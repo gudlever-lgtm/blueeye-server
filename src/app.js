@@ -9,6 +9,8 @@ const { requestLogger } = require('./middleware/requestLogger');
 const { securityHeaders } = require('./middleware/securityHeaders');
 const { createAuditLogger } = require('./middleware/auditLogger');
 const { notFoundHandler, errorHandler } = require('./middleware/errorHandler');
+// The view ↔ path map the dashboard and the server share (see public/routes.js).
+const appRoutes = require('../public/routes.js');
 const { silentLogger } = require('./logger');
 
 // Builds the Express application. Dependencies (db + repositories + logger) are
@@ -166,13 +168,36 @@ function createApp({
     const raw = fs.readFileSync(path.join(__dirname, '..', 'public', 'index.html'), 'utf8');
     stampedIndexHtml = raw
       .replace('src="/app.js"', `src="/app.js?v=${appVersion}"`)
-      .replace('href="/styles.css"', `href="/styles.css?v=${appVersion}"`);
+      .replace('href="/styles.css"', `href="/styles.css?v=${appVersion}"`)
+      .replace('href="/css/tokens.css"', `href="/css/tokens.css?v=${appVersion}"`)
+      .replace('href="/css/base.css"', `href="/css/base.css?v=${appVersion}"`)
+      .replace('href="/css/components.css"', `href="/css/components.css?v=${appVersion}"`);
   } catch (err) {
     logger.warn({ err }, 'could not read index.html for version stamping; serving raw');
   }
+
+  // A browser NAVIGATION wants the dashboard shell; an XHR wants JSON. The two
+  // collide because several screens share a path with an API route (/agents is
+  // both a page and GET /agents). Sec-Fetch-Dest: document is the browser's own
+  // word for "this is a navigation"; the Accept header covers clients that do
+  // not send it. app.js's api() sends neither, so a fetch never matches.
+  const isDocumentRequest = (req) => req.method === 'GET'
+    && (req.get('sec-fetch-dest') === 'document'
+      || String(req.get('accept') || '').includes('text/html'));
+  const sendShell = (res, status) => res.status(status).type('html').send(stampedIndexHtml);
+
   if (stampedIndexHtml) {
-    app.get(['/', '/index.html'], (req, res) => {
-      res.type('html').send(stampedIndexHtml);
+    // The entry point. '/' and '/index.html' collide with nothing, so they are
+    // served to every client, Accept header or not.
+    app.get(['/', '/index.html'], (req, res) => sendShell(res, 200));
+    // Every other address inside the dashboard's namespace, served BEFORE the
+    // API router so a navigation to /agents gets the dashboard rather than the
+    // agents JSON. An address the map owns but cannot resolve (/agents/abc) is
+    // the same shell with a 404: a mistyped page address deserves the page that
+    // says so, not an API error the person cannot read.
+    app.use((req, res, next) => {
+      if (!isDocumentRequest(req) || !appRoutes.ownsPath(req.path)) return next();
+      return sendShell(res, appRoutes.isAppPath(req.path) ? 200 : 404);
     });
   }
 
@@ -309,6 +334,18 @@ function createApp({
       logRing,
     })
   );
+
+  // An unknown address that a BROWSER asked for is a page that does not exist,
+  // not a missing API endpoint: answer 404 with the same shell so the user keeps
+  // the sidebar, the topbar and a way out. Mounted after the API router, so
+  // anything the API serves as HTML (the NIS2 documents, the report exports) has
+  // already answered by the time we get here.
+  if (stampedIndexHtml) {
+    app.use((req, res, next) => {
+      if (!isDocumentRequest(req)) return next();
+      return sendShell(res, 404);
+    });
+  }
 
   // 404 + centralised error handling, always mounted last.
   app.use(notFoundHandler);

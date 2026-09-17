@@ -1,0 +1,58 @@
+/* public/css/base.css — reset, typography, links, focus ring.
+ *
+ * The baseline every screen sits on, and the second of the three sheets the
+ * dashboard loads: tokens.css defines the values, base.css sets the ground,
+ * styles.css (shrinking) and components.css build on it. See
+ * docs/ui-contract.md.
+ *
+ * Nothing here names a colour or a font size directly — every value is a token
+ * from css/tokens.css.
+ */
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  /* Prefer Inter / Hanken Grotesk if present locally, else a clean system sans.
+     No external webfont (keeps it offline + EU-friendly). */
+  font: var(--fs-md)/1.55 'Inter', 'Hanken Grotesk', system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+.hidden { display: none !important; }
+[hidden] { display: none !important; }
+
+/* Typography hierarchy (NOC): tighter headings, aligned numerals. */
+h1, h2, h3 { letter-spacing: -0.01em; }
+h4 { letter-spacing: 0.02em; }
+/* Digits that line up in a column are read down, not across. The selector list
+   is the legacy screens' own columns; a migrated one gets it from the DataTable
+   and the StatStrip in components.css instead. */
+.kpi-v, .stat .v, .storage-row .v, td.num, .ta-bw, .big-chart .axis, .legend,
+.kv td, .assistant-meta { font-variant-numeric: tabular-nums; font-feature-settings: 'tnum' 1; }
+
+.muted { color: var(--muted); font-weight: 400; }
+.error { color: var(--bad); min-height: 1em; }
+a { color: var(--accent); }
+
+/* Focus ring. One shape for every focusable thing: the accent halo rather than
+   the browser's outline, which disappears against a dark panel. Keyboard only
+   (:focus-visible), so a mouse click does not leave a ring behind. */
+button:focus-visible, .chip:focus-visible, summary:focus-visible,
+a:focus-visible, [tabindex]:focus-visible {
+  outline: none; box-shadow: var(--ring); border-radius: var(--radius-sm);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  /* A transition somebody asked not to see. Kept to the two properties the
+     chrome animates so a genuinely instant UI is still legible. */
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

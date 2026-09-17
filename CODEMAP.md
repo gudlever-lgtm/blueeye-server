@@ -280,6 +280,20 @@ categories); fleet health is computed in `src/health/probeHealth.js` from `probe
 ## Dashboard (`public/app.js`)
 
 A single vanilla-JS SPA. Key building blocks:
+- **Routing** — `public/routes.js` is the one view ↔ path map, read by BOTH the
+  dashboard and `src/app.js`. Every screen has an address (`/fleet`,
+  `/probes/connection`, `/agents/12`); sub-tabs are path segments, filters stay
+  in the query. `render()` is the only writer (it pushes history when the path
+  changes), `popstate` the only reader. A browser navigation to an app path gets
+  the shell (200); one inside the namespace that resolves to nothing gets the
+  same shell with a 404 and `views.notFound`; a screen above the reader's role
+  gets `views.forbidden`. See docs/ui-contract.md → Routing.
+- **UI contract** — `public/css/tokens.css` is the one file colour lives in
+  (palette + every `[data-theme]` block + the spacing/type/radius scale);
+  `public/css/components.css` holds one implementation per component, scoped
+  under the `ui` marker class. `public/uiPreview.js` is the phase-1 example
+  screens on `/ui-preview/changes` and `/ui-preview/probes` (admin only, removed
+  when those two screens migrate). See docs/ui-contract.md.
 - `el(tag, attrs, ...kids)` — DOM helper. `api(path, opts)` — fetch + bearer + 401 handling.
 - `dataCard(title, { actions, note }, ...body)` — the framed page section every
   view's data lives in (heading + actions on top, table flush to the card's

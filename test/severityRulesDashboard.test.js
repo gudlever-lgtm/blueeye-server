@@ -334,6 +334,23 @@ async function openFindings(doc) {
   await click(nav, 150);
 }
 
+// Analysis is on the UI contract now (docs/ui-contract.md): the findings list is
+// a DataTable, and the page also carries two breakdown panels with tables of
+// their own — so "the list" is the table outside the panel grid.
+const findingRows = (doc) => [...doc.querySelectorAll('#view .panel-ui table.dt tbody tr')]
+  .filter((tr) => !tr.closest('.panel-grid'));
+
+// Writing a severity rule from a finding moved off the row and into its ⋯ menu,
+// which is where two of the three stacked buttons went. Open it and hand back
+// the entry, so these tests keep asking "can somebody do this from here?"
+// rather than "is there a button shaped like this?".
+async function rowMenuItem(doc, row, text) {
+  const dots = row.querySelector('[aria-haspopup="menu"]');
+  assert.ok(dots, 'the row has no ⋯ menu');
+  await click(dots, 40);
+  return byText(doc, '.ui-rowmenu button', text);
+}
+
 test('a downgraded finding says on screen that it was downgraded', async (t) => {
   const { doc } = await boot(t, {
     'GET /agents': [{ id: 1, hostname: 'gw-core', display_name: 'gw-core' }],
@@ -341,7 +358,7 @@ test('a downgraded finding says on screen that it was downgraded', async (t) => 
     'GET /api/findings/summary': { total: 1, bySeverity: { CRIT: 0, WARN: 1, INFO: 0 }, byMetric: [], byHost: [] },
   });
   await openFindings(doc);
-  const row = [...doc.querySelectorAll('#view table.findings tbody tr')][0];
+  const row = findingRows(doc)[0];
   assert.ok(row, 'no finding row rendered');
   // Without this the row is indistinguishable from a warning the detector
   // itself raised — which is exactly the event nobody ever looks at again.
@@ -355,7 +372,8 @@ test('a finding the detector judged on its own claims no rule', async (t) => {
     'GET /api/findings/summary': { total: 1, bySeverity: { CRIT: 1, WARN: 0, INFO: 0 }, byMetric: [], byHost: [] },
   });
   await openFindings(doc);
-  const row = [...doc.querySelectorAll('#view table.findings tbody tr')][0];
+  const row = findingRows(doc)[0];
+  assert.ok(row, 'no finding row rendered');
   assert.ok(!/\bwas\b/.test(row.textContent), 'an untouched finding must not claim a rule changed it');
 });
 
@@ -366,8 +384,8 @@ test('the button on a finding opens a rule already describing that finding', asy
     'GET /api/findings/summary': { total: 1, bySeverity: { CRIT: 0, WARN: 1, INFO: 0 }, byMetric: [], byHost: [] },
   });
   await openFindings(doc);
-  const btn = byText(doc, '#view table.findings button', 'Severity rule…');
-  assert.ok(btn, 'no per-finding severity-rule button');
+  const btn = await rowMenuItem(doc, findingRows(doc)[0], 'Severity rule…');
+  assert.ok(btn, 'no per-finding severity-rule control');
   await click(btn, 60);
 
   const inputs = [...doc.querySelectorAll('#modal-card form input, #modal-card form select, #modal-card form textarea')];
@@ -388,8 +406,10 @@ test('a viewer is never shown a control that writes a rule', async (t) => {
     'GET /api/findings/summary': { total: 1, bySeverity: { CRIT: 0, WARN: 1, INFO: 0 }, byMetric: [], byHost: [] },
   }, 'viewer');
   await openFindings(doc);
-  assert.equal(byText(doc, '#view table.findings button', 'Severity rule…'), null);
+  const row = findingRows(doc)[0];
+  assert.equal(await rowMenuItem(doc, row, 'Severity rule…'), null,
+    'a viewer was offered a control that writes a rule');
   // The provenance is not a privilege — a viewer must still see that the
   // severity in front of them was changed by a person.
-  assert.match(doc.querySelector('#view table.findings tbody tr').textContent, /was CRIT/);
+  assert.match(row.textContent, /was CRIT/);
 });

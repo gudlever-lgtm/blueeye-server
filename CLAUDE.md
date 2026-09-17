@@ -62,7 +62,14 @@ full HTTP route table, the data model, the dashboard structure, and a
 - Adding a feature usually means: a router in `src/routes/` (mounted in `routes/index.js`),
   a repository in `src/repositories/`, validation in `src/validation/`, a dashboard
   `views.<tab>` in `public/app.js` (+ a `data-view` button in `public/index.html`), a
-  `PAGE_INFO` help entry, and tests + a fake in `test-support/fakes.js`.
+  `PAGE_INFO` help entry, a path in `public/routes.js`, and tests + a fake in
+  `test-support/fakes.js`.
+- **The UI follows [docs/ui-contract.md](docs/ui-contract.md)** — one page template
+  per screen, built from `public/ui.js`, styled by `public/css/tokens.css` +
+  `base.css` + `components.css`. Colour lives in `tokens.css` and nowhere else.
+  `/ui-kitchen-sink` (admin) shows every component in every state; `npm run
+  ui:check` enforces the rules and runs in the gate. A screen is migrated by
+  adding it to that script's `MIGRATED` list in the same commit.
 - Per-feature docs live in `docs/` (analysis, geo, alerting, retention, traffic-types, …).
   Service Assurance has nine: start at
   [docs/service-assurance-guide.md](docs/service-assurance-guide.md), which is the
@@ -85,8 +92,9 @@ full HTTP route table, the data model, the dashboard structure, and a
 ## Pre-build gate (security / UI / validation tests)
 
 No branch build exists without the gate passing. `scripts/gate.sh` runs the three
-gate suites in `test/gate/` — **security**, **ui**, **validation** — and then the
-full `npm test`, and refuses the build on any failure. It runs from three places
+gate suites in `test/gate/` — **security**, **ui**, **validation** — then
+**`ui:check`** (`scripts/ui-check.js`, the UI contract) and the full `npm test`,
+and refuses the build on any failure. It runs from three places
 that all call the same script:
 
 - **Claude Code** — `.claude/settings.json` has a `PreToolUse` hook on `Bash`

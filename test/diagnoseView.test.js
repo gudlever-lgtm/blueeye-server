@@ -1,12 +1,13 @@
 'use strict';
 
-// The Diagnose screen, driven the way a person drives it: type the fault, read
-// the plan, run it, read the verdicts.
+// public/views/diagnose.js — Diagnose on the UI contract (docs/ui-contract.md).
 //
-// Same harness as dashboardSmoke — jsdom's fetch wired into the real Express
-// app — because the thing worth testing here is the whole path. A unit test of
-// the view against a hand-written fake would only prove the view agrees with
-// whatever the test's author believed the API returns.
+// The page was a hand-built card with seven controls in a row and a bare <span>
+// carrying both progress and failure. It is a FormPage now: two FormSections,
+// one primary action, and the result as Panels. These tests hold what had to
+// survive: the same POST body, the per-test selection carrying the STORED row
+// ids, the rounds loop with Stop, and the evidence list that makes a verdict
+// arguable rather than asserted.
 
 process.env.NODE_ENV = 'test';
 process.env.JWT_SECRET = 'test-secret-do-not-use-in-prod';
@@ -15,350 +16,274 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
-const request = require('supertest');
 const { JSDOM, VirtualConsole } = require('jsdom');
-
-const { makeApp, tokenFor, makeAgentsRepo, makeDiagnoseSessionsRepo } = require('../test-support/fakes');
 
 const PUBLIC = path.join(__dirname, '..', 'public');
 const html = fs.readFileSync(path.join(PUBLIC, 'index.html'), 'utf8');
-const tick = (ms = 150) => new Promise((r) => setTimeout(r, ms));
 
-const F1 = 'Mail kan forbinde, men når der sendes data, mistes pakker eller forbindelsen afbrydes';
-const AGENTS = [{ id: 1, hostname: 'fw-aarhus', display_name: 'fw-aarhus', status: 'online', capabilities: {}, meta: {}, monitor_config: {} }];
-
-// The measurements an MTU blackhole actually produces, timestamped after the
-// run so the session's correlation window picks them up.
-function mtuProbeRows(atMs) {
-  return [
+const AGENTS = [
+  { id: 7, display_name: 'oslo-edge-01', hostname: 'oslo-edge-01' },
+  { id: 8, display_name: 'cph-core-02', hostname: 'cph-core-02' },
+];
+const PLAN = {
+  sessionId: 42,
+  usedAi: false,
+  target: '8.8.8.8',
+  causes: [
     {
-      id: 11, agent_id: 1, type: 'ping', target: 'mail.example.com', ts: new Date(atMs + 1000),
-      ok: 1, loss_pct: 0, rtt_ms: 5,
-      sizes: JSON.stringify([
-        { bytes: 64, sent: 4, recv: 4, lossPct: 0, rttMs: 5, measured: true },
-        { bytes: 1472, sent: 4, recv: 0, lossPct: 100, measured: true },
-      ]),
+      id: 'mtu-blackhole', title: 'MTU black hole', confidence: 0.7,
+      explanation: 'Large packets are dropped while small ones get through.',
+      views: [{ view: 'probes', look_for: 'a path MTU below 1500', params: { tab: 'run' } }],
+      fixes: ['Clamp MSS on the tunnel'],
     },
     {
-      id: 12, agent_id: 1, type: 'path_mtu', target: 'mail.example.com', ts: new Date(atMs + 2000), ok: 1,
-      mtu: JSON.stringify({ pathMtu: 1400, blackholeDetected: true, icmpFragNeededSeen: false, recommendedMss: 1360, mtuDropAtHop: 3, mssSupported: true, mssObserved: 1460 }),
-      hops: JSON.stringify([{ hop: 3, ip: '10.0.0.3', maxMtu: 1400, status: 'blackhole' }]),
+      id: 'upstream-loss', title: 'Upstream loss', confidence: 0.4,
+      explanation: 'Loss appears beyond the first public hop.',
+      views: [{ view: 'flows', look_for: 'retransmits to that destination' }],
+      fixes: ['Raise it with the carrier'],
     },
-  ];
-}
+  ],
+  tests: [
+    { probeType: 'path_mtu', target: '8.8.8.8', params: {}, why: 'Measures the largest packet that gets through', askedBy: ['MTU black hole'] },
+    { probeType: 'ping', target: '8.8.8.8', params: { count: 20 }, direction: 'reverse', why: 'Loss from the far end', askedBy: ['Upstream loss'] },
+  ],
+};
+const SESSION_ROWS = {
+  session: {
+    tests: [
+      { id: 101, probeType: 'path_mtu', target: '8.8.8.8', params: {}, agentId: 7 },
+      { id: 102, probeType: 'ping', target: '8.8.8.8', params: { count: 20 }, agentId: 8 },
+    ],
+  },
+};
+const EVALUATION = {
+  counts: { confirmed: 1, ruled_out: 1, inconclusive: 0 },
+  summary: { text: 'The tunnel is clamping nothing, so large packets die.' },
+  causes: [
+    {
+      playbookId: 'mtu-blackhole', verdict: 'confirmed',
+      evidence: [
+        { when: 'path_mtu < 1500', result: true, because: 'measured 1400' },
+        { when: 'ping loss > 5%', result: false, because: 'measured 0%' },
+        { when: 'jitter > 30ms', result: null, because: 'never measured' },
+      ],
+      fixes: [{ text: 'Clamp MSS on the tunnel', complete: true }, { text: 'Or lower the MTU', complete: false }],
+    },
+    { playbookId: 'upstream-loss', verdict: 'ruled_out', reason: 'no_rule_matched', evidence: [], fixes: [] },
+  ],
+};
 
-function appWith({ probeRows = [], assistant = null } = {}) {
-  return makeApp({
-    agentsRepo: makeAgentsRepo({
-      findAll: async () => AGENTS,
-      findById: async (id) => AGENTS.find((a) => a.id === Number(id)) || null,
-    }),
-    agentCommander: { sendCommand: () => 1 },
-    diagnoseSessionsRepo: makeDiagnoseSessionsRepo({ probeRows }),
-    assistant,
-  });
-}
-
-async function boot(t, { role = 'operator', app = appWith() } = {}) {
-  const token = tokenFor(role, { id: 1, email: 'op@blueeye.local' });
+function boot({ t, routes = {}, url = 'http://server.test/diagnose', role = 'operator' } = {}) {
   const errors = [];
-  const virtualConsole = new VirtualConsole();
-  virtualConsole.on('jsdomError', (e) => errors.push(String((e && e.message) || e)));
-  const dom = new JSDOM(html, { url: 'http://server.test/', runScripts: 'outside-only', pretendToBeVisual: true, virtualConsole });
+  const vc = new VirtualConsole();
+  vc.on('jsdomError', (e) => errors.push(String((e && e.message) || e)));
+  const dom = new JSDOM(html, { url, runScripts: 'outside-only', pretendToBeVisual: true, virtualConsole: vc });
   const { window } = dom;
-  window.fetch = async (url, opts = {}) => {
-    const raw = String(url);
-    const method = (opts.method || 'GET').toUpperCase();
-    let req = request(app)[method.toLowerCase()](raw).set('Authorization', `Bearer ${token}`);
-    if (opts.body) req = req.set('Content-Type', 'application/json').send(JSON.parse(opts.body));
-    const res = await req;
-    return {
-      ok: res.status < 300,
-      status: res.status,
-      headers: { get: (h) => res.headers[String(h).toLowerCase()] },
-      json: async () => res.body,
-      text: async () => res.text,
-    };
+  const log = [];
+  window.fetch = async (u, opts = {}) => {
+    const p = String(u).split('?')[0];
+    log.push({ key: `${(opts.method || 'GET').toUpperCase()} ${p}`, url: String(u), body: opts.body });
+    const hit = routes[`${(opts.method || 'GET').toUpperCase()} ${p}`];
+    const status = hit === undefined ? 404 : (hit.status || 200);
+    const body = hit === undefined ? { error: 'Not Found' } : (hit.body !== undefined ? hit.body : hit);
+    return { ok: status < 300, status, headers: { get: () => 'application/json' }, json: async () => body, text: async () => JSON.stringify(body) };
   };
   window.matchMedia = () => ({ matches: false, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {} });
   window.scrollTo = () => {};
-  window.confirm = () => true;
   window.WebSocket = class { constructor() { this.readyState = 3; } close() {} send() {} addEventListener() {} removeEventListener() {} };
   window.EventSource = window.WebSocket;
-  window.addEventListener('error', (e) => errors.push(String(e.message)));
-  t.after(() => window.close());
-  window.localStorage.setItem('blueeye.server.token', token);
+  if (t) t.after(() => window.close());
+  window.localStorage.setItem('blueeye.server.token', 'T');
   window.localStorage.setItem('blueeye.server.role', role);
-  for (const s of [...window.document.querySelectorAll('script[src]')].map((x) => x.getAttribute('src'))) {
-    if (s.startsWith('/')) window.eval(fs.readFileSync(path.join(PUBLIC, s.split('?')[0]), 'utf8'));
+  for (const s of [...window.document.querySelectorAll('script[src]')].map((x) => x.getAttribute('src')).filter((x) => x.startsWith('/'))) {
+    window.eval(fs.readFileSync(path.join(PUBLIC, s.split('?')[0]), 'utf8'));
   }
-  await tick(250);
-  return { window, doc: window.document, errors, app, token };
+  return { window, doc: window.document, errors, log };
+}
+const settle = () => new Promise((r) => setTimeout(r, 180));
+
+const SESSION = (over = {}) => Object.assign({
+  'GET /me': { id: 1, email: 'x@y.dk', role: 'operator', preferences: {} },
+  'GET /auth/sso': { methods: [] },
+  'GET /license': { plan: 'professional', features: {} },
+  'GET /agents': AGENTS,
+  'GET /api/playbooks': { playbooks: [{ symptoms: ['web is slow from the branch'] }, { symptoms: ['VPN drops every few minutes'] }] },
+  'POST /api/diagnose': PLAN,
+  'GET /api/diagnose/42': SESSION_ROWS,
+  'POST /api/diagnose/42/run': { dispatched: 2, total: 2 },
+  'POST /api/diagnose/42/evaluate': EVALUATION,
+}, over);
+
+const askBtn = (doc) => [...doc.querySelectorAll('#view .form-actions-ui .btn-primary')][0];
+const panels = (doc) => [...doc.querySelectorAll('#view .panel-ui')];
+const testRows = (doc) => [...doc.querySelectorAll('#view table.dt tbody tr')];
+
+async function askFor(doc, window, text) {
+  const desc = doc.querySelector('#diag-description');
+  desc.value = text;
+  desc.dispatchEvent(new window.Event('input', { bubbles: true }));
+  askBtn(doc).dispatchEvent(new window.Event('click', { bubbles: true }));
+  await settle();
 }
 
-async function openDiagnose(doc) {
-  const btn = doc.querySelector('.tabs button[data-view="diagnose"]');
-  assert.ok(btn, 'no Diagnose entry in the nav');
-  btn.click();
-  await tick(250);
-  return btn;
-}
-
-const byText = (doc, sel, re) => [...doc.querySelectorAll(sel)].find((e) => re.test(e.textContent || ''));
-
-// Fills in the form and submits, returning once the plan is on screen.
-async function ask(doc, { description = F1, agent = '1', target = 'mail.example.com' } = {}) {
-  doc.querySelector('#diag-description').value = description;
-  const selects = doc.querySelectorAll('.diag-scope select');
-  if (agent) selects[0].value = agent;
-  doc.querySelector('.diag-scope input').value = target;
-  const submit = [...doc.querySelectorAll('.diag-ask .diag-actions button')][0];
-  submit.click();
-  await tick(400);
-}
-
-// --- the screen --------------------------------------------------------------
-
-test('the Diagnose entry is in the nav, translated, and opens a page that asks the question', async (t) => {
-  const { doc, errors } = await boot(t);
-  const btn = await openDiagnose(doc);
-  assert.equal(btn.textContent.trim(), 'Diagnose');
-  assert.ok(!/^nav\./.test(btn.textContent), 'the nav label is an untranslated key');
-  const field = doc.querySelector('#diag-description');
-  assert.ok(field, 'no description field');
-  assert.ok(field.placeholder.length > 10, 'the field does not say what to write in it');
-  assert.equal(field.getAttribute('maxlength'), '1000');
+test('Diagnose is a FormPage: PageHeader, two FormSections, one primary', async (t) => {
+  const { doc, errors } = boot({ t, routes: SESSION() });
+  await settle();
   assert.deepEqual(errors, []);
+  assert.ok(doc.querySelector('#view .ui.ui-page'));
+  assert.ok(doc.querySelector('#view .page-head .help-btn'), 'no (?) help control');
+  assert.equal(doc.querySelectorAll('#view .diag-ask').length, 0, 'the old card survived');
+  assert.equal(doc.querySelectorAll('#view .diag-scope').length, 0, 'the old scope row survived');
+  assert.equal(doc.querySelectorAll('#view .section-head').length, 0, 'the old section head survived');
+  assert.equal(doc.querySelectorAll('#view .form-sec').length, 2);
+  assert.equal(doc.querySelectorAll('#view .form-actions-ui .btn-primary').length, 1);
+  assert.ok(doc.querySelector('#diag-description'), 'no description field');
 });
 
-test('the examples under the field come from the catalogue, and clicking one fills it in', async (t) => {
-  const { doc } = await boot(t);
-  await openDiagnose(doc);
-  await tick(250);
-  const examples = [...doc.querySelectorAll('.diag-examples button')];
-  assert.ok(examples.length > 0, 'no examples — the catalogue call did not land');
-  const text = examples[0].textContent;
-  examples[0].click();
-  assert.equal(doc.querySelector('#diag-description').value, text);
+test('the examples come from the catalogue and fill the field', async (t) => {
+  const { doc, window } = boot({ t, routes: SESSION() });
+  await settle();
+  const ex = [...doc.querySelectorAll('#view .diag-examples .btn')];
+  assert.equal(ex.length, 2);
+  assert.match(ex[0].textContent, /web is slow from the branch/);
+  ex[0].dispatchEvent(new window.Event('click', { bubbles: true }));
+  await settle();
+  assert.equal(doc.querySelector('#diag-description').value, 'web is slow from the branch');
 });
 
-test('the Danish fixture produces a readable plan on screen', async (t) => {
-  const { doc, errors } = await boot(t);
-  await openDiagnose(doc);
-  await ask(doc);
-
-  const causes = doc.querySelector('.diag-causes');
-  assert.ok(causes, 'no plan rendered');
-  assert.match(causes.querySelector('.diag-cause-head strong').textContent, /MTU/i);
-
-  // It says which matcher produced it, without being asked.
-  assert.match(doc.querySelector('.diag-matched').textContent, /keyword|nøgleord/i);
-
-  // The tests are listed with their parameters already filled in.
-  const tests = [...doc.querySelectorAll('.diag-test code')].map((c) => c.textContent);
-  assert.ok(tests.some((x) => /^ping mail\.example\.com/.test(x) && /sizes=\[64,1472\]/.test(x)), tests.join(' | '));
-  assert.ok(tests.some((x) => /^path_mtu mail\.example\.com/.test(x)), tests.join(' | '));
-
-  // Every view link says what to look for once you are there.
-  const rows = [...doc.querySelectorAll('.diag-view-row')];
-  assert.ok(rows.length > 0);
-  for (const r of rows) {
-    assert.ok(r.querySelector('button'), 'a "look here" row with no way to get there');
-    assert.ok((r.querySelector('.muted').textContent || '').length > 10, 'a link with no "what am I looking at"');
-  }
-
-  // And a possible fix, before anything has run.
-  assert.ok(doc.querySelectorAll('.diag-fix').length > 0);
-  assert.deepEqual(errors, []);
+test('asking with an empty description is a field error, and sends nothing', async (t) => {
+  const { doc, window, log } = boot({ t, routes: SESSION() });
+  await settle();
+  askBtn(doc).dispatchEvent(new window.Event('click', { bubbles: true }));
+  await settle();
+  assert.ok(doc.querySelector('#view .field-error'), 'no error on the field');
+  assert.equal(log.filter((x) => x.key === 'POST /api/diagnose').length, 0, 'an empty question was sent');
 });
 
-test('a description that matches nothing says so instead of rendering an empty card', async (t) => {
-  const { doc, errors } = await boot(t);
-  await openDiagnose(doc);
-  await ask(doc, { description: 'Hej, hvordan går det i dag?' });
-  const empty = doc.querySelector('.diag-out .empty');
-  assert.ok(empty, 'no message at all');
-  assert.ok(empty.textContent.trim().length > 20);
-  assert.equal(doc.querySelector('.diag-causes'), null);
-  assert.deepEqual(errors, []);
+test('asking posts the description and the scope, and lists the causes', async (t) => {
+  const { doc, window, log } = boot({ t, routes: SESSION() });
+  await settle();
+  doc.querySelector('#diag-agent').value = '7';
+  doc.querySelector('#diag-target').value = '8.8.8.8';
+  await askFor(doc, window, 'large downloads stall on the VPN');
+  const post = log.find((x) => x.key === 'POST /api/diagnose');
+  const body = typeof post.body === 'string' ? JSON.parse(post.body) : post.body;
+  assert.equal(body.description, 'large downloads stall on the VPN');
+  assert.equal(body.agentId, 7);
+  assert.equal(body.target, '8.8.8.8');
+  assert.ok(body.locale, 'the locale did not reach the matcher');
+
+  const causes = panels(doc).find((p) => /MTU black hole/.test(p.textContent));
+  assert.ok(causes, 'no causes panel');
+  assert.match(causes.textContent, /Upstream loss/);
+  assert.match(causes.querySelector('.panel-head .meta-xs').textContent, /keyword|Keyword/i,
+    'the page does not say which matcher produced the plan');
 });
 
-// --- running and evaluating ---------------------------------------------------
-
-test('an operator can run the plan and read a confirmed cause with its evidence and its numbers', async (t) => {
-  // Stamped comfortably after the run will be dispatched: the correlation
-  // window opens at dispatch and runs for ten minutes, so anything a little in
-  // the future lands inside it no matter how long the render takes.
-  const app = appWith({ probeRows: mtuProbeRows(Date.now() + 30_000) });
-  const { doc, errors } = await boot(t, { app });
-  await openDiagnose(doc);
-  await ask(doc);
-
-  const runBtn = byText(doc, '.diag-tests button', /^Run |^Kør /);
-  assert.ok(runBtn, 'no way to run the plan');
-  runBtn.click();
-  await tick(300);
-  assert.match(doc.querySelector('.diag-tests .diag-actions .muted').textContent, /Sent \d+ of \d+|Sendte \d+ af \d+/);
-
-  byText(doc, '.diag-tests button', /Evaluate|Vurdér/).click();
-  await tick(400);
-
-  // The verdict is on the cause, in words.
-  const pill = doc.querySelector('.diag-cause-head .pill');
-  assert.ok(pill, 'no verdict rendered');
-  assert.match(pill.textContent, /Confirmed|Bekræftet/);
-  assert.match(doc.querySelector('.diag-counts').textContent, /1 confirmed|1 bekræftet/);
-
-  // The evidence is the rules themselves, marked.
-  const fired = [...doc.querySelectorAll('.diag-rule.fired')];
-  assert.ok(fired.length >= 1, 'no rule is shown as having matched');
-  assert.ok(fired.some((r) => /size_1472/.test(r.querySelector('code').textContent)));
-  for (const r of fired) assert.ok((r.querySelector('.small').textContent || '').length > 10, 'a rule with no reason');
-
-  // The fix carries the measured numbers, not placeholders.
-  const fixes = [...doc.querySelectorAll('.diag-fix')].map((f) => f.textContent);
-  assert.ok(fixes.some((f) => f.includes('1360')), fixes.join(' | '));
-  assert.ok(fixes.some((f) => f.includes('hop 3')), fixes.join(' | '));
-  assert.ok(!fixes.some((f) => f.includes('{')), 'a placeholder reached the screen');
-  assert.deepEqual(errors, []);
-});
-
-test('when the tests have not reported, the cause stays open and the screen says what it is waiting for', async (t) => {
-  // No probe rows: the agents were asked and nothing has come back.
-  const { doc, errors } = await boot(t, { app: appWith({ probeRows: [] }) });
-  await openDiagnose(doc);
-  await ask(doc);
-  byText(doc, '.diag-tests button', /^Run |^Kør /).click();
-  await tick(300);
-  byText(doc, '.diag-tests button', /Evaluate|Vurdér/).click();
-  await tick(400);
-
-  const pill = doc.querySelector('.diag-cause-head .pill');
-  assert.match(pill.textContent, /Open|Uafklaret/);
-  // And it names the measurement it needs, rather than just shrugging.
-  const reason = doc.querySelector('.diag-cause-head .small');
-  assert.ok(reason, 'no reason given for an open cause');
-  assert.match(reason.textContent, /Waiting on|Mangler/);
-  assert.match(reason.textContent, /ping\.|path_mtu\./);
-  assert.deepEqual(errors, []);
-});
-
-test('the plan can be run as a subset: clearing a test leaves it out of the dispatch', async (t) => {
-  const hub = { sent: [], sendCommand: (id, command) => { hub.sent.push({ id, command }); return 1; } };
-  const { doc, window } = await boot(t, { app: makeApp({
-    agentsRepo: makeAgentsRepo({ findAll: async () => AGENTS, findById: async (id) => AGENTS.find((a) => a.id === Number(id)) || null }),
-    agentCommander: hub,
-    diagnoseSessionsRepo: makeDiagnoseSessionsRepo({ probeRows: [] }),
-  }) });
-  await openDiagnose(doc);
-  await ask(doc);
-  // The row ids arrive a moment after the plan renders — the checkboxes come
-  // with them.
-  await tick(300);
-  const boxes = [...doc.querySelectorAll('.diag-test input[type=checkbox]')];
-  assert.ok(boxes.length >= 2, `only ${boxes.length} selectable tests`);
+test('the tests are a table, selectable by their STORED row ids', async (t) => {
+  const { doc, window, log } = boot({ t, routes: SESSION() });
+  await settle();
+  await askFor(doc, window, 'large downloads stall');
+  await settle();
+  assert.equal(testRows(doc).length, 2);
+  const boxes = [...doc.querySelectorAll('#view table.dt tbody input[type="checkbox"]')];
+  assert.equal(boxes.length, 2, 'the per-test selection is gone');
   assert.ok(boxes.every((b) => b.checked), 'the plan did not start fully selected');
 
+  // Clear the first, run, and only the second id is dispatched.
   boxes[0].checked = false;
   boxes[0].dispatchEvent(new window.Event('change', { bubbles: true }));
-  await tick(50);
-  assert.match(doc.querySelector('.diag-tests .diag-select').textContent, /\d+ of \d+ selected|\d+ af \d+ valgt/);
-
-  byText(doc, '.diag-tests button', /^Run |^Kør /).click();
-  await tick(400);
-  assert.equal(hub.sent.length, boxes.length - 1, `dispatched ${hub.sent.length} of ${boxes.length - 1} selected`);
+  const run = [...doc.querySelectorAll('#view .diag-run .btn-primary')][0];
+  run.dispatchEvent(new window.Event('click', { bubbles: true }));
+  await settle();
+  const post = log.find((x) => x.key === 'POST /api/diagnose/42/run');
+  const body = typeof post.body === 'string' ? JSON.parse(post.body) : post.body;
+  assert.deepEqual(body, { testIds: [102] });
 });
 
-test('Repeat on a plan writes one scheduled package per agent', async (t) => {
-  const packages = [];
-  const app = makeApp({
-    agentsRepo: makeAgentsRepo({ findAll: async () => AGENTS, findById: async (id) => AGENTS.find((a) => a.id === Number(id)) || null }),
-    agentCommander: { sendCommand: () => 1 },
-    diagnoseSessionsRepo: makeDiagnoseSessionsRepo({ probeRows: [] }),
-    testPackagesRepo: require('../test-support/fakes').makeTestPackagesRepo({
-      create: async (p) => { const row = { id: packages.length + 1, ...p }; packages.push(row); return row; },
-    }),
-  });
-  const { doc } = await boot(t, { app });
-  await openDiagnose(doc);
-  await ask(doc);
-  await tick(300);
-  byText(doc, '.diag-tests button', /^Repeat$|^Gentag$/).click();
-  await tick(150);
-  assert.equal(doc.querySelector('#modal').classList.contains('hidden'), false, 'the repeat dialog did not open');
-  byText(doc, '#modal-card .form-actions button', /Save repeat|Gem gentagelse/).click();
-  await tick(500);
-  assert.equal(packages.length, 1, `expected one package per agent, got ${packages.length}`);
-  assert.deepEqual(packages[0].targets.agentIds, [1]);
-  assert.equal(packages[0].schedule_spec.period, 'daily');
-  assert.ok(packages[0].items.length >= 2, 'the plan\'s tests did not make it into the package');
+test('running with nothing selected says so instead of dispatching everything', async (t) => {
+  const { doc, window, log } = boot({ t, routes: SESSION() });
+  await settle();
+  await askFor(doc, window, 'large downloads stall');
+  await settle();
+  for (const b of [...doc.querySelectorAll('#view table.dt tbody input[type="checkbox"]')]) {
+    b.checked = false;
+    b.dispatchEvent(new window.Event('change', { bubbles: true }));
+  }
+  [...doc.querySelectorAll('#view .diag-run .btn-primary')][0].dispatchEvent(new window.Event('click', { bubbles: true }));
+  await settle();
+  assert.equal(log.filter((x) => x.key === 'POST /api/diagnose/42/run').length, 0, 'an empty run was dispatched');
+  assert.ok(doc.querySelector('#view .diag-run .inline-note.is-warn'), 'nothing said why nothing ran');
 });
 
-test('a viewer sees the plan and is not offered the buttons that touch the network', async (t) => {
-  const { doc, errors } = await boot(t, { role: 'viewer' });
-  await openDiagnose(doc);
-  await ask(doc);
-  assert.ok(doc.querySelector('.diag-causes'), 'a viewer must still get the plan');
-  assert.ok(doc.querySelectorAll('.diag-test').length > 0, 'a viewer must still see what to run');
-  assert.equal(byText(doc, '.diag-tests button', /^Run |^Kør /), undefined);
-  assert.equal(byText(doc, '.diag-tests button', /Evaluate|Vurdér/), undefined);
+test('evaluating shows a verdict per cause with the evidence behind it', async (t) => {
+  const { doc, window } = boot({ t, routes: SESSION() });
+  await settle();
+  await askFor(doc, window, 'large downloads stall');
+  await settle();
+  const evalBtn = [...doc.querySelectorAll('#view .diag-run .btn')].find((b) => /Evaluate/i.test(b.textContent));
+  assert.ok(evalBtn, 'no evaluate control');
+  evalBtn.dispatchEvent(new window.Event('click', { bubbles: true }));
+  await settle();
+
+  const badges = [...doc.querySelectorAll('#view .diag-cause-head .badge-ui')].map((b) => b.textContent);
+  assert.equal(badges.length, 2);
+  assert.ok(badges.some((b) => /confirm/i.test(b)), `no confirmed verdict: ${badges.join(', ')}`);
+  assert.equal(doc.querySelectorAll('#view .pill').length, 0, 'the verdict is still a pill');
+
+  // Three rules, three states — including the one that was never measured.
+  const rules = [...doc.querySelectorAll('#view .diag-rule')];
+  assert.equal(rules.length, 3);
+  assert.match(rules[0].textContent, /path_mtu < 1500/);
+  assert.match(rules[0].textContent, /measured 1400/);
+  assert.equal(new Set(rules.map((r) => r.querySelector('.badge-ui').className)).size, 3,
+    'the three rule states look the same');
+
+  // A partial fix is called out rather than shown as a complete one.
+  assert.ok(doc.querySelector('#view .diag-fixes .inline-note.is-warn'), 'a partial fix reads as complete');
+});
+
+test('a viewer gets the plan but no way to dispatch it', async (t) => {
+  const { doc, window } = boot({ t, routes: SESSION({ 'GET /me': { id: 1, email: 'x@y.dk', role: 'viewer', preferences: {} } }), role: 'viewer' });
+  await settle();
+  await askFor(doc, window, 'large downloads stall');
+  await settle();
+  assert.equal(testRows(doc).length, 2, 'a viewer cannot see the plan');
+  assert.equal(doc.querySelectorAll('#view .diag-run').length, 0, 'a viewer was offered the run controls');
+  assert.equal(doc.querySelectorAll('#view table.dt tbody input[type="checkbox"]').length, 0);
+});
+
+test('a 500 on the match is an ErrorState that names the call', async (t) => {
+  const { doc, window, errors } = boot({ t, routes: SESSION({ 'POST /api/diagnose': { status: 500, body: { error: 'boom' } } }) });
+  await settle();
+  await askFor(doc, window, 'large downloads stall');
   assert.deepEqual(errors, []);
+  const err = doc.querySelector('#view .state.is-error');
+  assert.ok(err, 'no ErrorState');
+  assert.match(err.textContent, /POST \/api\/diagnose/);
+  assert.ok(!askBtn(doc).disabled, 'the button stayed disabled after a failure');
 });
 
-test('a "look here" button actually navigates somewhere', async (t) => {
-  const { doc, errors } = await boot(t);
-  await openDiagnose(doc);
-  await ask(doc);
-  const link = doc.querySelector('.diag-view-row button');
-  link.click();
-  await tick(300);
-  // We left Diagnose and landed on a page that rendered something.
-  assert.equal(doc.querySelector('#diag-description'), null, 'the deep link did not navigate');
-  const view = doc.querySelector('#view');
-  assert.ok((view.textContent || '').trim().length > 0, 'the deep link landed on a blank page');
-  assert.deepEqual(errors, []);
+test('a plan with no causes is an EmptyState carrying the server message', async (t) => {
+  const empty = { sessionId: 43, causes: [], tests: [], message: 'Nothing matched that description.' };
+  const { doc, window } = boot({ t, routes: SESSION({ 'POST /api/diagnose': empty }) });
+  await settle();
+  await askFor(doc, window, 'the beige one is broken');
+  const state = doc.querySelector('#view .state');
+  assert.ok(state);
+  assert.equal(doc.querySelectorAll('#view .state.is-error').length, 0, 'no match was reported as a failure');
+  assert.match(state.textContent, /Nothing matched that description/);
 });
 
-test('the page survives a server that is failing', async (t) => {
-  const app = appWith();
-  const { doc, errors } = await boot(t, { app });
-  await openDiagnose(doc);
-  // Break the API underneath the page, then ask.
-  doc.defaultView.fetch = async () => ({
-    ok: false, status: 500, headers: { get: () => 'application/json' },
-    json: async () => ({ error: 'Internal Server Error' }), text: async () => '{}',
-  });
-  await ask(doc);
-  const status = doc.querySelector('.diag-status');
-  assert.match(status.textContent, /Internal Server Error/);
-  assert.ok(status.classList.contains('error'));
-  assert.deepEqual(errors, [], 'a failing server must not throw on the page');
-});
-
-test('the whole screen follows a language switch', async (t) => {
-  const { doc, errors } = await boot(t);
-  await openDiagnose(doc);
-  const enPlaceholder = doc.querySelector('#diag-description').placeholder;
-  assert.equal(doc.querySelector('.tabs button[data-view="diagnose"]').textContent.trim(), 'Diagnose');
-
-  // Switched the way a person switches it — the picker in Settings → Appearance.
-  // Calling the catalogue's setLocale directly would change the rendered text
-  // but not the STATIC sidebar, and the untranslated-nav-label bug is exactly
-  // the one this is here to catch.
-  doc.querySelector('.tabs button[data-view="settings"]').click();
-  await tick(300);
-  const picker = doc.querySelector('#locale-select');
-  assert.ok(picker, 'no language picker in Settings');
-  picker.value = 'da';
-  picker.dispatchEvent(new doc.defaultView.Event('change'));
-  await tick(400);
-
-  await openDiagnose(doc);
-  const daPlaceholder = doc.querySelector('#diag-description').placeholder;
-  assert.notEqual(daPlaceholder, enPlaceholder);
-  assert.match(daPlaceholder, /mistes pakker/);
-  // The sidebar is static markup render() never touches, so it only follows if
-  // the nav entry carries a data-i18n key.
-  assert.equal(doc.querySelector('.tabs button[data-view="diagnose"]').textContent.trim(), 'Diagnosticér');
-  assert.deepEqual(errors, []);
+test('"open this view" still navigates where the cause says to look', async (t) => {
+  const { doc, window } = boot({ t, routes: SESSION() });
+  await settle();
+  doc.querySelector('#diag-agent').value = '7';
+  await askFor(doc, window, 'large downloads stall');
+  await settle();
+  const open = [...doc.querySelectorAll('#view .diag-view-row .btn')][0];
+  assert.ok(open, 'no way through to the view');
+  open.dispatchEvent(new window.Event('click', { bubbles: true }));
+  await settle();
+  assert.equal(window.location.pathname, '/probes/run', `went to ${window.location.pathname}`);
 });

@@ -90,10 +90,13 @@ test('dashboard offers selectable colour themes saved per user', async () => {
   assert.match(js, /dual: p\.dark\.key/); // every variant knows its opposite-brightness pair
   assert.match(js, /themeMeta\(document\.documentElement\.dataset\.theme\)\.dual/); // toggle flips brightness within the palette
 
+  // The palettes live in tokens.css (the UI contract's one file for colour);
+  // the picker that switches between them is ordinary chrome in styles.css.
+  const tokens = (await request(app).get('/css/tokens.css')).text;
+  assert.match(tokens, /\[data-theme="nord"\]/); // a dark colour palette is defined
+  assert.match(tokens, /\[data-theme="nord-light"\]/); // …paired with a light variant
+  assert.match(tokens, /\[data-theme="solarized-dark"\]/);
   const css = (await request(app).get('/styles.css')).text;
-  assert.match(css, /\[data-theme="nord"\]/); // a dark colour palette is defined
-  assert.match(css, /\[data-theme="nord-light"\]/); // …paired with a light variant
-  assert.match(css, /\[data-theme="solarized-dark"\]/);
   assert.match(css, /\.theme-grid/); // picker styling
 });
 
@@ -102,8 +105,13 @@ test('topology view renders a force-directed diagram alongside the tables', asyn
   const js = (await request(app).get('/app.js')).text;
   assert.match(js, /function topoForceLayout/); // Fruchterman-Reingold layout, no external graph library
   assert.match(js, /function topoGraphSvg/); // renders nodes/edges from GET \/api\/topology as SVG
-  assert.match(js, /GRAPH_MAX_NODES/); // diagram is capped to the busiest hosts for legibility
-  assert.match(js, /topoGraphSvg\(graphNodes, graphEdges/); // wired into views.topology
+
+  // The screen itself is on the UI contract (public/views/topology.js); the
+  // renderer above stays in app.js and is passed to it as `graphSvg`.
+  const view = (await request(app).get('/views/topology.js')).text;
+  assert.match(view, /GRAPH_MAX_NODES/); // diagram is capped to the busiest hosts for legibility
+  assert.match(view, /deps\.graphSvg\(nodes, edges/); // wired into the Diagram mode
+  assert.match(js, /graphSvg: topoGraphSvg/); // …and that is the renderer it gets
 
   const css = (await request(app).get('/styles.css')).text;
   assert.match(css, /\.topo-graph /); // diagram container + node/edge styling

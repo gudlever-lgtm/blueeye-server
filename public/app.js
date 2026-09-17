@@ -91,7 +91,9 @@ initLocale();
 const el = (tag, attrs = {}, ...kids) => {
   const node = document.createElement(tag);
   for (const [k, v] of Object.entries(attrs)) {
-    if (k === 'class') node.className = v;
+    // `class: cond ? 'x' : null` is a common shape; without the guard the
+    // element ends up with the literal class "null".
+    if (k === 'class') { if (v != null) node.className = v; }
     else if (k === 'html') node.innerHTML = v;
     else if (k.startsWith('on')) node.addEventListener(k.slice(2), v);
     else if (v !== null && v !== undefined) node.setAttribute(k, v);
@@ -1320,7 +1322,33 @@ const PAGE_INFO = {
   },
 };
 
+// Screens migrated onto the UI contract (docs/ui-contract.md). Their help lives
+// in the PageHeader's (?) popover, so the legacy hero banner must not also draw
+// one above them — two copies of the same paragraph, one of which the contract
+// deleted. The gate reads this set too: a migrated view is allowed to have no
+// PAGE_INFO entry precisely because its module carries the help instead.
+// view key -> the module in public/views/ that draws it. Usually the same word;
+// Analysis is the exception, because the view key is `findings` (the records it
+// lists) while the product calls the screen Analysis.
+const CONTRACT_VIEWS = new Map([
+  ['changes', 'changes'],
+  ['probes', 'probes'],
+  ['findings', 'analysis'],
+  ['fleet', 'fleet'],
+  ['map', 'sites'],
+  ['overview', 'traffic'],
+  ['geo', 'destinations'],
+  ['delta', 'topologyDelta'],
+  ['investigation', 'investigate'],
+  ['diagnose', 'diagnose'],
+  ['troubleshooting', 'troubleshooting'],
+  ['topology', 'topology'],
+  ['flows', 'flows'],
+  ['transactions', 'transactions'],
+]);
+
 function hero(viewKey) {
+  if (CONTRACT_VIEWS.has(viewKey)) return null;
   // Probes & Tests is one view with two sub-tabs; show the matching help for each.
   let info = PAGE_INFO[viewKey];
   if (viewKey === 'probes' && probesTab === 'packages') info = PAGE_INFO.tests;
@@ -3458,7 +3486,7 @@ function sortableTable(columns, opts = {}) {
 
 // ---- Analysis (findings + AI assistant) ----------------------------------
 // hostId of a finding is the agent id (the analysis pipeline keys on it).
-const findingsState = { hostId: '', severity: '', metric: '', tbody: null, agentName: null, reloadSummary: null };
+const findingsState = { hostId: '', severity: '', metric: '', sort: { key: 'time', dir: 'desc' } };
 
 // Authenticated download of a server export (CSV/JSON) → triggers a file save.
 async function downloadExport(resource, format, params = {}) {
@@ -3483,288 +3511,54 @@ function exportButtons(resource, getParams) {
     el('button', { class: 'small ghost', onclick: () => downloadExport(resource, 'json', getParams ? getParams() : {}) }, 'JSON'));
 }
 
-views.findings = async () => {
-  const root = el('div');
-  const agents = await api('/agents').catch(() => []);
-  const agentName = (id) => {
-    const a = agents.find((x) => String(x.id) === String(id));
-    return a ? (a.display_name || a.hostname) : `host ${id}`;
-  };
-  findingsState.agentName = agentName;
-
-  // Build the querystring for the active filters. `omit` lets the summary drop
-  // the metric filter so its per-metric breakdown (and the metric dropdown it
-  // populates) always shows every metric under the host/severity scope.
-  const filterQs = (omit = []) => {
-    const qs = new URLSearchParams();
-    if (findingsState.hostId && !omit.includes('hostId')) qs.set('hostId', findingsState.hostId);
-    if (findingsState.severity && !omit.includes('severity')) qs.set('severity', findingsState.severity);
-    if (findingsState.metric && !omit.includes('metric')) qs.set('metric', findingsState.metric);
-    const s = qs.toString();
-    return s ? `?${s}` : '';
-  };
-
-  // Severity / Metric filter controls live in the table header (a filter row
-  // under the sortable labels) — the same per-column filter+sort model the
-  // Events table uses. The Host selector is promoted out of the header into
-  // its own bar directly under the page heading (see hostFilterBar below).
-  const hostSelect = el('select', { class: 'col-filter' },
-    el('option', { value: '' }, 'All hosts'),
-    ...agents.map((a) => el('option',
-      { value: String(a.id), ...(String(a.id) === findingsState.hostId ? { selected: 'selected' } : {}) },
-      a.display_name || a.hostname)));
-  hostSelect.addEventListener('change', () => { findingsState.hostId = hostSelect.value; reload(); });
-
-  const sevSelect = el('select', { class: 'col-filter' },
-    el('option', { value: '' }, 'All severities'),
-    ...['CRIT', 'WARN', 'INFO'].map((s) => el('option',
-      { value: s, ...(s === findingsState.severity ? { selected: 'selected' } : {}) }, s)));
-  sevSelect.addEventListener('change', () => { findingsState.severity = sevSelect.value; reload(); });
-
-  // Metric options are filled in from the overview (byMetric) once it loads, so
-  // the dropdown reflects the metrics that actually have findings.
-  const metricSelect = el('select', { class: 'col-filter' }, el('option', { value: '' }, 'All metrics'));
-  metricSelect.addEventListener('change', () => { findingsState.metric = metricSelect.value; loadList(); });
-
-  root.append(el('div', { class: 'section-head' },
-    el('h2', {}, 'Analysis — errors & anomalies'),
-    el('span', { class: 'muted' }, 'computed locally'),
-    el('span', { class: 'spacer' }),
-    exportButtons('findings', () => {
-      const p = {};
-      if (findingsState.hostId) p.hostId = findingsState.hostId;
-      return p;
-    })));
-
-  // Host selector sits directly under the heading so scoping the whole page to a
-  // single host is the first control you reach (it drives the summary, the
-  // assistant and the detail list). Severity/metric stay as per-column filters.
-  root.append(el('div', { class: 'findings-host-filter' },
-    el('label', { for: 'findings-host-select' }, 'Host'),
-    hostSelect));
-  hostSelect.id = 'findings-host-select';
-
-  if (featureEnabled('assistant')) root.append(assistantBox(() => findingsState.hostId));
-
-  const summaryHost = el('div', { class: 'findings-summary' });
-  const listHost = el('div', {});
-  root.append(summaryHost, listHost);
-
-  // Sortable detail table. Row rendering stays in findingRow (also reused by the
-  // live-WebSocket prepend); the table shell handles header sort + empty states.
-  const columns = [
-    { label: 'Time', key: 'time', get: (f) => new Date(f.createdAt || 0).getTime() },
-    { label: 'Host', key: 'host', get: (f) => String(agentName(f.hostId) || '').toLowerCase() },
-    { label: 'Metric', key: 'metric', get: (f) => f.metric || '', filter: metricSelect },
-    { label: 'Severity', key: 'severity', get: (f) => SEVERITY_RANK[f.severity] || 0, filter: sevSelect },
-    { label: 'Deviation', key: 'deviation', get: (f) => (typeof f.deviation === 'number' ? f.deviation : null) },
-    { label: 'Explanation', key: null },
-    { label: '', key: null },
-  ];
-  const grid = sortableTable(columns, {
-    className: 'findings',
-    sortKey: 'time',
-    sortDir: 'desc',
-    emptyText: 'No findings match the current filter.',
-    renderRow: (f) => findingRow(agentName, f),
-  });
-  findingsState.tbody = grid.tbody;
-
-  async function loadList() {
-    grid.setLoading('Loading…');
-    listHost.replaceChildren(grid.table);
-    try {
-      const findings = await api(`/api/findings${filterQs()}`);
-      grid.setRows(findings);
-    } catch (err) {
-      grid.setError(err.message);
-    }
-  }
-
-  async function loadSummary() {
-    try {
-      // Overview reflects host + severity (not the metric filter) so it stays a
-      // full breakdown across metrics, and doubles as the metric-dropdown source.
-      const s = await api(`/api/findings/summary${filterQs(['metric'])}`);
-      renderFindingsSummary(summaryHost, s, agentName);
-      syncMetricOptions(metricSelect, s.byMetric);
-    } catch {
-      summaryHost.replaceChildren();
-    }
-  }
-
-  // Called by the summary chips/rows + the filter controls to re-scope both the
-  // overview and the detail list; exposed so a live finding can refresh totals.
-  function reload() { loadSummary(); loadList(); }
-  findingsState.reloadSummary = loadSummary;
-
-  reload();
-  return root;
-};
-
-// Keeps the metric dropdown in sync with the metrics that currently have
-// findings, preserving the active selection (even if it briefly has no rows).
-function syncMetricOptions(select, byMetric) {
-  const metrics = (byMetric || []).map((m) => m.metric).filter(Boolean);
-  if (findingsState.metric && !metrics.includes(findingsState.metric)) metrics.push(findingsState.metric);
-  const want = ['', ...metrics.sort((a, b) => String(a).localeCompare(String(b)))];
-  const have = Array.from(select.options).map((o) => o.value);
-  if (want.length === have.length && want.every((v, i) => v === have[i])) return; // unchanged
-  select.replaceChildren(
-    el('option', { value: '' }, 'All metrics'),
-    ...metrics.sort((a, b) => String(a).localeCompare(String(b))).map((m) => el('option', { value: m }, m)));
-  select.value = findingsState.metric || '';
-}
-
-// The overview panel: totals + severity chips + per-metric and per-host
-// breakdowns (count / avg σ / max σ). Chips and metric rows are clickable and
-// drive the same filters as the header controls, so the panel is a fast pivot.
-function renderFindingsSummary(host, s, agentName) {
-  if (!s || !s.total) { host.replaceChildren(); return; }
-
-  const setSeverity = (sev) => {
-    findingsState.severity = findingsState.severity === sev ? '' : sev;
-    if (currentView === 'findings') render();
-  };
-  const setMetric = (m) => {
-    findingsState.metric = findingsState.metric === m ? '' : m;
-    // Re-render to reflect the metric selection in the dropdown + rows + overview.
-    if (currentView === 'findings') render();
-  };
-
-  const sevChip = (sev) => el('button', {
-    class: `fs-chip${findingsState.severity === sev ? ' active' : ''}`,
-    title: `Filter to ${sev}`, onclick: () => setSeverity(sev),
-  }, el('span', { class: `badge ${sev}` }, sev), el('span', { class: 'fs-chip-n' }, String(s.bySeverity[sev] || 0)));
-
-  const totals = el('div', { class: 'fs-totals' },
-    el('div', { class: 'fs-total' }, el('span', { class: 'fs-n' }, String(s.total)), el('span', { class: 'fs-l muted' }, 'findings')),
-    el('div', { class: 'fs-total' }, el('span', { class: 'fs-n' }, String(s.unacked)), el('span', { class: 'fs-l muted' }, 'unacknowledged')),
-    el('div', { class: 'fs-chips' }, sevChip('CRIT'), sevChip('WARN'), sevChip('INFO')));
-
-  const metricTable = el('table', { class: 'fs-mini' },
-    el('thead', {}, el('tr', {}, el('th', {}, 'Metric'), el('th', { class: 'num' }, 'Count'), el('th', { class: 'num' }, 'Avg σ'), el('th', { class: 'num' }, 'Max σ'))),
-    el('tbody', {}, ...s.byMetric.slice(0, 8).map((m) => el('tr', {
-      class: `clickable${findingsState.metric === m.metric ? ' active' : ''}`,
-      title: `Filter to ${m.metric}`, onclick: () => setMetric(m.metric),
+// ---- Analysis (MIGRATED — see public/views/analysis.js) ---------------------
+// Built lazily: `ui` is declared far down this file and is in the temporal dead
+// zone up here. app.js keeps the filter state (it outlives the view, so leaving
+// the page and coming back does not silently widen the scope somebody set) and
+// the live-finding subscription.
+let analysisView = null;
+let onLiveFindingRow = null;
+function getAnalysisView() {
+  if (analysisView) return analysisView;
+  if (typeof window === 'undefined' || !window.AnalysisView || !ui) return null;
+  analysisView = window.AnalysisView.create({
+    el, api, t, errText, ui, openAgent,
+    state: findingsState,
+    isAdmin: () => isAdmin(),
+    help: () => {
+      const info = PAGE_INFO.findings || {};
+      return { lead: info.hero || '', title: info.title || t('analysis.title'), body: info.body || (() => []) };
     },
-      el('td', {}, m.metric),
-      el('td', { class: 'num' }, String(m.count)),
-      el('td', { class: 'num' }, fmtSigma(m.avgDeviation)),
-      el('td', { class: 'num' }, fmtSigma(m.maxDeviation))))));
-
-  const hostTable = el('table', { class: 'fs-mini' },
-    el('thead', {}, el('tr', {}, el('th', {}, 'Host'), el('th', { class: 'num' }, 'Total'), el('th', { class: 'num' }, 'CRIT'), el('th', { class: 'num' }, 'WARN'), el('th', { class: 'num' }, 'Avg σ'))),
-    el('tbody', {}, ...s.byHost.slice(0, 8).map((h) => el('tr', {},
-      el('td', {}, esc(agentName(h.hostId))),
-      el('td', { class: 'num' }, String(h.count)),
-      el('td', { class: 'num crit' }, String(h.crit)),
-      el('td', { class: 'num warn' }, String(h.warn)),
-      el('td', { class: 'num' }, fmtSigma(h.avgDeviation))))));
-
-  host.replaceChildren(el('div', { class: 'card findings-summary-card' },
-    el('div', { class: 'fs-head' },
-      el('h3', {}, 'Overview'),
-      el('span', { class: 'muted' }, 'aggregated over the current host/severity filter')),
-    totals,
-    el('div', { class: 'fs-grid' },
-      el('div', { class: 'fs-col' }, el('h4', { class: 'muted' }, 'By metric'), metricTable),
-      el('div', { class: 'fs-col' }, el('h4', { class: 'muted' }, 'By host'), hostTable))));
-}
-
-function findingRow(agentName, f) {
-  const dev = typeof f.deviation === 'number' ? `${f.deviation.toFixed(1)}σ` : '–';
-  const corr = Array.isArray(f.correlatedWith) && f.correlatedWith.length
-    ? el('div', { class: 'muted' }, `correlated with ${f.correlatedWith.length} other(s)`)
-    : null;
-  const action = f.acked
-    ? el('span', { class: 'muted' }, 'acknowledged')
-    : (canWrite() ? el('button', { class: 'small ghost', onclick: (e) => ackFinding(f, e.target) }, 'Acknowledge') : null);
-  // A severity a rule changed says so, next to the badge. A downgraded critical
-  // that looks exactly like a warning somebody detected is how an estate goes
-  // quiet without anyone deciding it should.
-  const ruled = f.originalSeverity
-    ? el('span', {
-      class: 'muted severity-ruled',
-      title: t('sev.ruledHelp', { detected: f.originalSeverity, stored: f.severity }),
-    }, ' · ' + t('sev.was', { severity: f.originalSeverity }))
-    : null;
-  const tr = el('tr', { class: f.acked ? 'acked' : '' },
-    el('td', { class: 'muted' }, fmtDate(f.createdAt)),
-    el('td', {}, agentName(f.hostId)),
-    el('td', {}, f.metric),
-    el('td', {}, el('span', { class: `badge ${esc(f.severity || 'INFO')}` }, f.severity || 'INFO'),
-      f.kind === 'FLATLINE' ? el('span', { class: 'muted' }, ' flatline') : null, ruled),
-    el('td', {}, dev),
-    el('td', {}, el('div', {}, f.explanation || '–'), corr),
-    el('td', {}, action, action ? ' ' : null,
-      el('button', { class: 'small ghost', title: 'What changed on this device just before the anomaly', onclick: (e) => toggleFindingContext(f, e.target) }, 'What changed?'),
-      // The thought "this should be a warning for us" happens HERE, looking at
-      // the event — not in Settings, later, trying to remember what it said.
-      isAdmin() ? el('button', {
-        class: 'small ghost',
-        title: t('sev.fromEventHelp'),
-        onclick: () => editSeverityRule(null, {
-          source: 'finding', match_metric: f.metric, match_kind: f.kind, match_host_id: f.hostId,
-        }),
-      }, t('sev.fromEvent')) : null));
-  tr.dataset.findingId = f.id;
-  return tr;
-}
-
-// Phase 3 — "what changed before this": expands an inline row under a finding
-// showing the CHANGE-type events on its device in the window before the trigger
-// (GET /api/findings/:id/context). Reuses timelineRowEl (Phase 2). Explicit
-// loading/empty/error states.
-function toggleFindingContext(f, btn) {
-  const tr = btn.closest('tr');
-  if (!tr) return;
-  const next = tr.nextElementSibling;
-  if (next && next.classList.contains('finding-context-row')) {
-    next.remove();
-    btn.textContent = 'What changed?';
-    return;
-  }
-  const cell = el('td', { colspan: String(tr.children.length), class: 'finding-context' });
-  tr.after(el('tr', { class: 'finding-context-row' }, cell));
-  btn.textContent = 'Hide changes';
-  loadFindingContext(f, cell);
-}
-
-async function loadFindingContext(f, container) {
-  const head = el('div', { class: 'muted fc-head' }, 'What changed before this anomaly');
-  const list = el('div', {});
-  container.replaceChildren(head, list);
-  const agentId = Number(f.hostId);
-  const opts = timelineRenderOpts(Number.isInteger(agentId) ? agentId : null, {
-    onRetry: () => loadFindingContext(f, container),
-    emptyText: 'No changes detected in this window.',
+    // At most one primary in a PageHeader, and an export is not it: the two
+    // export buttons are the page's secondary actions.
+    headerActions: () => [
+      ui.button('secondary', t('analysis.export.csv'), {
+        onclick: () => downloadExport('findings', 'csv', findingsState.hostId ? { hostId: findingsState.hostId } : {}),
+      }),
+      ui.button('secondary', t('analysis.export.json'), {
+        onclick: () => downloadExport('findings', 'json', findingsState.hostId ? { hostId: findingsState.hostId } : {}),
+      }),
+    ],
+    toolbarActions: () => [],
+    newSeverityRule: (f) => editSeverityRule(null, {
+      source: 'finding', match_metric: f.metric, match_kind: f.kind, match_host_id: f.hostId,
+    }),
+    // One subscriber at a time: the view registers on every render, and an old
+    // closure would go on writing into a table that is no longer on screen.
+    onLive: (fn) => { onLiveFindingRow = fn; },
   });
-  TimelineView.renderInto(document, list, TimelineView.resolveState({ loading: true }), opts);
-  let view;
-  try {
-    const data = await api(`/api/findings/${encodeURIComponent(f.id)}/context`);
-    // The context endpoint returns `changes`; adapt to the timeline state shape.
-    view = TimelineView.resolveState({ data: { events: data.changes, partial: data.partial, failedSources: data.failedSources } });
-  } catch (err) {
-    view = TimelineView.resolveState({ error: err });
-  }
-  TimelineView.renderInto(document, list, view, opts);
+  return analysisView;
 }
 
-async function ackFinding(f, btn) {
-  if (btn) btn.disabled = true;
-  try {
-    await api(`/api/findings/${encodeURIComponent(f.id)}/ack`, { method: 'POST' });
-    f.acked = true;
-    toast('Acknowledged');
-    const tr = btn && btn.closest('tr');
-    if (tr) { tr.classList.add('acked'); btn.replaceWith(el('span', { class: 'muted' }, 'acknowledged')); }
-  } catch (err) {
-    if (btn) btn.disabled = false;
-    toast(err.message, true);
-  }
-}
+views.findings = async () => {
+  const v = getAnalysisView();
+  if (!v) return el('div', { class: 'empty error' }, t('analysis.err.title'));
+  const node = await v.view();
+  // The assistant box is not part of the contract's components yet, so it is
+  // appended rather than composed — it migrates with the rest of Insights.
+  if (featureEnabled('assistant')) node.append(assistantBox(() => findingsState.hostId));
+  return node;
+};
 
 // AI-assistant box. Posts to /api/assistant/explain; degrades gracefully when
 // the feature is disabled (403) so it never looks broken.
@@ -4572,269 +4366,100 @@ views.cluster = async () => {
   return container;
 };
 
-views.overview = async () => {
-  const root = el('div', { class: 'overview' });
-  root.append(el('div', { class: 'section-head' }, el('h2', {}, 'Traffic'),
-    el('span', { class: 'muted' }, 'auto-updates every 3 sec.')));
+// ---- Traffic (MIGRATED — see public/views/traffic.js) -----------------------
+// The chart plotter, the storage fold, the history explorer and the traffic-type
+// breakdown stay here: each is its own unmigrated component, and Traffic is the
+// only screen that mounts them. The view asks for them and app.js hands them over.
+let trafficView = null;
+// ovState is declared below this block, so the state object is built on first
+// use rather than at module level.
+const trafficViewState = {};
 
-  // NOC: alert banner (latest unacked CRIT/WARN finding) + KPI grid.
-  const alertBanner = el('div', { class: 'alert-banner hidden' });
-  root.append(alertBanner);
-
-  // Compact KPI strip: one slim row instead of four tall cards.
-  const kpiStat = (cls, label) => {
-    const value = el('span', { class: 'v num' }, '–');
-    const sub = el('span', { class: 'kpi-mini' });
-    return { node: el('div', { class: `kpi ${cls}` }, el('span', { class: 'k' }, label), value, sub), value, sub };
+function getTrafficView() {
+  if (trafficView) return trafficView;
+  if (typeof window === 'undefined' || !window.TrafficView || !ui) return null;
+  trafficViewState.selection = ovState.selection;
+  // The three folds are built once per view entry and handed to the view to
+  // append. They carry their own polling and their own state.
+  let extras = null;
+  const buildExtras = () => {
+    const storageSummary = el('summary', { class: 'storage-line' }, el('span', { class: 'muted' }, 'Storage …'));
+    const storageBody = el('div', { class: 'storage-detail-body' });
+    const typesCard = trafficTypesCard();
+    const histSection = trafficHistorySection({ onData: (d) => typesCard.update(d) });
+    const typeSection = trafficTypeSection();
+    return {
+      storageSummary,
+      storageBody,
+      nodes: [
+        el('details', { class: 'storage-fold' }, storageSummary, storageBody),
+        el('div', { class: 'hist-row' },
+          el('details', { class: 'sec hist-main' },
+            el('summary', {}, 'History — inspect time window ', el('span', { class: 'muted' }, '· select agent + period')),
+            histSection.node),
+          typesCard.node),
+        el('details', { class: 'sec' },
+          el('summary', {}, 'Traffic type ', el('span', { class: 'muted' }, '· per agent · DNS, Facebook, …')),
+          typeSection.node),
+      ],
+    };
   };
-  const kRx = kpiStat('rx', '↓ RX');
-  const kTx = kpiStat('tx', '↑ TX');
-  const kAg = kpiStat('ag', 'Agents');
-  const kLoc = kpiStat('loc', 'Locations');
-  root.append(el('div', { class: 'kpis' }, kRx.node, kTx.node, kAg.node, kLoc.node));
 
-  async function refreshAlert() {
-    try {
-      const fs = await api(`/api/findings?since=${new Date(Date.now() - 3600000).toISOString()}`);
-      const hit = fs.find((f) => (f.severity === 'CRIT' || f.severity === 'WARN') && !f.acked);
-      if (hit) {
-        alertBanner.className = `alert-banner sev-${hit.severity}`;
-        alertBanner.replaceChildren(
-          el('span', { class: 'alert-ic' }, '⚠'),
-          el('span', {}, `${hit.severity}: ${esc(hit.metric || '')} — ${esc(hit.explanation || '')}`),
-          el('span', { class: 'spacer' }),
-          el('span', { class: 'muted small' }, fmtDate(hit.createdAt)),
-          el('button', { class: 'small ghost', onclick: () => { currentView = 'findings'; render(); } }, 'Details'));
-      } else { alertBanner.className = 'alert-banner hidden'; alertBanner.replaceChildren(); }
-    } catch { alertBanner.className = 'alert-banner hidden'; }
-  }
-  refreshAlert();
-  api('/locations').then((locs) => {
-    kLoc.value.textContent = String(locs.length);
-    kLoc.node.title = `${locs.filter((l) => l.latitude != null).length} with coordinates`;
-  }).catch(() => {});
+  trafficView = window.TrafficView.create({
+    el, t, ui, errText, fmtBytes, gotoView, openAgent,
+    state: trafficViewState,
+    plot: (series, opts) => multiChart(series, opts),
+    help: () => {
+      const info = PAGE_INFO.overview || {};
+      return { lead: info.hero || '', title: info.title || t('traffic.title'), body: info.body || (() => []) };
+    },
+    // One tick: every agent's latest traffic totals, in parallel. An agent that
+    // has not reported counts as zero rather than dropping out of the total.
+    fetchTick: async () => {
+      const agents = await api('/agents');
+      const latest = await Promise.all(agents.map(async (a) => {
+        try {
+          const rows = await api(`/agents/${a.id}/results?limit=1`);
+          const tr = rows[0] && rows[0].payload && rows[0].payload.traffic && rows[0].payload.traffic.totals;
+          return { a, rx: tr ? Number(tr.rxBytesPerSec) || 0 : 0, tx: tr ? Number(tr.txBytesPerSec) || 0 : 0 };
+        } catch { return { a, rx: 0, tx: 0 }; }
+      }));
+      return { agents, latest };
+    },
+    fetchAlert: async () => {
+      const list = await api(`/api/findings?since=${new Date(Date.now() - 3600000).toISOString()}`);
+      return list.find((f) => (f.severity === 'CRIT' || f.severity === 'WARN') && !f.acked) || null;
+    },
+    fetchSites: async () => {
+      const locs = await api('/locations');
+      const mapped = locs.filter((l) => l.latitude != null).length;
+      return { count: locs.length, hint: t('traffic.stat.sitesHint', { mapped }) };
+    },
+    mountExtras: (page) => { extras = buildExtras(); page.append(...extras.nodes); },
+    refreshExtras: () => {
+      if (!extras) return;
+      api('/system/storage').then((s) => {
+        extras.storageSummary.replaceChildren(...storageLineParts(s));
+        extras.storageBody.replaceChildren(storageCards(s));
+      }).catch(() => { /* the line keeps its placeholder */ });
+    },
+    startPolling: (refresh) => {
+      stopOverview();
+      ovState.timer = setInterval(() => {
+        if (currentView !== 'overview') { stopOverview(); return; }
+        if (modalOpen()) return;
+        refresh();
+      }, 3000);
+    },
+  });
+  return trafficView;
+}
 
-  // Top agents by current bandwidth (updated each tick).
-  const topAgents = el('div', { class: 'top-agents' });
-
-  // Hero chart: the chart fills the card's full width. Dragging across it zooms
-  // into the selected timespan (freezing the live view to that window); the
-  // "Reset zoom" chip returns to the live rolling view.
-  const chartHost = el('div', { class: 'overview-chart' });
-  const controls = el('div', { class: 'peragent-list' });
-  const chipRx = el('button', { class: 'chip rx', onclick: () => toggleSeries('total:rx') }, 'Total RX');
-  const chipTx = el('button', { class: 'chip tx', onclick: () => toggleSeries('total:tx') }, 'Total TX');
-  const perAgentCnt = el('span', { class: 'cnt muted' });
-  const perAgent = el('details', { class: 'chip-det' },
-    el('summary', { class: 'chip' }, 'Pr. agent ', perAgentCnt), controls);
-  const zoomBtn = el('button', { class: 'chip size-toggle', onclick: () => resetZoom() });
-  let zoom = null; // frozen snapshot of the dragged window, or null while live
-  const chartCard = el('div', { class: 'chart-card' },
-    el('div', { class: 'bar' }, el('h3', {}, 'Live traffic'), el('span', { class: 'spacer' }), chipRx, chipTx, perAgent, zoomBtn),
-    el('div', { class: 'chart-row' }, chartHost));
-  root.append(chartCard);
-
-  // Slim storage line; the full disk/DB/forbrug breakdown folds open below it.
-  const storageSummary = el('summary', { class: 'storage-line' }, el('span', { class: 'muted' }, 'Storage …'));
-  const storageBody = el('div', { class: 'storage-detail-body' });
-  root.append(el('details', { class: 'storage-fold' }, storageSummary, storageBody));
-  function refreshStorage() {
-    api('/system/storage').then((s) => {
-      storageSummary.replaceChildren(...storageLineParts(s));
-      storageBody.replaceChildren(storageCards(s));
-    }).catch(() => {});
-  }
-  refreshStorage();
-
-  root.append(el('details', { class: 'sec' }, el('summary', {}, 'Top agents ', el('span', { class: 'muted' }, '· by current bandwidth')), topAgents));
-
-  // history[seriesId] = [{ y }]; selection is a Set of seriesId.
-  const history = new Map();
-  const selection = ovState.selection;
-  const MAX = 60;
-  let agentsMeta = [];
-  let tickN = 0;
-
-  function pushPoint(id, label, y) {
-    if (!history.has(id)) history.set(id, { label, points: [] });
-    const h = history.get(id);
-    h.label = label;
-    h.points.push({ y, t: Date.now() });
-    if (h.points.length > MAX) h.points.shift();
-  }
-
-  async function tick() {
-    let agents;
-    try { agents = await api('/agents'); } catch (err) { chartHost.replaceChildren(el('p', { class: 'error' }, err.message)); return; }
-    agentsMeta = agents;
-    // Fetch each agent's latest result (rate) in parallel.
-    const latest = await Promise.all(agents.map(async (a) => {
-      try {
-        const rows = await api(`/agents/${a.id}/results?limit=1`);
-        const t = rows[0] && rows[0].payload && rows[0].payload.traffic && rows[0].payload.traffic.totals;
-        return { a, rx: t ? Number(t.rxBytesPerSec) || 0 : 0, tx: t ? Number(t.txBytesPerSec) || 0 : 0 };
-      } catch { return { a, rx: 0, tx: 0 }; }
-    }));
-    let totalRx = 0;
-    let totalTx = 0;
-    for (const { a, rx, tx } of latest) {
-      const name = a.display_name || a.hostname;
-      pushPoint(`rx:${a.id}`, `${name} RX`, rx);
-      pushPoint(`tx:${a.id}`, `${name} TX`, tx);
-      totalRx += rx; totalTx += tx;
-    }
-    pushPoint('total:rx', 'Total RX', totalRx);
-    pushPoint('total:tx', 'Total TX', totalTx);
-
-    // KPI cards.
-    kRx.value.textContent = `${fmtBytes(totalRx)}/s`;
-    kTx.value.textContent = `${fmtBytes(totalTx)}/s`;
-    const online = agents.filter((a) => a.status === 'online').length;
-    kAg.value.textContent = `${online} / ${agents.length}`;
-    kAg.sub.replaceChildren(usageBar(agents.length ? Math.round((online / agents.length) * 100) : 0));
-
-    // Top agents by current bandwidth.
-    const top = latest.slice().sort((a, b) => (b.rx + b.tx) - (a.rx + a.tx)).slice(0, 5);
-    topAgents.replaceChildren(
-      ...(top.length ? top.map(({ a, rx, tx }) => el('div', { class: 'ta-row' },
-        el('span', { class: `badge ${a.status}` }, a.status === 'online' ? '●' : '○'),
-        el('span', { class: 'ta-name' }, esc(a.display_name || a.hostname)),
-        el('span', { class: 'ta-bw muted' }, `↓ ${fmtBytes(rx)}/s · ↑ ${fmtBytes(tx)}/s`))) : [el('div', { class: 'muted' }, 'No agents.')]));
-
-    // Default selection on first load: the two totals.
-    if (!selection.size) { selection.add('total:rx'); selection.add('total:tx'); }
-
-    renderChart();
-    renderControls();
-
-    // Periodically refresh the alert banner + storage (not every 3s tick).
-    tickN += 1;
-    if (tickN % 10 === 0) { refreshAlert(); refreshStorage(); }
-  }
-
-  // The live series: the selected ids mapped onto their rolling history
-  // buffers, coloured cyan for RX / emerald for TX and the palette otherwise.
-  function liveSeries() {
-    const colorFor = (id, idx) => (id.includes('rx') ? '#06b6d4' : id.includes('tx') ? '#10b981' : SERIES_COLORS[idx % SERIES_COLORS.length]);
-    return [...selection].filter((id) => history.has(id)).map((id, idx) => ({
-      id, label: history.get(id).label, color: colorFor(id, idx),
-      points: history.get(id).points,
-    }));
-  }
-
-  function renderChart() {
-    // While zoomed the chart is frozen to the snapshot taken at drag time, so
-    // the 3-second live tick doesn't fight the zoom; otherwise it's the rolling
-    // live series.
-    const seriesList = zoom ? zoom.series : liveSeries();
-    const legend = legendFor(seriesList);
-    // Running clock ticks (HH:MM:SS) from the actual point timestamps, so the
-    // x-axis shows the (live or zoomed) timeframe rather than a static label.
-    const ref = seriesList.find((s) => s.points.length >= 2);
-    const TICKS = 5;
-    let xLabels = ['~3 min ago', '', 'now'];
-    if (ref) {
-      const pts = ref.points;
-      xLabels = Array.from({ length: TICKS }, (_, i) =>
-        fmtClock(pts[Math.round((i / (TICKS - 1)) * (pts.length - 1))].t));
-    }
-    chartHost.replaceChildren(
-      seriesList.length ? multiChart(seriesList, { height: 300, area: true, xLabels, onBrush: (f0, f1) => { if (f0 === null) resetZoom(); else zoomTo(f0, f1); } }) : el('div', { class: 'empty' }, 'Select series in the toolbar ↑'),
-      legend);
-    syncChips();
-  }
-
-  // Drag-to-zoom: freeze the chart to the dragged slice of whatever is shown
-  // now (the live buffer, or an existing zoom — so a second drag zooms in
-  // further). Snapshots the points so later live ticks leave the window be.
-  function zoomTo(f0, f1) {
-    const base = zoom ? zoom.series : liveSeries();
-    if (!base.length) return;
-    const lo = Math.min(f0, f1);
-    const hi = Math.max(f0, f1);
-    // multiChart stretches each series across the full width using its own
-    // point count, so map the dragged fraction onto each series' own index
-    // range. A single shared length would slice a shorter series past its end
-    // (it would vanish from the zoom) or zoom it to the wrong interval.
-    const series = base
-      .map((s) => {
-        const n = s.points.length;
-        const i0 = Math.round(lo * (n - 1));
-        const i1 = Math.round(hi * (n - 1));
-        return { id: s.id, label: s.label, color: s.color, points: s.points.slice(i0, i1 + 1).map((p) => ({ t: p.t, y: p.y })) };
-      })
-      .filter((s) => s.points.length >= 2);
-    if (!series.length) return;
-    zoom = { series };
-    updateZoomBtn();
-    renderChart();
-  }
-  function resetZoom() {
-    if (!zoom) return;
-    zoom = null;
-    updateZoomBtn();
-    renderChart();
-  }
-  // The toolbar chip only does something while zoomed; greyed out otherwise.
-  function updateZoomBtn() {
-    zoomBtn.textContent = '↺ Reset zoom';
-    zoomBtn.disabled = !zoom;
-    zoomBtn.classList.toggle('on', !!zoom);
-    zoomBtn.title = zoom ? 'Return to the live rolling view' : 'Drag across the chart to zoom into a timespan';
-  }
-
-  function checkbox(id, label) {
-    const cb = el('input', { type: 'checkbox' });
-    cb.checked = selection.has(id);
-    cb.addEventListener('change', () => { if (cb.checked) selection.add(id); else selection.delete(id); if (zoom) resetZoom(); else renderChart(); });
-    return el('label', { class: 'check' }, cb, label);
-  }
-
-  // Per-agent series live in the "Pr. agent" chip menu; totals are the chips.
-  function renderControls() {
-    const items = [];
-    for (const a of agentsMeta) {
-      const name = a.display_name || a.hostname;
-      items.push(checkbox(`rx:${a.id}`, `${name} · RX`), checkbox(`tx:${a.id}`, `${name} · TX`));
-    }
-    controls.replaceChildren(...(items.length ? items : [el('div', { class: 'muted' }, 'No agents.')]));
-    syncChips();
-  }
-
-  // Toolbar chips toggle the two totals and reflect the live selection.
-  function toggleSeries(id) {
-    if (selection.has(id)) selection.delete(id); else selection.add(id);
-    if (zoom) resetZoom(); else renderChart();
-  }
-  function syncChips() {
-    chipRx.classList.toggle('on', selection.has('total:rx'));
-    chipTx.classList.toggle('on', selection.has('total:tx'));
-    let n = 0;
-    for (const id of selection) if (id.startsWith('rx:') || id.startsWith('tx:')) n += 1;
-    perAgentCnt.textContent = n ? `(${n})` : '';
-  }
-
-  // Historical traffic explorer (date range, types, time axis, brush-to-zoom),
-  // with the Traffic types aggregate card beside it (side by side; stacks on
-  // narrow viewports). The card derives its figures from the history samples.
-  const typesCard = trafficTypesCard();
-  const histSection = trafficHistorySection({ onData: (d) => typesCard.update(d) });
-  const histDetails = el('details', { class: 'sec hist-main' }, el('summary', {}, 'History — inspect time window ', el('span', { class: 'muted' }, '· select agent + period')), histSection.node);
-  root.append(el('div', { class: 'hist-row' }, histDetails, typesCard.node));
-
-  // Traffic-type breakdown (DNS, Web, Facebook, …) — opt-in, collapsed.
-  const typeSection = trafficTypeSection();
-  root.append(el('details', { class: 'sec' }, el('summary', {}, 'Traffic type ', el('span', { class: 'muted' }, '· per agent · DNS, Facebook, …')), typeSection.node));
-
-  // Set the zoom-button state and render once before the first tick.
-  updateZoomBtn();
-  renderChart();
-
-  // Lifecycle: poll while this view is mounted; stop when leaving.
+views.overview = async () => {
+  const v = getTrafficView();
+  if (!v) return el('div', { class: 'empty error' }, t('traffic.err.title'));
   stopOverview();
-  ovState.timer = setInterval(() => { if (!modalOpen()) tick(); }, 3000);
-  tick();
-  return root;
+  return v.view();
 };
 
 // Overview polling state, so switching tabs stops it.
@@ -6347,558 +5972,308 @@ function topoLayersSvg(vm, { onNodeClick, focusId } = {}) {
 // Site filter scopes the graph to one location; window selector adjusts depth.
 // Action buttons (Ping / Vis rute) let an operator run live diagnostics against
 // any observed host directly from this view, using a selectable online agent.
-views.topology = async () => {
-  const root = el('div', { class: 'topology' });
-  const headInfo = el('span', { class: 'muted' }, 'Service/host dependencies from observed flows');
-  root.append(el('div', { class: 'section-head' }, el('h2', {}, 'Topology'), headInfo));
+// ---- Topology (MIGRATED — see public/views/topology.js) ---------------------
+// The three drawing primitives and the probe modals stay here: topoGraphSvg and
+// topoLayersSvg are their own components, the Leaflet map carries the reader's
+// pan and zoom, and the path visualisation is shared with Probes & Tests.
+const EXT_COLOR = '#f59e0b'; // external peer (matches the diagram's amber)
+const SITE_COLOR = '#38bdf8'; // internal site anchor
 
-  const [agentList, locations] = await Promise.all([
-    api('/agents').catch(() => []),
-    api('/locations').catch(() => []),
-  ]);
-  const onlineAgents = agentList.filter((a) => a.status === 'online');
+let topologyPage = null;
+const topologyPageState = {};
 
-  // Site and time-window selectors — control what the graph covers.
-  const locSel = el('select', { class: 'small' },
-    el('option', { value: '' }, 'All sites'),
-    ...locations.map((l) => el('option', { value: String(l.id) }, l.name)));
-  const winSel = el('select', { class: 'small' },
-    el('option', { value: '30' }, '30 min'),
-    el('option', { value: '60' }, '60 min'),
-    el('option', { value: '240' }, '4 hours'),
-    el('option', { value: '1440' }, '24 hours'));
-  winSel.value = '60';
-  const refreshBtn = el('button', { class: 'small ghost' }, 'Refresh');
-
-  // View-mode toggle: the who-talks-to-whom SVG diagram (default), the unified
-  // resilience "Layers" graph (LLDP links + service dependencies from
-  // /api/topology/graph), or a map of the public peers by country. Internal hosts
-  // are never geolocated, so the map only covers the external subset — see
-  // drawTopoMap. A ?layer/?focus deep-link opens straight into Layers.
-  const topoState = TopologyGraph.parseParams(window.location.search);
-  let mode = (window.location.search && /[?&](layer|focus)=/.test(window.location.search)) ? 'layers' : 'diagram';
-  const diagramBtn = el('button', { class: 'small', 'aria-pressed': 'true' }, 'Diagram');
-  const layersBtn = el('button', { class: 'small ghost', 'aria-pressed': 'false' }, 'Layers');
-  const mapBtn = el('button', { class: 'small ghost', 'aria-pressed': 'false' }, 'Map');
-  const modeToggle = el('div', { class: 'topo-mode', role: 'group', 'aria-label': 'View mode' }, diagramBtn, layersBtn, mapBtn);
-
-  root.append(el('div', { class: 'topo-action-bar' },
-    el('label', { class: 'inline muted' }, 'Site ', locSel),
-    el('label', { class: 'inline muted' }, ' Window ', winSel),
-    refreshBtn,
-    el('span', { class: 'spacer' }),
-    modeToggle));
-
-  // Agent selector — shown only when at least one agent is online so action
-  // buttons have something to send probes from. A specific choice scopes the
-  // diagram/tables to that agent's own exported flows AND is the vantage point
-  // for the per-node probes (Ping/Route/Path); "All agents" keeps the fleet view.
-  const agentSel = el('select', { class: 'small' });
-  if (onlineAgents.length) {
-    agentSel.append(el('option', { value: '' }, 'All agents (fleet)'));
-    onlineAgents.forEach((a) => agentSel.append(el('option', { value: String(a.id) }, a.display_name || a.hostname)));
-    agentSel.addEventListener('change', () => {
-      // Server-side, agent scope takes precedence over the Site filter, so grey
-      // Site out while one agent is selected to avoid a "my site is ignored"
-      // surprise; re-enable it when back on the fleet view.
-      const scoped = !!agentSel.value;
-      locSel.disabled = scoped;
-      locSel.title = scoped ? 'Ignored while a single agent is selected — the map is scoped to that agent’s flows.' : '';
-      loadTopology();
-    });
-    root.append(el('div', { class: 'topo-action-bar' },
-      el('span', { class: 'muted' }, 'View / run actions from agent:'), agentSel));
+// Send a probe and poll until a result newer than sentAt appears (or timeout).
+async function topoProbeAndWait(agentId, type, host, maxAttempts, intervalMs) {
+  const sentAt = Date.now();
+  await api(`/agents/${agentId}/probe`, { method: 'POST', body: { type, host } });
+  for (let i = 0; i < maxAttempts; i += 1) {
+    // eslint-disable-next-line no-await-in-loop
+    await new Promise((res) => setTimeout(res, intervalMs));
+    // eslint-disable-next-line no-await-in-loop
+    const d = await api(`/api/probes/latest?agentId=${encodeURIComponent(agentId)}`);
+    const r = (d.results || []).find(
+      (x) => x.type === type && x.target === host && new Date(x.ts).getTime() > sentAt - 500);
+    if (r) return r;
   }
+  throw new Error(t('topo.probe.noResult'));
+}
 
-  const summary = el('p', { class: 'muted' });
-  root.append(summary);
-  // The visual area holds either the diagram (graphHost) or the map (mapHost);
-  // the tables below stay visible in both modes (full list). lastData is the most
-  // recent /api/topology response so the toggle can redraw without refetching.
-  const graphHost = el('div', {});
-  const mapHost = el('div', { class: 'topo-maphost hidden' });
-  const layerHost = el('div', { class: 'topo-layerhost hidden' });
-  root.append(el('div', {}, graphHost, mapHost, layerHost));
-  const tableHost = el('div', {});
-  root.append(tableHost);
-  let lastData = null;
-  let graphData = null; // cached /api/topology/graph (unified l2_link + service_dep)
-  let layersApi = null; // handles returned by topoLayersSvg (highlight control)
-  let changeSets = null; // { changed:Set, flapping:Set } from /api/topology/changes
-  let whatIf = topoState.focus != null && canWrite(); // "what if this node fails?" preview mode
-
-  // Persist ONLY the topology-owned query params (layer + focus) without
-  // clobbering unrelated ones — the SPA's replaceState persistence pattern.
-  function syncTopoUrl() {
-    try {
-      const q = new URLSearchParams(window.location.search || '');
-      const patch = TopologyGraph.paramsPatch(topoState);
-      for (const [k, v] of Object.entries(patch)) { if (v == null) q.delete(k); else q.set(k, v); }
-      const qs = q.toString();
-      window.history.replaceState(null, '', qs ? `${window.location.pathname}?${qs}` : window.location.pathname);
-    } catch { /* URL API off — best-effort */ }
-  }
-
-  // byId index is rebuilt on each load; shared by label() and actionBtns().
-  const byId = {};
-  const label = (id) => {
-    const n = byId[id];
-    if (n && n.kind === 'external') return `${id}${n.asnName ? ` · ${n.asnName}` : ''}${n.country ? ` (${n.country})` : ''}`;
-    return id;
-  };
-  const kindBadge = (kind) => el('span', { class: `badge ${kind === 'external' ? 'warn' : 'ok'}` }, kind || '?');
-
-  // Send a probe and poll until a result newer than sentAt appears (or timeout).
-  async function runProbeAndWait(type, host, maxAttempts, intervalMs) {
-    const id = agentSel.value;
-    if (!id) throw new Error('Select an agent.');
-    const sentAt = Date.now();
-    await api(`/agents/${id}/probe`, { method: 'POST', body: { type, host } });
-    for (let i = 0; i < maxAttempts; i++) {
-      await new Promise((res) => setTimeout(res, intervalMs));
-      const d = await api(`/api/probes/latest?agentId=${encodeURIComponent(id)}`);
-      const r = (d.results || []).find(
-        (x) => x.type === type && x.target === host && new Date(x.ts).getTime() > sentAt - 500);
-      if (r) return { r, agentId: id };
-    }
-    throw new Error('No result yet — check Probes & Tests.');
-  }
-
-  // Per-row action buttons: Ping shows a quick RTT/loss summary; Show route runs
-  // traceroute and opens the full path-graph panel (same as Probes & Tests).
-  function actionBtns(host) {
-    const pingBtn = el('button', { class: 'small ghost', onclick: async () => {
-      if (!agentSel.value) { toast('Select an agent.', true); return; }
-      pingBtn.disabled = true;
-      const card = $('#modal-card');
-      const st = el('p', { class: 'muted' }, 'Sending ping…');
-      card.replaceChildren(
-        el('h3', {}, `Ping → ${esc(host)}`), st,
-        el('div', { class: 'form-actions' }, el('button', { class: 'ghost', onclick: closeModal }, 'Close')));
-      $('#modal').classList.remove('hidden');
-      try {
-        const { r } = await runProbeAndWait('ping', host, 8, 2500);
-        st.className = r.ok ? '' : 'error';
-        st.textContent = r.ok
-          ? `RTT: ${r.rttMs} ms · Tab: ${r.lossPct ?? 0}% · Jitter: ${r.jitterMs != null ? r.jitterMs + ' ms' : '–'}`
-          : `Error: ${r.detail || 'no response'}`;
-      } catch (e) {
-        st.className = 'error'; st.textContent = errText(e);
-      } finally { pingBtn.disabled = false; }
-    }}, 'Ping');
-
-    const routeBtn = el('button', { class: 'small ghost', onclick: async () => {
-      if (!agentSel.value) { toast('Select an agent.', true); return; }
-      routeBtn.disabled = true;
-      const agentId = agentSel.value;
-      const card = $('#modal-card');
-      const st = el('p', { class: 'muted' }, 'Running traceroute (up to ~30 s)…');
-      card.replaceChildren(
-        el('h3', {}, `Route → ${esc(host)}`), st,
-        el('div', { class: 'form-actions' }, el('button', { class: 'ghost', onclick: closeModal }, 'Close')));
-      $('#modal').classList.remove('hidden');
-      $('#modal-card').classList.add('wide');
-      try {
-        const { r } = await runProbeAndWait('traceroute', host, 12, 3000);
-        const detail = await probeDetail(r, agentId);
-        st.replaceWith(detail);
-      } catch (e) {
-        st.className = 'error'; st.textContent = errText(e);
-      } finally { routeBtn.disabled = false; }
-    }}, 'Show route');
-
-    // "Path" opens the shared Path Visualization (graph + brushable timeline) for
-    // the selected peer, sourced from the chosen agent — a drawer over the topology.
-    const pathBtn = el('button', { class: 'small ghost', onclick: async () => {
-      if (!agentSel.value) { toast('Select an agent.', true); return; }
-      const card = $('#modal-card');
-      card.replaceChildren(el('h3', {}, `Path → ${esc(host)}`), el('p', { class: 'muted' }, 'Loading path…'),
-        el('div', { class: 'form-actions' }, el('button', { class: 'ghost', onclick: closeModal }, 'Close')));
-      $('#modal').classList.remove('hidden');
-      $('#modal-card').classList.add('wide');
-      try {
-        const viz = await pathVisualization({ sourceId: agentSel.value, targetId: host });
-        card.replaceChildren(el('h3', {}, `Path → ${esc(host)}`), viz,
-          el('div', { class: 'form-actions' }, el('button', { class: 'ghost', onclick: closeModal }, 'Close')));
-      } catch (e) {
-        card.replaceChildren(el('h3', {}, `Path → ${esc(host)}`), el('p', { class: 'error' }, errText(e)),
-          el('div', { class: 'form-actions' }, el('button', { class: 'ghost', onclick: closeModal }, 'Close')));
-      }
-    }}, 'Path');
-
-    return el('div', { class: 'row-actions' }, pingBtn, routeBtn, pathBtn);
-  }
-
-  // Map mode: plots the PUBLIC peers by country (circles sized by traffic) over
-  // the shared EU/self-hosted tiles, your sites as anchor pins, and the observed
-  // dependencies as routes. Internal (RFC1918) hosts are never geolocated, so the
-  // map deliberately shows only the external subset; the diagram remains the tool
-  // for the internal structure. Routes internal→external are drawn from a single
-  // anchor site — the selected Site, or the only located site — because the graph
-  // doesn't tie each internal IP to a site; when the fleet spans several sites we
-  // show the peers without those lines and say so. External↔external edges (both
-  // ends geolocated) are always drawn.
-  const EXT_COLOR = '#f59e0b'; // external peer (matches the diagram's amber)
-  const SITE_COLOR = '#38bdf8'; // internal site anchor
-
-  async function drawTopoMap() {
-    stopTopoMap();
-    if (typeof L === 'undefined') {
-      mapHost.replaceChildren(el('div', { class: 'empty' }, 'Map library (Leaflet) could not be loaded — the map is unavailable offline. Use the Diagram.'));
+// Ping / Show route / Path, each in the shared modal. Ping is a summary; the
+// other two open the full panel the Probes screen uses.
+async function topoProbeModal(kind, host, agentId) {
+  const card = $('#modal-card');
+  const title = { ping: t('topo.ping'), route: t('topo.route'), path: t('topo.path') }[kind];
+  const heading = `${title} → ${host}`;
+  const status = el('p', { class: 'muted' }, t('topo.probe.working'));
+  const close = () => el('div', { class: 'form-actions' },
+    el('button', { class: 'ghost', onclick: closeModal }, t('common.close')));
+  card.replaceChildren(el('h3', {}, heading), status, close());
+  $('#modal').classList.remove('hidden');
+  if (kind !== 'ping') $('#modal-card').classList.add('wide');
+  try {
+    if (kind === 'ping') {
+      const r = await topoProbeAndWait(agentId, 'ping', host, 8, 2500);
+      status.className = r.ok ? '' : 'error';
+      status.textContent = r.ok
+        ? t('topo.probe.ping', { rtt: r.rttMs, loss: r.lossPct == null ? 0 : r.lossPct, jitter: r.jitterMs == null ? '–' : `${r.jitterMs} ms` })
+        : t('topo.probe.failed', { detail: r.detail || t('topo.probe.noReply') });
       return;
     }
-    const nodes = (lastData && lastData.nodes) || [];
-    const edges = (lastData && lastData.edges) || [];
-    const byId = {}; nodes.forEach((n) => { byId[n.id] = n; });
-    const located = locations.filter((l) => l.latitude != null && l.longitude != null);
-    const extNodes = nodes.filter((n) => n.kind === 'external');
-    const geoNodes = extNodes.filter((n) => n.lat != null && n.lng != null);
-
-    // Aggregate the geolocated peers to their country centroid (many peer IPs
-    // stack on one point otherwise): sum bytes, count peers, collect ASN names.
-    const byCountry = new Map();
-    for (const n of geoNodes) {
-      const e = byCountry.get(n.country) || { country: n.country, lat: n.lat, lng: n.lng, bytes: 0, peers: 0, asns: new Set() };
-      e.bytes += n.bytes || 0; e.peers += 1; if (n.asnName) e.asns.add(n.asnName);
-      byCountry.set(n.country, e);
-    }
-
-    // Which site anchors the internal→external routes (see the note above).
-    const selLoc = locSel.value ? located.find((l) => String(l.id) === locSel.value) : null;
-    const anchor = selLoc || (located.length === 1 ? located[0] : null);
-
-    if (!geoNodes.length && !located.length) {
-      mapHost.replaceChildren(el('div', { class: 'empty' },
-        extNodes.length
-          ? 'No public peers could be placed on the map yet. Country-level placement needs the offline GeoIP/ASN database (Settings → Map).'
-          : 'Nothing to map in this window — the graph is all internal hosts, which are never geolocated. Use the Diagram.'));
+    if (kind === 'route') {
+      const r = await topoProbeAndWait(agentId, 'traceroute', host, 12, 3000);
+      status.replaceWith(await probeDetail(r, agentId));
       return;
     }
+    const viz = await pathVisualization({ sourceId: agentId, targetId: host });
+    card.replaceChildren(el('h3', {}, heading), viz, close());
+  } catch (e) {
+    status.className = 'error';
+    status.textContent = errText(e);
+  }
+}
 
-    let cfg = {};
-    try { cfg = await api('/api/map/config'); } catch { /* fall back to default tiles */ }
-    // The user may have switched mode / left the view while awaiting.
-    if (mode !== 'map' || !mapHost.isConnected) return;
+// Map mode: the PUBLIC peers by country (circles sized by traffic) over the
+// shared EU/self-hosted tiles, your sites as anchor pins, and the observed
+// dependencies as routes. Internal (RFC1918) hosts are never geolocated, so the
+// map deliberately shows only the external subset; the diagram remains the tool
+// for the internal structure. Routes internal→external are drawn from a single
+// anchor site — the selected Site, or the only located site — because the graph
+// does not tie each internal IP to a site; when the fleet spans several sites
+// the peers are shown without those lines and the page says so.
+async function drawTopoMapInto(host, { data, locations, siteId }) {
+  stopTopoMap();
+  if (typeof L === 'undefined') {
+    host.replaceChildren(el('div', { class: 'empty' }, t('topo.map.noLibrary')));
+    return;
+  }
+  const nodes = (data && data.nodes) || [];
+  const edges = (data && data.edges) || [];
+  const nodeById = {};
+  nodes.forEach((n) => { nodeById[n.id] = n; });
+  const located = locations.filter((l) => l.latitude != null && l.longitude != null);
+  const extNodes = nodes.filter((n) => n.kind === 'external');
+  const geoNodes = extNodes.filter((n) => n.lat != null && n.lng != null);
 
-    const canvas = el('div', { class: 'map' });
-    // GeoIP-missing banner: peers exist but none could be placed by country.
-    const banner = (extNodes.length && !geoNodes.length)
-      ? el('div', { class: 'alert-banner sev-WARN' },
-          el('span', { class: 'alert-ic' }, '⚠'),
-          el('span', {}, el('strong', {}, 'GeoIP database not configured. '),
-            'External peers can’t be placed by country until the offline GeoIP/ASN database is loaded. ',
-            role === 'admin' ? settingsLink('map', 'Configure it in Settings → Map') : 'Ask an administrator to configure it in Settings → Map', '.'))
-      : null;
-    const noAnchor = geoNodes.length && !anchor;
-    const legend = el('div', { class: 'legend geo-legend' },
-      el('span', {}, el('span', { class: 'dot ring', style: `background:${SITE_COLOR}` }), ' site'),
-      el('span', {}, el('span', { class: 'dot', style: `background:${EXT_COLOR}` }), ' external peer'),
-      el('span', { class: 'muted' }, '· circle size = traffic · lines = observed routes · public peers placed at country level'));
-    const note = el('p', { class: 'muted small' },
-      `Internal (private) hosts are never geolocated — the map shows only the ${byCountry.size} external ${byCountry.size === 1 ? 'country' : 'countries'} (${geoNodes.length} peers). `,
-      noAnchor ? 'Select a single Site above to draw its routes to those peers.' : (anchor ? `Routes are drawn from ${esc(anchor.name)}.` : ''));
-    mapHost.replaceChildren(...[banner, canvas, legend, note].filter(Boolean));
-
-    const center = anchor ? [anchor.latitude, anchor.longitude]
-      : (geoNodes.length ? [geoNodes[0].lat, geoNodes[0].lng] : [located[0].latitude, located[0].longitude]);
-    const map = createLeafletMap(canvas, cfg, { center, zoom: 3 });
-    if (!map) return;
-    topoMapState.map = map;
-    const pts = [];
-
-    // Routes: internal→external anchored to the site; external↔external between
-    // the two country centroids. Aggregate by endpoints so repeated conversations
-    // become one line weighted (log-scaled) by total bytes.
-    const routes = new Map();
-    const addRoute = (key, a, b, bytes) => {
-      const r = routes.get(key) || { a, b, bytes: 0 };
-      r.bytes += bytes || 0; routes.set(key, r);
-    };
-    for (const e of edges) {
-      const a = byId[e.from]; const b = byId[e.to];
-      if (!a || !b) continue;
-      const aExt = a.kind === 'external' && a.lat != null;
-      const bExt = b.kind === 'external' && b.lat != null;
-      if (aExt && bExt) {
-        if (a.country === b.country) continue; // same centroid — nothing to draw
-        addRoute(`x:${[a.country, b.country].sort().join('>')}`, [a.lat, a.lng], [b.lat, b.lng], e.bytes);
-      } else if (anchor && (aExt || bExt)) {
-        const ext = aExt ? a : b;
-        addRoute(`s:${ext.country}`, [anchor.latitude, anchor.longitude], [ext.lat, ext.lng], e.bytes);
-      }
-    }
-    const maxRouteBytes = Math.max(1, ...[...routes.values()].map((r) => r.bytes));
-    for (const r of routes.values()) {
-      const w = 1 + (Math.log2(1 + r.bytes) / Math.log2(1 + maxRouteBytes)) * 4;
-      L.polyline([r.a, r.b], { color: EXT_COLOR, weight: w, opacity: 0.5 }).addTo(map);
-    }
-
-    // Site anchor pins (the anchor is emphasised; others give geographic context).
-    for (const l of located) {
-      const isAnchor = anchor && String(l.id) === String(anchor.id);
-      L.circleMarker([l.latitude, l.longitude], {
-        radius: isAnchor ? 9 : 7, color: '#fff', weight: 2,
-        fillColor: SITE_COLOR, fillOpacity: isAnchor ? 0.95 : 0.6,
-      }).addTo(map).bindTooltip(`${esc(l.name)}${isAnchor ? ' · routes anchor' : ''}`);
-      pts.push([l.latitude, l.longitude]);
-    }
-
-    // External peers by country.
-    for (const c of byCountry.values()) {
-      const asns = [...c.asns].slice(0, 4).join(', ');
-      L.circleMarker([c.lat, c.lng], {
-        radius: radiusForBytes(c.bytes), color: EXT_COLOR, fillColor: EXT_COLOR, fillOpacity: 0.5, weight: 1,
-      }).addTo(map).bindTooltip(
-        `${esc(c.country)} · ${c.peers} peer${c.peers === 1 ? '' : 's'} · ${fmtBytes(c.bytes)}${asns ? ` · ${esc(asns)}` : ''}`);
-      pts.push([c.lat, c.lng]);
-    }
-
-    if (pts.length > 1) { try { map.fitBounds(pts, { padding: [40, 40], maxZoom: 7 }); } catch { /* single point */ } }
-    setTimeout(() => { try { map.invalidateSize(); } catch { /* ignore */ } }, 60);
+  // Aggregate the geolocated peers to their country centroid — many peer IPs
+  // stack on one point otherwise.
+  const byCountry = new Map();
+  for (const n of geoNodes) {
+    const e = byCountry.get(n.country) || { country: n.country, lat: n.lat, lng: n.lng, bytes: 0, peers: 0, asns: new Set() };
+    e.bytes += n.bytes || 0;
+    e.peers += 1;
+    if (n.asnName) e.asns.add(n.asnName);
+    byCountry.set(n.country, e);
   }
 
-  // Show the active mode's host, keep the others hidden, and (re)draw it. Three
-  // modes: 'diagram' (flow-derived), 'layers' (unified resilience graph), 'map'.
-  function applyMode() {
-    graphHost.classList.toggle('hidden', mode !== 'diagram');
-    layerHost.classList.toggle('hidden', mode !== 'layers');
-    mapHost.classList.toggle('hidden', mode !== 'map');
-    for (const [btn, m] of [[diagramBtn, 'diagram'], [layersBtn, 'layers'], [mapBtn, 'map']]) {
-      btn.classList.toggle('ghost', mode !== m);
-      btn.setAttribute('aria-pressed', String(mode === m));
-    }
-    if (mode === 'map') drawTopoMap(); else stopTopoMap();
-    if (mode === 'layers') drawLayers();
-  }
-  diagramBtn.addEventListener('click', () => { if (mode !== 'diagram') { mode = 'diagram'; applyMode(); } });
-  layersBtn.addEventListener('click', () => { if (mode !== 'layers') { mode = 'layers'; applyMode(); } });
-  mapBtn.addEventListener('click', () => { if (mode !== 'map') { mode = 'map'; applyMode(); } });
+  const selLoc = siteId ? located.find((l) => String(l.id) === String(siteId)) : null;
+  const anchor = selLoc || (located.length === 1 ? located[0] : null);
 
-  // Layers mode: the unified resilience graph (LLDP l2_link + service_dep) with a
-  // layer toggle. Fetches /api/topology/graph once (cached), then re-renders the
-  // chosen layer locally. Distinct from the flow-derived diagram — see the note
-  // in the empty state. The layer choice persists to the URL.
-  // What-if / blast-radius result panel for the map. Null ⇒ the click-a-host
-  // prompt; otherwise the shared blastRadiusPanel.
-  function blastPanel(blast, nameFor) {
-    if (!blast) return el('div', { class: 'muted small' }, 'What-if mode: click a host to preview what fails if it goes down.');
-    return blastRadiusPanel(blast, { nameFor });
+  if (!geoNodes.length && !located.length) {
+    host.replaceChildren(el('div', { class: 'empty' },
+      extNodes.length ? t('topo.map.noGeoip') : t('topo.map.allInternal')));
+    return;
   }
 
-  async function runBlast(id) {
-    if (!layersApi) return;
-    topoState.focus = id; syncTopoUrl();
-    const panel = layerHost.querySelector('.blast-slot');
-    if (panel) panel.replaceChildren(el('div', { class: 'muted small' }, `Computing blast radius for ${id}…`));
-    let blast;
-    try {
-      blast = await api(`/api/topology/blast-radius/${encodeURIComponent(id)}`);
-    } catch (e) {
-      layersApi.setHighlight({ focus: id, isolated: new Set(), affected: new Set() });
-      if (panel) panel.replaceChildren(el('div', { class: 'error small' }, errText(e)));
-      return;
-    }
-    const sets = TopologyGraph.blastSets(blast);
-    layersApi.setHighlight(sets);
-    const nameFor = (nid) => { const n = (graphData.nodes || []).find((x) => x.id === Number(nid)); return n ? n.label : String(nid); };
-    if (panel) panel.replaceChildren(blastPanel(blast, nameFor));
+  let cfg = {};
+  try { cfg = await api('/api/map/config'); } catch { /* fall back to default tiles */ }
+  if (!host.isConnected) return; // the reader left while we awaited
+
+  const canvas = el('div', { class: 'map' });
+  const banner = (extNodes.length && !geoNodes.length)
+    ? el('div', { class: 'empty' }, t('topo.map.noGeoip'))
+    : null;
+  const note = (!anchor && located.length > 1)
+    ? el('p', { class: 'muted small' }, t('topo.map.manySites'))
+    : null;
+  host.replaceChildren(...[banner, canvas, note].filter(Boolean));
+
+  const centre = anchor ? [anchor.latitude, anchor.longitude]
+    : (geoNodes.length ? [geoNodes[0].lat, geoNodes[0].lng] : [20, 0]);
+  const map = createLeafletMap(canvas, cfg, { center: centre, zoom: 3 });
+  if (!map) return;
+  topoMapState.map = map;
+
+  const pts = [];
+  for (const l of located) {
+    L.circleMarker([l.latitude, l.longitude], {
+      radius: 7, color: SITE_COLOR, fillColor: SITE_COLOR, fillOpacity: 0.9, weight: 2,
+    }).addTo(map).bindTooltip(l.name);
+    pts.push([l.latitude, l.longitude]);
   }
 
-  function renderLayers() {
-    const layerBtn = (val, txt) => {
-      const active = topoState.layer === val;
-      const b = el('button', { class: `small${active ? '' : ' ghost'}`, 'aria-pressed': String(active) }, txt);
-      b.addEventListener('click', () => {
-        if (topoState.layer === val) return;
-        topoState.layer = val;
-        syncTopoUrl();
-        renderLayers();
-      });
-      return b;
-    };
-    const layerBar = el('div', { class: 'topo-layerbar', role: 'group', 'aria-label': 'Topology layer' },
-      el('span', { class: 'muted' }, 'Layer:'),
-      layerBtn('both', 'Both'), layerBtn('l2', 'L2 links'), layerBtn('dep', 'Dependencies'));
-    // "What if" is a blast-radius preview — operator+ only (the endpoint is
-    // operator+). Viewers don't see the toggle.
-    let whatIfBtn = null;
-    if (canWrite()) {
-      whatIfBtn = el('button', { class: `small${whatIf ? '' : ' ghost'}`, 'aria-pressed': String(whatIf), title: 'Preview which hosts fail if a node goes down' }, 'What if?');
-      whatIfBtn.addEventListener('click', () => {
-        whatIf = !whatIf;
-        if (!whatIf) { topoState.focus = null; syncTopoUrl(); }
-        renderLayers();
-      });
-      // Force a fresh service-dependency aggregation (normally a scheduled job),
-      // then reload the graph — operator+ (the recompute endpoint is).
-      const recomputeBtn = el('button', { class: 'small ghost', title: 'Recompute service dependencies now' }, 'Recompute');
-      recomputeBtn.addEventListener('click', async () => {
-        recomputeBtn.disabled = true;
-        try {
-          await api('/api/topology/dependencies/recompute', { method: 'POST' });
-          graphData = null;
-          await drawLayers();
-          toast('Service dependencies recomputed');
-        } catch (e) { toast(errText(e), true); } finally { recomputeBtn.disabled = false; }
-      });
-      layerBar.append(el('span', { class: 'spacer' }), recomputeBtn, whatIfBtn);
-    }
+  // External↔external edges are always drawn; internal→external only from the
+  // anchor site.
+  for (const e of edges) {
+    const from = nodeById[e.from];
+    const to = nodeById[e.to];
+    if (!to || to.lat == null || to.lng == null) continue;
+    const isExtExt = from && from.lat != null && from.lng != null;
+    const a = isExtExt ? [from.lat, from.lng] : (anchor ? [anchor.latitude, anchor.longitude] : null);
+    if (!a) continue;
+    L.polyline([a, [to.lat, to.lng]], { color: EXT_COLOR, weight: 1, opacity: 0.35 }).addTo(map);
+  }
 
-    if (!graphData) {
-      layerHost.replaceChildren(layerBar, el('div', { class: 'muted' }, 'Loading graph…'));
-      return;
-    }
-    const totals = graphData.totals || { nodes: 0, l2_link: 0, service_dep: 0 };
+  for (const c of byCountry.values()) {
+    const asns = [...c.asns].slice(0, 4).join(', ');
+    L.circleMarker([c.lat, c.lng], {
+      radius: radiusForBytes(c.bytes), color: EXT_COLOR, fillColor: EXT_COLOR, fillOpacity: 0.5, weight: 1,
+    }).addTo(map).bindTooltip(
+      `${c.country} · ${t('topo.map.peers', { n: c.peers })} · ${fmtBytes(c.bytes)}${asns ? ` · ${asns}` : ''}`);
+    pts.push([c.lat, c.lng]);
+  }
+
+  if (pts.length > 1) { try { map.fitBounds(pts, { padding: [40, 40], maxZoom: 7 }); } catch { /* single point */ } }
+  setTimeout(() => { try { map.invalidateSize(); } catch { /* ignore */ } }, 60);
+}
+
+// Layers mode: the unified resilience graph (LLDP l2_link + service_dep). The
+// graph is fetched once and cached; the layer choice re-renders locally.
+const topoLayersState = { graph: null, changeSets: null, api: null };
+
+async function drawTopoLayersInto(host, opts) {
+  const render = () => {
+    const graphData = topoLayersState.graph;
+    if (!graphData) { host.replaceChildren(el('div', { class: 'muted' }, t('topo.layers.loading'))); return; }
     if (!(graphData.edges || []).length) {
-      layerHost.replaceChildren(layerBar, el('div', { class: 'empty' },
-        'No topology graph yet. L2 links come from agents reporting LLDP neighbours; dependency edges are aggregated from TCP flows by a scheduled job.'));
-      layersApi = null;
+      host.replaceChildren(el('div', { class: 'empty' }, t('topo.layers.empty')));
+      topoLayersState.api = null;
       return;
     }
-    const vm = TopologyGraph.buildViewModel(graphData, topoState.layer, { focus: topoState.focus });
+    const vm = TopologyGraph.buildViewModel(graphData, opts.layer, { focus: opts.focus });
     if (!vm.nodes.length) {
-      layerHost.replaceChildren(layerBar, el('div', { class: 'empty' }, 'No edges in this layer — switch the layer above.'));
-      layersApi = null;
+      host.replaceChildren(el('div', { class: 'empty' }, t('topo.layers.emptyLayer')));
+      topoLayersState.api = null;
       return;
     }
-    layersApi = topoLayersSvg(vm, {
-      focusId: topoState.focus,
+    const api2 = topoLayersSvg(vm, {
+      focusId: opts.focus,
       onNodeClick: (id) => {
-        if (whatIf && canWrite()) runBlast(id);
-        else if (layersApi) layersApi.neighbourhood(id);
+        if (opts.whatIf) runTopoBlast(host, id, opts);
+        else if (topoLayersState.api) topoLayersState.api.neighbourhood(id);
       },
     });
-    // Flag recently-changed + flapping hosts (operator+ data) on their nodes.
-    if (changeSets) {
-      layersApi.nodeEls.forEach((g, id) => {
-        g.classList.toggle('flapping', changeSets.flapping.has(id));
-        g.classList.toggle('changed', changeSets.changed.has(id));
+    topoLayersState.api = api2;
+    // Recently-changed + flapping hosts (operator+ data) flagged on their nodes.
+    if (topoLayersState.changeSets) {
+      api2.nodeEls.forEach((g, id) => {
+        g.classList.toggle('flapping', topoLayersState.changeSets.flapping.has(id));
+        g.classList.toggle('changed', topoLayersState.changeSets.changed.has(id));
       });
     }
+    const totals = graphData.totals || { nodes: 0, l2_link: 0, service_dep: 0 };
     const legend = el('div', { class: 'pg-legend' },
-      el('span', { class: 'lg' }, el('span', { class: 'topo-swatch l2' }), 'Physical link (L2)'),
-      el('span', { class: 'lg' }, el('span', { class: 'topo-swatch dep' }), 'Service dependency'),
-      changeSets && (changeSets.changed.size || changeSets.flapping.size)
-        ? el('span', { class: 'lg' }, el('span', { class: 'topo-dot flapping' }), 'Recently changed / flapping') : null,
-      el('span', { class: 'lg muted' }, `${totals.nodes} hosts · ${totals.l2_link} links · ${totals.service_dep} dependencies · line width = bytes`));
-    const children = [layerBar, el('div', { class: 'pg-head' }, legend), layersApi.wrap];
-    if (canWrite()) children.push(el('div', { class: 'blast-slot' }, blastPanel(null)));
-    layerHost.replaceChildren(...children);
+      el('span', { class: 'lg' }, el('span', { class: 'topo-swatch l2' }), t('topo.legend.l2')),
+      el('span', { class: 'lg' }, el('span', { class: 'topo-swatch dep' }), t('topo.legend.dep')),
+      topoLayersState.changeSets && (topoLayersState.changeSets.changed.size || topoLayersState.changeSets.flapping.size)
+        ? el('span', { class: 'lg' }, el('span', { class: 'topo-dot flapping' }), t('topo.legend.changed'))
+        : null,
+      el('span', { class: 'lg muted' }, t('topo.legend.totals', {
+        nodes: totals.nodes, links: totals.l2_link, deps: totals.service_dep,
+      })));
+    const children = [el('div', { class: 'pg-head' }, legend), api2.wrap];
+    if (opts.whatIf) children.push(el('div', { class: 'blast-slot' }, el('div', { class: 'muted small' }, t('topo.whatIf.prompt'))));
+    host.replaceChildren(...children);
+    if (opts.whatIf && opts.focus != null) runTopoBlast(host, opts.focus, opts);
+  };
 
-    // Deep-linked (or re-render while) a node is focused in what-if mode: re-run.
-    if (whatIf && canWrite() && topoState.focus != null) runBlast(topoState.focus);
+  render();
+  if (topoLayersState.graph) return;
+  try {
+    topoLayersState.graph = await api('/api/topology/graph');
+  } catch (e) {
+    host.replaceChildren(el('div', { class: 'error' }, errText(e)));
+    return;
   }
-  async function drawLayers() {
-    if (graphData) { renderLayers(); return; }
-    renderLayers(); // shows "Loading…" with the layer bar
+  if (canWrite() && topoLayersState.changeSets === null) {
     try {
-      graphData = await api('/api/topology/graph');
-    } catch (e) {
-      layerHost.replaceChildren(el('div', { class: 'error' }, errText(e)));
-      return;
-    }
-    // Recently-changed / flapping links are operator+ data — fetch best-effort.
-    if (canWrite() && changeSets === null) {
+      const cg = await api('/api/topology/changes?limit=200');
+      topoLayersState.changeSets = TopologyGraph.changedHostSets(cg.events || []);
+    } catch { topoLayersState.changeSets = { changed: new Set(), flapping: new Set() }; }
+  }
+  if (host.isConnected) render();
+}
+
+async function runTopoBlast(host, id, opts) {
+  if (!topoLayersState.api) return;
+  if (opts.onFocus) opts.onFocus(id);
+  const slot = host.querySelector('.blast-slot');
+  if (slot) slot.replaceChildren(el('div', { class: 'muted small' }, t('topo.whatIf.computing', { id })));
+  let blast;
+  try {
+    blast = await api(`/api/topology/blast-radius/${encodeURIComponent(id)}`);
+  } catch (e) {
+    topoLayersState.api.setHighlight({ focus: id, isolated: new Set(), affected: new Set() });
+    if (slot) slot.replaceChildren(el('div', { class: 'error small' }, errText(e)));
+    return;
+  }
+  topoLayersState.api.setHighlight(TopologyGraph.blastSets(blast));
+  const nameFor = (nid) => {
+    const n = ((topoLayersState.graph && topoLayersState.graph.nodes) || []).find((x) => x.id === Number(nid));
+    return n ? n.label : String(nid);
+  };
+  if (slot) slot.replaceChildren(blastRadiusPanel(blast, { nameFor }));
+}
+
+function getTopologyPage() {
+  if (topologyPage) return topologyPage;
+  if (typeof window === 'undefined' || !window.TopologyPage || !ui) return null;
+  topologyPage = window.TopologyPage.create({
+    el, t, ui, errText, fmtBytes, gotoView,
+    state: topologyPageState,
+    TopologyGraph,
+    canWrite,
+    params: () => TopologyGraph.parseParams(window.location.search),
+    modeParam: () => {
+      try { return new URLSearchParams(window.location.search || '').get('mode'); } catch { return null; }
+    },
+    // parseParams defaults `layer` to 'both', so only the raw query can say
+    // whether a layer (or a focus) was actually deep-linked.
+    wantsLayers: () => /[?&](layer|focus)=/.test(window.location.search || ''),
+    // Only the topology-owned params are written, so an unrelated one on the
+    // URL survives — the SPA's replaceState persistence pattern.
+    syncParams: (patch) => {
       try {
-        const cg = await api('/api/topology/changes?limit=200');
-        changeSets = TopologyGraph.changedHostSets(cg.events || []);
-      } catch { changeSets = { changed: new Set(), flapping: new Set() }; }
-    }
-    renderLayers();
-  }
+        const q = new URLSearchParams(window.location.search || '');
+        for (const [k, v] of Object.entries(patch)) { if (v == null) q.delete(k); else q.set(k, String(v)); }
+        const qs = q.toString();
+        window.history.replaceState(null, '', qs ? `${window.location.pathname}?${qs}` : window.location.pathname);
+      } catch { /* URL API off — best-effort */ }
+    },
+    help: () => {
+      const info = PAGE_INFO.topology || {};
+      return { lead: info.hero || '', title: info.title || t('topo.title'), body: info.body || (() => []) };
+    },
+    fetchScope: async () => {
+      const [agents, locations] = await Promise.all([
+        api('/agents').catch(() => []),
+        api('/locations').catch(() => []),
+      ]);
+      return { agents, locations };
+    },
+    // Agent scope wins over Site, mirroring the backend precedence.
+    fetchTopology: async ({ minutes, agentId, siteId }) => {
+      const qp = new URLSearchParams({ minutes });
+      if (agentId) qp.set('agentId', agentId);
+      else if (siteId) qp.set('locationId', siteId);
+      return api(`/api/topology?${qp}`);
+    },
+    graphSvg: topoGraphSvg,
+    drawLayers: drawTopoLayersInto,
+    drawMap: drawTopoMapInto,
+    stopMap: stopTopoMap,
+    recompute: async () => {
+      await api('/api/topology/dependencies/recompute', { method: 'POST' });
+      topoLayersState.graph = null;
+    },
+    probe: topoProbeModal,
+  });
+  return topologyPage;
+}
 
-  async function loadTopology() {
-    const qp = new URLSearchParams({ minutes: winSel.value });
-    const agentId = agentSel.value; // '' = whole fleet
-    const locId = locSel.value;
-    // Agent scope wins over Site (mirrors the backend precedence): a specific
-    // agent limits the map to its own flows; otherwise fall back to the Site filter.
-    if (agentId) qp.set('agentId', agentId);
-    else if (locId) qp.set('locationId', locId);
-
-    const agentName = agentId ? (agentSel.options[agentSel.selectedIndex] || {}).text : null;
-    const locName = (!agentId && locId) ? (locations.find((l) => String(l.id) === locId) || {}).name : null;
-    const winLabel = winSel.options[winSel.selectedIndex].text;
-    const scopeName = agentName || locName;
-    headInfo.textContent = `Service/host dependencies · ${winLabel}${scopeName ? ` · ${scopeName}` : ''}`;
-
-    let data;
-    try {
-      data = await api(`/api/topology?${qp}`);
-    } catch (e) {
-      lastData = null;
-      graphHost.replaceChildren();
-      tableHost.replaceChildren(el('div', { class: 'error' }, errText(e)));
-      summary.textContent = '';
-      applyMode();
-      return;
-    }
-    lastData = data;
-
-    const t = data.totals || { nodes: 0, internal: 0, external: 0, edges: 0 };
-    summary.textContent = `${t.nodes} hosts (${t.internal} internal, ${t.external} external) · ${t.edges} dependencies${data.truncated ? ' · showing the heaviest' : ''}`;
-
-    if (!data.edges || !data.edges.length) {
-      graphHost.replaceChildren();
-      tableHost.replaceChildren(el('div', { class: 'empty' }, 'No flow data in this window. Topology is built from agents whose traffic source is NetFlow or sFlow.'));
-      applyMode();
-      return;
-    }
-
-    Object.keys(byId).forEach((k) => delete byId[k]);
-    (data.nodes || []).forEach((n) => { byId[n.id] = n; });
-
-    // Diagram: capped to the busiest hosts for legibility — the tables below
-    // carry the full (still-capped-by-the-API) list. Both draw from the same
-    // response, so the diagram and the tables always agree.
-    const GRAPH_MAX_NODES = 40;
-    const graphNodes = (data.nodes || []).slice(0, GRAPH_MAX_NODES);
-    const graphIds = new Set(graphNodes.map((n) => n.id));
-    const graphEdges = (data.edges || []).filter((e) => graphIds.has(e.from) && graphIds.has(e.to)).slice(0, 90);
-    const graphNote = graphNodes.length < (data.nodes || []).length
-      ? el('p', { class: 'muted small' }, `Diagram shows the ${graphNodes.length} busiest of ${data.nodes.length} hosts — see the tables below for the full list.`)
-      : null;
-    graphHost.replaceChildren(
-      ...[el('h3', {}, 'Diagram'),
-        topoGraphSvg(graphNodes, graphEdges, { label, kindBadge, actionBtns: onlineAgents.length ? actionBtns : null }),
-        graphNote].filter(Boolean));
-
-    tableHost.replaceChildren(
-      el('h3', {}, 'Top dependencies'),
-      el('table', { class: 'agents-table' },
-        el('thead', {}, el('tr', {},
-          el('th', { scope: 'col' }, 'From'), el('th', { scope: 'col' }, 'To'),
-          el('th', { scope: 'col' }, 'Peer'), el('th', { scope: 'col' }, 'Bytes'), el('th', { scope: 'col' }, 'Flows'),
-          onlineAgents.length ? el('th', { scope: 'col' }, 'Actions') : null)),
-        el('tbody', {}, ...data.edges.slice(0, 100).map((e) => el('tr', {},
-          el('td', {}, label(e.from)),
-          el('td', {}, label(e.to)),
-          el('td', {}, kindBadge(byId[e.to] && byId[e.to].kind)),
-          el('td', {}, fmtBytes(e.bytes)),
-          el('td', {}, String(e.flows)),
-          onlineAgents.length ? el('td', {}, actionBtns(e.to)) : null)))),
-      el('h3', {}, 'Busiest hosts'),
-      el('table', { class: 'agents-table' },
-        el('thead', {}, el('tr', {},
-          el('th', { scope: 'col' }, 'Host'), el('th', { scope: 'col' }, 'Kind'),
-          el('th', { scope: 'col' }, 'Peers'), el('th', { scope: 'col' }, 'In'), el('th', { scope: 'col' }, 'Out'),
-          onlineAgents.length ? el('th', { scope: 'col' }, 'Actions') : null)),
-        el('tbody', {}, ...(data.nodes || []).slice(0, 50).map((n) => el('tr', {},
-          el('td', {}, label(n.id)),
-          el('td', {}, kindBadge(n.kind)),
-          el('td', {}, String(n.degree)),
-          el('td', {}, fmtBytes(n.bytesIn)),
-          el('td', {}, fmtBytes(n.bytesOut)),
-          onlineAgents.length ? el('td', {}, actionBtns(n.id)) : null)))));
-
-    applyMode();
-  }
-
-  locSel.addEventListener('change', loadTopology);
-  winSel.addEventListener('change', loadTopology);
-  refreshBtn.addEventListener('click', loadTopology);
-  await loadTopology();
-  return root;
+views.topology = async () => {
+  const v = getTopologyPage();
+  if (!v) return el('div', { class: 'empty error' }, t('topo.err.title'));
+  return v.view();
 };
 
 // ---- Delta / Changes view (topology change feed) ---------------------------
@@ -6917,127 +6292,61 @@ PAGE_INFO.delta = {
   ],
 };
 
-const CHANGE_SEV_CLASS = { CRIT: 'bad', WARN: 'warn', INFO: 'muted' };
+// ---- Topology delta (MIGRATED — see public/views/topologyDelta.js) ----------
+let topologyDeltaView = null;
+const topologyDeltaState = {};
+
+function getTopologyDeltaView() {
+  if (topologyDeltaView) return topologyDeltaView;
+  if (typeof window === 'undefined' || !window.TopologyDeltaView || !ui) return null;
+  topologyDeltaView = window.TopologyDeltaView.create({
+    el, t, ui, errText, openAgent, gotoView,
+    state: topologyDeltaState,
+    Delta: DeltaView,
+    search: () => window.location.search,
+    help: () => {
+      const info = PAGE_INFO.delta || {};
+      return { lead: info.hero || '', title: info.title || t('delta.title'), body: info.body || (() => []) };
+    },
+    // The site and severity are the SHARED global filter, not a second copy:
+    // editing them here moves the same fleetFilter the Overview uses.
+    filter: () => fleetFilter,
+    setSite: (site) => { fleetFilter = FleetFilter.setSite(fleetFilter, site); syncFleetUrl(); },
+    // FleetFilter has no setter for the whole list, and writing the array in
+    // by hand would skip its normalisation. Toggling off, then on, does not.
+    setSeverity: (tokens) => {
+      let next = fleetFilter;
+      for (const tok of next.severity.slice()) next = FleetFilter.toggleSeverity(next, tok);
+      for (const tok of tokens) next = FleetFilter.toggleSeverity(next, tok);
+      fleetFilter = next;
+      syncFleetUrl();
+    },
+    // The change types live in the URL so a filtered feed is one link.
+    syncTypes: (types) => {
+      try {
+        const q = new URLSearchParams(window.location.search || '');
+        const patch = DeltaView.changeTypesPatch(types);
+        if (patch.changeTypes == null) q.delete('changeTypes'); else q.set('changeTypes', patch.changeTypes);
+        const qs = q.toString();
+        window.history.replaceState(null, '', window.location.pathname + (qs ? `?${qs}` : '') + window.location.hash);
+      } catch { /* best-effort */ }
+    },
+    fetchAll: async () => {
+      const [chg, ag, loc] = await Promise.all([
+        api('/api/topology/changes?limit=500'),
+        api('/agents').catch(() => []),
+        api('/locations').catch(() => []),
+      ]);
+      return { events: chg.events || [], agents: ag || [], locations: loc || [] };
+    },
+  });
+  return topologyDeltaView;
+}
 
 views.delta = async () => {
-  const root = el('div', { class: 'delta-view' });
-  root.append(el('div', { class: 'section-head' }, el('h2', {}, 'Changes'), el('span', { class: 'muted' }, 'Topology delta feed')));
-  const controls = el('div', { class: 'delta-controls' });
-  const listHost = el('div', {});
-  root.append(controls, listHost);
-
-  let types = DeltaView.parseChangeTypes(window.location.search);
-  let events = [];
-  let agents = [];
-  let locations = [];
-
-  function syncDeltaUrl() {
-    try {
-      const q = new URLSearchParams(window.location.search || '');
-      const patch = DeltaView.changeTypesPatch(types);
-      if (patch.changeTypes == null) q.delete('changeTypes'); else q.set('changeTypes', patch.changeTypes);
-      const qs = q.toString();
-      window.history.replaceState(null, '', window.location.pathname + (qs ? `?${qs}` : '') + window.location.hash);
-    } catch { /* best-effort */ }
-  }
-
-  const nameById = {};
-  const nameFor = (hid) => nameById[hid] || `host ${hid}`;
-  function siteAgentIdSet() {
-    if (!fleetFilter.site) return null;
-    const want = String(fleetFilter.site).toLowerCase();
-    const s = new Set();
-    agents.forEach((a) => {
-      if (String(a.location_name || '').toLowerCase() === want || String(a.location_id) === want) s.add(Number(a.id));
-    });
-    return s;
-  }
-
-  function changeTypeRow() {
-    const counts = DeltaView.countByType(events);
-    const chip = (t) => {
-      const on = types.includes(t.key);
-      const b = el('button', { class: `chip${on ? ' active' : ''}`, 'aria-pressed': String(on) },
-        t.label, el('span', { class: 'chip-count' }, String(counts[t.key] || 0)));
-      b.addEventListener('click', () => {
-        types = on ? types.filter((k) => k !== t.key) : DeltaView.normalizeTypes(types.concat(t.key));
-        syncDeltaUrl();
-        renderDelta();
-      });
-      return b;
-    };
-    const row = el('div', { class: 'delta-typebar', role: 'group', 'aria-label': 'Change type' },
-      el('span', { class: 'muted' }, 'Type:'), ...DeltaView.CHANGE_TYPES.map(chip));
-    if (types.length) row.append(el('button', { class: 'small ghost', onclick: () => { types = []; syncDeltaUrl(); renderDelta(); } }, 'All'));
-    return row;
-  }
-
-  function globalFilterRow() {
-    // Site + severity come from the shared global filter — editing here mutates
-    // the SAME fleetFilter the Overview uses and re-syncs the shared URL params.
-    const siteSel = el('select', { class: 'small' }, el('option', { value: '' }, 'All sites'),
-      ...locations.map((l) => el('option', { value: String(l.id) }, l.name)));
-    if (fleetFilter.site) siteSel.value = String(fleetFilter.site);
-    siteSel.addEventListener('change', () => { fleetFilter = FleetFilter.setSite(fleetFilter, siteSel.value || null); syncFleetUrl(); renderDelta(); });
-    const sevBtn = (tok, label) => {
-      const on = fleetFilter.severity.includes(tok);
-      const b = el('button', { class: `chip${on ? ' active' : ''}`, 'aria-pressed': String(on) }, label);
-      b.addEventListener('click', () => { fleetFilter = FleetFilter.toggleSeverity(fleetFilter, tok); syncFleetUrl(); renderDelta(); });
-      return b;
-    };
-    const chips = FleetFilter.chips(fleetFilter).map((c) => el('button', { class: 'chip removable', title: 'Remove filter',
-      onclick: () => { fleetFilter = FleetFilter.removeChip(fleetFilter, c); syncFleetUrl(); renderDelta(); } }, c.label, ' ×'));
-    return el('div', { class: 'delta-globalbar' },
-      el('label', { class: 'inline muted' }, 'Site ', siteSel),
-      el('span', { class: 'muted' }, 'Severity:'), sevBtn('CRIT', 'Kritiske'), sevBtn('WARN', 'Advarsler'),
-      chips.length ? el('span', { class: 'delta-chips' }, ...chips) : null);
-  }
-
-  function changeTable(rows) {
-    return el('table', { class: 'agents-table delta-table' },
-      el('thead', {}, el('tr', {},
-        el('th', { scope: 'col' }, 'Time'), el('th', { scope: 'col' }, 'Type'),
-        el('th', { scope: 'col' }, 'Host'), el('th', { scope: 'col' }, 'Severity'), el('th', { scope: 'col' }, 'What changed'))),
-      el('tbody', {}, ...rows.map((e) => {
-        const sev = DeltaView.severityToken(e);
-        const ct = DeltaView.changeTypeOf(e);
-        return el('tr', {},
-          el('td', {}, e.timestamp ? fmtDate(e.timestamp) : '–'),
-          el('td', {}, el('span', { class: 'badge' }, ct.replace(/_/g, ' '))),
-          el('td', {}, e.agentId != null ? el('button', { class: 'linklike', onclick: () => openAgent(e.agentId) }, esc(nameFor(e.agentId))) : '–'),
-          el('td', {}, el('span', { class: `badge ${CHANGE_SEV_CLASS[sev] || 'muted'}` }, sev)),
-          el('td', {}, esc(e.summary || '')));
-      })));
-  }
-
-  function renderDelta() {
-    controls.replaceChildren(changeTypeRow(), globalFilterRow());
-    if (!events.length) { listHost.replaceChildren(el('div', { class: 'empty' }, 'No topology changes recorded yet. Changes appear as agents report LLDP neighbours across poll cycles.')); return; }
-    const filtered = DeltaView.filterChanges(events, { types, severityTokens: fleetFilter.severity, siteAgentIds: siteAgentIdSet() });
-    listHost.replaceChildren(filtered.length
-      ? changeTable(filtered)
-      : el('div', { class: 'empty' }, 'No changes match the current filter.'));
-  }
-
-  controls.replaceChildren(el('div', { class: 'muted' }, 'Loading…'));
-  try {
-    const [chg, ag, loc] = await Promise.all([
-      api('/api/topology/changes?limit=500'),
-      api('/agents').catch(() => []),
-      api('/locations').catch(() => []),
-    ]);
-    events = chg.events || [];
-    agents = ag || [];
-    locations = loc || [];
-  } catch (e) {
-    controls.replaceChildren();
-    listHost.replaceChildren(el('div', { class: e.status === 403 ? 'empty' : 'error' },
-      e.status === 403 ? 'The changes feed is available to operators and admins.' : errText(e)));
-    return root;
-  }
-  agents.forEach((a) => { nameById[a.id] = a.display_name || a.hostname || `host ${a.id}`; });
-  renderDelta();
-  return root;
+  const v = getTopologyDeltaView();
+  if (!v) return el('div', { class: 'empty error' }, t('delta.err.title'));
+  return v.view();
 };
 
 // ---- Admin → Discovery (active scan scope + candidate queue) ---------------
@@ -7361,363 +6670,86 @@ PAGE_INFO.diagnose = {
 // mid-outage must never show two halves of two different answers.
 let diagnoseState = null;
 
-function diagVerdictClass(verdict) {
-  return verdict === 'confirmed' ? 'bad' : verdict === 'ruled_out' ? 'ok' : 'warn';
+// ---- Diagnose (MIGRATED — see public/views/diagnose.js) ---------------------
+let diagnoseView = null;
+
+function getDiagnoseView() {
+  if (diagnoseView) return diagnoseView;
+  if (typeof window === 'undefined' || !window.DiagnoseView || !ui) return null;
+  // The plan, the scope and the selection survive a view switch, which is what
+  // diagnoseState has always been for.
+  if (!diagnoseState) diagnoseState = {};
+  diagnoseView = window.DiagnoseView.create({
+    el, t, ui, errText, plural,
+    state: diagnoseState,
+    navigate: diagnoseNavigate,
+    isViewer: () => role === 'viewer',
+    help: () => {
+      const info = PAGE_INFO.diagnose || {};
+      return { lead: info.hero || '', title: info.title || t('diag.title'), body: info.body || (() => []) };
+    },
+    fetchAgents: async () => api('/agents').catch(() => []),
+    // The examples are the catalogue's own symptoms, so they can never drift
+    // from what the matcher actually knows.
+    fetchExamples: async () => {
+      const r = await api(`/api/playbooks?locale=${encodeURIComponent(window.I18n.getLocale())}`);
+      return (r.playbooks || []).slice(0, 4).map((p) => (p.symptoms || [])[0]).filter(Boolean);
+    },
+    ask: async ({ description, agentId, peerAgentId, target }) => {
+      const body = { description, locale: window.I18n.getLocale() };
+      if (agentId != null) body.agentId = agentId;
+      if (peerAgentId != null) body.peerAgentId = peerAgentId;
+      if (target) body.target = target;
+      return api('/api/diagnose', { method: 'POST', body });
+    },
+    fetchSession: async (sessionId) => {
+      const d = await api(`/api/diagnose/${sessionId}`);
+      return (d.session && d.session.tests) || [];
+    },
+    runTests: async (sessionId, body) => api(`/api/diagnose/${sessionId}/run`, { method: 'POST', body }),
+    evaluate: async (sessionId) => api(`/api/diagnose/${sessionId}/evaluate`, { method: 'POST', body: {} }),
+    // One package per agent: a test package pushes every item to every target,
+    // so a single package would run each reverse test from the wrong end.
+    repeat: (rows, st, chipEl) => {
+      const byAgent = new Map();
+      for (const r of rows) {
+        if (!byAgent.has(r.agentId)) byAgent.set(r.agentId, []);
+        byAgent.get(r.agentId).push({ type: 'probe', probe: { type: r.probeType, host: r.target, ...(r.params || {}) } });
+      }
+      openRepeatModal({
+        what: t('repeat.what.diagnose'),
+        onSave: async (spec, runs) => {
+          const made = [];
+          for (const [agentId, items] of byAgent) {
+            const repeated = [];
+            for (let i = 0; i < runs; i += 1) repeated.push(...items);
+            // eslint-disable-next-line no-await-in-loop
+            made.push(await api('/api/test-packages', {
+              method: 'POST',
+              body: {
+                name: `Diagnosis #${st.plan.sessionId} — ${st.target || st.plan.target}`.slice(0, 120),
+                enabled: true,
+                schedule_spec: spec,
+                targets: { mode: 'agents', agentIds: [Number(agentId)] },
+                items: repeated,
+              },
+            }));
+          }
+          return { name: made.map((m) => m.name).join(', '), packages: made };
+        },
+        onSaved: (pkg, summary) => repeatChip(chipEl, pkg, summary),
+      });
+    },
+  });
+  return diagnoseView;
 }
 
 views.diagnose = async () => {
-  const root = el('div', { class: 'diagnose' });
-  const agents = await api('/agents').catch(() => []);
-
-  root.append(el('div', { class: 'section-head' },
-    el('h2', {}, t('diag.title')),
-    el('span', { class: 'muted' }, t('diag.lead'))));
-
-  // --- the question ---------------------------------------------------------
-  const desc = el('textarea', {
-    id: 'diag-description', rows: '3', maxlength: '1000',
-    placeholder: t('diag.field.placeholder'),
-    'aria-label': t('diag.field.label'),
-  });
-  if (diagnoseState && diagnoseState.description) desc.value = diagnoseState.description;
-
-  const agentSel = el('select', { class: 'small', 'aria-label': t('diag.agent') },
-    el('option', { value: '' }, t('diag.agent.none')),
-    ...agents.map((a) => el('option', { value: String(a.id) }, a.display_name || a.hostname || `#${a.id}`)));
-  const peerSel = el('select', { class: 'small', 'aria-label': t('diag.peer') },
-    el('option', { value: '' }, t('diag.peer.none')),
-    ...agents.map((a) => el('option', { value: String(a.id) }, a.display_name || a.hostname || `#${a.id}`)));
-  const targetIn = el('input', { class: 'small', placeholder: t('diag.target.placeholder'), 'aria-label': t('diag.target') });
-  if (diagnoseState) {
-    if (diagnoseState.agentId) agentSel.value = String(diagnoseState.agentId);
-    if (diagnoseState.peerAgentId) peerSel.value = String(diagnoseState.peerAgentId);
-    if (diagnoseState.target) targetIn.value = diagnoseState.target;
-  }
-
-  const submit = el('button', { class: 'primary' }, t('diag.submit'));
-  const status = el('div', { class: 'muted diag-status' });
-  const out = el('div', { class: 'diag-out' });
-
-  // The examples are the catalogue's own symptoms, so they can never drift from
-  // what the matcher actually knows — and clicking one is the fastest way to see
-  // the thing work.
-  const examples = el('div', { class: 'diag-examples muted' });
-  api(`/api/playbooks?locale=${encodeURIComponent(window.I18n.getLocale())}`).then((r) => {
-    const picks = (r.playbooks || []).slice(0, 4).map((p) => (p.symptoms || [])[0]).filter(Boolean);
-    if (!picks.length) return;
-    examples.append(el('span', {}, `${t('diag.examples')} `));
-    picks.forEach((sym, i) => {
-      if (i) examples.append(document.createTextNode(' · '));
-      examples.append(el('button', {
-        class: 'small ghost', type: 'button',
-        onclick: () => { desc.value = sym; desc.focus(); },
-      }, sym));
-    });
-  }).catch(() => {});
-
-  root.append(el('div', { class: 'card diag-ask' },
-    el('label', { class: 'field' }, el('span', {}, t('diag.field.label')), desc),
-    el('div', { class: 'muted small' }, t('diag.field.hint', { max: 1000 })),
-    examples,
-    el('div', { class: 'diag-scope' },
-      el('label', { class: 'inline muted' }, `${t('diag.agent')} `, agentSel),
-      el('label', { class: 'inline muted' }, `${t('diag.target')} `, targetIn),
-      el('label', { class: 'inline muted' }, `${t('diag.peer')} `, peerSel)),
-    el('div', { class: 'muted small' }, t('diag.peer.hint')),
-    el('div', { class: 'diag-actions' }, submit, status)));
-  root.append(out);
-
-  async function ask() {
-    const description = desc.value.trim();
-    if (!description) { desc.focus(); return; }
-    submit.disabled = true;
-    status.textContent = t('diag.working');
-    status.className = 'muted diag-status';
-    try {
-      const body = { description, locale: window.I18n.getLocale() };
-      if (agentSel.value) body.agentId = Number(agentSel.value);
-      if (peerSel.value && peerSel.value !== agentSel.value) body.peerAgentId = Number(peerSel.value);
-      if (targetIn.value.trim()) body.target = targetIn.value.trim();
-      const plan = await api('/api/diagnose', { method: 'POST', body });
-      diagnoseState = {
-        description, agentId: body.agentId || null, peerAgentId: body.peerAgentId || null,
-        target: body.target || null, plan, evaluation: null,
-      };
-      status.textContent = '';
-      renderPlan();
-    } catch (err) {
-      status.textContent = err.message;
-      status.className = 'error diag-status';
-    } finally {
-      submit.disabled = false;
-    }
-  }
-  submit.addEventListener('click', ask);
-  // Ctrl/Cmd+Enter submits — the field is a textarea, so Enter is a newline.
-  desc.addEventListener('keydown', (e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); ask(); } });
-
-  function renderPlan() {
-    out.replaceChildren();
-    const st = diagnoseState;
-    if (!st || !st.plan) return;
-    const plan = st.plan;
-    if (!plan.causes || plan.causes.length === 0) {
-      out.append(el('div', { class: 'card empty' }, plan.message || t('diag.empty')));
-      return;
-    }
-
-    // Which matcher produced this, said plainly. A plan is worth a different
-    // amount depending on the answer, and the reader should not have to guess.
-    out.append(el('div', { class: `diag-matched ${plan.usedAi ? 'ai' : 'local'}` },
-      plan.usedAi ? t('diag.matched.llm') : t('diag.matched.keywords')));
-
-    const ev = st.evaluation;
-    if (ev) {
-      out.append(el('div', { class: 'diag-counts' }, t('diag.counts', ev.counts)));
-      if (ev.summary && ev.summary.text) {
-        out.append(el('div', { class: 'card diag-summary' },
-          el('h3', {}, t('diag.summary')),
-          el('p', {}, ev.summary.text),
-          el('p', { class: 'muted small' }, t('diag.summary.ai'))));
-      }
-    }
-
-    // --- the causes ---------------------------------------------------------
-    const causesCard = el('div', { class: 'card diag-causes' }, el('h3', {}, t('diag.causes')));
-    // After an evaluation the server has already ordered them confirmed →
-    // open → eliminated; before one, the matcher's ranking stands.
-    const ordered = ev
-      ? ev.causes.map((c) => ({ cause: plan.causes.find((p) => p.id === c.playbookId), verdict: c })).filter((x) => x.cause)
-      : plan.causes.map((cause) => ({ cause, verdict: null }));
-
-    for (const { cause, verdict } of ordered) {
-      const head = el('div', { class: 'diag-cause-head' }, el('strong', {}, cause.title));
-      if (verdict) {
-        head.append(el('span', { class: `pill ${diagVerdictClass(verdict.verdict)}` }, t(`diag.verdict.${verdict.verdict}`)));
-        if (verdict.reason) {
-          head.append(el('span', { class: 'muted small' }, verdict.reason === 'missing_data'
-            ? t('diag.reason.missing_data', { facts: verdict.missingFacts.join(', ') })
-            : t(`diag.reason.${verdict.reason}`)));
-        }
-      } else if (cause.confidence != null) {
-        head.append(el('span', { class: 'muted small' }, `${Math.round(cause.confidence * 100)}%`));
-      }
-
-      const body = el('div', { class: 'diag-cause-body' }, el('p', {}, cause.explanation));
-      if (cause.reason) body.append(el('p', { class: 'muted small' }, cause.reason));
-
-      // How to read the answer — the views, with what to look for in each.
-      const reading = el('div', { class: 'diag-reading' }, el('h4', {}, t('diag.reading')));
-      for (const v of cause.views) {
-        reading.append(el('div', { class: 'diag-view-row' },
-          el('button', {
-            class: 'small ghost', type: 'button',
-            onclick: () => diagnoseNavigate(v, st),
-          }, t('diag.reading.open', { view: v.view })),
-          el('span', { class: 'muted' }, v.look_for)));
-      }
-      body.append(reading);
-
-      // The evidence, once there is any: every rule, whether it matched, and the
-      // sentence behind it. This is what makes a verdict arguable instead of
-      // asserted.
-      if (verdict) {
-        const evid = el('div', { class: 'diag-evidence' }, el('h4', {}, t('diag.evidence')));
-        for (const e of verdict.evidence) {
-          const state = e.result === true ? 'fired' : e.result === false ? 'notFired' : 'unknown';
-          evid.append(el('div', { class: `diag-rule ${state}` },
-            el('code', {}, e.when),
-            el('span', { class: 'muted' }, ` — ${t(`diag.evidence.${state}`)}`),
-            el('div', { class: 'muted small' }, e.because)));
-        }
-        body.append(evid);
-      }
-
-      // The fix. Never shown for a cause that has been eliminated — the server
-      // already dropped them, and this is the belt to that braces.
-      const fixes = verdict ? verdict.fixes : cause.fixes.map((text) => ({ text, complete: true }));
-      if (fixes && fixes.length) {
-        const fixEl = el('div', { class: 'diag-fixes' }, el('h4', {}, t('diag.fixes')));
-        for (const f of fixes) {
-          const text = typeof f === 'string' ? f : f.text;
-          const complete = typeof f === 'string' ? true : f.complete;
-          fixEl.append(el('div', { class: complete ? 'diag-fix' : 'diag-fix partial muted' }, text));
-        }
-        body.append(fixEl);
-      }
-
-      causesCard.append(el('div', { class: 'diag-cause' }, head, body));
-    }
-    out.append(causesCard);
-
-    // --- the tests ----------------------------------------------------------
-    const testsCard = el('div', { class: 'card diag-tests' }, el('h3', {}, t('diag.tests')));
-    if (!plan.tests.length || !plan.target) {
-      testsCard.append(el('p', { class: 'muted' }, t('diag.tests.none')));
-    } else {
-      // Which of the plan's tests to actually dispatch. A plan proposes what is
-      // worth measuring; the technician often already knows one of them is
-      // pointless here, and running it anyway costs an agent, a round trip and
-      // a line of noise in the evidence. Everything starts selected — the plan
-      // is the recommendation, not a menu.
-      //
-      // The checkboxes carry the STORED row ids, which the screen learns from
-      // GET /api/diagnose/:id. Those rows are inserted in plan order and read
-      // back ordered by id, so index pairing is exact; without the ids the
-      // server would have to be told "the third one", which is not something it
-      // could verify.
-      const rowIds = st.testRows ? st.testRows.map((r) => r.id) : [];
-      if (!st.testRows && role !== 'viewer') {
-        api(`/api/diagnose/${st.plan.sessionId}`)
-          .then((d) => { st.testRows = (d.session && d.session.tests) || []; renderPlan(); })
-          .catch(() => { st.testRows = []; });
-      }
-      // The selection is seeded the first time the ids actually arrive — the
-      // first render happens before the fetch lands, and seeding an empty set
-      // then would leave the plan permanently unselected.
-      if (!st.selectedTests || (!st.selectionSeeded && rowIds.length)) {
-        st.selectedTests = new Set(rowIds);
-        st.selectionSeeded = rowIds.length > 0;
-      }
-      const selectedTests = st.selectedTests;
-      const counter = el('span', { class: 'muted small' });
-      const syncCount = () => {
-        counter.textContent = t('diag.tests.selected', { n: String(selectedTests.size), total: String(rowIds.length || plan.tests.length) });
-      };
-
-      plan.tests.forEach((tst, i) => {
-        const params = Object.entries(tst.params || {}).map(([k, v]) => `${k}=${JSON.stringify(v)}`).join(' ');
-        const rowId = rowIds[i];
-        const cb = rowId !== undefined && role !== 'viewer'
-          ? el('input', { type: 'checkbox', ...(selectedTests.has(rowId) ? { checked: 'checked' } : {}) })
-          : null;
-        if (cb) {
-          cb.addEventListener('change', () => {
-            if (cb.checked) selectedTests.add(rowId); else selectedTests.delete(rowId);
-            syncCount();
-          });
-        }
-        testsCard.append(el('div', { class: 'diag-test' },
-          cb,
-          el('code', {}, `${tst.probeType} ${tst.target}${params ? ` ${params}` : ''}`),
-          tst.direction === 'reverse' ? el('span', { class: 'pill' }, '←') : null,
-          el('div', { class: 'muted small' }, tst.why || ''),
-          el('div', { class: 'muted small' }, t('diag.tests.askedBy', { causes: tst.askedBy.join(', ') }))));
-      });
-      if (role !== 'viewer') {
-        syncCount();
-        testsCard.append(el('div', { class: 'muted small diag-select' }, t('diag.tests.select'), ' ', counter));
-
-        // Rounds + Stop, for the fault that is not there while you are looking
-        // at it: the same plan dispatched again and again until it reproduces.
-        const roundsInput = el('input', { type: 'number', min: '1', max: '20', value: '1', class: 'run-count' });
-        const runBtn = el('button', { class: 'primary run-btn' });
-        const stopBtn = el('button', { class: 'small ghost', disabled: 'disabled' }, t('probe.stop'));
-        const repeatBtn = el('button', { class: 'small ghost' }, t('diag.tests.repeat'));
-        const repeatChipEl = el('span', { class: 'ct-chip', hidden: true });
-        const evalBtn = el('button', { class: 'small' }, t('diag.evaluate'));
-        const runStatus = el('span', { class: 'muted' });
-        const syncRunLabel = () => {
-          const n = Math.max(1, Math.min(20, Number(roundsInput.value) || 1));
-          runBtn.replaceChildren(t('diag.tests.runSelected'), ' ', roundsInput, ' ', plural('probe.rounds', n, { n: String(n) }));
-        };
-        roundsInput.addEventListener('input', syncRunLabel);
-        roundsInput.addEventListener('click', (e) => e.stopPropagation());
-        syncRunLabel();
-
-        const ROUND_GAP_MS = 4000;
-        let stopRequested = false;
-        const selectedIds = () => [...selectedTests];
-        runBtn.addEventListener('click', async () => {
-          const ids = selectedIds();
-          if (rowIds.length && !ids.length) { runStatus.textContent = t('diag.tests.noneSelected'); return; }
-          const rounds = Math.max(1, Math.min(20, Number(roundsInput.value) || 1));
-          stopRequested = false;
-          runBtn.disabled = true; stopBtn.disabled = false;
-          for (let round = 1; round <= rounds && !stopRequested; round += 1) {
-            runStatus.textContent = rounds === 1
-              ? t('diag.tests.running')
-              : t('diag.tests.round', { round: String(round), rounds: String(rounds) });
-            try {
-              // No ids yet (the fetch has not landed) means the whole plan,
-              // which is exactly what the button did before it could select.
-              const body = ids.length && rowIds.length ? { testIds: ids } : {};
-              // eslint-disable-next-line no-await-in-loop
-              const r = await api(`/api/diagnose/${st.plan.sessionId}/run`, { method: 'POST', body });
-              runStatus.textContent = t('diag.tests.dispatched', { n: r.dispatched, total: r.total });
-            } catch (err) { runStatus.textContent = err.message; break; }
-            if (round < rounds && !stopRequested) {
-              // eslint-disable-next-line no-await-in-loop
-              await new Promise((r) => setTimeout(r, ROUND_GAP_MS));
-            }
-          }
-          if (stopRequested) runStatus.textContent = t('diag.tests.stopped');
-          stopBtn.disabled = true; runBtn.disabled = false;
-        });
-        stopBtn.addEventListener('click', () => {
-          stopRequested = true;
-          stopBtn.disabled = true;
-          runStatus.textContent = t('diag.tests.stopped');
-        });
-
-        // Repeat: the selected tests on a schedule. A plan can span two agents
-        // (a reverse test runs from the far end), and a test package pushes
-        // every item to every target — so this writes ONE PACKAGE PER AGENT
-        // rather than one package that would run each test from the wrong end.
-        repeatBtn.addEventListener('click', () => {
-          const rows = (st.testRows || []).filter((r) => selectedTests.has(r.id) && r.agentId != null);
-          if (!rows.length) { runStatus.textContent = t('diag.tests.noneSelected'); return; }
-          const byAgent = new Map();
-          for (const r of rows) {
-            if (!byAgent.has(r.agentId)) byAgent.set(r.agentId, []);
-            byAgent.get(r.agentId).push({ type: 'probe', probe: { type: r.probeType, host: r.target, ...(r.params || {}) } });
-          }
-          openRepeatModal({
-            what: t('repeat.what.diagnose'),
-            onSave: async (spec, runs) => {
-              const made = [];
-              for (const [agentId, items] of byAgent) {
-                const repeated = [];
-                for (let i = 0; i < runs; i += 1) repeated.push(...items);
-                // eslint-disable-next-line no-await-in-loop
-                made.push(await api('/api/test-packages', {
-                  method: 'POST',
-                  body: {
-                    name: `Diagnosis #${st.plan.sessionId} — ${st.target || plan.target}`.slice(0, 120),
-                    enabled: true,
-                    schedule_spec: spec,
-                    targets: { mode: 'agents', agentIds: [Number(agentId)] },
-                    items: repeated,
-                  },
-                }));
-              }
-              return { name: made.map((m) => m.name).join(', '), packages: made };
-            },
-            onSaved: (pkg, summary) => repeatChip(repeatChipEl, pkg, summary),
-          });
-        });
-        evalBtn.addEventListener('click', async () => {
-          evalBtn.disabled = true; runStatus.textContent = t('diag.evaluating');
-          try {
-            st.evaluation = await api(`/api/diagnose/${st.plan.sessionId}/evaluate`, { method: 'POST', body: {} });
-            runStatus.textContent = '';
-            renderPlan();
-          } catch (err) { runStatus.textContent = err.message; } finally { evalBtn.disabled = false; }
-        });
-        testsCard.append(el('div', { class: 'diag-actions' }, runBtn, stopBtn, repeatBtn, evalBtn, repeatChipEl, runStatus));
-      }
-    }
-    out.append(testsCard);
-  }
-
-  if (diagnoseState && diagnoseState.plan) renderPlan();
-  return root;
+  const v = getDiagnoseView();
+  if (!v) return el('div', { class: 'empty error' }, t('diag.err.ask'));
+  return v.view();
 };
 
-// Opens the screen a playbook's "how to read the answer" points at, carrying the
-// session's device and target so the reader lands on the data rather than on an
-// empty picker. Anything unrecognised falls back to the plain view rather than
-// doing nothing, because a dead button is worse than an imprecise one.
 function diagnoseNavigate(view, state) {
   const agentId = state && state.agentId != null ? Number(state.agentId) : null;
   switch (view.view) {
@@ -7740,123 +6772,46 @@ function diagnoseNavigate(view, state) {
   render();
 }
 
+// ---- Investigate (MIGRATED — see public/views/investigate.js) ---------------
+// investigationCard() stays here: it carries the NIS2 draft block and the
+// AI-narrative fold, each of which migrates on its own terms.
+let investigateView = null;
+const investigateState = {};
+
+function getInvestigateView() {
+  if (investigateView) return investigateView;
+  if (typeof window === 'undefined' || !window.InvestigateView || !ui) return null;
+  investigateView = window.InvestigateView.create({
+    el, t, ui, errText,
+    state: investigateState,
+    card: investigationCard,
+    help: () => {
+      const info = PAGE_INFO.investigation || {};
+      return { lead: info.hero || '', title: info.title || t('inv.title'), body: info.body || (() => []) };
+    },
+    fetchTargets: async () => {
+      const [agents, locations] = await Promise.all([
+        api('/agents').catch(() => []),
+        api('/locations').catch(() => []),
+      ]);
+      return { agents, locations };
+    },
+    fetchHistory: async () => {
+      const list = await api('/api/investigation');
+      return Array.isArray(list) ? list : [];
+    },
+    run: async ({ type, value, windowMinutes }) => api('/api/investigation/run', {
+      method: 'POST',
+      body: { locationRef: { type, value }, windowMinutes },
+    }),
+  });
+  return investigateView;
+}
+
 views.investigation = async () => {
-  const root = el('div', { class: 'investigation' });
-
-  const agents = await api('/agents').catch(() => []);
-  const locations = await api('/locations').catch(() => []);
-
-  // --- Input section ---
-  const typeSelect = el('select', { id: 'inv-type' },
-    el('option', { value: 'agent' }, 'Agent'),
-    el('option', { value: 'interface' }, 'Interface'),
-    el('option', { value: 'subnet' }, 'Subnet'),
-    el('option', { value: 'site' }, 'Site/location'));
-
-  // Dynamic value input: dropdown for agent/site, free text for subnet/interface.
-  const agentOptions = [el('option', { value: '' }, '— select agent —'),
-    ...agents.map((a) => el('option', { value: String(a.id) }, a.display_name || a.hostname))];
-  const siteOptions = [el('option', { value: '' }, '— select site —'),
-    ...locations.map((l) => el('option', { value: String(l.id) }, l.name))];
-
-  const valueSelect = el('select', { id: 'inv-value-select' }, ...agentOptions);
-  const valueText = el('input', { id: 'inv-value-text', type: 'text', placeholder: 'e.g. 10.0.1.0/24 or eth0', class: 'hidden' });
-
-  typeSelect.addEventListener('change', () => {
-    const t = typeSelect.value;
-    if (t === 'agent') {
-      valueSelect.replaceChildren(...agentOptions.map((o) => o.cloneNode(true)));
-      valueSelect.classList.remove('hidden');
-      valueText.classList.add('hidden');
-    } else if (t === 'site') {
-      valueSelect.replaceChildren(...siteOptions.map((o) => o.cloneNode(true)));
-      valueSelect.classList.remove('hidden');
-      valueText.classList.add('hidden');
-    } else {
-      valueSelect.classList.add('hidden');
-      valueText.classList.remove('hidden');
-    }
-  });
-
-  const windowSelect = el('select', { id: 'inv-window' },
-    el('option', { value: '15' }, '15 min'),
-    el('option', { value: '30', selected: 'selected' }, '30 min'),
-    el('option', { value: '60' }, '60 min'));
-
-  const runBtn = el('button', { class: 'primary', id: 'inv-run-btn' }, 'Investigate');
-  const statusEl = el('p', { class: 'muted', id: 'inv-status' }, '');
-
-  root.append(
-    el('div', { class: 'section-head' },
-      el('h2', {}, 'Troubleshooting'),
-      el('span', { class: 'muted' }, 'Location-driven anomaly investigation')),
-    el('div', { class: 'inv-form' },
-      el('div', { class: 'inv-form-row' },
-        el('label', {}, 'Location type ', typeSelect),
-        el('label', {}, 'Value ', valueSelect, valueText),
-        el('label', {}, 'Time window ', windowSelect),
-        runBtn),
-      statusEl));
-
-  const resultArea = el('div', { id: 'inv-result-area' });
-  root.append(resultArea);
-
-  const historyArea = el('div', { id: 'inv-history-area' });
-  root.append(historyArea);
-
-  // Load history of previous investigations.
-  async function loadHistory() {
-    let list;
-    try {
-      list = await api('/api/investigation');
-    } catch {
-      return;
-    }
-    if (!Array.isArray(list) || list.length === 0) {
-      historyArea.replaceChildren(el('div', { class: 'empty' }, 'No previous investigations.'));
-      return;
-    }
-    historyArea.replaceChildren(
-      el('h3', {}, 'Previous investigations'),
-      ...list.map(investigationCard));
-  }
-
-  loadHistory();
-
-  runBtn.addEventListener('click', async () => {
-    const t = typeSelect.value;
-    const rawValue = t === 'agent' || t === 'site'
-      ? valueSelect.value
-      : valueText.value.trim();
-
-    if (!rawValue) {
-      statusEl.textContent = 'Select or enter a location value.';
-      return;
-    }
-
-    runBtn.disabled = true;
-    statusEl.textContent = 'Investigating…';
-    resultArea.replaceChildren();
-
-    try {
-      const inv = await api('/api/investigation/run', {
-        method: 'POST',
-        body: {
-          locationRef: { type: t, value: rawValue },
-          windowMinutes: Number(windowSelect.value),
-        },
-      });
-      resultArea.replaceChildren(investigationCard(inv));
-      statusEl.textContent = '';
-      loadHistory();
-    } catch (err) {
-      statusEl.textContent = `Error: ${err.message}`;
-    } finally {
-      runBtn.disabled = false;
-    }
-  });
-
-  return root;
+  const v = getInvestigateView();
+  if (!v) return el('div', { class: 'empty error' }, t('inv.err.run'));
+  return v.view();
 };
 
 // ---------------------------------------------------------------------------
@@ -7948,427 +6903,105 @@ function tshootTopologySvg(topology, { onSelect, layerFilter } = {}) {
   return wrap;
 }
 
+// ---- Troubleshooting (MIGRATED — see public/views/troubleshooting.js) -------
+// The topology SVG, the timeline rows and the brush geometry stay here: they
+// are their own components, and two of them are shared with other screens.
+let troubleshootingView = null;
+const troubleshootingState = {};
+
+// The event timeline's drag-to-brush, as an object the view can paint into: one
+// marker per event, a selection rectangle, and pointer coords mapped through the
+// viewBox so the selection lines up regardless of the rendered width.
+function tshootBrushSvg(events, bounds, { onBrush }) {
+  const W = 900;
+  const H = 60;
+  const ns = 'http://www.w3.org/2000/svg';
+  const mk = (tag, attrs = {}, ...kids) => {
+    const e = document.createElementNS(ns, tag);
+    for (const [a, v] of Object.entries(attrs)) if (v != null) e.setAttribute(a, v);
+    for (const kid of kids) if (kid != null) e.append(kid.nodeType ? kid : document.createTextNode(String(kid)));
+    return e;
+  };
+  const span = Math.max(1, bounds.toMs - bounds.fromMs);
+  const xOf = (ms) => ((ms - bounds.fromMs) / span) * W;
+
+  const svg = mk('svg', {
+    viewBox: `0 0 ${W} ${H}`, class: 'ts-brush', role: 'img',
+    'aria-label': t('tshoot.timeline.label'),
+  });
+  svg.append(mk('line', { class: 'ts-axis', x1: 0, y1: H - 14, x2: W, y2: H - 14 }));
+  const sel = mk('rect', { class: 'ts-brush-sel', x: 0, y: 0, width: 0, height: H - 14 });
+  svg.append(sel);
+  for (const e of events) {
+    const ms = Date.parse(e.timestamp);
+    if (Number.isNaN(ms)) continue;
+    svg.append(mk('line', {
+      class: `ts-marker sev-${window.TimelineView.severityClass(e.severity)}${window.TroubleshootingView.isChangeEvent(e) ? ' is-change' : ''}`,
+      x1: xOf(ms), y1: 8, x2: xOf(ms), y2: H - 14,
+    }, mk('title', {}, `${fmtDate(e.timestamp)} — ${e.summary}`)));
+  }
+
+  let dragFrom = null;
+  const msAt = (ev) => {
+    const rect = svg.getBoundingClientRect();
+    const ratio = rect.width ? (ev.clientX - rect.left) / rect.width : 0;
+    return bounds.fromMs + Math.max(0, Math.min(1, ratio)) * span;
+  };
+  svg.addEventListener('pointerdown', (ev) => { dragFrom = msAt(ev); svg.setPointerCapture(ev.pointerId); });
+  svg.addEventListener('pointermove', (ev) => {
+    if (dragFrom == null) return;
+    onBrush({ fromMs: dragFrom, toMs: msAt(ev) });
+  });
+  svg.addEventListener('pointerup', (ev) => {
+    if (dragFrom == null) return;
+    const to = msAt(ev);
+    // A click (not a drag) clears rather than selecting a zero-width window.
+    const next = Math.abs(to - dragFrom) < span / 200 ? null : { fromMs: dragFrom, toMs: to };
+    dragFrom = null;
+    onBrush(next);
+  });
+
+  return {
+    svg,
+    setSelection: (b) => {
+      if (!b) { sel.setAttribute('width', '0'); return; }
+      sel.setAttribute('x', String(Math.min(xOf(b.fromMs), xOf(b.toMs))));
+      sel.setAttribute('width', String(Math.abs(xOf(b.toMs) - xOf(b.fromMs))));
+    },
+  };
+}
+
+function getTroubleshootingView() {
+  if (troubleshootingView) return troubleshootingView;
+  if (typeof window === 'undefined' || !window.TroubleshootingPage || !ui) return null;
+  troubleshootingView = window.TroubleshootingPage.create({
+    el, t, ui, errText, openAgent, openCluster, gotoView,
+    state: troubleshootingState,
+    TV: window.TroubleshootingView,
+    topologySvg: tshootTopologySvg,
+    brushSvg: tshootBrushSvg,
+    timelineRow: (e) => window.TimelineView.renderRow(document, e, { formatTime: fmtDate }),
+    help: () => {
+      const info = PAGE_INFO.troubleshooting || {};
+      return { lead: info.hero || '', title: info.title || t('tshoot.title'), body: info.body || (() => []) };
+    },
+    fetchOverview: async (minutes) => api(`/api/troubleshooting/overview?minutes=${encodeURIComponent(minutes)}`),
+    fetchFaults: async (limit, offset) => api(`/api/troubleshooting/faults?limit=${limit}&offset=${offset}`),
+    blastRadius: async (anchorId) => {
+      const radius = await api(`/api/topology/blast-radius/${encodeURIComponent(anchorId)}`);
+      return window.TroubleshootingView.pathNodeIds([
+        ...(radius.directly_isolated || []),
+        ...(radius.dependency_affected || []),
+      ]);
+    },
+  });
+  return troubleshootingView;
+}
+
 views.troubleshooting = async () => {
-  const TV = window.TroubleshootingView;
-  const root = el('div', { class: 'tshoot' });
-
-  const winSel = el('select', { class: 'small' },
-    el('option', { value: '60' }, 'Last 1h'),
-    el('option', { value: '360' }, 'Last 6h'),
-    el('option', { value: '1440' }, 'Last 24h'),
-    el('option', { value: '10080' }, 'Last 7d'));
-  winSel.value = '1440';
-  const refreshBtn = el('button', { class: 'small ghost' }, 'Refresh');
-  const statusEl = el('span', { class: 'muted' });
-
-  root.append(el('div', { class: 'section-head' },
-    el('h2', {}, 'Troubleshooting'),
-    el('span', { class: 'muted' }, 'What is failing, what it affects, and when it started')));
-  root.append(el('div', { class: 'topo-action-bar' },
-    el('label', { class: 'inline muted' }, 'Window ', winSel),
-    refreshBtn, el('span', { class: 'spacer' }), statusEl));
-
-  const kpiHost = el('div', { class: 'kpi-grid' });
-  const topoHost = el('div', { class: 'card ts-topo-card' });
-  const causeHost = el('div', { class: 'card ts-cause-card' });
-  const faultsHost = el('div', { class: 'card ts-faults-card', hidden: 'hidden' });
-  const timelineHost = el('div', { class: 'card ts-timeline-card' });
-  root.append(kpiHost, el('div', { class: 'ts-split' }, topoHost, causeHost), faultsHost, timelineHost);
-
-  let data = null;
-  let graphEl = null;
-  let brush = null; // { fromMs, toMs } or null
-
-  // --- the raw fault list: opt-in, paged, never part of the page load -------
-  // A fleet can carry tens of thousands of raw alarms behind its root causes.
-  // Fetching them to paint the screen is what made this tab slow, so the
-  // overview read no longer touches them: the Active faults figure links here,
-  // and GET /api/troubleshooting/faults pages them in only once asked.
-  const FAULT_PAGE = 100;
-  const faults = { open: false, rows: [], total: 0, loading: false, error: null, loaded: false };
-
-  // --- zone 1: key figures -------------------------------------------------
-  // The Active faults card carries the doorway to the list: the figure is free
-  // (it comes off the cluster rows), the rows behind it are not, so the card
-  // says how many there are and lets the operator decide to pay for them.
-  function faultsAction() {
-    const total = Number(data && data.summary && data.summary.activeFaults) || 0;
-    if (!total) return null;
-    if (faults.open) {
-      return el('button', { class: 'small ghost ts-faults-link', onclick: closeFaults }, t('tshoot.faults.hide'));
-    }
-    const label = faults.loading
-      ? t('tshoot.faults.loading', { loaded: faults.rows.length, total })
-      : (total === 1 ? t('tshoot.faults.linkOne') : t('tshoot.faults.link', { count: total }));
-    return el('button', {
-      class: 'small ghost ts-faults-link',
-      disabled: faults.loading ? 'disabled' : null,
-      onclick: openFaults,
-    }, label);
-  }
-
-  function renderKpis() {
-    const cards = TV.kpiCards(data.summary);
-    const status = (key, value) => {
-      if (!value) return 'ok';
-      return key === 'rootCauses' || key === 'activeFaults' ? 'bad' : 'warn';
-    };
-    kpiHost.replaceChildren(...cards.map((c) => kpiCard(
-      c.label, String(c.value), c.hint, status(c.key, c.value),
-      c.key === 'activeFaults' ? faultsAction() : null,
-    )));
-  }
-
-  // --- zone 2: topology ----------------------------------------------------
-  function renderTopology() {
-    const t = data.topology || { nodes: [], links: [], counts: {}, layers: {} };
-    const layerSel = el('select', { class: 'small' },
-      el('option', { value: 'all' }, `Both layers (${t.layers.l2 || 0} L2 · ${t.layers.l3 || 0} L3)`),
-      el('option', { value: 'l2' }, `L2 links (${t.layers.l2 || 0})`),
-      el('option', { value: 'l3' }, `L3 dependencies (${t.layers.l3 || 0})`));
-
-    const detail = el('div', { class: 'ts-node-detail muted' }, 'Select a node for its details.');
-    const legend = el('div', { class: 'ts-legend' },
-      el('span', { class: 'lg' }, el('span', { class: 'ts-dot ts-ok' }), `OK (${t.counts.ok || 0})`),
-      el('span', { class: 'lg' }, el('span', { class: 'ts-dot ts-down' }), `Down (${t.counts.down || 0})`),
-      el('span', { class: 'lg' }, el('span', { class: 'ts-dot ts-unreachable_downstream' }), `Unreachable downstream (${t.counts.unreachable_downstream || 0})`));
-
-    const graphSlot = el('div', {});
-    const draw = () => {
-      graphEl = tshootTopologySvg(t, {
-        layerFilter: layerSel.value,
-        onSelect: (n) => {
-          detail.classList.remove('muted');
-          detail.replaceChildren(
-            el('div', { class: 'ts-node-head' },
-              el('strong', {}, n.label),
-              el('span', { class: `badge ${n.state === 'down' ? 'down' : n.state === 'ok' ? 'ok' : 'neutral'}` }, TV.stateLabel(n.state))),
-            el('div', { class: 'muted' }, n.lastSeen ? `Last seen ${fmtDate(n.lastSeen)}` : 'Never reported'),
-            el('button', { class: 'small', onclick: () => openAgent(n.id) }, 'Open agent'));
-        },
-      });
-      graphSlot.replaceChildren(graphEl);
-    };
-    layerSel.addEventListener('change', draw);
-    draw();
-
-    const discovered = (t.discovered || []).length;
-    topoHost.replaceChildren(...[
-      el('div', { class: 'ts-panel-head' }, el('h3', {}, 'Topology'), el('span', { class: 'spacer' }), layerSel),
-      graphSlot, legend, detail,
-      discovered
-        ? el('p', { class: 'muted' }, `${discovered} address${discovered === 1 ? '' : 'es'} seen by active discovery but not yet monitored — promote them under Discovery to place them on this graph.`)
-        : null,
-    ].filter(Boolean));
-  }
-
-  // --- zone 3: root causes -------------------------------------------------
-  async function showPath(model, row) {
-    if (model.pathAnchorId == null) return;
-    const note = el('div', { class: 'muted' }, 'Loading path…');
-    row.append(note);
-    try {
-      const radius = await api(`/api/topology/blast-radius/${encodeURIComponent(model.pathAnchorId)}`);
-      const ids = TV.pathNodeIds([...(radius.directly_isolated || []), ...(radius.dependency_affected || [])]);
-      // The anchor itself is the start of every path.
-      if (graphEl && graphEl.highlightPath) graphEl.highlightPath([Number(model.pathAnchorId), ...ids]);
-      note.replaceChildren(
-        el('span', {}, ids.length ? `Highlighted ${ids.length} host(s) on the path.` : 'No downstream path from this node.'),
-        el('button', { class: 'small ghost', onclick: () => { if (graphEl && graphEl.clearPath) graphEl.clearPath(); note.remove(); } }, 'Clear'));
-    } catch (err) {
-      note.textContent = `Could not load the path: ${err.message}`;
-    }
-  }
-
-  function showChanges(model, row) {
-    const changes = TV.changesBefore(data.timeline, model.firstSeen, 30 * 60 * 1000);
-    const box = el('div', { class: 'ts-changes' });
-    if (!changes.length) {
-      box.append(el('div', { class: 'muted' }, 'No recorded change in the 30 minutes before this fault started.'));
-    } else {
-      const ul = el('ul', { class: 'timeline' });
-      changes.forEach((e) => ul.append(window.TimelineView.renderRow(document, e, { formatTime: fmtDate })));
-      box.append(el('div', { class: 'muted' }, `${changes.length} change(s) in the 30 minutes before this fault started:`), ul);
-    }
-    const existing = row.querySelector('.ts-changes');
-    if (existing) existing.replaceWith(box); else row.append(box);
-  }
-
-  function renderRootCauses() {
-    const causes = (data.rootCauses || []).map(TV.rootCauseModel);
-    const head = el('div', { class: 'ts-panel-head' }, el('h3', {}, 'Root causes'),
-      el('span', { class: 'muted' }, causes.length ? `${data.summary.activeFaults} alarm(s) → ${causes.length} cause(s)` : ''));
-
-    if (!causes.length) {
-      causeHost.replaceChildren(head, el('div', { class: 'empty' }, 'No correlated root causes in this window.'));
-      return;
-    }
-
-    const rows = causes.map((m) => {
-      const row = el('div', { class: `ts-cause sev-${m.severity}` });
-      const actions = el('div', { class: 'ts-cause-actions' },
-        el('button', { class: 'small', onclick: () => showPath(m, row), disabled: m.pathAnchorId == null ? 'disabled' : null }, 'Show path'),
-        el('button', { class: 'small ghost', onclick: () => showChanges(m, row) }, 'What changed?'),
-        el('button', { class: 'small ghost', onclick: () => openCluster(m.id) }, 'Open situation'));
-      row.append(
-        el('div', { class: 'ts-cause-head' },
-          el('span', { class: `badge ${m.severity}` }, m.severity),
-          el('strong', {}, m.cause),
-          m.confidence ? el('span', { class: 'badge neutral' }, `${m.confidence} confidence`) : null),
-        el('div', { class: 'ts-cause-meta muted' },
-          el('span', {}, m.affectedText),
-          m.blastText ? el('span', { class: 'ts-blast' }, m.blastText) : null,
-          m.firstSeen ? el('span', {}, `since ${fmtDate(m.firstSeen)}`) : null),
-        actions);
-      return row;
-    });
-    causeHost.replaceChildren(head, ...rows);
-  }
-
-  // --- zone 4: timeline + brush -------------------------------------------
-  function renderTimeline() {
-    const all = data.timeline || [];
-    const bounds = TV.timelineBounds(all);
-    const head = el('div', { class: 'ts-panel-head' }, el('h3', {}, 'Timeline'),
-      el('span', { class: 'muted' }, 'Config pushes, port flaps and new routes — drag to select a window'));
-
-    if (!bounds) {
-      timelineHost.replaceChildren(head, el('div', { class: 'empty' }, 'No recorded events in this window.'));
-      return;
-    }
-
-    const W = 900;
-    const H = 60;
-    const ns = 'http://www.w3.org/2000/svg';
-    const mk = (tag, attrs = {}, ...kids) => {
-      const e = document.createElementNS(ns, tag);
-      for (const [a, v] of Object.entries(attrs)) if (v != null) e.setAttribute(a, v);
-      for (const kid of kids) if (kid != null) e.append(kid.nodeType ? kid : document.createTextNode(String(kid)));
-      return e;
-    };
-    const span = Math.max(1, bounds.toMs - bounds.fromMs);
-    const xOf = (ms) => ((ms - bounds.fromMs) / span) * W;
-
-    const svg = mk('svg', { viewBox: `0 0 ${W} ${H}`, class: 'ts-brush', role: 'img', 'aria-label': 'Event timeline' });
-    svg.append(mk('line', { class: 'ts-axis', x1: 0, y1: H - 14, x2: W, y2: H - 14 }));
-    const sel = mk('rect', { class: 'ts-brush-sel', x: 0, y: 0, width: 0, height: H - 14 });
-    svg.append(sel);
-    for (const e of all) {
-      const ms = Date.parse(e.timestamp);
-      if (isNaN(ms)) continue;
-      svg.append(mk('line', {
-        class: `ts-marker sev-${window.TimelineView.severityClass(e.severity)}${TV.isChangeEvent(e) ? ' is-change' : ''}`,
-        x1: xOf(ms), y1: 8, x2: xOf(ms), y2: H - 14,
-      }, mk('title', {}, `${fmtDate(e.timestamp)} — ${e.summary}`)));
-    }
-
-    const list = el('div', { class: 'ts-events' });
-    const paint = () => {
-      const shown = brush ? TV.eventsInWindow(all, brush.fromMs, brush.toMs) : all;
-      if (brush) {
-        sel.setAttribute('x', String(Math.min(xOf(brush.fromMs), xOf(brush.toMs))));
-        sel.setAttribute('width', String(Math.abs(xOf(brush.toMs) - xOf(brush.fromMs))));
-      } else {
-        sel.setAttribute('width', '0');
-      }
-      const ul = el('ul', { class: 'timeline' });
-      shown.forEach((e) => ul.append(window.TimelineView.renderRow(document, e, { formatTime: fmtDate })));
-      list.replaceChildren(
-        el('div', { class: 'muted' },
-          brush ? `${shown.length} of ${all.length} event(s) in the selected window` : `${all.length} event(s)`,
-          brush ? el('button', { class: 'small ghost', onclick: () => { brush = null; paint(); } }, 'Clear selection') : null),
-        shown.length ? ul : el('div', { class: 'empty' }, 'No events in the selected window.'));
-    };
-
-    // Drag-to-brush. Pointer coords are mapped through the viewBox so the
-    // selection lines up regardless of the rendered width.
-    let dragFrom = null;
-    const msAt = (ev) => {
-      const rect = svg.getBoundingClientRect();
-      const ratio = rect.width ? (ev.clientX - rect.left) / rect.width : 0;
-      return bounds.fromMs + Math.max(0, Math.min(1, ratio)) * span;
-    };
-    svg.addEventListener('pointerdown', (ev) => { dragFrom = msAt(ev); svg.setPointerCapture(ev.pointerId); });
-    svg.addEventListener('pointermove', (ev) => {
-      if (dragFrom == null) return;
-      brush = { fromMs: dragFrom, toMs: msAt(ev) };
-      paint();
-    });
-    svg.addEventListener('pointerup', (ev) => {
-      if (dragFrom == null) return;
-      const to = msAt(ev);
-      // A click (not a drag) clears rather than selecting a zero-width window.
-      brush = Math.abs(to - dragFrom) < span / 200 ? null : { fromMs: dragFrom, toMs: to };
-      dragFrom = null;
-      paint();
-    });
-
-    timelineHost.replaceChildren(head, svg, list);
-    paint();
-  }
-
-  // --- anomalies ride under the root causes -------------------------------
-  function renderAnomalies() {
-    const list = data.anomalies || [];
-    if (!list.length) return;
-    const rows = list.slice(0, 25).map((a) => el('tr', {},
-      el('td', { class: 'mono' }, a.linkId),
-      el('td', { class: 'num' }, a.currentVsBaselinePct == null ? '—' : `${a.currentVsBaselinePct > 0 ? '+' : ''}${a.currentVsBaselinePct}%`),
-      el('td', {}, a.since ? fmtDate(a.since) : '—')));
-    causeHost.append(
-      el('div', { class: 'ts-panel-head' }, el('h3', {}, 'Baseline deviations'),
-        el('span', { class: 'muted' }, 'vs. this weekday/hour')),
-      el('table', { class: 'ts-anoms' },
-        el('thead', {}, el('tr', {}, el('th', {}, 'Flow pair'), el('th', { class: 'num' }, 'vs. baseline'), el('th', {}, 'Since'))),
-        el('tbody', {}, ...rows)));
-  }
-
-  // --- the raw fault list (opt-in) -----------------------------------------
-  // agent id -> device label, so a row reads "sw-acc-a" and not "agent 3". The
-  // topology panel already carries the names; no second lookup.
-  function deviceLabels() {
-    const byId = {};
-    for (const n of ((data && data.topology && data.topology.nodes) || [])) byId[String(n.id)] = n.label;
-    return byId;
-  }
-
-  function faultTable() {
-    const labels = deviceLabels();
-    const rows = faults.rows.map((f) => {
-      const m = TV.faultRowModel(f, labels);
-      return el('tr', { class: m.missing ? 'ts-fault-missing' : null },
-        el('td', {}, el('span', { class: `badge ${m.severity}` }, m.missing ? '—' : m.severity)),
-        el('td', {}, m.deviceLabel),
-        el('td', { class: 'mono' }, m.metric),
-        el('td', {}, m.createdAt ? fmtDate(m.createdAt) : (m.missing ? t('tshoot.faults.purged') : '—')),
-        el('td', { class: 'muted' },
-          m.cause || '—',
-          m.acked ? el('span', { class: 'badge neutral' }, t('tshoot.faults.acked')) : null));
-    });
-    return el('table', { class: 'ts-faults' },
-      el('thead', {}, el('tr', {},
-        el('th', {}, t('tshoot.faults.colSeverity')),
-        el('th', {}, t('tshoot.faults.colHost')),
-        el('th', {}, t('tshoot.faults.colMetric')),
-        el('th', {}, t('tshoot.faults.colWhen')),
-        el('th', {}, t('tshoot.faults.colCause')))),
-      el('tbody', {}, ...rows));
-  }
-
-  function renderFaults() {
-    faultsHost.hidden = !faults.open;
-    if (!faults.open) { faultsHost.replaceChildren(); return; }
-
-    const head = el('div', { class: 'ts-panel-head' },
-      el('h3', {}, t('tshoot.faults.title')),
-      el('span', { class: 'muted' }, t('tshoot.faults.hint')),
-      el('span', { class: 'spacer' }),
-      el('button', { class: 'small ghost', onclick: closeFaults }, t('tshoot.faults.hide')));
-
-    if (faults.error) {
-      faultsHost.replaceChildren(head,
-        el('div', { class: 'error' }, t('tshoot.faults.error', { message: faults.error })),
-        el('button', { class: 'small', onclick: loadFaultPage }, t('tshoot.faults.retry')));
-      return;
-    }
-
-    // The counter is the whole point of the opt-in: a long read has to say how
-    // far it has got, not spin.
-    const progress = TV.faultProgress({ loaded: faults.rows.length, total: faults.total, loading: faults.loading });
-    const counter = el('div', { class: `ts-fault-counter muted${faults.loading ? ' is-loading' : ''}` }, t(progress.key, progress.params));
-
-    const next = TV.faultsRemaining({ loaded: faults.rows.length, total: faults.total }, FAULT_PAGE);
-    const more = next > 0
-      ? el('button', { class: 'small', disabled: faults.loading ? 'disabled' : null, onclick: loadFaultPage }, t('tshoot.faults.loadMore', { count: next }))
-      : null;
-
-    // `el()` skips null kids but a bare replaceChildren(…, null) stringifies it
-    // to the text "null", so filter (same guard as the traceroute panel).
-    if (!faults.rows.length) {
-      faultsHost.replaceChildren(...[head, counter,
-        faults.loading ? null : el('div', { class: 'empty' }, t('tshoot.faults.empty'))].filter(Boolean));
-      return;
-    }
-    faultsHost.replaceChildren(...[head, counter, faultTable(), more].filter(Boolean));
-  }
-
-  // One page at a time, appended. `offset` is the number of rows already held,
-  // and the backend keeps a stable order, so paging never re-reads or skips.
-  async function loadFaultPage() {
-    if (faults.loading) return;
-    faults.loading = true;
-    faults.error = null;
-    renderFaults();
-    renderKpis();
-    try {
-      const page = await api(`/api/troubleshooting/faults?limit=${FAULT_PAGE}&offset=${faults.rows.length}`);
-      faults.total = Number(page.total) || 0;
-      faults.rows = faults.rows.concat(page.faults || []);
-      faults.loaded = true;
-    } catch (err) {
-      faults.error = err.message;
-    } finally {
-      faults.loading = false;
-      renderFaults();
-      renderKpis();
-    }
-  }
-
-  function openFaults() {
-    faults.open = true;
-    renderKpis();
-    renderFaults();
-    if (!faults.loaded) loadFaultPage();
-  }
-
-  function closeFaults() {
-    faults.open = false;
-    renderFaults();
-    renderKpis();
-  }
-
-  async function load() {
-    statusEl.textContent = 'Loading…';
-    refreshBtn.disabled = true;
-    try {
-      data = await api(`/api/troubleshooting/overview?minutes=${encodeURIComponent(winSel.value)}`);
-      brush = null;
-      // The fault set belongs to the rollup we just replaced, so the held pages
-      // are stale. Drop them; if the operator had the list open, page 1 of the
-      // NEW set is fetched rather than silently showing the old one.
-      faults.rows = [];
-      faults.total = 0;
-      faults.loaded = false;
-      faults.error = null;
-      renderKpis();
-      renderTopology();
-      renderRootCauses();
-      renderAnomalies();
-      renderTimeline();
-      renderFaults();
-      if (faults.open) loadFaultPage();
-      // A domain that is down costs its own panel, not the screen — say which.
-      statusEl.textContent = data.partial
-        ? `Partial data — unavailable: ${data.failedSources.join(', ')}`
-        : '';
-      statusEl.classList.toggle('warn', !!data.partial);
-    } catch (err) {
-      kpiHost.replaceChildren();
-      topoHost.replaceChildren(el('div', { class: 'empty' }, `Could not load: ${err.message}`));
-      causeHost.replaceChildren();
-      timelineHost.replaceChildren();
-      faults.open = false;
-      renderFaults();
-      statusEl.textContent = '';
-    } finally {
-      refreshBtn.disabled = false;
-    }
-  }
-
-  winSel.addEventListener('change', load);
-  refreshBtn.addEventListener('click', load);
-  await load();
-  return root;
+  const v = getTroubleshootingView();
+  if (!v) return el('div', { class: 'empty error' }, t('tshoot.err.title'));
+  return v.view();
 };
 
 // Interface health per agent (utilisation, errors, discards, link state/speed)
@@ -8415,19 +7048,45 @@ views.interfaces = async () => {
 // persists the active sub-tab across re-renders; gotoView('tests') deep-links here
 // onto the packages tab (the old standalone Tests page).
 let probesTab = 'run'; // 'run' | 'connection' | 'packages'
+// ---- Probes & Tests (page shell MIGRATED — see public/views/probes.js) ------
+// The shell is on the UI contract; the three tab bodies below are not yet, and
+// they migrate in their own commits. Built lazily: `ui` is declared far down
+// this file and is in the temporal dead zone up here.
+let probesView = null;
+function getProbesView() {
+  if (probesView) return probesView;
+  if (typeof window === 'undefined' || !window.ProbesView || !ui) return null;
+  probesView = window.ProbesView.create({
+    el, t, ui, errText,
+    getTab: () => probesTab,
+    setTab: (key) => {
+      if (probesTab === key) return;
+      // Run-a-probe owns the poller; every other tab must not leave it running.
+      if (key !== 'run') stopProbes();
+      probesTab = key;
+      render();
+    },
+    rerender: () => render(),
+    // Each tab answers a different question, so each brings its own lead line
+    // and its own help — the three PAGE_INFO entries that used to feed three
+    // different hero banners now feed one (?) popover.
+    helpFor: (tab) => {
+      const info = (tab === 'packages' ? PAGE_INFO.tests
+        : (tab === 'connection' ? PAGE_INFO.connectionTest : PAGE_INFO.probes)) || {};
+      return { lead: info.hero || '', title: info.title || t('probes.title'), body: info.body || (() => []) };
+    },
+    tabBody: (tab) => (tab === 'packages' ? testPackagesView()
+      : (tab === 'connection' ? connectionTestView() : probeRunnerView())),
+  });
+  return probesView;
+}
+
 views.probes = async () => {
+  const v = getProbesView();
+  if (v) return v.view();
+  // The module did not load: the tab bodies still work, so serve them rather
+  // than a blank page.
   const root = el('div');
-  root.append(el('div', { class: 'section-head' }, el('h2', {}, 'Probes & Tests'),
-    tabStrip([['run', 'Run a probe'], ['connection', t('ct.tab')], ['packages', 'Test packages']], {
-      active: probesTab,
-      ariaLabel: 'Probes & Tests',
-      onPick: (key) => {
-        if (probesTab === key) return;
-        if (key !== 'run') stopProbes();
-        probesTab = key;
-        render();
-      },
-    })));
   const sub = probesTab === 'packages' ? testPackagesView
     : (probesTab === 'connection' ? connectionTestView : probeRunnerView);
   root.append(await sub());
@@ -9517,107 +8176,61 @@ function changesRowEl(event, nameFor, showIndication = true) {
   return row;
 }
 
-views.changes = async () => {
-  const root = el('div', { class: 'changes-view' });
-  const head = el('div', { class: 'section-head' },
-    el('h2', {}, t('changes.title')),
-    el('span', { class: 'muted' }, t('changes.subtitle')));
-  const controls = el('div', { class: 'chg-controls' });
-  const body = el('div', {}, el('div', { class: 'muted' }, t('changes.loading')));
-  root.append(head, controls, body);
-
-  let agents = [];
-  try { agents = await api('/agents'); } catch { /* labels are best-effort */ }
-  const nameById = {};
-  (agents || []).forEach((a) => { nameById[a.id] = a.display_name || a.hostname || `agent ${a.id}`; });
-  const nameFor = (id) => nameById[id] || `agent ${id}`;
-
-  async function load() {
-    body.replaceChildren(el('div', { class: 'muted' }, t('changes.loading')));
-    let data;
-    try {
+// ---- Changes (MIGRATED — see public/views/changes.js) ----------------------
+// The first screen on the UI contract (docs/ui-contract.md). The view itself
+// lives in its own file so `npm run ui:check` can hold it to the contract while
+// the screens around it are still on the old chrome; app.js keeps the state the
+// screen must not own — the chosen window and the reference marker both outlive
+// the view, and the marker moves only on an explicit "Mark as seen".
+let changesView = null;
+function getChangesView() {
+  if (changesView) return changesView;
+  if (typeof window === 'undefined' || !window.ChangesView || !ui) return null;
+  changesView = window.ChangesView.create({
+    el, api, t, errText, openAgent, ui,
+    WINDOWS: CHANGES_WINDOWS,
+    getWindow: () => changesWindow,
+    setWindow: (w) => { if (CHANGES_WINDOWS.includes(w)) changesWindow = w; },
+    setSince: (s) => { changesSince = s; },
+    feedPath: () => {
       const qs = new URLSearchParams({ window: changesWindow });
       if (changesSince) qs.set('since', changesSince);
-      data = await api(`/api/changes?${qs.toString()}`);
-    } catch (err) {
-      body.replaceChildren(
-        el('p', { class: 'error' }, t('changes.error', { message: errText(err) })),
-        el('button', { class: 'small ghost', onclick: load }, t('common.retry')));
-      return;
-    }
-
-    const kids = [];
-    kids.push(el('p', { class: 'muted small' }, t('changes.since', { when: fmtDate(data.since) })));
-
-    // Say what was folded. A page that quietly correlated 120 occurrences into 14
-    // events reads as a suspiciously quiet shift unless it says so outright.
-    if (data.correlated > 0) {
-      kids.push(el('p', { class: 'muted small' }, t('changes.correlated', { rows: data.total, raw: data.rawTotal })));
-    }
-
-    if (data.partial && (data.failedSources || []).length) {
-      kids.push(el('p', { class: 'warn small' }, t('changes.partial', { sources: data.failedSources.join(', ') })));
-    }
-
-    if (!data.events.length) {
-      // A meaningful empty state: the reference time is what makes "no changes"
-      // an answer rather than a blank page.
-      kids.push(el('div', { class: 'empty' },
-        el('p', {}, t('changes.empty', { when: fmtDate(data.since) })),
-        el('p', { class: 'muted small' }, t('changes.emptyHint'))));
-    } else {
-      for (const group of data.groups) {
-        kids.push(el('h3', { class: `chg-group sev-${group.severity}` }, t(`changes.group.${group.severity}`),
-          el('span', { class: 'muted small' }, ` (${group.events.length})`)));
-        const ul = el('ul', { class: 'timeline-list' });
-        // A row with no family (a situation, an agent transition) is transparent
-        // here rather than a break in the run — otherwise one such row between
-        // two latency events reprints the identical sentence underneath both.
-        let prevFamily = null;
-        group.events.forEach((e) => {
-          const family = e.family || null;
-          ul.append(changesRowEl(e, nameFor, family !== null && family !== prevFamily));
-          if (family !== null) prevFamily = family;
-        });
-        kids.push(ul);
-      }
-      if (data.truncated) {
-        kids.push(el('p', { class: 'muted small' }, t('changes.truncated', { shown: data.returned, total: data.total })));
-      }
-    }
-    body.replaceChildren(...kids);
-  }
-
-  // Window picker + the explicit mark-as-seen. The marker moves ONLY here —
-  // never on a load — so the page can still tell you what is new next time.
-  const winSel = el('select', {
-    onchange: (e) => { changesWindow = e.target.value; load(); },
-  }, ...CHANGES_WINDOWS.map((w) => el('option', {
-    value: w, ...(w === changesWindow ? { selected: 'selected' } : {}),
-  }, w)));
-
-  const seenBtn = el('button', {
-    class: 'small',
-    onclick: async () => {
-      seenBtn.disabled = true;
-      try {
-        await api('/api/changes/seen', { method: 'POST', body: {} });
-        toast(t('changes.marked'));
-        changesSince = 'last_login';
-        await load();
-      } catch (err) { toast(errText(err), true); }
-      finally { seenBtn.disabled = false; }
+      return `/api/changes?${qs.toString()}`;
     },
-  }, t('changes.markSeen'));
+    exportCsv: () => exportChangesCsv(),
+  });
+  return changesView;
+}
 
-  controls.append(
-    el('label', {}, t('changes.window'), ' ', winSel),
-    seenBtn,
-    el('button', { class: 'small ghost', onclick: () => { currentView = 'fleet'; render(); } }, t('changes.fleetLink')));
-
-  await load();
-  return root;
+views.changes = async () => {
+  const v = getChangesView();
+  return v ? v.view() : el('div', { class: 'empty error' }, t('changes.error', { message: 'view module not loaded' }));
 };
+
+// The export the toolbar offers. A CSV of what is on screen is the answer to
+// "send me that list", and it is the server's own feed rather than the rendered
+// rows, so a truncated page does not become a truncated export.
+async function exportChangesCsv() {
+  try {
+    const qs = new URLSearchParams({ window: changesWindow });
+    if (changesSince) qs.set('since', changesSince);
+    const data = await api(`/api/changes?${qs.toString()}`);
+    const rows = [['time', 'severity', 'kind', 'type', 'summary', 'agent', 'count']];
+    for (const e of data.events || []) {
+      rows.push([e.timestamp, e.severity, e.kind, e.type, e.summary, e.agentId == null ? '' : e.agentId, e.count || 1]);
+    }
+    const csv = rows.map((r) => r.map((c) => `"${String(c ?? '').replace(/"/g, '""')}"`).join(',')).join('\n');
+    const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
+    const a = el('a', { href: url, download: `changes-${changesWindow}.csv` });
+    document.body.append(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    ui.toast(t('changes.exported'), t('changes.exportedDetail', { n: (data.events || []).length }));
+  } catch (err) {
+    ui.toast(t('changes.err.title'), errText(err), { bad: true });
+  }
+}
 
 const fleetState = { timer: null };
 function stopFleet() { if (fleetState.timer) { clearInterval(fleetState.timer); fleetState.timer = null; } }
@@ -9911,209 +8524,79 @@ function fleetIssues(w) {
 // The landing view: all agents with a probe-derived health verdict, worst-first.
 // Click a row to pivot into that agent's combined detail page. For Professional+
 // licences it also surfaces an "Open issues" rollup (events + findings).
+// ---- Fleet (MIGRATED — see public/views/fleet.js) ---------------------------
+// Built lazily: `ui` is declared far down this file. app.js keeps what outlives
+// the view — the cross-view fleet filter, the health sort, and the 10 s poll —
+// and hands the view the three panels that are not the contract's: the NOC
+// header, the traffic map and the licence-gated issues rollup.
+let fleetView = null;
+const fleetViewState = {};
+function getFleetView() {
+  if (fleetView) return fleetView;
+  if (typeof window === 'undefined' || !window.FleetView || !ui) return null;
+  fleetView = window.FleetView.create({
+    el, t, ui, FleetFilter,
+    state: fleetViewState,
+    errText,
+    openAgent, gotoView,
+    summaryTotal,
+    latencyText,
+    throughputText,
+    // The health verdict as a contract Badge rather than the legacy .badge.
+    healthBadgeUi: (h) => {
+      const [cls, label] = HEALTH_BADGE[(h && h.status) || 'unknown'] || HEALTH_BADGE.unknown;
+      const tone = { online: 'ok', warn: 'warn', crit: 'crit', down: 'crit', stale: 'neutral', grace: 'neutral' }[cls] || 'neutral';
+      return ui.badge(tone, label);
+    },
+    filter: () => fleetFilter,
+    setFilter: (next) => { fleetFilter = next; },
+    getSortByHealth: () => fleetSortByHealth,
+    setSortByHealth: (v) => { fleetSortByHealth = v; },
+    syncUrl: () => syncFleetUrl(),
+    help: () => {
+      const info = PAGE_INFO.fleet || {};
+      return { lead: info.hero || '', title: info.title || t('fleet.title'), body: info.body || (() => []) };
+    },
+    // Filtering is client-side on the dataset the page already holds. Only for a
+    // large fleet (>500 agents) is the severity filter offloaded to the server
+    // to shrink the payload; the summary stays whole-fleet either way, so the
+    // StatStrip counts remain correct.
+    fetchHealth: (last) => {
+      const big = last && summaryTotal(last.summary) > 500;
+      const q = big && fleetFilter.severity.length
+        ? `?severity=${encodeURIComponent(fleetFilter.severity.join(','))}` : '';
+      return api(`/api/fleet/health${q}`);
+    },
+    maintenance: () => api('/api/settings/maintenance').then((m) => (m && m.windows) || []),
+    // Licence-gated (dashboard_advanced): when the licence excludes it the
+    // panels are simply omitted, so the core Overview always renders.
+    issues: async () => {
+      if (!featureEntitled('dashboard_advanced')) return null;
+      return fleetIssues((await api('/api/dashboard/advanced')).widgets);
+    },
+    noc: (data) => nocDashboard(data, {}),
+    // Rendered once per view entry: the poll redraws the grid, and rebuilding
+    // the Leaflet instance under the reader would throw away their pan and zoom.
+    trafficMap: () => trafficMapCard({
+      subtitle: t('fleet.trafficSub'),
+      onArcClick: (a, site) => openFlows(null, { mode: 'map', locationId: site.locationId ?? null }),
+      onSiteClick: (s) => { if (s.locationId != null) openLocation(s.locationId); },
+    }),
+    startPolling: (refresh) => {
+      stopFleet();
+      fleetState.timer = setInterval(() => {
+        if (currentView !== 'fleet') { stopFleet(); return; }
+        if (!modalOpen()) refresh();
+      }, 10000);
+    },
+  });
+  return fleetView;
+}
+
 views.fleet = async () => {
-  const root = el('div', { class: 'fleet' });
-  root.append(el('div', { class: 'section-head' }, el('h2', {}, 'Overview'),
-    el('span', { class: 'muted' }, 'All agents · health from reachability · loss · latency · jitter')));
-  const bannerHost = el('div', {});
-  const nocHost = el('div', {});
-  // Fleet-wide traffic map (colored directional arrows, below the network
-  // path). Rendered ONCE per view entry — the 10 s poll re-renders nocHost
-  // only, so the Leaflet instance isn't rebuilt under the user.
-  const trafficHost = el('div', { class: 'fleet-traffic' });
-  const chipsHost = el('div', { class: 'filter-chips' });   // active-filter chips (self-hides when empty)
-  const cardsHost = el('div', { class: 'fleet-cards' });     // four clickable metric cards
-  const tableHost = el('div', {});
-  const issuesHost = el('div', {}); // gated (dashboard_advanced): events + findings
-  root.append(bannerHost, nocHost, trafficHost, chipsHost, cardsHost, tableHost, issuesHost);
-  trafficHost.append(trafficMapCard({
-    subtitle: 'all sites · last 6 h · arrows = traffic type + live direction',
-    // Clicking a dataflow opens the Flows page in Map mode scoped to that
-    // site; clicking a site pin opens the location's drill-down page.
-    onArcClick: (a, site) => openFlows(null, { mode: 'map', locationId: site.locationId ?? null }),
-    onSiteClick: (s) => { if (s.locationId != null) openLocation(s.locationId); },
-  }));
-
-  // Maintenance banner (viewer-readable) — shown while a window is active now.
-  api('/api/settings/maintenance').then((m) => {
-    const now = Date.now();
-    const active = (m.windows || []).filter((w) => Date.parse(w.from) <= now && now <= Date.parse(w.to));
-    if (active.length) bannerHost.replaceChildren(el('div', { class: 'mw-banner' }, '🛠 Maintenance active: ', esc(active.map((w) => w.name).join(', ')), el('span', { class: 'muted' }, ' — alert notifications suppressed')));
-    else bannerHost.replaceChildren();
-  }).catch(() => {});
-
-  // The four metric cards (Kritiske / Advarsler / Offline) are whole-card filter
-  // toggles over the shared `fleetFilter` state; "Fleet health" is a sort, not a
-  // filter (it orders the grid by health score, worst-first, and scrolls to it).
-  // The latest fetch is cached so a toggle re-renders instantly without a
-  // refetch, and every change mirrors into the URL so the view is shareable.
-  let lastData = null;
-  // Independent of the metric-card filters: the NOC header (KPI cards + live
-  // network path) can be narrowed to a single location. null = whole fleet.
-  let locationScope = null;
-  function applyFleet() {
-    if (!lastData) return;
-    renderChips();
-    renderCards(lastData);
-    renderTable(lastData.agents);
-  }
-  function updateFilter(next) { fleetFilter = next; syncFleetUrl(); applyFleet(); }
-  function clearAllFilters() { updateFilter(FleetFilter.emptyState()); }
-
-  // Distinct locations present in the latest poll (only sites that actually have
-  // an agent are offered as scope options), name-sorted.
-  function nocLocations(agents) {
-    const seen = new Map();
-    for (const a of agents || []) {
-      if (a.locationId != null && !seen.has(a.locationId)) seen.set(a.locationId, a.locationName || `#${a.locationId}`);
-    }
-    return [...seen].map(([id, name]) => ({ id, name })).sort((x, y) => x.name.localeCompare(y.name));
-  }
-  // Narrow the fleet rollup to one location, recomputing the status summary so
-  // the KPI cards + the network path reflect just that site. null ⇒ whole fleet.
-  function scopeData(data, locId) {
-    if (locId == null) return data;
-    const agents = (data.agents || []).filter((a) => a.locationId === locId);
-    const summary = { ok: 0, warn: 0, bad: 0, down: 0, stale: 0, unknown: 0, total: agents.length };
-    for (const a of agents) summary[a.health.status] = (summary[a.health.status] || 0) + 1;
-    return { ...data, agents, summary };
-  }
-  // (Re)render the NOC header for the current scope. The <select> is rebuilt on
-  // every poll with the active scope preselected, so the choice survives the
-  // 10 s refresh; picking a location just re-runs this (no refetch).
-  function renderNoc() {
-    if (!lastData) return;
-    const locs = nocLocations(lastData.agents);
-    // Forget a scope whose location dropped out of the latest poll.
-    if (locationScope != null && !locs.some((l) => l.id === locationScope)) locationScope = null;
-    const scopeName = locationScope != null ? (locs.find((l) => l.id === locationScope) || {}).name : null;
-    const controls = locs.length
-      ? el('label', { class: 'inline muted' }, 'Location ',
-        el('select', { onchange: (e) => { locationScope = e.target.value ? Number(e.target.value) : null; renderNoc(); } },
-          el('option', { value: '' }, 'All locations'),
-          ...locs.map((l) => el('option', { value: String(l.id), selected: l.id === locationScope ? '' : null }, l.name))))
-      : null;
-    nocHost.replaceChildren(nocDashboard(scopeData(lastData, locationScope), { controls, scopeName }));
-  }
-
-  // A whole-card filter toggle. `onActivate` runs on click and on Enter/Space;
-  // aria-pressed mirrors the active state for screen readers.
-  function metricCard({ cls, label, value, sub, active, onActivate }) {
-    return el('div', {
-      class: `metric-card ${cls}${active ? ' active' : ''}`,
-      role: 'button', tabindex: '0', 'aria-pressed': active ? 'true' : 'false',
-      title: sub,
-      onclick: onActivate,
-      onkeydown: (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onActivate(); } },
-    }, el('div', { class: 'mc-k' }, label), el('div', { class: 'mc-v' }, value), el('div', { class: 'mc-sub' }, sub));
-  }
-  // "Fleet health" doesn't filter — it toggles a worst-first sort of the grid by
-  // health score (ascending) and scrolls the grid into view.
-  function onFleetHealth() {
-    fleetSortByHealth = !fleetSortByHealth;
-    applyFleet();
-    try { tableHost.scrollIntoView({ behavior: 'smooth', block: 'start' }); } catch { /* jsdom / old browsers */ }
-  }
-  function renderCards(data) {
-    const s = data.summary || {};
-    const agents = data.agents || [];
-    const total = summaryTotal(s);
-    const crit = (s.bad || 0) + (s.down || 0);
-    const warn = s.warn || 0;
-    // The summary always reflects the whole fleet (even when the returned agent
-    // list is narrowed by a server-side severity filter), so the card counts stay
-    // honest. `offline` counts connection state; fall back to the list for older
-    // servers that don't emit summary.offline.
-    const offline = typeof s.offline === 'number' ? s.offline : agents.filter((a) => !a.online).length;
-    const healthPct = total ? Math.round(((s.ok || 0) / total) * 100) : null;
-    cardsHost.replaceChildren(
-      metricCard({ cls: 'health', label: 'Fleet health', value: healthPct == null ? '–' : `${healthPct}%`, sub: 'sortér grid efter score', active: fleetSortByHealth, onActivate: onFleetHealth }),
-      metricCard({ cls: 'crit', label: 'Kritiske', value: String(crit), sub: 'CRIT · klik for at filtrere', active: fleetFilter.severity.includes('CRIT'), onActivate: () => updateFilter(FleetFilter.toggleSeverity(fleetFilter, 'CRIT')) }),
-      metricCard({ cls: 'warn', label: 'Advarsler', value: String(warn), sub: 'WARN · klik for at filtrere', active: fleetFilter.severity.includes('WARN'), onActivate: () => updateFilter(FleetFilter.toggleSeverity(fleetFilter, 'WARN')) }),
-      metricCard({ cls: 'offline', label: 'Offline', value: String(offline), sub: 'ikke forbundet', active: fleetFilter.offline, onActivate: () => updateFilter(FleetFilter.toggleOffline(fleetFilter)) }));
-  }
-  // One removable chip per active filter; a "Ryd alle" appears once two or more
-  // filters are stacked. The row self-hides (CSS :empty) when nothing is active.
-  function renderChips() {
-    const cs = FleetFilter.chips(fleetFilter);
-    if (!cs.length) { chipsHost.replaceChildren(); return; }
-    const kids = cs.map((c) => el('button', {
-      class: 'filter-chip', type: 'button', 'aria-label': `Fjern filter: ${c.label}`,
-      onclick: () => updateFilter(FleetFilter.removeChip(fleetFilter, c)),
-    }, el('span', {}, c.label), el('span', { class: 'fc-x', 'aria-hidden': 'true' }, '✕')));
-    if (cs.length >= 2) kids.push(el('button', { class: 'filter-chip clear-all', type: 'button', onclick: clearAllFilters }, 'Ryd alle'));
-    chipsHost.replaceChildren(...kids);
-  }
-  function fleetRow(a) {
-    const m = a.health.metrics;
-    const dq = a.quality && a.quality.status && a.quality.status !== 'ok' && a.quality.status !== 'unknown'
-      ? el('span', { class: 'dq-flag', title: `Data quality: ${a.quality.reason || a.quality.status}` }, ' ⚠')
-      : null;
-    return el('tr', { class: 'fleet-row', tabindex: '0', onclick: () => openAgent(a.agentId), onkeydown: (e) => { if (e.key === 'Enter') openAgent(a.agentId); } },
-      el('td', {}, el('div', {}, esc(a.displayName), dq), a.displayName !== a.hostname ? el('div', { class: 'muted' }, esc(a.hostname)) : null),
-      el('td', {}, el('span', { class: `badge ${a.online ? 'online' : 'offline'}` }, a.online ? 'online' : 'offline')),
-      el('td', {}, healthBadge(a.health)),
-      el('td', { class: 'num' }, m.lossPct != null ? `${m.lossPct}%` : '–'),
-      el('td', { class: 'num' }, latencyText(m)),
-      el('td', { class: 'num' }, m.jitterMs != null ? `${m.jitterMs} ms` : '–'),
-      el('td', { class: 'num muted' }, m.targets ? `${m.reachable}/${m.targets}` : '–'),
-      el('td', { class: 'num' }, throughputText(a.throughput)),
-      el('td', { class: 'muted' }, a.locationName || '–'),
-      el('td', { class: 'muted' }, m.lastTs ? fmtTimeShort(new Date(m.lastTs).getTime()) : '–'));
-  }
-  function renderTable(agents) {
-    // Total across the whole fleet — from the summary so it's right even when the
-    // list was pre-narrowed by a server-side severity filter (an empty list then
-    // means "nothing matched", not "no agents enrolled").
-    const total = summaryTotal((lastData && lastData.summary)) || agents.length;
-    if (!total) { tableHost.replaceChildren(el('div', { class: 'empty' }, 'No agents yet — go to Agents to enrol one.')); return; }
-    const filtered = FleetFilter.applyFilter(agents, fleetFilter);
-    const active = FleetFilter.isActive(fleetFilter);
-    // "3 af 47 agenter" over the table, shown while a filter is active.
-    const countLine = active ? el('div', { class: 'fleet-count' }, `${filtered.length} af ${total} agenter`) : null;
-    // Empty result: an explicit message + a way out — never a bare empty table.
-    if (!filtered.length) {
-      tableHost.replaceChildren(...[countLine, el('div', { class: 'empty fleet-empty' },
-        el('div', {}, 'Ingen agenter matcher filteret'),
-        el('button', { class: 'small ghost', onclick: clearAllFilters }, 'Ryd filter'))].filter(Boolean));
-      return;
-    }
-    const ordered = fleetSortByHealth ? FleetFilter.sortByHealth(filtered) : filtered;
-    const body = el('table', { class: 'fleet-table' },
-      el('thead', {}, el('tr', {}, ...['Agent', 'Status', 'Health', 'Loss', 'Latency', 'Jitter', 'Targets', 'Speed', 'Location', 'Last seen'].map((h) => el('th', {}, h)))),
-      el('tbody', {}, ...ordered.map(fleetRow)));
-    tableHost.replaceChildren(...[countLine, body].filter(Boolean));
-  }
-  // Open issues (events + findings) — a Professional+ rollup (feature
-  // dashboard_advanced). Best-effort + gated: when the licence doesn't include
-  // it the panels are simply omitted, so the core Overview always renders.
-  async function refreshIssues() {
-    if (!featureEntitled('dashboard_advanced')) { issuesHost.replaceChildren(); return; }
-    try { issuesHost.replaceChildren(fleetIssues((await api('/api/dashboard/advanced')).widgets)); }
-    catch { issuesHost.replaceChildren(); }
-  }
-  async function refresh() {
-    refreshIssues(); // gated events/findings panels, fetched in parallel
-    // Filtering is client-side on the dataset the Overview already holds. Only
-    // for a large fleet (>500 agents) do we offload the severity filter to the
-    // server as a query param to shrink the payload; the summary stays whole-
-    // fleet either way, so the metric-card counts remain correct.
-    const big = lastData && summaryTotal(lastData.summary) > 500;
-    const q = big && fleetFilter.severity.length ? `?severity=${encodeURIComponent(fleetFilter.severity.join(','))}` : '';
-    let data;
-    try { data = await api(`/api/fleet/health${q}`); } catch (e) { tableHost.replaceChildren(el('div', { class: 'error' }, e.message)); return; }
-    lastData = data;
-    renderNoc();
-    applyFleet();
-  }
-
-  await refresh();
-  stopFleet();
-  fleetState.timer = setInterval(() => {
-    if (currentView !== 'fleet') { stopFleet(); return; }
-    if (!modalOpen()) refresh();
-  }, 10000);
-  return root;
+  const v = getFleetView();
+  if (!v) return el('div', { class: 'empty error' }, t('fleet.err.title'));
+  return v.view();
 };
 
 // Combined per-agent page: health résumé + probes (latency/loss/jitter) +
@@ -10774,400 +9257,99 @@ views.nics = async () => {
 // Unified mode: top talkers, ports, protocols, scan/fan-out, anomaly markers.
 // Bidirectional mode: ingress/egress side-by-side with asymmetry indicator.
 // Metadata only; internal (LAN) conversations are shown — never geolocated.
-views.flows = async () => {
-  const root = el('div', { class: 'flows-explorer' });
-  root.append(el('div', { class: 'section-head' },
-    el('h2', {}, 'Flows'),
-    el('span', { class: 'muted' }, 'Conversations · top talkers · ports · anomalies · ingress/egress')));
+// ---- Flows (MIGRATED — see public/views/flows.js) ---------------------------
+// The traffic map, its legend chips and the traffic-type colour ramp stay here:
+// the ramp is a per-category palette that has not been migrated, and the map
+// carries the reader's pan and zoom.
+let flowsPage = null;
+const flowsPageState = {};
 
-  const agents = await api('/agents').catch(() => []);
-  if (!agents.length) { root.append(el('div', { class: 'empty' }, 'No agents yet.')); return root; }
+// One dot in the traffic-type colour ramp. Built here rather than in the view
+// because the ramp is app.js's, and a per-category colour cannot be a class.
+function trafficTypeDot(category) {
+  return el('span', { class: 'tc-dot', style: `background:${trafficTypeColor(category)}` });
+}
 
-  const agentSel = el('select', {}, ...agents.map((a) => el('option', { value: String(a.id) }, a.display_name || a.hostname)));
-  if (selectedAgentId != null && agents.some((a) => String(a.id) === String(selectedAgentId))) agentSel.value = String(selectedAgentId);
-
-  // Mode toggle: Unified (explore), Bidirectional (ingress/egress split) or
-  // Map (geographic traffic arrows colored by traffic type).
-  let mode = 'unified';
-  const modeUnified = el('button', { class: 'small active' }, 'Unified');
-  const modeBidi = el('button', { class: 'small ghost' }, 'Bidirectional');
-  const modeMap = el('button', { class: 'small ghost' }, 'Map');
-
-  // Map-mode scope: the selected agent, one site, or the whole fleet. Site
-  // options come from the agents' locations (sites that actually report).
-  const mapScopeSel = el('select', {}, el('option', { value: 'agent' }, 'Selected agent'), el('option', { value: 'fleet' }, 'All sites'));
-  {
-    const seen = new Map();
-    for (const a of agents) if (a.location_id != null && !seen.has(a.location_id)) seen.set(a.location_id, a.location_name || `#${a.location_id}`);
-    for (const [lid, name] of [...seen].sort((x, y) => String(x[1]).localeCompare(String(y[1])))) {
-      mapScopeSel.append(el('option', { value: `l${lid}` }, `Site: ${name}`));
-    }
-  }
-
-  const peerInput = el('input', { type: 'text', placeholder: 'IP (src/dst)' });
-  const portInput = el('input', { type: 'number', min: '1', max: '65535', placeholder: 'port' });
-  const protoInput = el('input', { type: 'text', placeholder: 'tcp/udp' });
-  const dirSel = el('select', {},
-    el('option', { value: '' }, 'All directions'),
-    el('option', { value: 'out' }, 'Outbound'),
-    el('option', { value: 'in' }, 'Inbound'));
-  const scopeSel = el('select', {},
-    el('option', { value: '' }, 'Internal + external'),
-    el('option', { value: 'external' }, 'External only'),
-    el('option', { value: 'internal' }, 'Internal only'));
-
-  // Time controls: preset buttons + optional custom from/to that override them.
-  const presets = [['15m', '15 min'], ['1h', '1 hour'], ['6h', '6 hours'], ['24h', '24 hours']];
-  let activePreset = '1h';
-  const fromI = el('input', { type: 'datetime-local', title: 'From (overrides preset)' });
-  const toI = el('input', { type: 'datetime-local', title: 'To (overrides preset)' });
-  // Drag-to-zoom window (ms). When set it overrides the preset/custom inputs so a
-  // brushed selection on the chart narrows the view; cleared by "Reset zoom" or by
-  // picking a preset / typing a custom range. See applyZoom() / windowMs().
-  let zoom = null;
-  const presetBtns = presets.map(([val, label]) => {
-    const b = el('button', { class: `small ghost${val === activePreset ? ' active' : ''}`, onclick: () => {
-      activePreset = val;
-      presetBtns.forEach((pb) => pb.classList.toggle('active', pb === b));
-      fromI.value = ''; toI.value = ''; clearZoom();
-      refresh();
-    } }, label);
-    return b;
-  });
-  // Typing a custom range is an explicit intent — drop any active zoom.
-  fromI.addEventListener('change', clearZoom);
-  toI.addEventListener('change', clearZoom);
-  const runBtn = el('button', { class: 'flows-inspect' }, 'Inspect');
-  const resetZoomBtn = el('button', { class: 'small ghost flows-reset-zoom', style: 'display:none', title: 'Restore the full time range', onclick: () => { clearZoom(); refresh(); } }, 'Reset zoom');
-  const status = el('span', { class: 'muted flows-status' });
-
-  function clearZoom() { zoom = null; resetZoomBtn.style.display = 'none'; }
-
-  // Drag-selected a region on a chart: narrow the window to it and reload. Agents
-  // report at a coarse cadence, so pad very thin selections to a usable minimum.
-  function applyZoom(fromMs, toMs) {
-    if (!Number.isFinite(fromMs) || !Number.isFinite(toMs)) return;
-    let a = Math.min(fromMs, toMs);
-    let b = Math.max(fromMs, toMs);
-    const MIN_MS = 60 * 1000;
-    if (b - a < MIN_MS) { const mid = (a + b) / 2; a = Math.round(mid - MIN_MS / 2); b = Math.round(mid + MIN_MS / 2); }
-    zoom = { fromMs: a, toMs: b };
-    resetZoomBtn.style.display = '';
-    refresh();
-  }
-
-  // A labelled control group: a small uppercase caption stacked above its
-  // input/select/button-group, so the filter bar reads as discrete fields
-  // instead of one crowded row.
-  const flowField = (labelText, cls, ...controls) =>
-    el('div', { class: 'flows-field' + (cls ? ' ' + cls : '') },
-      el('span', { class: 'flows-field-label' }, labelText), ...controls);
-
-  // Mode + time presets rendered as connected "segmented" controls (one active).
-  const modeSeg = el('div', { class: 'flows-seg' }, modeUnified, modeBidi, modeMap);
-  const rangeSeg = el('div', { class: 'flows-seg' }, ...presetBtns);
-
-  // Unified-only filters — hidden when switching to bidirectional/map mode.
-  const unifiedControls = el('div', { class: 'flows-row flows-row-filters' },
-    flowField('Port', 'flows-field-sm', portInput),
-    flowField('Proto', 'flows-field-sm', protoInput),
-    flowField('Direction', '', dirSel),
-    flowField('Scope', '', scopeSel));
-
-  const peerField = flowField('Peer', 'flows-field-grow', peerInput);
-  const mapScopeField = flowField('Map scope', '', mapScopeSel);
-  mapScopeField.style.display = 'none';
-
-  // Prefill from a deep link (global search → "→ flows", or a clicked dataflow
-  // on the Overview / a location page → Map mode scoped to that site).
-  if (flowsPrefill) {
-    if (flowsPrefill.agentId != null && agents.some((a) => String(a.id) === String(flowsPrefill.agentId))) agentSel.value = String(flowsPrefill.agentId);
-    if (flowsPrefill.peer) peerInput.value = flowsPrefill.peer;
-    if (flowsPrefill.port) portInput.value = String(flowsPrefill.port);
-    if (flowsPrefill.mode === 'map') {
-      mode = 'map';
-      if (flowsPrefill.locationId != null && [...mapScopeSel.options].some((o) => o.value === `l${flowsPrefill.locationId}`)) {
-        mapScopeSel.value = `l${flowsPrefill.locationId}`;
-      } else if (flowsPrefill.locationId === null) {
-        mapScopeSel.value = 'fleet';
-      }
-    }
-    flowsPrefill = null;
-  }
-
-  function applyModeUI() {
-    for (const [btn, val] of [[modeUnified, 'unified'], [modeBidi, 'bidi'], [modeMap, 'map']]) {
-      btn.classList.toggle('active', mode === val);
-      btn.classList.toggle('ghost', mode !== val);
-    }
-    unifiedControls.style.display = mode === 'unified' ? '' : 'none';
-    peerField.style.display = mode === 'map' ? 'none' : '';
-    mapScopeField.style.display = mode === 'map' ? '' : 'none';
-  }
-  function switchMode(m) {
-    mode = m;
-    applyModeUI();
-    refresh();
-  }
-  modeUnified.addEventListener('click', () => switchMode('unified'));
-  modeBidi.addEventListener('click', () => switchMode('bidi'));
-  modeMap.addEventListener('click', () => switchMode('map'));
-
-  root.append(el('div', { class: 'flows-controls' },
-    el('div', { class: 'flows-row' },
-      flowField('Agent', 'flows-field-agent', agentSel),
-      flowField('Mode', '', modeSeg),
-      peerField,
-      mapScopeField),
-    unifiedControls,
-    el('div', { class: 'flows-row flows-row-time' },
-      flowField('Range', '', rangeSeg),
-      flowField('From', '', fromI),
-      flowField('To', '', toI),
-      el('div', { class: 'flows-field flows-field-action' }, runBtn, resetZoomBtn, status))));
-
-  const host = el('div', {});
-  root.append(host);
-
-  function windowMs() {
-    if (zoom) return { fromMs: zoom.fromMs, toMs: zoom.toMs };
-    if (fromI.value && toI.value) return { fromMs: new Date(fromI.value).getTime(), toMs: new Date(toI.value).getTime() };
-    const now = Date.now();
-    if (activePreset === '15m') return { fromMs: now - 15 * 60000, toMs: now };
-    if (activePreset === '6h') return { fromMs: now - 6 * 3600000, toMs: now };
-    if (activePreset === '24h') return { fromMs: now - 24 * 3600000, toMs: now };
-    return { fromMs: now - 3600000, toMs: now };
-  }
-
-  function dirSection(title, color, data, fromMs, toMs, markers) {
-    const kids = [];
-    if (data.series && data.series.length >= 2) {
-      const pts = data.series.map((s) => ({ t: new Date(s.at).getTime(), y: s.bytes }));
-      kids.push(el('div', { class: 'overview-chart' },
-        historyChart([{ id: 'b', label: 'Bytes', color, points: pts }],
-          { fromMs: pts[0].t, toMs: pts[pts.length - 1].t, band: robustBand(pts), markers, onBrush: applyZoom })));
-    } else {
-      kids.push(el('div', { class: 'empty' }, 'No flows in window.'));
-    }
-    kids.push(el('h4', {}, 'Top talkers'));
-    if (!data.topTalkers.length) {
-      kids.push(el('div', { class: 'empty' }, 'No flows recorded.'));
-    } else {
-      kids.push(el('table', {},
-        el('thead', {}, el('tr', {}, ...['Source', 'Destination', 'Org/Country', 'Bytes', 'Flows'].map((h) => el('th', {}, h)))),
-        el('tbody', {}, ...data.topTalkers.slice(0, 20).map((t) => el('tr', {},
-          el('td', {}, esc(t.srcIp || '–')),
-          el('td', {}, esc(t.dstIp || t.extIp || '–')),
-          el('td', {}, t.internal
-            ? el('span', { class: 'badge grace' }, 'internal')
-            : el('span', { class: 'muted' }, [t.asnName, t.country].filter(Boolean).join(' · ') || '–')),
-          el('td', { class: 'num' }, fmtBytes(t.bytes)),
-          el('td', { class: 'num muted' }, String(t.flowCount)))))));
-    }
-    if (data.byProto && data.byProto.length) {
-      kids.push(el('h4', {}, 'Protocols'));
-      kids.push(el('table', {},
-        el('thead', {}, el('tr', {}, ...['Protocol', 'Bytes', 'Flows'].map((h) => el('th', {}, h)))),
-        el('tbody', {}, ...data.byProto.slice(0, 8).map((p) => el('tr', {},
-          el('td', {}, p.proto || '–'),
-          el('td', { class: 'num' }, fmtBytes(p.bytes)),
-          el('td', { class: 'num muted' }, String(p.flowCount)))))));
-    }
-    return el('div', { class: 'flowbidi-panel' },
-      el('h3', { class: 'flowbidi-dir' }, title, el('span', { class: 'muted' }, ` · ${fmtBytes(data.totals.bytes)}`)),
-      ...kids);
-  }
-
-  const talkerPeer = (t) => (t.internal ? t.dstIp : (t.extIp || t.dstIp));
-
-  async function refresh() {
-    const { fromMs, toMs } = windowMs();
-    if (!Number.isFinite(fromMs) || !Number.isFinite(toMs) || toMs <= fromMs) {
-      host.replaceChildren(el('div', { class: 'error' }, 'Invalid time range — check From / To.'));
-      status.textContent = ''; return;
-    }
-    status.textContent = 'Loading…';
-    host.replaceChildren();
-    stopTrafficMaps(); // tear down a previous map-mode render
-
-    const qp = new URLSearchParams({
-      agentId: agentSel.value,
-      from: new Date(fromMs).toISOString(),
-      to: new Date(toMs).toISOString(),
-    });
-    const peerVal = peerInput.value.trim();
-
-    // Map mode — /api/flows/map: colored directional arrows between sites and
-    // destination countries (color = traffic type, motion = direction).
-    if (mode === 'map') {
-      if (typeof L === 'undefined') {
-        host.replaceChildren(el('div', { class: 'empty' }, 'Map library (Leaflet) could not be loaded — the traffic map is unavailable offline.'));
-        status.textContent = ''; return;
-      }
-      const scope = mapScopeSel.value;
-      const mqp = new URLSearchParams({ from: new Date(fromMs).toISOString(), to: new Date(toMs).toISOString() });
-      if (scope === 'agent') mqp.set('agentId', agentSel.value);
-      else if (scope.startsWith('l')) mqp.set('locationId', scope.slice(1));
-      let data; let cfg;
-      try {
-        [data, cfg] = await Promise.all([api(`/api/flows/map?${mqp}`), trafficTileConfig()]);
-      } catch (e) {
-        host.replaceChildren(el('div', { class: 'error' }, errText(e)));
-        status.textContent = ''; return;
-      }
-      status.textContent = `${fmtBytes(data.totals.bytes)} · ${data.totals.flowCount} flows · ${data.totals.destinations} destination${data.totals.destinations === 1 ? '' : 's'}`;
-
-      if (!data.arcs.length) {
-        host.replaceChildren(el('div', { class: 'empty' },
-          'No geolocated flows in the window — the map needs NetFlow/sFlow reporting, the geo pipeline (Settings → Map) and a located site for the origin.'));
-        return;
-      }
-
-      const mapEl = el('div', { class: 'map traffic-map' });
-      const chipsHost = el('div', {});
-      const siteByKey = new Map((data.sites || []).map((s) => [s.key, s]));
-      // Top flows side panel — click a row to pan the map to that destination.
-      const flowRows = data.arcs.slice(0, 25).map((a) => {
-        const site = siteByKey.get(a.siteKey);
-        const dirTxt = a.direction === 'in' ? '◂ in' : a.direction === 'both' ? '⇄ both' : 'out ▸';
-        return el('div', {
-          class: 'flowmap-row', role: 'button', tabindex: '0',
-          onclick: () => { if (mapApi && a.lat != null) mapApi.map.setView([a.lat, a.lng], Math.max(mapApi.map.getZoom(), 4)); },
-          onkeydown: (e) => { if (e.key === 'Enter' && mapApi && a.lat != null) mapApi.map.setView([a.lat, a.lng], Math.max(mapApi.map.getZoom(), 4)); },
-        },
-        el('span', { class: 'tc-dot', style: `background:${trafficTypeColor(a.category)}` }),
-        el('span', { class: 'fmr-dst' },
-          el('span', {}, `${esc(site ? site.name : '?')} → ${esc(a.country)}`),
-          el('span', { class: 'muted' }, `${esc(a.label)}${a.asnNames && a.asnNames.length ? ' · ' + esc(a.asnNames[0]) : ''}`)),
-        el('span', { class: 'fmr-vol num' }, fmtBytes(a.bytes), el('span', { class: `fmr-dir dir-${a.direction}` }, dirTxt)));
-      });
-      const side = el('div', { class: 'flowmap-side' },
-        el('div', { class: 'card' }, el('h3', {}, 'Traffic type'), chipsHost),
-        el('div', { class: 'card' }, el('h3', {}, 'Top flows'), el('div', { class: 'flowmap-list' }, ...flowRows)));
-      host.replaceChildren(el('div', { class: 'flowmap-grid' }, el('div', {}, mapEl, trafficMapKey()), side));
-
-      let mapApi = drawTrafficMap(mapEl, cfg, data, {
-        onSiteClick: (s) => { if (s.locationId != null) openLocation(s.locationId); },
-      });
-      chipsHost.replaceChildren(trafficLegendChips(data.categories, () => mapApi));
-      return;
-    }
-
-    if (mode === 'bidi') {
-      if (peerVal) qp.set('host', peerVal);
-      let data;
-      try {
-        data = await api(`/api/flows/bidirectional?${qp}`);
-      } catch (e) {
-        host.replaceChildren(el('div', { class: 'error' }, errText(e)));
-        status.textContent = ''; return;
-      }
-      status.textContent = `${fmtBytes(data.asymmetry.totalBytes)} total · ${fmtBytes(data.asymmetry.inBytes)} ↓ / ${fmtBytes(data.asymmetry.outBytes)} ↑`;
-
-      let markers = [];
-      try {
-        const fs = await api(`/api/findings?hostId=${encodeURIComponent(agentSel.value)}&since=${new Date(fromMs).toISOString()}`);
-        markers = findingMarkers(fs);
-      } catch { /* overlay is optional */ }
-
-      const kids = [];
-      if (data.asymmetry.ratio !== null && data.asymmetry.asymmetric) {
-        const inPct = Math.round(data.asymmetry.ratio * 100);
-        kids.push(el('div', { class: 'flowbidi-asym warn' },
-          '⚠ Asymmetric traffic: ',
-          el('strong', {}, `${inPct}% ingress`), ' / ',
-          el('strong', {}, `${100 - inPct}% egress`),
-          el('span', { class: 'muted' }, ' — replies may arrive on a different path.')));
-      } else if (data.asymmetry.ratio !== null) {
-        const inPct = Math.round(data.asymmetry.ratio * 100);
-        kids.push(el('div', { class: 'flowbidi-asym ok' },
-          `Symmetric traffic: ${inPct}% ingress / ${100 - inPct}% egress.`));
-      }
-      kids.push(el('div', { class: 'flowbidi-cols' },
-        dirSection('↓ Ingress', '#06b6d4', data.ingress, fromMs, toMs, markers),
-        dirSection('↑ Egress', '#10b981', data.egress, fromMs, toMs, markers)));
-      host.replaceChildren(...kids);
-      return;
-    }
-
-    // Unified mode — /api/flows/explore.
-    if (peerVal) qp.set('peer', peerVal);
-    if (portInput.value.trim()) qp.set('port', portInput.value.trim());
-    if (protoInput.value.trim()) qp.set('proto', protoInput.value.trim());
-    if (dirSel.value) qp.set('direction', dirSel.value);
-    if (scopeSel.value) qp.set('internal', scopeSel.value);
-
-    let data;
-    try { data = await api(`/api/flows/explore?${qp}`); } catch (e) { host.replaceChildren(el('div', { class: 'error' }, e.message)); status.textContent = ''; return; }
-    status.textContent = `${fmtBytes(data.totals.bytes)} · ${data.totals.flowCount} flows · ${data.totals.records} records`;
-
-    let markers = [];
+function getFlowsPage() {
+  if (flowsPage) return flowsPage;
+  if (typeof window === 'undefined' || !window.FlowsPage || !ui) return null;
+  const iso = (ms) => new Date(ms).toISOString();
+  // The findings overlay is optional: a failure there costs the markers, never
+  // the chart.
+  const markersFor = async (agentId, fromMs) => {
     try {
-      const fs = await api(`/api/findings?hostId=${encodeURIComponent(agentSel.value)}&since=${new Date(fromMs).toISOString()}`);
-      markers = findingMarkers(fs);
-    } catch { /* overlay is optional */ }
+      const fs = await api(`/api/findings?hostId=${encodeURIComponent(agentId)}&since=${iso(fromMs)}`);
+      return findingMarkers(fs);
+    } catch { return []; }
+  };
+  flowsPage = window.FlowsPage.create({
+    el, t, ui, errText, fmtBytes,
+    state: flowsPageState,
+    hasMapLibrary: () => typeof L !== 'undefined',
+    selectedAgentId: () => selectedAgentId,
+    takePrefill: () => { const p = flowsPrefill; flowsPrefill = null; return p; },
+    syncMode: (mode) => {
+      try {
+        const q = new URLSearchParams(window.location.search || '');
+        if (mode === 'unified') q.delete('mode'); else q.set('mode', mode);
+        const qs = q.toString();
+        window.history.replaceState(null, '', qs ? `${window.location.pathname}?${qs}` : window.location.pathname);
+      } catch { /* best-effort */ }
+    },
+    help: () => {
+      const info = PAGE_INFO.flows || {};
+      return { lead: info.hero || '', title: info.title || t('flows.title'), body: info.body || (() => []) };
+    },
+    fetchAgents: async () => api('/agents').catch(() => []),
+    chart: (points, { markers, onBrush }) => el('div', { class: 'overview-chart' },
+      historyChart([{ id: 'b', label: t('flows.col.bytes'), color: ui.token('--series-0'), points }], {
+        fromMs: points[0].t, toMs: points[points.length - 1].t,
+        band: robustBand(points), markers, onBrush,
+      })),
+    fetchExplore: async ({ window: w, agentId, peer, port, proto, direction, internal }) => {
+      const qp = new URLSearchParams({ agentId, from: iso(w.fromMs), to: iso(w.toMs) });
+      if (peer) qp.set('peer', String(peer).trim());
+      if (port) qp.set('port', String(port).trim());
+      if (proto) qp.set('proto', String(proto).trim());
+      if (direction) qp.set('direction', direction);
+      if (internal) qp.set('internal', internal);
+      const data = await api(`/api/flows/explore?${qp}`);
+      return { data, markers: await markersFor(agentId, w.fromMs) };
+    },
+    fetchBidi: async ({ window: w, agentId, peer }) => {
+      const qp = new URLSearchParams({ agentId, from: iso(w.fromMs), to: iso(w.toMs) });
+      if (peer) qp.set('host', String(peer).trim());
+      const data = await api(`/api/flows/bidirectional?${qp}`);
+      return { data, markers: await markersFor(agentId, w.fromMs) };
+    },
+    fetchMap: async ({ window: w, agentId, scope }) => {
+      const qp = new URLSearchParams({ from: iso(w.fromMs), to: iso(w.toMs) });
+      if (scope === 'agent') qp.set('agentId', agentId);
+      else if (scope.startsWith('l')) qp.set('locationId', scope.slice(1));
+      const [data, cfg] = await Promise.all([api(`/api/flows/map?${qp}`), trafficTileConfig()]);
+      return { data, cfg };
+    },
+    drawMap: (hostEl, cfg, data) => drawTrafficMap(hostEl, cfg, data, {
+      onSiteClick: (s) => { if (s.locationId != null) openLocation(s.locationId); },
+    }),
+    legendChips: trafficLegendChips,
+    mapKey: trafficMapKey,
+    typeDot: trafficTypeDot,
+    stopMaps: stopTrafficMaps,
+  });
+  return flowsPage;
+}
 
-    const kids = [];
-    if (data.scans && data.scans.length) {
-      kids.push(el('details', { class: 'sec scan-sec', open: true },
-        el('summary', {}, '⚠ Possible scans / fan-out ', el('span', { class: 'muted' }, '· one source against many ports/hosts')),
-        el('table', {},
-          el('thead', {}, el('tr', {}, ...['Source', 'Type', 'Ports', 'Hosts', 'Bytes', 'Flows'].map((h) => el('th', {}, h)))),
-          el('tbody', {}, ...data.scans.map((s) => el('tr', {},
-            el('td', {}, esc(s.srcIp)),
-            el('td', {}, el('span', { class: `badge ${s.kind === 'port-scan' ? 'offline' : 'warn'}` }, s.kind === 'port-scan' ? 'PORT-SCAN' : 'FAN-OUT')),
-            el('td', { class: 'num bad-text' }, String(s.distinctPorts)),
-            el('td', { class: 'num' }, String(s.distinctHosts)),
-            el('td', { class: 'num' }, fmtBytes(s.bytes)),
-            el('td', { class: 'num muted' }, String(s.flowCount))))))));
-    }
-    if (data.series && data.series.length >= 2) {
-      const pts = data.series.map((s) => ({ t: new Date(s.at).getTime(), y: s.bytes }));
-      kids.push(el('div', { class: 'overview-chart' },
-        historyChart([{ id: 'b', label: 'Bytes', color: '#06b6d4', points: pts }],
-          { fromMs: pts[0].t, toMs: pts[pts.length - 1].t, band: robustBand(pts), markers, onBrush: applyZoom })));
-      kids.push(el('p', { class: 'muted flows-chart-hint' }, 'Tip: drag across the chart to zoom into a time range.'));
-    }
-    kids.push(el('h4', {}, 'Top talkers'));
-    if (!data.topTalkers.length) kids.push(el('div', { class: 'empty' }, 'No flows in the window — requires NetFlow/sFlow + geo-pipeline.'));
-    else kids.push(el('table', {},
-      el('thead', {}, el('tr', {}, ...['Source', 'Destination', 'Org/Country', 'Bytes', 'Packets', 'Flows'].map((h) => el('th', {}, h)))),
-      el('tbody', {}, ...data.topTalkers.map((t) => el('tr', { class: 'fleet-row', onclick: () => { peerInput.value = talkerPeer(t) || ''; refresh(); } },
-        el('td', {}, esc(t.srcIp || '–')),
-        el('td', {}, esc(t.dstIp || t.extIp || '–')),
-        el('td', {}, t.internal ? el('span', { class: 'badge grace' }, 'internal') : el('span', { class: 'muted' }, [t.asnName, t.country].filter(Boolean).join(' · ') || '–')),
-        el('td', { class: 'num' }, fmtBytes(t.bytes)),
-        el('td', { class: 'num muted' }, String(t.packets)),
-        el('td', { class: 'num muted' }, String(t.flowCount)))))));
-
-    const portTable = el('table', {},
-      el('thead', {}, el('tr', {}, ...['Port', 'Service', 'Proto', 'Bytes', 'Flows'].map((h) => el('th', {}, h)))),
-      el('tbody', {}, ...(data.byPort.length ? data.byPort.map((p) => el('tr', {},
-        el('td', {}, String(p.port)),
-        el('td', {}, p.service ? el('span', { class: 'badge grace' }, p.service) : el('span', { class: 'muted' }, '–')),
-        el('td', { class: 'muted' }, p.proto || '–'),
-        el('td', { class: 'num' }, fmtBytes(p.bytes)), el('td', { class: 'num muted' }, String(p.flowCount))))
-        : [el('tr', {}, el('td', { class: 'muted' }, '–'))])));
-    const protoTable = el('table', {},
-      el('thead', {}, el('tr', {}, ...['Protocol', 'Bytes', 'Flows'].map((h) => el('th', {}, h)))),
-      el('tbody', {}, ...(data.byProto.length ? data.byProto.map((p) => el('tr', {},
-        el('td', {}, p.proto || '–'),
-        el('td', { class: 'num' }, fmtBytes(p.bytes)),
-        el('td', { class: 'num muted' }, String(p.flowCount))))
-        : [el('tr', {}, el('td', { class: 'muted' }, '–'))])));
-    kids.push(el('div', { class: 'flows-tables' },
-      el('div', {}, el('h4', {}, 'Top ports'), portTable),
-      el('div', {}, el('h4', {}, 'Protocols'), protoTable)));
-
-    host.replaceChildren(...kids);
-  }
-
-  runBtn.addEventListener('click', refresh);
-  agentSel.addEventListener('change', refresh);
-  mapScopeSel.addEventListener('change', refresh);
-  applyModeUI(); // a deep link may land directly in Map mode
-  await refresh();
-  return root;
+views.flows = async () => {
+  const v = getFlowsPage();
+  if (!v) return el('div', { class: 'empty error' }, t('flows.err.title'));
+  // A mode on the URL (a deep link, or coming back to the page) wins over the
+  // remembered one.
+  try {
+    const m = new URLSearchParams(window.location.search || '').get('mode');
+    if (m === 'bidi' || m === 'map' || m === 'unified') flowsPageState.mode = m;
+  } catch { /* best-effort */ }
+  return v.view();
 };
 
 // Map of locations with their agents. Uses Leaflet if available; otherwise falls
@@ -11433,91 +9615,41 @@ function stopTopoMap() {
 
 // Sites-map polling state (mirrors stopOverview/stopGeo). Re-drawn on a timer so
 // agent health/online counts stay live; torn down when leaving the view.
-const mapState = { map: null, timer: null, layer: null, fitted: false, popupOpen: false };
+const mapState = { map: null, timer: null, layer: null, fitted: false, popupOpen: false, redraw: null, cfg: null };
 function stopMap() {
   if (mapState.timer) { clearInterval(mapState.timer); mapState.timer = null; }
   if (mapState.map) { try { mapState.map.remove(); } catch { /* ignore */ } }
   mapState.map = null; mapState.layer = null; mapState.fitted = false; mapState.popupOpen = false;
+  // The redraw closure holds the markers of the map that was just removed; a
+  // poll that survived the view switch would otherwise draw into a dead layer.
+  mapState.redraw = null;
 }
 
 // The "Sites" map: your locations on a map, each marker coloured by the WORST
 // agent health at that site (reusing the Overview verdict), clustered, live, and
 // click-through to the agents there.
-views.map = async () => {
-  const root = el('div');
-  const sub = el('span', { class: 'muted' });
-  root.append(el('div', { class: 'section-head' }, el('h2', {}, 'Sites'), sub));
-
-  let locations; let agents; let mapCfg; let fleet;
-  try {
-    [locations, agents, mapCfg, fleet] = await Promise.all([
-      api('/locations'), api('/agents'),
-      api('/api/map/config').catch(() => ({})),
-      api('/api/fleet/health').catch(() => ({ agents: [] })),
-    ]);
-  } catch (e) { root.append(el('div', { class: 'error' }, e.message)); return root; }
-
-  // agentId → health verdict; refreshed on each poll.
-  const healthByAgent = new Map((fleet.agents || []).map((a) => [a.agentId, a.health && a.health.status]));
-
-  // Per-location rollup: counts + the agents (with health) + the worst status.
-  function rollup() {
-    const byLoc = new Map();
-    for (const a of agents) {
-      if (a.location_id == null) continue;
-      const e = byLoc.get(a.location_id) || { total: 0, online: 0, agents: [] };
-      e.total += 1;
-      if (a.status === 'online') e.online += 1;
-      const status = healthByAgent.get(a.id) || (a.status === 'online' ? 'unknown' : 'down');
-      e.agents.push({ id: a.id, name: a.display_name || a.hostname, status });
-      byLoc.set(a.location_id, e);
-    }
-    for (const e of byLoc.values()) e.worst = worstHealthStatus(e.agents.map((x) => x.status));
-    return byLoc;
-  }
-
-  const located = locations.filter((l) => l.latitude != null && l.longitude != null);
-  sub.textContent = `${located.length} of ${locations.length} locations have coordinates`;
-
-  if (typeof L === 'undefined') {
-    root.append(el('div', { class: 'empty' }, 'Map library could not be loaded (offline?). Showing list instead.'));
-    root.append(locationList(locations, rollup()));
-    return root;
-  }
-  if (!located.length) {
-    root.append(el('div', { class: 'empty' }, 'No locations with coordinates yet. Add latitude/longitude in the Locations tab.'));
-    return root;
-  }
-
-  const mapEl = el('div', { class: 'map' });
-  root.append(mapEl);
-  root.append(el('div', { class: 'legend geo-legend' },
-    el('span', {}, el('span', { class: 'dot ring', style: `background:${HEALTH_COLOR.ok}` }), ' healthy'),
-    el('span', {}, el('span', { class: 'dot ring', style: `background:${HEALTH_COLOR.warn}` }), ' warning'),
-    el('span', {}, el('span', { class: 'dot ring', style: `background:${HEALTH_COLOR.bad}` }), ' critical'),
-    el('span', {}, el('span', { class: 'dot ring', style: `background:${HEALTH_COLOR.unknown}` }), ' unknown / offline'),
-    el('span', { class: 'muted' }, '· colour = worst agent health at the site')));
-
-  function popupFor(l, c) {
-    return el('div', { class: 'map-pop' },
-      el('strong', {}, esc(l.name)),
-      el('div', { class: 'muted' }, `${c.online}/${c.total} agents online`),
-      l.address ? el('div', { class: 'muted' }, esc(l.address)) : null,
-      el('div', { class: 'map-pop-agents' }, ...c.agents.slice(0, 12).map((ag) => el('button', {
-        class: 'map-pop-agent', title: 'Open agent', onclick: () => openAgent(ag.id),
-      }, el('span', { class: 'dot', style: `background:${healthColor(ag.status)}` }), esc(ag.name)))));
-  }
-
-  function draw(byLoc) {
+// ---- Sites (MIGRATED — see public/views/sites.js) ---------------------------
+// The Leaflet instance stays here: it is a live object with the reader's pan and
+// zoom in it, and the 10 s poll must move its markers rather than rebuild it.
+// The view asks for a canvas, and app.js mounts the map into it.
+let sitesView = null;
+const sitesViewState = {};
+function mountSitesMap(canvas, located, byLoc, opts) {
+  stopMap();
+  const drawMarkers = (rolled) => {
     if (!mapState.layer) return;
     mapState.layer.clearLayers();
     const pts = [];
     for (const l of located) {
-      const c = byLoc.get(l.id) || { total: 0, online: 0, agents: [], worst: null };
+      const c = rolled[l.id] || { total: 0, online: 0, agents: [], worst: null };
       const m = L.circleMarker([l.latitude, l.longitude], {
-        radius: 9, color: '#fff', weight: 2, fillColor: c.worst ? healthColor(c.worst) : '#94a3b8', fillOpacity: 0.95,
+        radius: 9,
+        color: opts.ringColor,
+        weight: 2,
+        fillColor: opts.colorFor(c.worst || 'unknown'),
+        fillOpacity: 0.95,
       });
-      m.bindPopup(popupFor(l, c));
+      m.bindPopup(sitePopup(l, c, opts));
       mapState.layer.addLayer(m);
       pts.push([l.latitude, l.longitude]);
     }
@@ -11525,53 +9657,112 @@ views.map = async () => {
       if (pts.length > 1) mapState.map.fitBounds(pts, { padding: [40, 40] });
       mapState.fitted = true;
     }
-  }
-
-  stopMap();
+  };
+  mapState.redraw = drawMarkers;
+  // Deferred: the canvas is not in the document until the view is returned, and
+  // Leaflet measures it on init.
   setTimeout(() => {
-    if (!mapEl.isConnected) return; // view was left before the deferred init ran
-    const map = createLeafletMap(mapEl, mapCfg, { center: [located[0].latitude, located[0].longitude], zoom: 6 });
+    if (!canvas.isConnected) return;
+    const map = createLeafletMap(canvas, mapState.cfg || {}, {
+      center: [located[0].latitude, located[0].longitude], zoom: 6,
+    });
     if (!map) return;
     mapState.map = map;
     map.on('popupopen', () => { mapState.popupOpen = true; });
     map.on('popupclose', () => { mapState.popupOpen = false; });
-    mapState.layer = (typeof L.markerClusterGroup === 'function') ? L.markerClusterGroup({ maxClusterRadius: 50 }) : L.layerGroup();
+    mapState.layer = (typeof L.markerClusterGroup === 'function')
+      ? L.markerClusterGroup({ maxClusterRadius: 50 })
+      : L.layerGroup();
     mapState.layer.addTo(map);
-    draw(rollup());
+    drawMarkers(byLoc);
   }, 0);
+}
 
-  mapState.timer = setInterval(async () => {
-    if (currentView !== 'map') { stopMap(); return; }
-    if (modalOpen() || mapState.popupOpen || !mapState.map) return;
-    try {
-      const [a, f] = await Promise.all([api('/agents'), api('/api/fleet/health').catch(() => null)]);
-      agents = a;
-      if (f) { healthByAgent.clear(); for (const x of f.agents || []) healthByAgent.set(x.agentId, x.health && x.health.status); }
-      draw(rollup());
-    } catch { /* keep the last good render */ }
-  }, 10000);
+function sitePopup(l, c, opts) {
+  return el('div', { class: 'ui map-pop' },
+    el('strong', {}, l.name),
+    el('div', { class: 'meta-xs' }, t('sites.popup.online', { online: c.online, total: c.total })),
+    l.address ? el('div', { class: 'meta-xs' }, l.address) : null,
+    el('div', { class: 'map-pop-agents' }, ...c.agents.slice(0, 12).map((ag) => el('button', {
+      class: 'btn btn-ghost btn-xs map-pop-agent',
+      title: t('sites.popup.openAgent'),
+      onclick: () => opts.openAgent(ag.id),
+    }, el('span', { class: `ui-legend-dot health-${HEALTH_TONE_KEY[ag.status] || 'unknown'}` }), ag.name))));
+}
+// The four colours a site marker and its legend can take. Anything the health
+// model does not name reads as unknown rather than inventing a fifth.
+const HEALTH_TONE_KEY = { ok: 'ok', warn: 'warn', bad: 'bad', down: 'bad', stale: 'unknown', unknown: 'unknown' };
 
-  return root;
+function getSitesView() {
+  if (sitesView) return sitesView;
+  if (typeof window === 'undefined' || !window.SitesView || !ui) return null;
+  sitesView = window.SitesView.create({
+    el, t, ui, errText, openAgent, openLocation, gotoView,
+    state: sitesViewState,
+    worstHealthStatus,
+    hasMapLibrary: () => typeof L !== 'undefined',
+    help: () => {
+      const info = PAGE_INFO.map || {};
+      return { lead: info.hero || '', title: info.title || t('sites.title'), body: info.body || (() => []) };
+    },
+    fetchAll: async () => {
+      const [locations, agents, cfg, fleet] = await Promise.all([
+        api('/locations'),
+        api('/agents'),
+        api('/api/map/config').catch(() => ({})),
+        api('/api/fleet/health').catch(() => ({ agents: [] })),
+      ]);
+      mapState.cfg = cfg;
+      const healthByAgent = {};
+      for (const a of fleet.agents || []) healthByAgent[a.agentId] = a.health && a.health.status;
+      return { locations, agents, healthByAgent };
+    },
+    mountMap: mountSitesMap,
+    redrawMarkers: (byLoc) => { if (mapState.redraw) mapState.redraw(byLoc); },
+    startPolling: (refresh) => {
+      mapState.timer = setInterval(() => {
+        if (currentView !== 'map') { stopMap(); return; }
+        // A poll that redraws while somebody is reading a popup closes it under
+        // them, so it waits.
+        if (modalOpen() || mapState.popupOpen || !mapState.map) return;
+        refresh();
+      }, 10000);
+    },
+  });
+  return sitesView;
+}
+
+views.map = async () => {
+  const v = getSitesView();
+  if (!v) return el('div', { class: 'empty error' }, t('sites.err.title'));
+  return v.view();
 };
 
 // ---- Destinations map (internal sites + external destinations + selection) ----
-const geoState = { map: null, ext: null, hosts: null, rect: null, dests: [], sinceIso: '', panel: null, selecting: false, rectStart: null, healthByHost: null, pathLayer: null };
+const geoState = { map: null, ext: null, hosts: null, rect: null, dests: [], internalHosts: [], sinceIso: '',
+  selecting: false, rectStart: null, healthByHost: null, pathLayer: null, config: null, mapOpts: null };
 
-function stopGeo() {
+// Drops the Leaflet objects, keeping the data they were drawn from: mounting a
+// new map has to tear the old one down WITHOUT throwing away the overview it is
+// about to draw.
+function teardownGeoMap() {
   if (geoState.map) { try { geoState.map.remove(); } catch { /* ignore */ } }
   geoState.map = null; geoState.ext = null; geoState.hosts = null; geoState.rect = null;
-  geoState.dests = []; geoState.selecting = false; geoState.rectStart = null; geoState.healthByHost = null; geoState.pathLayer = null;
+  geoState.selecting = false; geoState.rectStart = null; geoState.pathLayer = null;
+}
+function stopGeo() {
+  teardownGeoMap();
+  geoState.dests = []; geoState.internalHosts = [];
+  // mapOpts closes over the view that is going away; a redraw through a stale
+  // one would draw into a layer that no longer exists.
+  geoState.mapOpts = null;
 }
 
-function devColor(dev) {
-  const d = Number(dev) || 0;
-  if (d >= 0.75) return '#ef4444';
-  if (d >= 0.2) return '#f59e0b';
-  return '#38bdf8';
-}
-function devLabel(dev) { const d = Number(dev) || 0; return `${d > 0 ? '+' : ''}${Math.round(d * 100)}%`; }
+// ---- Destinations (MIGRATED — see public/views/destinations.js) -------------
+// The Leaflet instance, the two marker layers, the region rectangle and the
+// traceroute path layer stay here: they are live objects carrying the reader's
+// pan, zoom and selection. The view asks for a canvas and app.js mounts into it.
 function radiusForBytes(b) { return Math.max(6, Math.min(28, 6 + Math.log10((Number(b) || 0) + 1) * 3)); }
-function destTitle(d) { return `${d.country || '??'}${d.asn ? ` · AS${d.asn}` : ''}${d.asnName ? ` ${d.asnName}` : ''}`; }
 function destQuery(d) {
   const qs = new URLSearchParams();
   if (d.country) qs.set('country', d.country);
@@ -11580,269 +9771,227 @@ function destQuery(d) {
   return qs.toString();
 }
 
-function geoSpinner(text) { return el('div', { class: 'geo-loading' }, el('span', { class: 'spinner' }), text || 'Loading…'); }
+let destinationsView = null;
+const destinationsViewState = {};
 
-function miniTable(title, rows) {
-  if (!rows || !rows.length) return null;
-  return el('div', { class: 'mini' }, el('h4', {}, title),
-    el('table', {}, el('tbody', {}, ...rows.map((r) => el('tr', {}, el('td', {}, r[0]), el('td', { class: 'num' }, r[1]))))));
-}
-function findingMini(f) {
-  return el('div', { class: 'finding-mini' },
-    el('span', { class: `badge ${esc(f.severity || 'INFO')}` }, f.severity || 'INFO'),
-    el('span', {}, ` ${esc(f.metric || '')} `),
-    el('span', { class: 'muted' }, esc(f.explanation || '')));
-}
-
-views.geo = async () => {
-  if (typeof L === 'undefined') {
-    return el('div', { class: 'empty' }, 'Map library (Leaflet) could not be loaded — geo map is unavailable offline.');
-  }
-  const [config, overview, fleet, agents] = await Promise.all([
-    api('/api/geo/config'), api('/api/geo/overview'),
-    api('/api/fleet/health').catch(() => ({ agents: [] })),
-    api('/agents').catch(() => []),
-  ]);
-  // hostId → health verdict, so internal site pins can be coloured by health.
-  geoState.healthByHost = new Map((fleet.agents || []).map((a) => [a.agentId, a.health && a.health.status]));
-
-  const root = el('div', { class: 'geo' });
-  const periodSel = el('select', {},
-    el('option', { value: '24h' }, 'Last 24 h'),
-    el('option', { value: '7d' }, 'Last 7 days'),
-    el('option', { value: '30d' }, 'Last 30 days'));
-  const regionBtn = el('button', { class: 'small ghost' }, 'Select region');
-  const clearBtn = el('button', { class: 'small ghost' }, 'Clear selection');
-  root.append(el('div', { class: 'section-head' },
-    el('h2', {}, 'Destinations'),
-    el('span', { class: 'spacer' }),
-    exportButtons('geo', () => (geoState.sinceIso ? { since: geoState.sinceIso } : {})),
-    el('label', { class: 'muted inline' }, 'Period ', periodSel),
-    regionBtn, clearBtn));
-
-  // Path picker: overlay an agent's traceroute path onto this map. Target options
-  // are the agent's recent traceroute destinations (run them in the Probes tab).
-  const pathAgentSel = el('select', { class: 'small' }, el('option', { value: '' }, 'Agent…'),
-    ...agents.map((a) => el('option', { value: String(a.id) }, a.display_name || a.hostname)));
-  const pathTargetDl = el('datalist', { id: 'geo-path-targets' });
-  const pathTargetInput = el('input', { type: 'text', class: 'small', list: 'geo-path-targets', placeholder: 'Traceroute target…' });
-  const pathTargetTypes = new Map(); // target -> 'traceroute' | 'tcptraceroute'
-  const showPathBtn = el('button', { class: 'small' }, 'Show path');
-  const clearPathBtn = el('button', { class: 'small ghost' }, 'Clear path');
-  async function loadPathTargets() {
-    pathTargetDl.replaceChildren();
-    const id = pathAgentSel.value;
-    pathTargetInput.value = '';
-    if (!id) return;
-    try {
-      const data = await api(`/api/probes/latest?agentId=${encodeURIComponent(id)}`);
-      // Remember which probe produced each target: a TCP trace is stored as
-      // host:port and is only found by asking the graph for that type.
-      pathTargetTypes.clear();
-      for (const r of (data.results || [])) {
-        if (r.type !== 'traceroute' && r.type !== 'tcptraceroute') continue;
-        if (!pathTargetTypes.has(r.target)) pathTargetTypes.set(r.target, r.type);
-      }
-      for (const target of pathTargetTypes.keys()) pathTargetDl.append(el('option', { value: target }));
-    } catch { /* leave empty */ }
-  }
-  async function showPath() {
-    if (!geoState.map) return;
-    const id = pathAgentSel.value;
-    if (!id) { toast('Pick an agent first.', true); return; }
-    const target = pathTargetInput.value.trim();
-    if (!target) { toast('Enter a traceroute target.', true); return; }
-    showPathBtn.disabled = true;
-    let polling = false;
-    try {
-      const probeType = pathTargetTypes.get(target) || 'traceroute';
-      const qs = `agentId=${encodeURIComponent(id)}&target=${encodeURIComponent(target)}&probeType=${encodeURIComponent(probeType)}`;
-      const data = await api(`/api/probes/path?${qs}`);
-      if (data.nodes && data.nodes.length) {
-        drawGeoPath(data);
-      } else {
-        // No existing data — trigger a fresh traceroute and poll for results.
-        await api(`/agents/${id}/probe`, { method: 'POST', body: { type: 'traceroute', host: target } });
-        polling = true;
-        showPathBtn.textContent = 'Running…';
-        let attempts = 0;
-        const poll = setInterval(async () => {
-          attempts++;
-          try {
-            const d = await api(`/api/probes/path?${qs}`);
-            if ((d.nodes && d.nodes.length) || attempts >= 4) {
-              clearInterval(poll);
-              showPathBtn.textContent = 'Show path';
-              showPathBtn.disabled = false;
-              if (d.nodes && d.nodes.length) { drawGeoPath(d); loadPathTargets(); }
-              else toast('Traceroute sent — no path yet, try Show path again in a moment.', true);
-            }
-          } catch { clearInterval(poll); showPathBtn.textContent = 'Show path'; showPathBtn.disabled = false; }
-        }, 4000);
-      }
-    } catch (e) {
-      toast(e.status === 409 ? 'Agent not connected — run the traceroute from the Probes tab first.' : errText(e), true);
-    } finally { if (!polling) showPathBtn.disabled = false; }
-  }
-  pathAgentSel.addEventListener('change', loadPathTargets);
-  showPathBtn.addEventListener('click', showPath);
-  clearPathBtn.addEventListener('click', () => { if (geoState.pathLayer) geoState.pathLayer.clearLayers(); showOverviewSummary(); });
-  root.append(el('div', { class: 'geo-pathpick' },
-    el('span', { class: 'muted' }, 'Traceroute path:'),
-    pathAgentSel, pathTargetDl, pathTargetInput, showPathBtn, clearPathBtn));
-
-  // No GeoIP database ⇒ public IPs can't be placed by country, so the map shows
-  // only site pins and traceroute paths collapse to the origin. Say so up front
-  // rather than letting the map look broken; point admins at where to fix it.
-  geoState.geoip = config.geoip || null;
-  if (config.geoip && config.geoip.configured === false) {
-    root.append(el('div', { class: 'alert-banner sev-WARN' },
-      el('span', { class: 'alert-ic' }, '⚠'),
-      el('span', {},
-        el('strong', {}, 'GeoIP database not configured. '),
-        'External destinations and traceroute hops can’t be placed by country until an offline GeoIP/ASN range database is loaded. ',
-        role === 'admin'
-          ? settingsLink('map', 'Configure it in Settings → Map')
-          : 'Ask an administrator to configure it in Settings → Map',
-        '.')));
-  }
-
-  const mapEl = el('div', { class: 'map' });
-  const panel = el('div', { class: 'geo-panel' });
-  geoState.panel = panel;
-  geoState.mapEl = mapEl;
-  root.append(el('div', { class: 'geo-grid' }, mapEl, panel));
-  // Two colour scales: internal SITES are ringed dots coloured by agent health;
-  // external DESTINATIONS are circles coloured by traffic deviation (size = volume).
-  root.append(el('div', { class: 'legend geo-legend' },
-    el('span', { class: 'muted' }, 'Sites:'),
-    el('span', {}, el('span', { class: 'dot ring', style: `background:${HEALTH_COLOR.ok}` }), ' healthy'),
-    el('span', {}, el('span', { class: 'dot ring', style: `background:${HEALTH_COLOR.warn}` }), ' warning'),
-    el('span', {}, el('span', { class: 'dot ring', style: `background:${HEALTH_COLOR.bad}` }), ' critical'),
-    el('span', { class: 'muted' }, '· Destinations:'),
-    el('span', {}, el('span', { class: 'dot', style: 'background:#38bdf8' }), ' normal'),
-    el('span', {}, el('span', { class: 'dot', style: 'background:#f59e0b' }), ' elevated'),
-    el('span', {}, el('span', { class: 'dot', style: 'background:#ef4444' }), ' strong deviation'),
-    el('span', { class: 'muted' }, '· size = volume')));
-
-  periodSel.addEventListener('change', () => {
-    const v = periodSel.value;
-    const ms = v === '7d' ? 7 * 864e5 : v === '30d' ? 30 * 864e5 : 864e5;
-    geoState.sinceIso = new Date(Date.now() - ms).toISOString();
-    reloadOverview();
-  });
-  regionBtn.addEventListener('click', () => beginRegionSelect(regionBtn));
-  clearBtn.addEventListener('click', () => { clearRegion(); showOverviewSummary(); });
-
-  setTimeout(() => initGeoMap(config, overview), 0);
-  return root;
-};
-
-function initGeoMap(config, overview) {
-  if (!geoState.mapEl || !geoState.mapEl.isConnected) return; // view was left already
-  const center = pickGeoCenter(overview);
-  const map = createLeafletMap(geoState.mapEl, config, { center, zoom: 3 });
-  if (!map) return;
-  geoState.map = map;
-
-  geoState.ext = (typeof L.markerClusterGroup === 'function') ? L.markerClusterGroup({ maxClusterRadius: 50 }) : L.layerGroup();
-  geoState.hosts = L.layerGroup();
-  geoState.ext.addTo(map); geoState.hosts.addTo(map);
-
-  // Region drawing handlers (active only while selecting).
-  map.on('mousedown', (e) => { if (geoState.selecting) { geoState.rectStart = e.latlng; } });
-  map.on('mousemove', (e) => {
-    if (!geoState.selecting || !geoState.rectStart) return;
-    const b = L.latLngBounds(geoState.rectStart, e.latlng);
-    if (geoState.rect) geoState.rect.setBounds(b);
-    else geoState.rect = L.rectangle(b, { color: '#38bdf8', weight: 1, fillOpacity: 0.08 }).addTo(map);
-  });
-  map.on('mouseup', (e) => {
-    if (!geoState.selecting || !geoState.rectStart) return;
-    const b = L.latLngBounds(geoState.rectStart, e.latlng);
-    geoState.rectStart = null; geoState.selecting = false;
-    map.dragging.enable(); map.boxZoom.enable();
-    aggregateRegion(b);
-  });
-
-  drawOverview(overview);
-  showOverviewSummary();
-}
-
-function pickGeoCenter(overview) {
-  const h = (overview.internalHosts || []).find((x) => x.lat != null && x.lng != null);
-  if (h) return [h.lat, h.lng];
-  const d = (overview.externalDestinations || []).find((x) => x.lat != null && x.lng != null);
-  return d ? [d.lat, d.lng] : [20, 0];
-}
-
-function drawOverview(overview) {
-  geoState.dests = (overview.externalDestinations || []).filter((d) => d.lat != null && d.lng != null);
-  geoState.ext.clearLayers(); geoState.hosts.clearLayers();
-
-  for (const h of overview.internalHosts || []) {
+// Draws both marker sets from the last overview. Called on mount and on every
+// period change; the map itself is never rebuilt, so the reader keeps their view.
+function drawGeoMarkers(opts) {
+  if (!geoState.ext || !geoState.hosts) return;
+  geoState.ext.clearLayers();
+  geoState.hosts.clearLayers();
+  for (const h of geoState.internalHosts || []) {
     if (h.lat == null || h.lng == null) continue;
-    const status = (geoState.healthByHost && geoState.healthByHost.get(h.hostId)) || (h.status === 'online' ? 'unknown' : 'down');
-    const m = L.circleMarker([h.lat, h.lng], { radius: 8, color: '#fff', weight: 2, fillColor: healthColor(status), fillOpacity: 0.95 });
-    m.bindTooltip(`${esc(h.siteName || `host ${h.hostId}`)} (${esc(h.status || '?')})`);
-    m.on('click', () => selectHost(h));
+    const status = (geoState.healthByHost && geoState.healthByHost.get(h.hostId))
+      || (h.status === 'online' ? 'unknown' : 'down');
+    const m = L.circleMarker([h.lat, h.lng], {
+      radius: 8, color: opts.ringColor, weight: 2,
+      fillColor: opts.healthColor(status), fillOpacity: 0.95,
+    });
+    m.bindTooltip(`${h.siteName || `host ${h.hostId}`} (${h.status || '?'})`);
+    m.on('click', () => opts.onHost(h));
     geoState.hosts.addLayer(m);
   }
   for (const d of geoState.dests) {
+    const colour = opts.devColor(d.deviation);
     const c = L.circleMarker([d.lat, d.lng], {
-      radius: radiusForBytes(d.bytes), color: devColor(d.deviation),
-      fillColor: devColor(d.deviation), fillOpacity: 0.5, weight: 1,
+      radius: radiusForBytes(d.bytes), color: colour,
+      fillColor: colour, fillOpacity: 0.5, weight: 1,
     });
-    c.bindTooltip(`${esc(destTitle(d))} — ${fmtBytes(d.bytes)} (${devLabel(d.deviation)})`);
-    c.on('click', () => selectDestination(d));
+    c.bindTooltip(`${destTitleOf(d)} — ${fmtBytes(d.bytes)}`);
+    c.on('click', () => opts.onDestination(d));
     geoState.ext.addLayer(c);
   }
 }
-
-async function reloadOverview() {
-  if (!geoState.map) return;
-  const panel = geoState.panel;
-  panel.replaceChildren(geoSpinner('Updating…'));
-  try {
-    const qs = geoState.sinceIso ? `?since=${encodeURIComponent(geoState.sinceIso)}` : '';
-    const overview = await api(`/api/geo/overview${qs}`);
-    drawOverview(overview);
-    showOverviewSummary();
-  } catch (err) {
-    panel.replaceChildren(el('div', { class: 'empty error' }, err.message));
-  }
+function destTitleOf(d) {
+  return `${d.country || '??'}${d.asn ? ` · AS${d.asn}` : ''}${d.asnName ? ` ${d.asnName}` : ''}`;
+}
+function pickGeoCenter() {
+  const h = (geoState.internalHosts || []).find((x) => x.lat != null && x.lng != null);
+  if (h) return [h.lat, h.lng];
+  const d = geoState.dests.find((x) => x.lat != null && x.lng != null);
+  return d ? [d.lat, d.lng] : [20, 0];
 }
 
-function showOverviewSummary() {
-  const panel = geoState.panel;
-  if (!panel) return;
-  const dests = geoState.dests;
-  const totBytes = dests.reduce((s, d) => s + (Number(d.bytes) || 0), 0);
-  const top = dests.slice().sort((a, b) => (Number(b.bytes) || 0) - (Number(a.bytes) || 0)).slice(0, 12);
-  const topTable = top.length
-    ? el('table', { class: 'geo-top' }, el('tbody', {}, ...top.map((d) => el('tr', {
-      class: 'geo-top-row', tabindex: '0', title: 'Show destination details',
-      onclick: () => selectDestination(d),
-      onkeydown: (e) => { if (e.key === 'Enter') selectDestination(d); },
+function mountGeoMap(canvas, opts) {
+  teardownGeoMap();
+  geoState.mapOpts = opts;
+  // Deferred: the canvas is not in the document until the view is returned, and
+  // Leaflet measures it on init.
+  setTimeout(() => {
+    if (!canvas.isConnected) return;
+    const map = createLeafletMap(canvas, geoState.config || {}, { center: pickGeoCenter(), zoom: 3 });
+    if (!map) return;
+    geoState.map = map;
+    geoState.ext = (typeof L.markerClusterGroup === 'function')
+      ? L.markerClusterGroup({ maxClusterRadius: 50 })
+      : L.layerGroup();
+    geoState.hosts = L.layerGroup();
+    geoState.ext.addTo(map);
+    geoState.hosts.addTo(map);
+
+    // Region drawing, active only while selecting.
+    map.on('mousedown', (e) => { if (geoState.selecting) { geoState.rectStart = e.latlng; } });
+    map.on('mousemove', (e) => {
+      if (!geoState.selecting || !geoState.rectStart) return;
+      const b = L.latLngBounds(geoState.rectStart, e.latlng);
+      if (geoState.rect) geoState.rect.setBounds(b);
+      else geoState.rect = L.rectangle(b, { color: opts.selectColor, weight: 1, fillOpacity: 0.08 }).addTo(map);
+    });
+    map.on('mouseup', (e) => {
+      if (!geoState.selecting || !geoState.rectStart) return;
+      const b = L.latLngBounds(geoState.rectStart, e.latlng);
+      geoState.rectStart = null;
+      geoState.selecting = false;
+      map.dragging.enable();
+      map.boxZoom.enable();
+      opts.onRegion(geoState.dests.filter((d) => b.contains([d.lat, d.lng])));
+      clearGeoRegion();
+    });
+
+    drawGeoMarkers(opts);
+  }, 0);
+}
+
+function beginRegionSelect() {
+  if (!geoState.map) return;
+  geoState.selecting = true;
+  geoState.map.dragging.disable();
+  geoState.map.boxZoom.disable();
+  ui.toast(t('dest.regionPrompt'));
+}
+function clearGeoRegion() {
+  if (geoState.rect && geoState.map) { geoState.map.removeLayer(geoState.rect); }
+  geoState.rect = null;
+}
+
+function getDestinationsView() {
+  if (destinationsView) return destinationsView;
+  if (typeof window === 'undefined' || !window.DestinationsView || !ui) return null;
+  // target -> 'traceroute' | 'tcptraceroute': a TCP trace is stored as host:port
+  // and is only found by asking the graph for that type.
+  const pathTargetTypes = new Map();
+
+  // geoState.dests is what the MAP can draw; the view gets every destination.
+  // A destination with no coordinates is still traffic leaving the network —
+  // it belongs in the table even when it cannot be put on the map.
+  const takeOverview = (overview) => {
+    const all = overview.externalDestinations || [];
+    geoState.internalHosts = overview.internalHosts || [];
+    geoState.dests = all.filter((d) => d.lat != null && d.lng != null);
+    return { destinations: all };
+  };
+
+  destinationsView = window.DestinationsView.create({
+    el, t, ui, errText, fmtBytes, gotoView,
+    state: destinationsViewState,
+    isAdmin: () => role === 'admin',
+    hasMapLibrary: () => typeof L !== 'undefined',
+    help: () => {
+      const info = PAGE_INFO.geo || {};
+      return { lead: info.hero || '', title: info.title || t('dest.title'), body: info.body || (() => []) };
     },
-    el('td', {}, el('span', { class: 'dot', style: `background:${devColor(d.deviation)}` }), ' ', esc(destTitle(d))),
-    el('td', { class: 'num' }, fmtBytes(d.bytes)),
-    el('td', { class: 'num muted' }, devLabel(d.deviation))))))
-    : el('div', { class: 'muted' }, 'No external destinations in this period.');
-  panel.replaceChildren(
-    el('div', { class: 'section-head' }, el('h3', {}, 'Overview')),
-    el('p', { class: 'muted' }, `${dests.length} external destinations · ${fmtBytes(totBytes)} in the period`),
-    el('h4', {}, 'Top destinations'),
-    topTable,
-    el('p', { class: 'muted small' }, 'Click a row, a circle (destination) or a site pin for details, or select a region.'));
+    fetchFirst: async () => {
+      const [config, overview, fleet, agents] = await Promise.all([
+        api('/api/geo/config').catch(() => ({})),
+        api('/api/geo/overview'),
+        api('/api/fleet/health').catch(() => ({ agents: [] })),
+        api('/agents').catch(() => []),
+      ]);
+      geoState.config = config;
+      geoState.healthByHost = new Map((fleet.agents || []).map((a) => [a.agentId, a.health && a.health.status]));
+      return Object.assign({ config, agents }, takeOverview(overview));
+    },
+    fetchOverview: async () => {
+      const qs = geoState.sinceIso ? `?since=${encodeURIComponent(geoState.sinceIso)}` : '';
+      return takeOverview(await api(`/api/geo/overview${qs}`));
+    },
+    setPeriod: (period) => {
+      const ms = period === '7d' ? 7 * 864e5 : period === '30d' ? 30 * 864e5 : 864e5;
+      geoState.sinceIso = new Date(Date.now() - ms).toISOString();
+    },
+    redraw: () => { if (geoState.mapOpts) drawGeoMarkers(geoState.mapOpts); },
+    mountMap: mountGeoMap,
+    beginRegionSelect,
+    exportAs: (fmt) => downloadExport('geo', fmt, geoState.sinceIso ? { since: geoState.sinceIso } : {}),
+    // A destination with no flows in the period is a 404, which is an answer
+    // rather than a failure.
+    fetchDestination: async (d) => {
+      const qs = destQuery(d);
+      const flows = await api(`/api/geo/select/flows?${qs}`).catch((e) => { if (e.status === 404) return null; throw e; });
+      if (!flows) return null;
+      const res = await api(`/api/geo/select/findings?${qs}`).catch((e) => { if (e.status === 404) return { findings: [] }; throw e; });
+      return { flows, findings: res.findings || [] };
+    },
+    fetchHost: async (h) => api(`/api/findings?hostId=${encodeURIComponent(h.hostId)}`),
+    // Findings across the distinct countries in the box, bounded to eight.
+    fetchRegionFindings: async (inBox) => {
+      const countries = [...new Set(inBox.map((d) => d.country).filter(Boolean))].slice(0, 8);
+      const seen = new Set();
+      const out = [];
+      for (const country of countries) {
+        const qs = new URLSearchParams({ country });
+        if (geoState.sinceIso) qs.set('since', geoState.sinceIso);
+        // eslint-disable-next-line no-await-in-loop
+        const res = await api(`/api/geo/select/findings?${qs}`).catch((e) => (e.status === 404 ? { findings: [] } : Promise.reject(e)));
+        for (const f of res.findings || []) { if (!seen.has(f.id)) { seen.add(f.id); out.push(f); } }
+      }
+      return out;
+    },
+    loadPathTargets: async (agentId, list) => {
+      list.replaceChildren();
+      pathTargetTypes.clear();
+      if (!agentId) return;
+      try {
+        const data = await api(`/api/probes/latest?agentId=${encodeURIComponent(agentId)}`);
+        for (const r of (data.results || [])) {
+          if (r.type !== 'traceroute' && r.type !== 'tcptraceroute') continue;
+          if (!pathTargetTypes.has(r.target)) pathTargetTypes.set(r.target, r.type);
+        }
+        for (const target of pathTargetTypes.keys()) list.append(el('option', { value: target }));
+      } catch { /* leave the list empty */ }
+    },
+    // Draws the path and resolves with the graph (plus its geolocated stops),
+    // or null when a fresh traceroute had to be sent and produced nothing yet.
+    showPath: async (agentId, target) => {
+      if (!geoState.map) return null;
+      const probeType = pathTargetTypes.get(target) || 'traceroute';
+      const qs = `agentId=${encodeURIComponent(agentId)}&target=${encodeURIComponent(target)}&probeType=${encodeURIComponent(probeType)}`;
+      let data = await api(`/api/probes/path?${qs}`);
+      if (!(data.nodes && data.nodes.length)) {
+        // Nothing stored yet: ask for a run, then poll a few times.
+        await api(`/agents/${agentId}/probe`, { method: 'POST', body: { type: 'traceroute', host: target } });
+        data = await pollForPath(qs);
+        if (!data) return null;
+      }
+      return drawGeoPath(data);
+    },
+    clearPath: () => { if (geoState.pathLayer) geoState.pathLayer.clearLayers(); },
+  });
+  return destinationsView;
 }
 
-// Overlays a traceroute path graph (from /api/probes/path) onto the Destinations
-// map in a dedicated layer that "Clear path" wipes — same pgColor/pathGeoStops/
-// renderPathStops used by the Probes traceroute map — and summarises it in the
-// side panel.
+function pollForPath(qs) {
+  return new Promise((resolve) => {
+    let attempts = 0;
+    const poll = setInterval(async () => {
+      attempts += 1;
+      try {
+        const d = await api(`/api/probes/path?${qs}`);
+        if ((d.nodes && d.nodes.length) || attempts >= 4) {
+          clearInterval(poll);
+          resolve(d.nodes && d.nodes.length ? d : null);
+        }
+      } catch { clearInterval(poll); resolve(null); }
+    }, 4000);
+  });
+}
+
+// Overlays a traceroute path graph (from /api/probes/path) onto the map in a
+// dedicated layer that "Clear path" wipes — the same pathGeoStops/
+// renderPathStops the Probes traceroute map uses.
 function drawGeoPath(graph) {
-  if (!geoState.map) return;
+  if (!geoState.map) return null;
   const stops = pathGeoStops(graph.nodes || []);
   if (!geoState.pathLayer) geoState.pathLayer = L.layerGroup().addTo(geoState.map);
   geoState.pathLayer.clearLayers();
@@ -11850,159 +9999,14 @@ function drawGeoPath(graph) {
     const latlngs = renderPathStops(geoState.pathLayer, stops);
     try { geoState.map.fitBounds(latlngs, { padding: [40, 40], maxZoom: 7 }); } catch { /* single point */ }
   }
-  geoPathSummary(graph, stops);
+  return Object.assign({}, graph, { stops });
 }
 
-function geoPathSummary(graph, stops) {
-  const panel = geoState.panel;
-  if (!panel) return;
-  const rank = { bad: 3, warn: 2, muted: 1, ok: 0 };
-  const hops = (graph.nodes || []).filter((n) => n.kind !== 'source');
-  const worst = hops.reduce((w, n) => ((rank[n.severity] || 0) > (rank[(w && w.severity)] || 0) ? n : w), null);
-  const list = stops.length
-    ? el('ul', { class: 'geo-path-stops' }, ...stops.map((s) => {
-      const isSrc = s.nodes.some((n) => n.kind === 'source');
-      const place = isSrc ? (s.nodes[0].label || 'Agent') : (s.nodes[0].country || '—');
-      const hopLabel = isSrc ? 'origin'
-        : s.nodes.length > 1 ? `hops ${s.nodes[0].hop}–${s.nodes[s.nodes.length - 1].hop}` : `hop ${s.nodes[0].hop}`;
-      return el('li', {}, el('span', { class: 'dot', style: `background:${pgColor(s.severity)}` }), ' ',
-        esc(String(place)), ' ', el('span', { class: 'muted' }, hopLabel));
-    }))
-    : el('div', { class: 'empty' }, 'No geolocated stops — country-level geo needs the agent site and at least one public hop.');
-  // When a run exists but the map stays (almost) empty, say why instead of leaving
-  // a blank panel: either no hops came back at all (the agent's traceroute/tracert
-  // is missing or blocked), or hops came back but can't be placed (private hops, or
-  // no GeoIP country). The full per-hop topology is always on the Probes view.
-  let note = null;
-  if (graph.samples > 0 && stops.length < 2) {
-    if (!hops.length) {
-      const why = graph.detail
-        ? `The agent couldn't run traceroute: ${esc(graph.detail)}.`
-        : 'The traceroute returned no hops — the agent is likely missing the traceroute/tracert command or has it blocked.';
-      note = el('p', { class: 'muted small' }, `${why} Open Probes to see the raw result.`);
-    } else {
-      const silent = hops.every((h) => h.unresponsive);
-      note = el('p', { class: 'muted small' }, `${hops.length} hop${hops.length === 1 ? '' : 's'} captured${silent ? ' (all silent — no ICMP replies)' : ''}, but none could be placed on the map (private hops or no GeoIP country). Open Probes for the per-hop topology.`);
-    }
-  }
-  // worst-hop line and `note` can be null; `el()` skips null kids but a bare
-  // `replaceChildren(…, null, …)` would stringify it to the text "null", so filter.
-  const worstLine = worst && (rank[worst.severity] || 0) > 0
-    ? el('p', { class: worst.severity === 'bad' ? 'bad-text' : 'warn-text' }, `Worst hop: #${worst.hop} — ${esc(worst.explain)}`)
-    : null;
-  panel.replaceChildren(...[
-    el('div', { class: 'section-head' }, el('h3', {}, 'Traceroute path')),
-    el('p', {}, esc(graph.target || '(latest)')),
-    el('p', { class: 'muted' }, `${graph.samples} run${graph.samples === 1 ? '' : 's'} aggregated · ${stops.length} geolocated stop${stops.length === 1 ? '' : 's'}`),
-    worstLine,
-    note,
-    list,
-    el('p', { class: 'muted small' }, 'Open Probes to inspect the per-hop topology, or “Clear path” to return to the overview.'),
-  ].filter(Boolean));
-}
-
-async function selectDestination(d) {
-  const panel = geoState.panel;
-  panel.replaceChildren(geoSpinner('Loading destination…'));
-  const qs = destQuery(d);
-  try {
-    const flows = await api(`/api/geo/select/flows?${qs}`).catch((e) => { if (e.status === 404) return null; throw e; });
-    if (!flows) { panel.replaceChildren(el('div', { class: 'empty' }, 'No data for this destination in the period.')); return; }
-    const findings = await api(`/api/geo/select/findings?${qs}`).catch((e) => { if (e.status === 404) return { findings: [] }; throw e; });
-    renderDestPanel(d, flows, findings);
-  } catch (err) {
-    panel.replaceChildren(el('div', { class: 'empty error' }, err.message));
-  }
-}
-
-function renderDestPanel(d, flows, findingsRes) {
-  const fs = (findingsRes && findingsRes.findings) || [];
-  geoState.panel.replaceChildren(
-    el('div', { class: 'section-head' }, el('h3', {}, destTitle(d)),
-      el('span', { class: 'spacer' }), el('button', { class: 'small ghost', onclick: () => { clearRegion(); showOverviewSummary(); } }, 'Clear selection')),
-    el('p', { class: 'muted' }, `${fmtBytes(flows.totals.bytes)} · ${flows.totals.flowCount} flows · deviation ${devLabel(d.deviation)}`),
-    miniTable('Direction', flows.byDirection.map((x) => [x.direction === 'in' ? 'inbound' : 'outbound', fmtBytes(x.bytes)])),
-    miniTable('Protocol', flows.byProto.map((x) => [esc(x.proto || '–'), fmtBytes(x.bytes)])),
-    miniTable('ASN', flows.byAsn.map((x) => [esc(x.asnName || (x.asn ? `AS${x.asn}` : '–')), fmtBytes(x.bytes)])),
-    el('h4', {}, `Findings (${fs.length})`),
-    fs.length ? el('div', {}, ...fs.slice(0, 50).map(findingMini)) : el('div', { class: 'muted' }, 'No findings for the hosts communicating with this destination.'));
-}
-
-async function selectHost(h) {
-  const panel = geoState.panel;
-  panel.replaceChildren(geoSpinner('Loading host…'));
-  try {
-    const findings = await api(`/api/findings?hostId=${encodeURIComponent(h.hostId)}`);
-    panel.replaceChildren(
-      el('div', { class: 'section-head' }, el('h3', {}, esc(h.siteName || `host ${h.hostId}`)),
-        el('span', { class: 'spacer' }), el('button', { class: 'small ghost', onclick: showOverviewSummary }, 'Clear selection')),
-      el('p', {}, el('span', { class: `badge ${h.status === 'online' ? 'online' : 'offline'}` }, h.status || '?'), ` host ${h.hostId}`),
-      el('h4', {}, `Findings (${findings.length})`),
-      findings.length ? el('div', {}, ...findings.slice(0, 50).map(findingMini)) : el('div', { class: 'muted' }, 'No findings for this host.'));
-  } catch (err) {
-    panel.replaceChildren(el('div', { class: 'empty error' }, err.message));
-  }
-}
-
-function beginRegionSelect(btn) {
-  if (!geoState.map) return;
-  geoState.selecting = true;
-  geoState.map.dragging.disable();
-  geoState.map.boxZoom.disable();
-  toast('Draw a box on the map to select a region');
-  if (btn) { btn.classList.add('active-btn'); setTimeout(() => btn.classList.remove('active-btn'), 1500); }
-}
-
-function clearRegion() {
-  if (geoState.rect && geoState.map) { geoState.map.removeLayer(geoState.rect); }
-  geoState.rect = null;
-}
-
-async function aggregateRegion(bounds) {
-  const panel = geoState.panel;
-  const inBox = geoState.dests.filter((d) => bounds.contains([d.lat, d.lng]));
-  if (!inBox.length) { panel.replaceChildren(el('div', { class: 'empty' }, 'No destinations in the selected region.')); return; }
-  const totBytes = inBox.reduce((s, d) => s + (Number(d.bytes) || 0), 0);
-  const totFlows = inBox.reduce((s, d) => s + (Number(d.flowCount) || 0), 0);
-  panel.replaceChildren(
-    el('div', { class: 'section-head' }, el('h3', {}, 'Region'),
-      el('span', { class: 'spacer' }), el('button', { class: 'small ghost', onclick: () => { clearRegion(); showOverviewSummary(); } }, 'Clear selection')),
-    el('p', { class: 'muted' }, `${inBox.length} destinations · ${fmtBytes(totBytes)} · ${totFlows} flows`),
-    miniTable('Destinations', inBox.slice().sort((a, b) => b.bytes - a.bytes).slice(0, 30).map((d) => [esc(destTitle(d)), fmtBytes(d.bytes)])),
-    el('div', { class: 'geo-region-findings' }, geoSpinner('Loading findings for the region…')));
-
-  // Aggregate findings across the distinct countries in the box (bounded).
-  const countries = [...new Set(inBox.map((d) => d.country).filter(Boolean))].slice(0, 8);
-  const seen = new Set();
-  const findings = [];
-  try {
-    for (const country of countries) {
-      const qs = new URLSearchParams({ country });
-      if (geoState.sinceIso) qs.set('since', geoState.sinceIso);
-      // eslint-disable-next-line no-await-in-loop
-      const res = await api(`/api/geo/select/findings?${qs}`).catch((e) => (e.status === 404 ? { findings: [] } : Promise.reject(e)));
-      for (const f of res.findings || []) { if (!seen.has(f.id)) { seen.add(f.id); findings.push(f); } }
-    }
-  } catch { /* best-effort */ }
-  const slot = panel.querySelector('.geo-region-findings');
-  if (slot) {
-    slot.replaceChildren(el('h4', {}, `Findings (${findings.length})`),
-      findings.length ? el('div', {}, ...findings.slice(0, 50).map(findingMini)) : el('div', { class: 'muted' }, 'No findings in the region.'));
-  }
-}
-
-function locationList(locations, byLoc) {
-  return el('table', {},
-    el('thead', {}, el('tr', {}, ...['Location', 'Address', 'Coordinates', 'Agents'].map((h) => el('th', {}, h)))),
-    el('tbody', {}, ...locations.map((l) => {
-      const c = byLoc.get(l.id) || { total: 0, online: 0 };
-      return el('tr', {},
-        el('td', {}, l.name),
-        el('td', { class: 'muted' }, l.address || '–'),
-        el('td', { class: 'muted' }, l.latitude != null ? `${l.latitude}, ${l.longitude}` : '–'),
-        el('td', {}, `${c.online}/${c.total} online`));
-    })));
-}
+views.geo = async () => {
+  const v = getDestinationsView();
+  if (!v) return el('div', { class: 'empty error' }, t('dest.err.title'));
+  return v.view();
+};
 
 // Maps an hsflowd exporter state to a badge colour class.
 function hsflowdBadgeClass(state) {
@@ -16261,19 +14265,10 @@ function onLiveFinding(f) {
   if (!f) return;
   const sev = f.severity || 'INFO';
   toast(`New finding: ${f.metric} ${sev}`, sev === 'CRIT' || sev === 'WARN');
-  // Live-prepend only when the findings table is actually on screen and the
-  // active filters match; otherwise the REST list will show it next time.
-  if (currentView === 'findings' && findingsState.tbody && findingsState.tbody.isConnected) {
-    const hostOk = !findingsState.hostId || String(f.hostId) === String(findingsState.hostId);
-    const sevOk = !findingsState.severity || f.severity === findingsState.severity;
-    const metricOk = !findingsState.metric || f.metric === findingsState.metric;
-    if (hostOk && sevOk && metricOk) {
-      const name = findingsState.agentName || ((id) => `host ${id}`);
-      findingsState.tbody.prepend(findingRow(name, f));
-    }
-    // Keep the overview totals honest even when the row is filtered out.
-    if (findingsState.reloadSummary) findingsState.reloadSummary();
-  }
+  // Hand it to the Analysis screen when that screen is the one on display. The
+  // view decides whether the row passes the active filters and re-reads the
+  // totals either way — they move whether or not the row is shown.
+  if (currentView === 'findings' && onLiveFindingRow) onLiveFindingRow(f);
 }
 
 // ---- NIS2 Reporting Center ------------------------------------------------
@@ -17302,43 +15297,47 @@ views.about = async () => {
   });
 };
 
-views.transactions = async () => {
-  const root = el('div', { class: 'transactions' });
-  const body = el('div', {});
-  const tabs = tabStrip([['list', 'List'], ['matrix', 'Matrix']], {
-    active: txTab,
-    ariaLabel: 'Transaction tests',
-    onPick: (k) => { txTab = k; draw(); },
-  });
-  const head = el('div', { class: 'section-head' }, el('h2', {}, 'Transaction tests'),
-    isAdmin() ? el('button', { class: 'primary', onclick: () => txMount(body, () => txForm(null, body)) }, '+ New test') : null);
-  function draw() {
-    tabs.setActive(txTab);
-    if (txTab === 'matrix') txMount(body, () => txMatrixView(body));
-    else txMount(body, () => txListView(body));
-  }
-  root.append(head, tabs, body);
-  draw();
-  return root;
-};
-
-async function txListView(host) {
-  const tests = await api('/api/transactions');
-  if (!tests.length) return el('div', { class: 'empty' }, 'No transaction tests yet. A transaction test runs http/tcp/dns/icmp from assigned agents on an interval.');
-  const rows = tests.map((t) => el('tr', { class: 'clickable', onclick: () => txMount(host, () => txDetailView(t.id, host)) },
-    el('td', {}, t.name),
-    el('td', {}, el('span', { class: 'chip' }, t.type)),
-    el('td', {}, t.target || '—'),
-    el('td', {}, String((t.agent_ids || []).length)),
-    el('td', {}, `${t.interval_sec}s`),
-    el('td', {}, t.enabled ? 'Active' : 'Disabled'),
-    el('td', {}, isAdmin() ? el('span', {},
-      el('button', { class: 'ghost small', onclick: (e) => { e.stopPropagation(); txMount(host, () => txForm(t, host)); } }, 'Edit'),
-      el('button', { class: 'ghost small danger', onclick: (e) => { e.stopPropagation(); txDelete(t, host); } }, 'Delete')) : null)));
-  return el('table', { class: 'data-table' },
-    el('thead', {}, el('tr', {}, ...['Name', 'Type', 'Target', 'Agents', 'Interval', 'Status', ''].map((h) => el('th', {}, h)))),
-    el('tbody', {}, ...rows));
+// ---- Transaction tests (MIGRATED — see public/views/transactions.js) --------
+// A SHELL migration: the create/edit form, the matrix and the per-test detail
+// are ~350 lines with their own machinery and are passed in whole.
+let transactionsPage = null;
+const transactionsPageState = {};
+let txRenderList = null;
+function txListView(host) {
+  return txRenderList ? txRenderList(host) : el('div', { class: 'empty' }, t('tx.none'));
 }
+
+function getTransactionsPage() {
+  if (transactionsPage) return transactionsPage;
+  if (typeof window === 'undefined' || !window.TransactionsPage || !ui) return null;
+  transactionsPage = window.TransactionsPage.create({
+    el, t, ui,
+    state: transactionsPageState,
+    isAdmin,
+    tab: () => txTab,
+    setTab: (k) => { txTab = k; syncLocation(); },
+    help: () => {
+      const info = PAGE_INFO.transactions || {};
+      return { lead: info.hero || '', title: info.title || t('tx.title'), body: info.body || (() => []) };
+    },
+    fetchTests: async () => api('/api/transactions'),
+    // The unmigrated builders navigate back to the list, which is the view's
+    // now — so it hands it over and txListView() forwards to it.
+    exposeList: (fn) => { txRenderList = fn; },
+    mount: txMount,
+    form: txForm,
+    matrix: txMatrixView,
+    detail: txDetailView,
+    remove: txDelete,
+  });
+  return transactionsPage;
+}
+
+views.transactions = async () => {
+  const v = getTransactionsPage();
+  if (!v) return el('div', { class: 'empty error' }, t('tx.err.title'));
+  return v.view();
+};
 
 async function txDelete(test, host) {
   if (!confirm(`Delete transaction test "${test.name}"?`)) return;
@@ -17634,10 +15633,253 @@ function txTrendSvg(rows) {
 // green does not tell a shift what happened while they were away. The fleet grid
 // is still the right screen for bulk operations, so it keeps its own route.
 let currentView = 'changes';
+
+
+// ---- Routing ---------------------------------------------------------------
+// Every screen has an address (see public/routes.js). Two rules keep the URL and
+// `currentView` honest without rewriting the ~25 places that assign it directly:
+//
+//   1. render() is the single writer. Whatever set currentView, by the time the
+//      view is drawn the address is brought in line with it — pushed onto the
+//      history stack when the path actually changes, so Back steps through the
+//      screens the user visited.
+//   2. popstate is the single reader. Going Back parses the address and sets
+//      currentView from it, with the push suppressed so the step is not undone.
+//
+// The query string is left alone: several views own it for their own filters
+// (fleet ?severity, topology ?layer, delta ?changeTypes) and all of them
+// preserve window.location.pathname, so paths and filters do not collide.
+const Routes = (typeof window !== 'undefined' && window.AppRoutes) || null;
+// The screen a preview route stands in for: it has no rail entry of its own, so
+// without this the sidebar marks nothing and the breadcrumb prints a view key.
+const PREVIEW_OF = { uiPreviewChanges: 'changes', uiPreviewProbes: 'probes' };
+// A screen with no rail entry at all still needs a name in the crumb, or the
+// topbar prints a view key at the reader.
+const CRUMB_ONLY = { kitchenSink: 'route.crumb.kitchenSink' };
+// Set while a popstate is being applied: the address is already correct, so
+// render() must replace rather than push (a push would strand the Back button).
+let routerReplacing = false;
+// The address the user asked for when it turned out not to exist — shown by the
+// not-found view so the message can name it.
+let notFoundPath = '';
+// The role the blocked address needs, so the forbidden screen can name it.
+let forbiddenRole = '';
+
+// The sub-tab state variable each tabbed view reports its position through.
+// `let` declarations below this line are hoisted but in the temporal dead zone,
+// so this is a function rather than a table built at load time.
+function routeTabFor(view) {
+  switch (view) {
+    case 'probes': return probesTab;
+    case 'transactions': return txTab;
+    case 'serviceAssurance': return serviceAssuranceTab;
+    case 'settings': return settingsTab;
+    case 'guide': return guideTrack;
+    default: return null;
+  }
+}
+function routeIdFor(view) {
+  switch (view) {
+    case 'agent': return selectedAgentId;
+    case 'location': return selectedLocationId;
+    case 'event': return selectedEventId;
+    case 'cluster': return selectedClusterId;
+    default: return null;
+  }
+}
+function setRouteTab(view, tab) {
+  if (!tab) return;
+  if (view === 'probes') probesTab = tab;
+  else if (view === 'transactions') txTab = tab;
+  else if (view === 'serviceAssurance') serviceAssuranceTab = tab;
+  else if (view === 'settings') settingsTab = tab;
+  else if (view === 'guide') guideTrack = tab;
+}
+function setRouteId(view, id) {
+  if (id == null) return;
+  if (view === 'agent') selectedAgentId = id;
+  else if (view === 'location') selectedLocationId = id;
+  else if (view === 'event') selectedEventId = id;
+  else if (view === 'cluster') selectedClusterId = id;
+}
+
+// Read the address into view state. Returns false when the path names no screen
+// (the server already answered 404 with this same shell) or when the screen is
+// above the reader's role — a typed URL does not pass the nav rail, so the check
+// that hides the tab has to happen here as well.
+function applyRoute(loc) {
+  if (!Routes) return true;
+  const hit = Routes.match((loc || window.location).pathname);
+  if (!hit) {
+    notFoundPath = (loc || window.location).pathname;
+    currentView = Routes.NOT_FOUND;
+    return false;
+  }
+  const min = Routes.MIN_ROLE[hit.view];
+  if (min && !roleAtLeast(min)) {
+    // A typed URL does not pass the nav rail, so the role gate that hides the
+    // tab has to be applied here too. It is NOT a 404: saying "no such page"
+    // about a page that does exist is the kind of half-truth that sends people
+    // to support. The API behind every one of these screens refuses the same
+    // reader with a real 403, so the screen says the same thing.
+    notFoundPath = (loc || window.location).pathname;
+    forbiddenRole = min;
+    currentView = 'forbidden';
+    return false;
+  }
+  currentView = hit.view;
+  setRouteTab(hit.view, hit.tab);
+  setRouteId(hit.view, hit.id);
+  return true;
+}
+
+// Bring the address in line with the view being drawn. Called from render().
+function syncLocation() {
+  // notFound and forbidden are answers ABOUT an address, not screens with one:
+  // rewriting the bar to '/' would hide the very address the message names.
+  if (!Routes || !Routes.VIEWS[currentView]) return;
+  try {
+    const target = Routes.pathFor(currentView, { tab: routeTabFor(currentView), id: routeIdFor(currentView) });
+    if (Routes.normalise(window.location.pathname) === target) return;
+    const url = target + (window.location.search || '') + (window.location.hash || '');
+    if (routerReplacing) window.history.replaceState(null, '', url);
+    else window.history.pushState(null, '', url);
+  } catch { /* URL/History API off — the app still works, the address does not follow */ }
+}
+
+// Section / page / sub-page, rebuilt from the route on every render. The labels
+// come from the sidebar the route points at, so the crumb and the rail can never
+// disagree, and a language switch relabels both.
+function syncCrumb() {
+  const host = $('#crumb');
+  if (!host || !Routes) return;
+  // The two answers ABOUT an address rather than screens with one.
+  if (currentView === Routes.NOT_FOUND || currentView === 'forbidden') {
+    host.replaceChildren(el('span', { class: 'crumb-here' },
+      currentView === 'forbidden' ? t('route.forbidden.crumb') : t('route.notFound.crumb')));
+    return;
+  }
+  if (CRUMB_ONLY[currentView]) {
+    host.replaceChildren(el('span', { class: 'crumb-here' }, t(CRUMB_ONLY[currentView])));
+    return;
+  }
+  const marks = PREVIEW_OF[currentView] || currentView;
+  const tab = routeTabFor(currentView);
+  const btn = [...document.querySelectorAll(NAV_BUTTONS)].find((b) => b.dataset.view === marks
+    && (!b.dataset.saTab || b.dataset.saTab === tab)
+    && (!b.dataset.guide || b.dataset.guide === tab))
+    || document.querySelector(`[data-view="${marks}"]`);
+  const group = btn && btn.closest('.nav-group');
+  const groupLabel = group && group.querySelector('.nav-group-label');
+  const parts = [];
+  if (groupLabel) parts.push(groupLabel.textContent.trim());
+  parts.push(btn ? btn.textContent.trim() : (VIEW_LABELS[currentView] || currentView));
+  // A sub-page the rail does not name: the open record, or a tab of its own.
+  const id = routeIdFor(currentView);
+  if (PREVIEW_OF[currentView]) parts.push(t('uip.crumb'));
+  else if (id != null) parts.push(`#${id}`);
+  else if (tab && !(btn && (btn.dataset.saTab || btn.dataset.guide))) parts.push(crumbTabLabel(currentView, tab));
+
+  const kids = [];
+  parts.filter(Boolean).forEach((text, i) => {
+    if (i) kids.push(el('span', { class: 'crumb-sep', 'aria-hidden': 'true' }, '/'));
+    kids.push(i === parts.length - 1
+      ? el('span', { class: 'crumb-here', 'aria-current': 'page' }, text)
+      : el('span', { class: 'crumb-step' }, text));
+  });
+  host.replaceChildren(...kids);
+}
+// A sub-tab's own label. Falls back to the segment itself, which is already the
+// word in the URL, so an untranslated tab reads as its address rather than blank.
+function crumbTabLabel(view, tab) {
+  const key = `route.tab.${view}.${tab}`;
+  const label = t(key);
+  return label === key ? tab : label;
+}
+
+if (typeof window !== 'undefined' && Routes) {
+  window.addEventListener('popstate', () => {
+    closeDrawer();
+    routerReplacing = true;
+    applyRoute(window.location);
+    Promise.resolve(render()).finally(() => { routerReplacing = false; });
+  });
+}
+
+// The address that did not resolve. Rendered inside the ordinary shell — the
+// sidebar, the topbar and the search are all still there, because a mistyped
+// URL is not a reason to take the way out away.
+views.notFound = async () => el('div', { class: 'ui ui-page' },
+  el('header', { class: 'page-head' },
+    el('div', {},
+      el('h1', {}, t('route.notFound.title')),
+      el('p', {}, t('route.notFound.lead')))),
+  el('section', { class: 'panel-ui' },
+    el('div', { class: 'state is-error' },
+      el('div', { class: 'state-ico' }, '404'),
+      el('h3', {}, t('route.notFound.heading')),
+      el('p', {}, t('route.notFound.body'), ' ', el('code', {}, notFoundPath || '/')),
+      el('button', {
+        class: 'btn btn-primary',
+        onclick: () => { currentView = Routes ? Routes.HOME : 'changes'; render(); },
+      }, t('route.notFound.home')))));
+
+// The address exists; this reader may not open it. Same shell, same way out.
+views.forbidden = async () => el('div', { class: 'ui ui-page' },
+  el('header', { class: 'page-head' },
+    el('div', {},
+      el('h1', {}, t('route.forbidden.title')),
+      el('p', {}, t('route.forbidden.lead')))),
+  el('section', { class: 'panel-ui' },
+    el('div', { class: 'state is-error' },
+      el('div', { class: 'state-ico' }, '403'),
+      el('h3', {}, t('route.forbidden.heading', { role: forbiddenRole || 'admin' })),
+      el('p', {}, t('route.forbidden.body', { role: forbiddenRole || 'admin' }), ' ', el('code', {}, notFoundPath || '/')),
+      el('button', {
+        class: 'btn btn-primary',
+        onclick: () => { currentView = Routes ? Routes.HOME : 'changes'; render(); },
+      }, t('route.notFound.home')))));
+
+// ---- UI-contract preview (Phase 1, admin only) ------------------------------
+// Two example screens built from the contract's components, on their own routes
+// so nothing live changes while the direction is reviewed. Deleted once Changes
+// and Probes & Tests are migrated onto their real routes.
+// The contract's components, built once and handed to every screen that has been
+// migrated. See public/ui.js and docs/ui-contract.md.
+const ui = (typeof window !== 'undefined' && window.Ui)
+  ? window.Ui.create({
+    el, t, plural, tabStrip,
+    getLocale: () => (window.I18n ? window.I18n.getLocale() : 'en'),
+    relativeTime: (v) => (window.I18n ? window.I18n.relativeTime(v) : String(v)),
+  })
+  : null;
+
+const uiPreview = (typeof window !== 'undefined' && window.UiPreview && ui)
+  ? window.UiPreview.create({ el, api, t, plural, errText, openAgent, gotoView, ui })
+  : null;
+views.uiPreviewChanges = async () => (uiPreview
+  ? uiPreview.changes()
+  : el('div', { class: 'empty' }, t('uip.unavailable')));
+views.uiPreviewProbes = async () => (uiPreview
+  ? uiPreview.probes()
+  : el('div', { class: 'empty' }, t('uip.unavailable')));
+
+// ---- Component reference ----------------------------------------------------
+// /ui-kitchen-sink, admin only. Every component in every state, built from the
+// same ui.js a migrated screen uses. Stays after the migration: it is the visual
+// reference for docs/ui-contract.md and the surface the component tests read.
+const kitchenSink = (typeof window !== 'undefined' && window.KitchenSink && ui)
+  ? window.KitchenSink.create({ el, t, ui })
+  : null;
+views.kitchenSink = async () => (kitchenSink
+  ? kitchenSink.view()
+  : el('div', { class: 'empty' }, t('uip.unavailable')));
+
 // Every control that navigates: the sidebar rail, the rail's foot (Documentation)
 // and the account menu (About). One selector, so a new home for a nav entry is
 // wired for both the click and the active-state pass.
 const NAV_BUTTONS = '.tabs button[data-view], #sidebar-foot button[data-view], #user-menu-panel button[data-view]';
+
 const modalOpen = () => !$('#modal').classList.contains('hidden');
 
 // One-time per session: stamp the sidebar foot with this server's build —
@@ -17705,6 +15947,10 @@ async function render({ silent = false } = {}) {
   maybePromptSigningKey();
 
   // Stop the overview poller when leaving that view (it restarts itself when shown).
+  // The preview screens own their drawer, popover and row menu; they are
+  // appended to <body>, so leaving the view does not remove them.
+  if (ui && currentView !== 'uiPreviewChanges' && currentView !== 'uiPreviewProbes'
+    && currentView !== 'kitchenSink') ui.closeOverlays();
   if (currentView !== 'overview') stopOverview();
   if (currentView !== 'probes') stopProbes();
   if (currentView !== 'interfaces') stopIfaces();
@@ -17724,11 +15970,28 @@ async function render({ silent = false } = {}) {
   for (const b of document.querySelectorAll(NAV_BUTTONS)) {
     // Several entries can share one data-view when they deep-link to different
     // sub-tabs; the sub-tab is what tells them apart.
-    const active = b.dataset.view === currentView
+    const marks = PREVIEW_OF[currentView] || currentView;
+    const active = b.dataset.view === marks
       && (!b.dataset.saTab || b.dataset.saTab === serviceAssuranceTab)
       && (!b.dataset.guide || b.dataset.guide === guideTrack);
     b.classList.toggle('active', active);
+    // The section you are in is open. Groups start collapsed and the collapsed
+    // set is remembered per browser, so without this a deep link (or a reload
+    // on any page) marks an item inside a folded group — a "you are here" that
+    // nobody can see. Unfolding does not touch the remembered set: close it
+    // again and the choice still sticks.
+    if (active) {
+      const group = b.closest('.nav-group');
+      if (group && group.classList.contains('collapsed')) {
+        group.classList.remove('collapsed');
+        const label = group.querySelector('.nav-group-label');
+        if (label) label.setAttribute('aria-expanded', 'true');
+      }
+    }
   }
+
+  syncLocation();
+  syncCrumb();
 
   const view = $('#view');
   if (!silent) view.replaceChildren(el('div', { class: 'empty' }, 'Loading…'));
@@ -18004,7 +16267,14 @@ setupNavGroups();
 $('#modal').addEventListener('click', (e) => { if (e.target.id === 'modal') closeModal(); });
 installModalA11y(); // focus management + trap + Escape for every modal flow
 
-render();
+// The first paint comes from the address bar, not from a default. A reload, a
+// bookmark and a shared link all land on the screen they name; the bare '/'
+// lands on Changes as before. The address is already correct at this point, so
+// the first render replaces rather than pushes — otherwise Back would have to
+// step past an entry the user never navigated to.
+routerReplacing = true;
+applyRoute(window.location);
+Promise.resolve(render()).finally(() => { routerReplacing = false; });
 
 // ---- Scheduled reports ----------------------------------------------------
 // The exports answer a question somebody asked. This answers the recurring

@@ -15,8 +15,13 @@
     <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css" />
     <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css" />
     <script defer src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
+    <!-- tokens.css first (it defines the palette every rule below reads),
+         then the legacy sheet, then the UI-contract components. -->
+    <link rel="stylesheet" href="/css/tokens.css" />
+    <link rel="stylesheet" href="/css/base.css" />
     <link rel="stylesheet" href="/styles.css" />
     <link rel="stylesheet" href="/serviceAssurance.css" />
+    <link rel="stylesheet" href="/css/components.css" />
   </head>
   <body>
     <!-- Login -->
@@ -147,6 +152,10 @@
       <div class="shell">
         <header class="topbar">
           <button id="nav-toggle" class="ghost nav-toggle" data-i18n-title="nav.toggle" data-i18n-aria-label="nav.toggle" title="Toggle navigation" aria-label="Toggle navigation">☰</button>
+          <!-- Breadcrumb: section / page / sub-page, rebuilt from the route on
+               every render (see syncCrumb in app.js). Static markup, so the
+               label is set from the same catalogue the sidebar uses. -->
+          <nav class="crumb" id="crumb" data-i18n-aria-label="nav.breadcrumb" aria-label="Breadcrumb"></nav>
           <span class="spacer"></span>
           <!-- Global search: a single magnifier button that expands into a
                search pill on click (fade + slide out toward the left). The ✕,
@@ -209,6 +218,7 @@
     <div id="toast" class="toast hidden" role="status" aria-live="polite" aria-atomic="true"></div>
     <div id="modal" class="modal hidden" role="dialog" aria-modal="true" aria-label="Dialog"><div class="modal-card" id="modal-card" tabindex="-1"></div></div>
 
+    <script src="/routes.js"></script>
     <script src="/i18n.js"></script>
     <script src="/baselineMetric.js"></script>
     <script src="/timelineView.js"></script>
@@ -221,6 +231,23 @@
     <script src="/serviceAssurance.js"></script>
     <script src="/guides.js"></script>
     <script src="/about.js"></script>
+    <script src="/ui.js"></script>
+    <script src="/views/changes.js"></script>
+    <script src="/views/probes.js"></script>
+    <script src="/views/analysis.js"></script>
+    <script src="/views/fleet.js"></script>
+    <script src="/views/sites.js"></script>
+    <script src="/views/traffic.js"></script>
+    <script src="/views/destinations.js"></script>
+    <script src="/views/topologyDelta.js"></script>
+    <script src="/views/investigate.js"></script>
+    <script src="/views/diagnose.js"></script>
+    <script src="/views/troubleshooting.js"></script>
+    <script src="/views/topology.js"></script>
+    <script src="/views/flows.js"></script>
+    <script src="/views/transactions.js"></script>
+    <script src="/uiPreview.js"></script>
+    <script src="/kitchenSink.js"></script>
     <script src="/app.js"></script>
   </body>
 </html>

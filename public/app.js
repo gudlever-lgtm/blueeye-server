@@ -1367,6 +1367,7 @@ const CONTRACT_VIEWS = new Map([
   ['docs', 'docs'],
   ['users', 'users'],
   ['screening', 'screening'],
+  ['license', 'license'],
 ]);
 
 function hero(viewKey) {
@@ -11153,7 +11154,7 @@ views.docs = async () => {
 let settingsPage = null;
 const SETTINGS_SECTIONS = {
   users: () => views.users({ embedded: true }),
-  license: () => views.license(),
+  license: () => views.license({ embedded: true }),
   appearance: settingsAppearanceView,
   database: settingsDatabaseView,
   map: settingsMapView,
@@ -13650,132 +13651,53 @@ async function deleteUser(u) {
   catch (err) { toast(err.message, true); }
 }
 
-// Formats a plan limit for display: null/undefined means "unlimited".
-const fmtLimit = (v) => (v === null || v === undefined ? 'Unlimited' : String(v));
 // "used / max (pct%)" plus a usage bar; unlimited limits show just the count.
-function limitStat(label, used, max) {
-  if (max === null || max === undefined) return stat(label, `${used} / ∞`);
-  const pct = max > 0 ? Math.round((used / max) * 100) : 0;
-  return stat(label, el('div', {}, el('div', {}, `${used} / ${max} (${pct}%)`), usageBar(pct)));
+
+
+// ---- License (MIGRATED — see public/views/license.js)
+// Reached at /license and as the License section inside Settings; the second
+// passes mode 'embedded'.
+let licensePage = null;
+let licenseEmbedded = false;
+function getLicensePage() {
+  if (licensePage) return licensePage;
+  if (typeof window === 'undefined' || !window.LicensePage || !ui) return null;
+  licensePage = window.LicensePage.create({
+    el, t, ui, errText,
+    canWrite,
+    // The usage bar writes its own width, which a migrated view may not — so
+    // it is passed in, the way topology's graph renderer is.
+    usageBar,
+    mode: () => (licenseEmbedded ? 'embedded' : 'standalone'),
+    help: () => ({ title: t('lic.info.title'), body: () => [
+      el('p', {}, t('lic.info.p1')),
+      el('p', {}, t('lic.info.p2')),
+      el('p', { class: 'muted' }, t('lic.info.p3')),
+    ] }),
+    fetchAll: async () => {
+      const status = await api('/license/status');
+      // Plan, usage and matrix are best-effort: a server without the plan layer
+      // (or a 503 from it) must still render the status the page is named for.
+      const [plan, usage, matrix] = await Promise.all([
+        api('/license/plan').catch(() => null),
+        api('/license/usage').catch(() => null),
+        api('/license/matrix').catch(() => null),
+      ]);
+      return { status, plan, usage, matrix };
+    },
+    refresh: refreshLicense,
+    rerender: () => render(),
+  });
+  return licensePage;
 }
 
-// Human labels for the licence status badge (the raw status still drives the
-// badge colour via its CSS class). 'expired' reads as a clear, distinct state
-// rather than the catch-all 'invalid'.
-const LICENSE_STATUS_LABELS = {
-  valid: 'Valid',
-  grace: 'Valid (grace)',
-  expired: 'License expired',
-  not_yet_valid: 'Not yet valid',
-  invalid: 'Invalid',
-  unlicensed: 'Unlicensed',
-  unknown: 'Unknown',
-};
-const licenseStatusLabel = (status) => LICENSE_STATUS_LABELS[status] || status;
-
-views.license = async () => {
-  const s = await api('/license/status');
-  // Plan / usage / matrix are best-effort — a server without the plan layer (or
-  // a 503) must still render the classic status block.
-  let plan = null;
-  let usage = null;
-  let matrix = null;
-  try { plan = await api('/license/plan'); } catch { /* optional */ }
-  try { usage = await api('/license/usage'); } catch { /* optional */ }
-  try { matrix = await api('/license/matrix'); } catch { /* optional */ }
-
-  const root = el('div');
-  root.append(el('div', { class: 'section-head' },
-    el('h2', {}, 'License status'),
-    canWrite() ? el('button', { class: 'small', onclick: refreshLicense }, 'Re-validate now') : null));
-  // A misconfigured trust anchor makes every proof fail signature verification
-  // (reason: 'invalid_signature') the same way a genuinely bad proof would —
-  // "Re-validate now" then keeps returning 200 while silently sitting on
-  // whatever was last cached, which looks like "revalidation doesn't pick up
-  // license changes" rather than "verifying against the wrong public key".
-  // Say so plainly instead of letting that look like a stuck refresh.
-  const trust = s.publicKeyTrust;
-  if (trust && (trust.source === 'blocked' || !trust.configured)) {
-    root.append(el('div', { class: 'alert-banner sev-WARN' },
-      el('span', { class: 'alert-ic' }, '⚠'),
-      el('span', {},
-        el('strong', {}, 'License verification is misconfigured. '),
-        !trust.configured
-          ? 'The embedded public key in src/license/publicKey.js is still the placeholder — no proof can ever verify, so "Re-validate now" will never reflect changes made on the license server. '
-          : 'LICENSE_PUBLIC_KEY is set but ignored in production (no TRUST_ANCHOR_OVERRIDE_ACK) — verification falls back to the embedded key instead. ',
-        'See docs/licensing.md.')));
-  }
-  // Offline mode reports a different evidence trail (a local signed file with a
-  // validity window) instead of the online grace window.
-  const offline = s.mode === 'offline';
-  // The licence's own expiry, shown for both modes. null = perpetual / none.
-  const expiryText = s.validUntil ? fmtDate(s.validUntil) : (s.licensed ? 'No expiry' : '–');
-  root.append(el('div', { class: 'cards' },
-    stat('Status', el('span', { class: `badge ${s.status}` }, licenseStatusLabel(s.status))),
-    stat('Licensed', s.licensed ? 'Yes' : 'No'),
-    plan ? stat('Plan', `BlueEyes ${plan.plan_name}`) : stat('Max. agents', String(s.maxAgents)),
-    offline ? stat('Validation', 'Offline (local file)') : stat('Server ID', s.serverId || '–'),
-    stat('Last validated', fmtDate(s.verifiedAt)),
-    stat('License expires', expiryText),
-    // Grace is an online-only concept (running on a cached proof while offline).
-    offline ? null : stat('Grace expires', fmtDate(s.graceUntil)),
-  ));
-  if (offline && s.organizationId) root.append(el('p', { class: 'muted' }, `Organization: ${s.organizationId}`));
-  if (offline && !s.licensed) root.append(el('p', { class: 'muted' }, 'Restricted mode — the local licence is missing, expired or invalid. Install a valid licence file and press "Re-validate now".'));
-  if (s.reason) root.append(el('p', { class: 'muted' }, `Note: ${s.reason}`));
-
-  // ---- License overview (active plan limits + support) --------------------
-  if (plan) {
-    root.append(el('h3', {}, 'Plan overview'));
-    root.append(el('div', { class: 'cards' },
-      stat('Plan', `BlueEyes ${plan.plan_name}${plan.is_trial ? ' (trial)' : ''}`),
-      stat('Support level', plan.support_level),
-      stat('Max. agents', fmtLimit(plan.limits.max_agents)),
-      stat('Max. active test paths', fmtLimit(plan.limits.max_test_paths)),
-      stat('History retention', plan.limits.history_days === null ? 'Unlimited' : `${plan.limits.history_days} days`),
-    ));
-  }
-
-  // ---- Usage overview -----------------------------------------------------
-  if (usage) {
-    root.append(el('h3', {}, 'Usage'));
-    root.append(el('div', { class: 'cards' },
-      limitStat('Agents', usage.agents.used, usage.agents.max),
-      limitStat('Active test paths', usage.test_paths.used, usage.test_paths.max),
-      stat('History limit', usage.history_days === null ? 'Unlimited' : `${usage.history_days} days`),
-      stat('Last validation', fmtDate(usage.lastValidation)),
-    ));
-  }
-
-  // ---- Feature matrix (active plan + upgrade hints) -----------------------
-  if (matrix) {
-    root.append(el('h3', {}, 'Feature matrix'));
-    const active = matrix.activePlan;
-    const head = el('tr', {}, el('th', {}, 'Feature'),
-      ...matrix.plans.map((p) => el('th', { class: p.plan_key === active ? 'active' : '' }, p.plan_name)));
-    const body = matrix.features.map((f) => {
-      const roadmap = f.status === 'roadmap';
-      const cells = matrix.plans.map((p) => {
-        const on = p.features[f.key];
-        // A roadmap feature is priced into the plan but not built yet: show
-        // "Roadmap" where the tier would include it, never a tick.
-        const mark = on ? (roadmap ? el('span', { class: 'badge roadmap' }, 'Roadmap') : '✓') : '–';
-        return el('td', { class: p.plan_key === active ? 'active' : '' }, mark);
-      });
-      const activePlan = matrix.plans.find((p) => p.plan_key === active);
-      const entitled = activePlan && activePlan.features[f.key];
-      const label = roadmap
-        ? el('td', {}, f.label, ' ', el('span', { class: 'badge roadmap' }, 'Roadmap'))
-        : el('td', {}, f.label);
-      return el('tr', { class: (entitled && !roadmap) ? '' : 'muted' }, label, ...cells);
-    });
-    root.append(el('div', { class: 'tablewrap' },
-      el('table', { class: 'matrix' }, el('thead', {}, head), el('tbody', {}, ...body))));
-    root.append(el('p', { class: 'muted' }, 'Features not included in your plan are greyed out — contact your administrator or upgrade the licence to enable them. Rows marked ', el('span', { class: 'badge roadmap' }, 'Roadmap'), ' are planned and not available yet (tracked in ROADMAP.md).'));
-  }
-
-  root.append(el('p', { class: 'muted' }, 'License renewal is done with the provider. Once renewed, press "Re-validate now" to fetch the updated status immediately (otherwise it is checked automatically every 6 hours).'));
-  return root;
+views.license = async (opts) => {
+  const v = getLicensePage();
+  if (!v) return el('div', { class: 'empty error' }, t('lic.err.title'));
+  licenseEmbedded = !!(opts && opts.embedded);
+  // The status is re-read per entry, so the page is rebuilt with it.
+  licensePage = null;
+  return getLicensePage().view();
 };
 
 async function refreshLicense() {

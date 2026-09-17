@@ -1546,3 +1546,44 @@ Two things the migration changed rather than moved:
 they are a LoadingState and an ErrorState with a Retry. A failed *run* keeps the
 catalogue and says what happened in a toast — it used to leave the button
 reading "Running…" when the error came back.
+
+
+**License** is the last of the three two-address screens and the last screen in
+Administration. It is a DashboardPage, not a list: the question is "what are we
+entitled to, and how close to the edge are we".
+
+The `.section-head` was an `<h2>` and a button; the licence's own state now sits
+in **template D's status slot** beside the title. The state is the whole subject
+of the page — it does not belong in the first cell of a grid below it.
+
+Three `.cards` rows of `stat()` divs, each under a loose `<h3>`, held sixteen
+figures with no order of importance: the licence status next to the server id
+next to the support level. The four an administrator acts on — **agents, test
+paths, history, expiry** — are a StatStrip, with the usage bars under the two
+that are a fraction of a limit. Everything else is one Panel of KeyValues, which
+is what a reference block is.
+
+`.alert-banner sev-WARN` was a page-local banner. The trust-anchor warning is an
+InlineNote and says the same thing: a misconfigured anchor makes every proof
+fail verification the way a bad proof would, so "Re-validate now" keeps
+answering 200 while sitting on the cache — which reads as "revalidation is
+broken" rather than "we are verifying against the wrong key".
+
+The feature matrix was `table.matrix` with `.active` shading the current plan's
+column. It is a DataTable: unentitled rows are `dimmed` (which the component
+already has) and **the current plan is named in the panel note** — a shaded
+column in a table that already dims rows is two colours saying two things, and
+"Professional (current)" is a header that clips at any plan name longer than a
+word. A tick is not a state, so `✓` is text; "Roadmap" is one, so it is a Badge.
+
+**Fixed for every screen, found here:** `keyValues` was styled only under
+`.ui-drawer`, so the same contract component rendered as a browser-default `<dl>`
+— key on one line, value indented below — anywhere else. A component that looks
+like itself in one container and not in another is not a component. The rules
+are scoped to `.ui` now, and a KeyValues sitting directly in a Panel brings its
+own padding, since a Panel supplies none (a DataTable runs flush to its edges).
+
+Also added: `ui.fmt.date` — a calendar date with no clock, for a licence expiry
+or a release date, where a minute reads as precision the value does not have.
+The contract had `abs`, `short`, `clock`, `rel` and `duration`; this is the
+sixth and the family is now complete.

@@ -49,6 +49,7 @@ const PUBLIC_ROUTES = new Set([
   'GET /enroll/agent-binary/:arch',
   'GET /enroll/agent-binary-status',
   'GET /enroll/agent/:platform',
+  'GET /enroll/repin.sh',
   'GET /enroll/:code/install.sh',
   'GET /enroll/:code/install.ps1',
   'GET /enroll/update.ps1',

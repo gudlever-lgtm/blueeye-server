@@ -11,6 +11,7 @@ const { createLogRing } = require('../src/logger');
 const { issueToken } = require('../src/auth/jwt');
 const { createSettingsService } = require('../src/services/settings');
 const { createSecretBox } = require('../src/lib/secretBox');
+const { createCommandSigner } = require('../src/services/commandSigner');
 const { makeServiceTests } = require('./serviceTestsFakes');
 const { createConnectorRegistry } = require('../src/integrations/connectors');
 const { createCmdbConnectorRegistry } = require('../src/cmdb/connectors');
@@ -2509,6 +2510,7 @@ function makeSeverityRulesRepo(seed = []) {
 }
 
 function makeApp(overrides = {}) {
+  const releaseKeyService = overrides.releaseKeyService || makeReleaseKeyService();
   // Resolve the deps the plan/usage services build on, so the (real) services
   // can wrap them. Default plan resolution lands on the internal 'licensed'
   // plan → unlimited limits, so existing tests are unaffected; pass `plan:` to
@@ -2640,8 +2642,16 @@ function makeApp(overrides = {}) {
     logRing: overrides.logRing || makeLogRing(),
     speedtestResultsRepo: overrides.speedtestResultsRepo || makeSpeedtestResultsRepo(),
     releaseStore: overrides.releaseStore || makeReleaseStore(),
-    releasePublicKey: overrides.releasePublicKey || '',
-    releaseKeyService: overrides.releaseKeyService || makeReleaseKeyService(),
+    // The real server passes a live resolver over the key service (the key can be
+    // generated or deleted without a restart), so the fake does too — otherwise
+    // the routes that serve the release key answer 404 in tests while the key
+    // service says a key exists.
+    releasePublicKey: overrides.releasePublicKey || (() => releaseKeyService.getPublicKey()),
+    releaseKeyService,
+    // The real server signs privileged commands with the release key whenever it
+    // can, so the fake app does too — a test that asserts on what reaches the
+    // agent should see the command the agent would actually receive.
+    commandSigner: overrides.commandSigner || createCommandSigner({ releaseKeyService }),
     // Only wired when a test supplies one: with no update command configured the
     // real server passes an inert service, which is what null models here.
     serverUpdateService: overrides.serverUpdateService || null,
@@ -2691,14 +2701,21 @@ function makeApp(overrides = {}) {
 // exercise the "no key" gate, or override individual methods.
 function makeReleaseKeyService(overrides = {}) {
   const configured = overrides.configured !== undefined ? overrides.configured : true;
-  const okStatus = { configured: true, source: 'managed', createdAt: '2026-01-01T00:00:00.000Z', createdBy: 1, fingerprint: 'f'.repeat(64), canSign: true };
-  const noStatus = { configured: false, source: null, createdAt: null, createdBy: null, fingerprint: null, canSign: false };
+  // Verify-only models the real deployment shape that has bitten hardest: a
+  // release PUBLIC key is configured (so agents pin it and enrollment works) but
+  // the server holds no private half, so every update goes out unsigned.
+  const verifyOnly = overrides.verifyOnly === true;
+  const okStatus = { configured: true, source: 'managed', createdAt: '2026-01-01T00:00:00.000Z', createdBy: 1, fingerprint: 'f'.repeat(64), canSign: true, signBlocked: '', keyError: null };
+  const verifyStatus = { configured: true, source: 'env', createdAt: null, createdBy: null, fingerprint: 'e'.repeat(64), canSign: false, signBlocked: 'verify-only', keyError: null };
+  const noStatus = { configured: false, source: null, createdAt: null, createdBy: null, fingerprint: null, canSign: false, signBlocked: 'no-key', keyError: null };
+  const statusOf = () => (verifyOnly ? verifyStatus : (configured ? okStatus : noStatus));
   return {
     load: overrides.load || (async () => {}),
-    getPublicKey: overrides.getPublicKey || (() => (configured ? '-----BEGIN PUBLIC KEY-----\nFAKE\n-----END PUBLIC KEY-----' : '')),
-    isConfigured: overrides.isConfigured || (() => configured),
-    canSign: overrides.canSign || (() => configured),
-    status: overrides.status || (() => (configured ? okStatus : noStatus)),
+    getPublicKey: overrides.getPublicKey || (() => (configured || verifyOnly ? '-----BEGIN PUBLIC KEY-----\nFAKE\n-----END PUBLIC KEY-----' : '')),
+    isConfigured: overrides.isConfigured || (() => configured || verifyOnly),
+    canSign: overrides.canSign || (() => configured && !verifyOnly),
+    signBlockedReason: overrides.signBlockedReason || (() => statusOf().signBlocked),
+    status: overrides.status || statusOf,
     generate: overrides.generate || (async () => okStatus),
     remove: overrides.remove || (async () => noStatus),
     sign: overrides.sign || (() => 'ZmFrZS1zaWc='),

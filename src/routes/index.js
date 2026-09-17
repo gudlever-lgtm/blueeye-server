@@ -619,7 +619,7 @@ function createApiRouter({
   //   - POST /results          — agent token
   //   - POST /enroll           — unauthenticated
   // Requests fall through routers that have no matching route.
-  router.use('/agents', createAgentsRouter({ agentsRepo, locationsRepo, resultsRepo, agentCommander, agentSourceStore, releaseStore, releasePublicKey, publishRelease: () => publishSignedReleaseFromSource({ sourceStore: agentSourceStore, releaseStore, releaseKeyService }), auditRepo, auditLogger, integrationTrigger: integrationsDispatcher, commandSigner, logger, reconnect: agentReconnect }));
+  router.use('/agents', createAgentsRouter({ agentsRepo, locationsRepo, resultsRepo, agentCommander, agentSourceStore, releaseStore, releasePublicKey, releaseKeyService, publishRelease: () => publishSignedReleaseFromSource({ sourceStore: agentSourceStore, releaseStore, releaseKeyService }), auditRepo, auditEventsRepo, auditLogger, integrationTrigger: integrationsDispatcher, commandSigner, logger, reconnect: agentReconnect }));
   router.use('/audit', createAuditRouter({ auditRepo }));
   // Unified, server-wide audit trail (Reporting → Audit) — admin only.
   if (auditEventsRepo) router.use('/api/audit', createAuditEventsRouter({ auditEventsRepo, auditLogRepo, featureGate, usersRepo }));

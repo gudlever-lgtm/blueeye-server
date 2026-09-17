@@ -8,7 +8,7 @@ const assert = require('node:assert/strict');
 const crypto = require('crypto');
 const request = require('supertest');
 
-const { makeApp, makeReleaseStore, authHeader } = require('../test-support/fakes');
+const { makeApp, makeReleaseStore, makeReleaseKeyService, authHeader } = require('../test-support/fakes');
 const { canonicalize } = require('../src/lib/canonicalize');
 
 const admin = () => authHeader('admin');
@@ -85,7 +85,9 @@ test('POST /agents/releases returns 400 on an empty body', async () => {
 });
 
 test('POST /agents/releases returns 503 when no release public key is configured', async () => {
-  const res = await upload(makeApp(), signedRelease()); // default releasePublicKey is ''
+  // No key anywhere — the app resolves the release key from the key service, as
+  // the real server does, so "not configured" is one fact, not two.
+  const res = await upload(makeApp({ releaseKeyService: makeReleaseKeyService({ configured: false }) }), signedRelease());
   assert.equal(res.status, 503);
 });
 

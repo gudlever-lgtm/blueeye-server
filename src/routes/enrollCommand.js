@@ -220,6 +220,46 @@ function createEnrollCommandRouter({ enrollmentCodesRepo, artifactStore, sourceS
     })
   );
 
+  // The RE-PIN command for a systemd agent that refuses updates because the key
+  // it pinned at install time is no longer the key this server signs with. The
+  // agent says so itself ("refusing unsigned update: a release public key is
+  // pinned", or "release signature did not verify"), and until now the dashboard
+  // had no answer to give: re-running the installer needs an enrollment code and
+  // would onboard a second agent for the same host. This returns the one-liner
+  // that re-anchors the agent in place, plus the fingerprint of the key it will
+  // pin, so the operator can compare it with Settings -> Agent key first.
+  //
+  // GET /api/enroll/repin-command
+  //   -> { oneLiner, scriptUrl, fingerprint, canSign }
+  // 409 when this server publishes no release key — re-pinning a host to nothing
+  // would only trade one broken state for another, so the fix is to generate the
+  // key first.
+  router.get(
+    '/repin-command',
+    requireAuth,
+    requireRole(ROLES.OPERATOR, ROLES.ADMIN),
+    asyncHandler(async (req, res) => {
+      const status = releaseKeyService && typeof releaseKeyService.status === 'function'
+        ? releaseKeyService.status() : { configured: false };
+      if (!status.configured) {
+        return res.status(409).json({
+          error: 'This server publishes no agent release key, so there is nothing to pin. Generate one under Settings → Agent key first.',
+          code: 'NO_RELEASE_KEY',
+        });
+      }
+      const serverUrl = resolveServerUrl(req, enrollConfig);
+      const scriptUrl = `${serverUrl}/enroll/repin.sh`;
+      res.json({
+        oneLiner: `curl -fsSL ${scriptUrl} | sudo sh`,
+        scriptUrl,
+        fingerprint: status.fingerprint || null,
+        source: status.source || null,
+        canSign: !!status.canSign,
+        certFingerprint: certFingerprint || null,
+      });
+    })
+  );
+
   return router;
 }
 

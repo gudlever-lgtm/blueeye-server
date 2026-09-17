@@ -65,6 +65,7 @@ const RESOURCE = {
 // Sub-action segments on /agents/:id/<sub> that name what was done.
 const AGENT_SUBACTIONS = new Set([
   'run-test', 'probe', 'run-speedtest', 'update', 'upgrade', 'delete', 'diagnose', 'ping', 'install-tool', 'reconnect',
+  'rekey',
   'cmdb-link',
 ]);
 
@@ -101,6 +102,13 @@ function describeRequest(method, rawPath) {
   // /agents/:id/<sub> — the sub segment names the action (run-test, upgrade…).
   if (head === 'agents' && parts.length >= 3 && AGENT_SUBACTIONS.has(parts[2])) {
     return { action: `agent.${parts[2]}`, targetType: 'agent', targetId: parts[1] || null, targetLabel: null };
+  }
+
+  // /license/refresh re-validates the licence against the licence server. It
+  // creates nothing, so 'license.create' (what the POST verb would make of it)
+  // named the wrong event in every user log.
+  if (head === 'license' && parts[1] === 'refresh') {
+    return { action: 'license.revalidate', targetType: 'license', targetId: null, targetLabel: null };
   }
 
   // /api/settings/<area> and /api/nis2/<kind>/... — keep the sub-area as target.

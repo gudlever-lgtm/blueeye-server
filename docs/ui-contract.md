@@ -1001,3 +1001,165 @@ advisory about the data is for; the head keeps the count.
 **Not migrated, passed in whole:** `renderEnrollResult` — the generated command,
 the live "waiting for agent" socket state, the Windows two-step variant and the
 manual download + checksum block.
+
+
+**Discovery** is a DashboardPage of four panels: the scan scope, a manual
+sweep, the candidates, and the sweep log.
+
+The scope form was `.discovery-form` + `.discovery-form-row` + a local
+`field()` — a page-local copy of FormSection, three classes deep, with its own
+grid. It is a FormSection; the whole `.discovery-*` block is gone from
+`styles.css`.
+
+A failed save used to write into a `<span class="error">` beside the button.
+That part was right, and it stayed: the server validates per field and returns
+`details` keyed by field, so the message belongs next to the button that
+failed, not in a toast that is gone before the reader looks back at the form.
+
+**The counts were the filter all along.** "discovered 4 · promoted 1 · ignored
+9" was a grey sentence, next to a `<select>` that did the filtering. They are a
+StatStrip now — the same move Events and Situations made — and clicking the
+pressed one clears it.
+
+Promote and Dismiss were two buttons in every candidate row. Promote is the
+row's action on hover; Dismiss is the ⋯ menu, because dismissing something you
+have not looked at should take one more beat than promoting it.
+
+Every status was `.badge <word>` — `online` for a promoted candidate, `muted`
+for an ignored one, styled by the server's vocabulary rather than by what the
+word means. They are Badges on tones.
+
+**Each panel fails on its own.** There were three separate greys for "Loading…"
+and three for the error. A 500 on the candidates now leaves the scope form and
+the sweep log standing, and names `GET /api/discovery/candidates` with a Retry.
+A 403 on the config is the exception: the nav hides this screen, so a reader who
+gets there typed the address — that is a locked EmptyState, not a server
+failure, and nothing else is drawn under it.
+
+Only **connected** agents are offered as a sweep vantage. An offline one was
+offered before and answered 409.
+
+
+**System Logs** had a `.history-controls` row: three loose labels, a Refresh
+and a status span, all in one flex line. It is a Toolbar, with Refresh as a
+toolbar action where every other screen puts it, and a Clear that is present
+and disabled rather than appearing and disappearing under the cursor.
+
+The level badge was `.badge danger|warn|neutral|active` — a fourth vocabulary
+for severity, in an app that already had one. It is a Badge on the same
+crit/warn/info/neutral tones the rest of the app reads.
+
+**"server logs unavailable: …" used to be appended to the row count**, in the
+same grey span, so the sentence read "42 entries shown · server logs
+unavailable: HTTP 500". A ring that cannot be read is not a footnote to a
+count: it is an inline note above the table, and it says what the rows below it
+then are — this browser's own log, and nothing else. It is still never a toast,
+because a toast here re-enters `recordClientLog`.
+
+An empty table said nothing at all; it now says whether the ring is quiet or
+the filter matches nothing, and only the second offers a Clear.
+
+**Kept exactly as it was:** the faceted counts. Each dropdown counts over the
+set the OTHER filter narrowed, so a selected level still shows how many entries
+each source holds — which is what makes the selection reversible without
+guessing. The level filter is a floor ("Warn+"), not an exact match.
+
+
+**User Logs** is the audit log, and the screen where the DataTable's one rule —
+**a row is one line** — did the most work. Every row had three stacked lines in
+three of its six cells: the action label over the raw key over `POST
+/auth/login · HTTP 401 · 10.0.0.44`, the name over the e-mail, a flag's reasons
+under its badge. Six columns of that overflowed the panel at 1280 and pushed
+the flag text off the right edge.
+
+The row is five one-line columns now, and everything under them opens in a
+**Drawer**: why it was flagged, the account behind it, what was done, and the
+request that did it. That is where the contract puts detail, and it is the only
+place with room for a whole request line.
+
+"flagged: 3" was a warn badge inside a grey summary line. A count that is the
+reason to open the page is a stat: the StatStrip carries actions / people /
+flagged, and clicking flagged filters — the same move Events, Situations and
+Discovery made. The "Flagged only" checkbox went with it.
+
+**Kept deliberately:** an unflagged row carries no badge at all. A green "OK" on
+every line is noise, and a flag only means something if it is rare enough to
+notice. The flag rules and their wording stay server-side in
+`src/audit/userActivity.js`, so this screen and the CSV export can never
+disagree about why something was flagged — and the export still asks with the
+filters the reader set.
+
+A failed load used to put a red box **above an empty table**, so the screen said
+"it broke" and "nothing happened here" at the same time, with the summary still
+showing counts the load never returned. It is one ErrorState naming
+`GET /api/audit/users`, with a Retry, and nothing else.
+
+With both log screens migrated, the `.logs-table` / `.log-row-error` block is
+gone from `styles.css`.
+
+
+**Settings** is the sixth shell migration, and the one that reverses an earlier
+decision on purpose.
+
+The section picker was `.settings-nav`: five wrapped clusters of `.small ghost`
+buttons with an `.active` class — **twenty-two buttons pretending to be tabs**,
+which the "Forbidden after migration" list names outright. An earlier test
+defended them, on the reasoning that they were "destinations, not tabs". The
+addresses say otherwise: they are `/settings/<section>`, one screen with
+sections, and selecting one swaps the panel below it without leaving the page.
+That is a tablist.
+
+They are **two levels of SubTabs**: the five groups, then the sections of the
+group you are in. Five fits a strip and so does eight; twenty-two never did,
+which is why they wrapped. The group is derived from the section, so no route
+changed — `/settings/retention` still opens Retention, with **Data** selected
+above it. Picking a group opens that group's first section, because a group
+with nothing selected under it is a strip with no page behind it.
+
+**Deviation, recorded:** the contract asks for one SubTabs row per screen.
+Settings has two, for the same reason Reporting does — the second level belongs
+to whatever the first level selected.
+
+**The shell draws no panel around the section.** Every section body already
+builds its own `.settings-card`, so a contract panel around it was a box inside
+a box with the section's name written on both. The panel is kept for the two
+states a section cannot draw itself: the skeleton while it loads, and the
+ErrorState when it throws. The licence answer, which needed a home once the
+panel head was gone, is a Badge in a Toolbar row that moves with the section —
+it used to be `.badge active|bad` on a bare `div` above the strips, describing
+whichever section happened to be open.
+
+A section that threw used to replace the entire page body with a red box, so a
+failing section looked like a broken Settings. It is an ErrorState in the
+section's slot, with the section still selected, so Retry has something to
+retry.
+
+**Not migrated, passed in whole:** all twenty-two section bodies.
+
+
+**Login and the forced password change** are the last two screens of phase 3,
+and the only two that are static markup in `index.html` rather than a view
+module. `render()` never touches them, so — like the sidebar — they carry
+`data-i18n` attributes that `applyStaticTranslations()` walks.
+
+They were `.login` + `.card`: a 340px box with `<label>Email <input></label>`
+inside it, one unstyled `<button>`, and `<p class="error">`. They are on the
+contract's tokens and controls now, under a `.ui.ui-auth` scope with an
+`.auth-card` — the two labelled fields are `.f`, the submit is one
+`.btn-primary`, and the error is the same `.field-error` a form field uses,
+with `role="alert"` and `:empty { display: none }` so it holds no line until
+something goes wrong.
+
+**The forced-change screen read both languages at once.** Every line of it was
+hardcoded `Ny adgangskode / New password` — Danish, a slash, English — because
+it predates the translation layer and nobody wanted to pick. It goes through
+`t()` now, and a test walks both screens asserting that no visible string is
+hardcoded and that neither carries ` / `.
+
+The SSO sign-in options were `.sso-button`, a hand-rolled link that looked
+almost like a button. They are `a.btn.btn-secondary`, and `.ui a.btn` drops the
+underline the global anchor rule would otherwise put back.
+
+**Not a page template.** These two are on the contract's components but on no
+page template: there is no shell around them, and a sidebar the reader cannot
+use would be a lie.

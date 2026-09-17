@@ -24,14 +24,23 @@
     <link rel="stylesheet" href="/css/components.css" />
   </head>
   <body>
-    <!-- Login -->
-    <main id="login" class="login hidden">
-      <form id="login-form" class="card">
-        <h1>BlueEyes <span class="muted">Network Resilience System</span></h1>
-        <label>Email <input type="email" id="email" value="admin@blueeye.local" required /></label>
-        <label>Password <input type="password" id="password" required /></label>
-        <button type="submit">Log in</button>
-        <p id="login-error" class="error"></p>
+    <!-- Login. Static markup render() never touches, so — like the sidebar — it
+         carries data-i18n attributes that applyStaticTranslations() walks. It
+         used to be hardcoded English, and the forced-change screen below it was
+         hardcoded Danish-slash-English on every line. -->
+    <main id="login" class="ui ui-auth hidden">
+      <form id="login-form" class="auth-card">
+        <h1 class="auth-brand">BlueEyes <span class="auth-sub" data-i18n="auth.product">Network Resilience System</span></h1>
+        <div class="f">
+          <label for="email" data-i18n="auth.email">Email</label>
+          <input type="email" id="email" autocomplete="username" value="admin@blueeye.local" required />
+        </div>
+        <div class="f">
+          <label for="password" data-i18n="auth.password">Password</label>
+          <input type="password" id="password" autocomplete="current-password" required />
+        </div>
+        <button type="submit" class="btn btn-primary auth-submit" data-i18n="auth.login">Log in</button>
+        <p id="login-error" class="field-error" role="alert"></p>
         <!-- Federated sign-in (OIDC/SAML). Populated by app.js from GET /auth/sso
              only when a method is licensed + configured; hidden otherwise. -->
         <div id="sso-options" class="sso-options hidden"></div>
@@ -40,19 +49,25 @@
 
     <!-- Forced password change: shown when the signed-in user still holds a
          one-time password (must_change_password). Blocks the rest of the app. -->
-    <main id="force-change" class="login hidden">
-      <form id="force-change-form" class="card">
-        <h1>BlueEyes <span class="muted">Network Resilience System</span></h1>
-        <p class="muted">Vælg en ny adgangskode for at fortsætte. / Choose a new password to continue.</p>
-        <label>Nuværende (engangs) adgangskode / Current (one-time) password
-          <input type="password" id="fc-current" autocomplete="current-password" required /></label>
-        <label>Ny adgangskode / New password
-          <input type="password" id="fc-new" autocomplete="new-password" required /></label>
-        <label>Gentag ny adgangskode / Repeat new password
-          <input type="password" id="fc-confirm" autocomplete="new-password" required /></label>
-        <button type="submit">Skift adgangskode / Change password</button>
-        <p id="fc-error" class="error"></p>
-        <button type="button" id="fc-logout" class="linklike">Log ud / Log out</button>
+    <main id="force-change" class="ui ui-auth hidden">
+      <form id="force-change-form" class="auth-card">
+        <h1 class="auth-brand">BlueEyes <span class="auth-sub" data-i18n="auth.product">Network Resilience System</span></h1>
+        <p class="meta" data-i18n="auth.fc.lead">Choose a new password to continue.</p>
+        <div class="f">
+          <label for="fc-current" data-i18n="auth.fc.current">Current (one-time) password</label>
+          <input type="password" id="fc-current" autocomplete="current-password" required />
+        </div>
+        <div class="f">
+          <label for="fc-new" data-i18n="auth.fc.new">New password</label>
+          <input type="password" id="fc-new" autocomplete="new-password" required />
+        </div>
+        <div class="f">
+          <label for="fc-confirm" data-i18n="auth.fc.confirm">Repeat new password</label>
+          <input type="password" id="fc-confirm" autocomplete="new-password" required />
+        </div>
+        <button type="submit" class="btn btn-primary auth-submit" data-i18n="auth.fc.submit">Change password</button>
+        <p id="fc-error" class="field-error" role="alert"></p>
+        <button type="button" id="fc-logout" class="btn btn-ghost btn-xs" data-i18n="auth.logout">Log out</button>
       </form>
     </main>
 
@@ -253,6 +268,10 @@
     <script src="/views/guides.js"></script>
     <script src="/views/locations.js"></script>
     <script src="/views/enrollment.js"></script>
+    <script src="/views/discovery.js"></script>
+    <script src="/views/systemLogs.js"></script>
+    <script src="/views/userLogs.js"></script>
+    <script src="/views/settings.js"></script>
     <script src="/uiPreview.js"></script>
     <script src="/kitchenSink.js"></script>
     <script src="/app.js"></script>

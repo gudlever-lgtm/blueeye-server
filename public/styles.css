@@ -12,18 +12,11 @@
 
    What is left here is the page-specific chrome, and it shrinks with every
    screen phase 3 migrates onto the components in css/components.css. */
-/* Login */
-.login { min-height: 100vh; display: grid; place-items: center; }
-/* Federated sign-in block on the login card (OIDC/SAML). */
+/* Federated sign-in block on the login card (OIDC/SAML). The login screen
+   itself is on the contract now — see .ui-auth in css/components.css. */
 .sso-options { display: flex; flex-direction: column; gap: 8px; }
 .sso-divider { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12px; }
 .sso-divider::before, .sso-divider::after { content: ""; flex: 1; height: 1px; background: var(--border); }
-.sso-button {
-  display: block; text-align: center; text-decoration: none;
-  padding: 9px 12px; border-radius: var(--radius-sm);
-  border: 1px solid var(--border); background: var(--panel); color: var(--text);
-}
-.sso-button:hover { border-color: var(--accent); color: var(--accent); }
 .card {
   background: var(--panel);
   border: 1px solid var(--border);
@@ -485,15 +478,6 @@ main#view .card { width: auto; padding: 18px 20px; box-shadow: var(--shadow); }
 
 /* Delta / Changes view: change-type filter + shared global filter bar. */
 
-/* Admin → Discovery: scope form + candidate queue. */
-.discovery-view .card { margin-bottom: 16px; }
-.discovery-cfg-head, .discovery-cand-head { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin-bottom: 10px; }
-.discovery-form { display: flex; flex-direction: column; gap: 12px; }
-.discovery-form .field { display: flex; flex-direction: column; gap: 4px; }
-.discovery-form .field > span:first-child { font-size: 12px; color: var(--muted); }
-.discovery-form textarea, .discovery-form input { width: 100%; box-sizing: border-box; }
-.discovery-form-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; }
-
 /* NICs view: firmware-drift card + inventory list. */
 .nics-summary { margin: 0 0 14px; }
 .nic-card { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px 18px; margin: 0 0 16px; }
@@ -827,7 +811,6 @@ thead tr.filter-row th { padding: 4px 8px 8px; font-weight: 400; vertical-align:
 /* A badge that opens something (the agents' status badge -> connection diagnosis). */
 .badge.clickable { cursor: pointer; text-decoration: underline dotted; text-underline-offset: 2px; }
 /* Per-section licence pill row at the top of each Settings tab. */
-.settings-license-row { margin: 2px 0 14px; }
 /* Neutral/consumed (e.g. an enrollment code that's been used up). */
 .badge.used, .badge.neutral { background: var(--muted-weak); color: var(--muted); }
 /* Planned-but-not-built feature (license feature matrix). Distinct from warn. */
@@ -1314,19 +1297,6 @@ button.active-btn { outline: 2px solid var(--accent); }
 #inv-history-area { display: flex; flex-direction: column; gap: 12px; }
 #inv-history-area h3 { margin: 8px 0 4px; font-size: 15px; }
 
-
-/* ---- Logs views (System Logs + User Logs) -------------------------------- */
-.logs-table td { vertical-align: top; }
-.logs-table .nowrap { white-space: nowrap; }
-.logs-table code { font-size: 12px; }
-.log-row-error > td:first-child { border-left: 3px solid var(--bad); }
-/* Both log tables lean on .small for their secondary lines; it is not a global
-   utility, so it is defined here for them. */
-.logs-table .small { font-size: 12px; }
-/* User Logs: the user id column reads as an identifier, not prose. */
-.logs-table td.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
-/* A flag's reasons sit under its badge and wrap; the rest of the row does not. */
-.logs-table td .badge + .muted { margin-top: 3px; white-space: normal; max-width: 34ch; }
 /* Transaction tests: list/matrix/heatmap/trend + editor. */
 .data-table { width: 100%; border-collapse: collapse; }
 .data-table th, .data-table td { text-align: left; padding: 6px 10px; border-bottom: 1px solid var(--border); font-size: 13px; }

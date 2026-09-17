@@ -93,8 +93,13 @@ async function openSeverityRules(doc) {
   const settings = doc.querySelector('.tabs button[data-view="settings"]');
   assert.ok(settings, 'the Settings nav button is missing');
   await click(settings, 120);
-  const tab = byText(doc, '.settings-nav button', 'Severity rules');
-  assert.ok(tab, `no "Severity rules" tab — found: ${textOf(doc, '.settings-nav button').join(' | ')}`);
+  // Settings picks its section with two SubTabs strips now (group, then
+  // section), so Severity rules is under "Detection & alerts".
+  const group = byText(doc, '#view .subtab', 'Detection & alerts');
+  assert.ok(group, `no "Detection & alerts" group — found: ${textOf(doc, '#view .subtab').join(' | ')}`);
+  await click(group, 120);
+  const tab = byText(doc, '#view .subtab', 'Severity rules');
+  assert.ok(tab, `no "Severity rules" tab — found: ${textOf(doc, '#view .subtab').join(' | ')}`);
   await click(tab, 120);
   return tab;
 }

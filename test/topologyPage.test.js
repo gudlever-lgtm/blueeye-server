@@ -257,3 +257,35 @@ test('an operator gets What if?, and it puts the focus in the URL', async (t) =>
   assert.ok(doc.querySelector('#view .blast-slot'), 'the what-if prompt did not appear');
   void window;
 });
+
+// The Layers dropdown did nothing. `params` is a snapshot taken once at render,
+// and parseParams always fills `layer` (defaulting to 'both'), so the
+// `params.layer || state.layer` read could never see a change: picking L2 set
+// state, synced the URL, redrew — and read 'both' back out of the stale
+// snapshot. The deep link seeds the layer once; after that the operator owns it.
+test('the Layers dropdown actually switches layer', async (t) => {
+  const { doc, window } = boot({ t, routes: SESSION(), url: 'http://server.test/topology?mode=layers' });
+  await settle();
+
+  const layerSel = [...doc.querySelectorAll('#view select')]
+    .find((s) => [...s.options].some((o) => o.value === 'l2'));
+  assert.ok(layerSel, 'the layer picker is missing');
+  assert.equal(layerSel.value, 'both');
+
+  layerSel.value = 'l2';
+  layerSel.dispatchEvent(new window.Event('change', { bubbles: true }));
+  await settle();
+
+  const after = [...doc.querySelectorAll('#view select')]
+    .find((s) => [...s.options].some((o) => o.value === 'l2'));
+  assert.equal(after.value, 'l2', 'the picker snapped back to the URL value');
+  assert.equal(new window.URLSearchParams(window.location.search).get('layer'), 'l2');
+
+  after.value = 'dep';
+  after.dispatchEvent(new window.Event('change', { bubbles: true }));
+  await settle();
+  const third = [...doc.querySelectorAll('#view select')]
+    .find((s) => [...s.options].some((o) => o.value === 'l2'));
+  assert.equal(third.value, 'dep', 'a second switch must work too');
+  assert.equal(new window.URLSearchParams(window.location.search).get('layer'), 'dep');
+});

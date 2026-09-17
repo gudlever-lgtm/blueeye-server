@@ -1,5 +1,59 @@
 # Changelog
 
+## 0.161.0 — About: what this build is, and what it grew into
+
+The account menu (top right) gains **About**. It answers two questions an
+operator actually asks, on one page:
+
+- **What am I running?** The version this host serves and the date it was
+  released, read from `GET /system/version` — the same pair the sidebar foot is
+  stamped with, so the page can never claim a build the server is not on.
+- **When did this arrive?** A dated feature history, newest first, grouped by
+  month: 79 entries from *First commit* in May 2026 to this release, each with
+  the version it shipped in and which part of the product it belongs to.
+
+Filter chips cut the list to one area — Monitoring, Fleet, Diagnostics, Service
+Assurance, Insights, Platform — with the count on each chip, and the month
+headings follow the language (September 2026 / september 2026) without a
+catalogue entry of their own.
+
+### The history is data
+
+`public/about.js` holds the list. One entry is a version, a date, an area and
+`{ en, da }` for the title and the one-liner:
+
+```js
+{ v: '0.120.0', d: '2026-09-10', area: 'assurance',
+  en: { t: 'BlueEyes Service Assurance', s: 'Synthetic monitoring of your own web services…' },
+  da: { t: 'BlueEyes Service Assurance', s: 'Syntetisk overvågning af jeres egne webtjenester…' } },
+```
+
+The text is data rather than catalogue keys on purpose: seventy-nine history
+entries would drown `public/i18n.js`, and nothing outside this page ever names
+them. The page **chrome** — headings, filters, the build line, the help drawer —
+does go through `t()` like the rest of the UI, in both catalogues.
+
+The versions and the dates are the repository's own: each one is the version
+`package.json` carried when that change landed on `main`. `test/about.test.js`
+pins the shape — every entry has a version, a real date, a known area and both
+languages; the list runs newest first; and **nothing may claim a version newer
+than `package.json`**, because the page is read next to the build stamp.
+
+### The version line is the garnish, not the page
+
+`GET /system/version` is viewer+ and can fail. A 403, a 404 or a 500 costs the
+build line — the version reads `—` and no date is shown — and the history
+renders regardless. Tested at all three.
+
+### The account menu can navigate now
+
+About is the first `data-view` entry that lives in the account menu rather than
+the sidebar. Both the click wiring and the active-state pass read one selector
+(`NAV_BUTTONS`: the rail, the rail's foot, the account menu), and an item that
+navigates closes the menu behind it — a dropdown left hanging over the page it
+just opened is the bug that avoids.
+
+
 ## 0.152.0 — Diagnose: from a sentence to a confirmed cause
 
 A technician writes what is wrong in their own words:

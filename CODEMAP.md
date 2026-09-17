@@ -134,6 +134,7 @@ src/
 public/                # dependency-free dashboard SPA
 ├── index.html         # shell + top tab bar (data-view buttons)
 ├── app.js             # the whole SPA: views.*, render(), el() DOM helper, api()
+├── about.js           # About: the dated feature history (data, { en, da }) + its page
 └── styles.css         # design tokens (radii/elevation/hairlines) + light default
                        # + [data-theme=…] palettes (dark, nord, …); see docs/design.md
 
@@ -298,6 +299,8 @@ A single vanilla-JS SPA. Key building blocks:
   **Run a probe** · **Connection test** — one address, the whole battery, with rounds/Stop/Repeat ·
   **Test packages**), `flows` (Unified / Bidirectional / **Map** — geographic traffic arrows via `/api/flows/map`), `screening` (**Test area** — admin-only outbound screening), `findings`, `locations`, `enrollment`,
   `docs` (**Documentation** — built-in handbook: getting-started + troubleshooting how-tos for everyone, admin-only setup guides; static, RBAC-gated content),
+  `about` (**About** — reached from the account menu, not the rail: this host's version +
+  release date from `/system/version`, then the dated feature history from `public/about.js`),
   `settings`) plus `agent` (the combined per-agent drill-down page, no tab —
   reached via `openAgent(id)`) and `location` (the per-site drill-down —
   agents + scoped health + data flows, reached via `openLocation(id)`).
@@ -330,13 +333,17 @@ A single vanilla-JS SPA. Key building blocks:
   showing the signed-in user (`#whoami` = email + role badge) + a chevron. Houses **Refresh**
   (full `location.reload()`) with the **auto-refresh** toggle (`#autorefresh`; persisted in
   `localStorage` under `AUTOREFRESH_KEY`, restored + started on load, reload on change),
-  **Dark mode** (`#theme`) and **Log out** (`#logout`). Closes on outside-click + Escape.
+  **Dark mode** (`#theme`), **About** (`#about`, `data-view="about"`) and **Log out**
+  (`#logout`). Closes on outside-click + Escape — and on an item that navigates, via
+  `closeUserMenu()`, since the menu now holds a nav entry. Everything that navigates is
+  wired through the one `NAV_BUTTONS` selector in `app.js` (the rail, its foot, this menu).
 
 ## Where do I change…?
 
 | Task | Start here |
 | --- | --- |
 | A new HTTP endpoint | `src/routes/<x>.js` + mount in `routes/index.js` + a fake in `test-support/fakes.js` |
+| "Put the new feature on the About page" | One entry at the TOP of `RELEASES` in `public/about.js`: `{ v, d, area, en:{t,s}, da:{t,s} }` — the version it ships in, the date it lands, and both languages (the history is data, not catalogue keys; only the page chrome is `about.*` in `public/i18n.js`). `test/about.test.js` enforces the order, the areas, both languages and that nothing claims a version newer than `package.json` |
 | A DB table/column | new `migrations/NNN_*.sql` + repository in `src/repositories/` |
 | "This event should be a warning for us, not a critical" | Severity rules. The judgement is pure in `src/events/severityRules.js` (most specific rule wins; a tie goes to the newest); data + the 30s cache the write path uses in `src/repositories/severityRulesRepository.js`; HTTP in `src/routes/severityRules.js`. Applied where events are STORED — `FindingStore.save()` (`src/analysis/findings.js`) and `src/serviceTests/assurance/reactor.js` (through the `severityRules` **port**, since nothing under `src/serviceTests/` may require a host module). UI: Settings → Severity rules + a "Severity rule…" button on each finding and incident. `docs/severity-rules.md` |
 | "Discover what is BEHIND the login" | `src/serviceTests/discovery/authenticate.js` (pure) decides what can sign in and whether the session still holds; the worker\'s `signIn()` drives it in the SAME browser the crawl uses. Two routes: replay a login test, or fill in the login form the anonymous pass found and stored as `detected_login` (migration 091) — the second is what makes the FIRST authenticated discovery possible. A lost session stops the crawl (`STOP.SESSION_LOST`) rather than mapping the public site and reporting it as private |

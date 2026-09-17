@@ -1434,6 +1434,30 @@
       // Sidebar navigation. index.html carries these as data-i18n attributes;
       // guides.js names the same tabs through the same keys, so a guide can
       // never tell you to click something the menu does not call that.
+      // About (account menu → About). The page chrome only: the feature history
+      // itself is { en, da } data in public/about.js, because a hundred history
+      // entries would drown this catalogue and nothing else names them.
+      'about.title': 'About BlueEyes',
+      'about.subtitle': 'This build, and what the product grew into',
+      'about.lead': 'BlueEyes runs on your own infrastructure: no cloud, no telemetry, no payload inspection. Below is what has been built, newest first, with the version it shipped in and the month it landed.',
+      'about.build.released': 'released {date}',
+      'about.build.unknownDate': 'release date unavailable',
+      'about.filter.all': 'Everything',
+      'about.area.monitoring': 'Monitoring',
+      'about.area.fleet': 'Fleet',
+      'about.area.diagnostics': 'Diagnostics',
+      'about.area.assurance': 'Service Assurance',
+      'about.area.insights': 'Insights',
+      'about.area.platform': 'Platform',
+      'about.count.one': '{count} release',
+      'about.count.other': '{count} releases',
+      'about.foot': 'Only the changes that moved what the product can do are listed; the full commit-by-commit history lives in CHANGELOG.md in the repository.',
+      'about.unavailable': 'The About page could not be loaded.',
+      'about.info.hero': 'What this server build is, and the features that got it here — newest first, grouped by month, each with the version it shipped in.',
+      'about.info.title': 'About — the build and the feature history',
+      'about.info.p1': 'The line at the top is this host: the version it runs and the date that version was released. It is read from the server, so it is the build you are actually talking to — not the newest one that exists.',
+      'about.info.p2': 'The history below is curated. One entry per change that moved what the product can do, with the version it shipped in and the month it landed. Use the filters to read one area at a time.',
+      'about.info.p3': 'Fixes, refactors and internal work are left out here; CHANGELOG.md in the repository carries the full record.',
       'nav.group.monitoring': "Monitoring",
       'nav.group.fleet': "Fleet",
       'nav.group.diagnostics': "Diagnostics",
@@ -1446,6 +1470,7 @@
       'nav.view.settings': "Settings",
       'nav.docs': "Documentation",
       'nav.docsTitle': "Open the built-in documentation",
+      'nav.about': "About",
       'nav.toggle': "Toggle navigation",
       'nav.view.changes': 'Changes',
       'nav.view.fleet': 'Fleet',
@@ -3484,6 +3509,29 @@
       // Sidebar navigation. index.html carries these as data-i18n attributes;
       // guides.js names the same tabs through the same keys, so a guide can
       // never tell you to click something the menu does not call that.
+      // Om-siden (kontomenu → Om BlueEyes). Kun sidens ramme: selve
+      // funktionshistorikken er { en, da }-data i public/about.js.
+      'about.title': 'Om BlueEyes',
+      'about.subtitle': 'Denne version, og det produktet er vokset til',
+      'about.lead': 'BlueEyes kører på jeres egen infrastruktur: ingen sky, ingen telemetri, ingen indholdsinspektion. Herunder står det, der er bygget, nyeste først, med den version det kom i, og den måned det landede.',
+      'about.build.released': 'udgivet {date}',
+      'about.build.unknownDate': 'udgivelsesdato ikke tilgængelig',
+      'about.filter.all': 'Alt',
+      'about.area.monitoring': 'Overvågning',
+      'about.area.fleet': 'Flåde',
+      'about.area.diagnostics': 'Diagnostik',
+      'about.area.assurance': 'Service Assurance',
+      'about.area.insights': 'Indsigt',
+      'about.area.platform': 'Platform',
+      'about.count.one': '{count} udgivelse',
+      'about.count.other': '{count} udgivelser',
+      'about.foot': 'Kun de ændringer, der flyttede på, hvad produktet kan, står her; den fulde historik commit for commit ligger i CHANGELOG.md i repositoriet.',
+      'about.unavailable': 'Om-siden kunne ikke indlæses.',
+      'about.info.hero': 'Hvad denne serverversion er, og de funktioner der førte hertil — nyeste først, grupperet efter måned, hver med den version de kom i.',
+      'about.info.title': 'Om — versionen og funktionshistorikken',
+      'about.info.p1': 'Linjen øverst er denne maskine: den version, den kører, og datoen den blev udgivet. Den læses fra serveren, så det er den version, du rent faktisk taler med — ikke den nyeste, der findes.',
+      'about.info.p2': 'Historikken herunder er udvalgt. Ét punkt pr. ændring, der flyttede på, hvad produktet kan, med den version det kom i, og den måned det landede. Brug filtrene til at læse ét område ad gangen.',
+      'about.info.p3': 'Fejlrettelser, oprydning og internt arbejde er ikke med her; CHANGELOG.md i repositoriet har hele historikken.',
       'nav.group.monitoring': "Overvågning",
       'nav.group.fleet': "Flåde",
       'nav.group.diagnostics': "Diagnostik",
@@ -3496,6 +3544,7 @@
       'nav.view.settings': "Indstillinger",
       'nav.docs': "Dokumentation",
       'nav.docsTitle': "Åbn den indbyggede dokumentation",
+      'nav.about': "Om BlueEyes",
       'nav.toggle': "Vis/skjul menu",
       'nav.view.changes': "Ændringer",
       'nav.view.fleet': "Flåde",

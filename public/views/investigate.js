@@ -203,7 +203,7 @@
         if (!history.length) {
           historyHost.replaceChildren(ui.panel({
             title: t('inv.history'),
-            children: [ui.emptyState({ title: t('inv.noHistory'), body: t('inv.noHistoryHint') })],
+            children: [ui.emptyState({ kind: 'nodata', title: t('inv.noHistory'), body: t('inv.noHistoryHint') })],
           }));
           return;
         }
@@ -250,7 +250,7 @@
           .catch(function () {
             historyHost.replaceChildren(ui.panel({
               title: t('inv.history'),
-              children: [ui.emptyState({ title: t('inv.noHistory'), body: t('inv.historyFailed') })],
+              children: [ui.emptyState({ kind: 'nodata', title: t('inv.noHistory'), body: t('inv.historyFailed') })],
             }));
           });
       }

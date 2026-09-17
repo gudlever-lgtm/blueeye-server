@@ -366,6 +366,22 @@
   --sa-hue-7: #4a3aa7;
   --sa-hue-8: #e34948;
 
+  /* ---- Layer scale --------------------------------------------------------
+     One ordering for everything that overlaps, so a new overlay is a token
+     rather than a guessed number. Anything that paints above the page sits
+     here; a component that invents its own z-index is a bug. Leaflet's panes
+     (400+) are clamped by `isolation: isolate` on the map container, which
+     keeps them inside the page layer instead of the root one. */
+  --z-sticky: 2;      /* sticky table head, inside its panel */
+  --z-inline: 20;     /* inline suggestion list, anchored to its input */
+  --z-topbar: 30;     /* sticky page topbar */
+  --z-sidebar: 40;    /* nav rail (its mobile scrim sits one below) */
+  --z-popover: 50;    /* help popover, dropdown menu */
+  --z-rowmenu: 55;    /* row action menu */
+  --z-scrim: 70;      /* modal / drawer backdrop */
+  --z-modal: 71;      /* modal card, drawer panel */
+  --z-toast: 90;      /* always on top: a toast raised from a modal must show */
+
   /* DataTable row heights. Compact is the density toggle, not a second table. */
   --row-h: 44px;
   --row-h-compact: 36px;

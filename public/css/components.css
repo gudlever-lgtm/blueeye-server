@@ -41,7 +41,7 @@
   color: var(--text-muted); font-size: var(--fs-xs); font-weight: 700; cursor: pointer; }
 .ui .help-btn:hover { border-color: var(--accent); color: var(--accent); background: var(--surface); }
 
-.ui-popover { position: fixed; z-index: 40; width: min(420px, calc(100vw - var(--s-6) * 2));
+.ui-popover { position: fixed; z-index: var(--z-popover); width: min(420px, calc(100vw - var(--s-6) * 2));
   background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-panel);
   box-shadow: var(--shadow-lg); padding: var(--s-5); }
 .ui-popover h3 { margin: 0 0 var(--s-2); font-size: var(--fs-md); }
@@ -147,7 +147,7 @@
 /* ---- DataTable ----------------------------------------------------------- */
 .ui .table-wrap-ui { max-height: 60vh; overflow: auto; }
 .ui table.dt { width: 100%; border-collapse: collapse; font-size: var(--fs-sm); table-layout: fixed; }
-.ui table.dt thead th { position: sticky; top: 0; z-index: 2; background: var(--surface-alt);
+.ui table.dt thead th { position: sticky; top: 0; z-index: var(--z-sticky); background: var(--surface-alt);
   height: 36px; padding: 0 var(--s-4); text-align: left; white-space: nowrap; cursor: pointer;
   user-select: none; border-bottom: 1px solid var(--border); font-size: var(--fs-xs);
   font-weight: 650; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; }
@@ -174,7 +174,7 @@
 .ui table.dt tbody tr:hover .row-act .on-hover,
 .ui .row-act .on-hover:focus-visible { opacity: 1; pointer-events: auto; }
 
-.ui-rowmenu { position: fixed; z-index: 45; min-width: 200px; padding: var(--s-1);
+.ui-rowmenu { position: fixed; z-index: var(--z-rowmenu); min-width: 200px; padding: var(--s-1);
   background: var(--surface); border: 1px solid var(--border);
   border-radius: var(--r-panel); box-shadow: var(--shadow-lg); }
 .ui-rowmenu button { display: block; width: 100%; text-align: left; background: none; border: 0;
@@ -192,6 +192,11 @@
 .ui .state p { margin: 0; max-width: 56ch; color: var(--text-muted);
   font-size: var(--fs-sm); line-height: 1.6; }
 .ui .state.is-error .state-ico { color: var(--sev-crit); }
+/* A query that came back empty: the reader's next move is to widen it, so the
+   glyph is a refusal rather than a tick. `ok` is the only state that earns one. */
+.ui .state.is-nodata .state-ico { color: var(--sev-crit); font-weight: 700; }
+.ui .state.is-ok .state-ico { color: var(--sev-ok, var(--text-muted)); }
+.ui .state.is-none .state-ico { color: var(--text-muted); }
 .ui .state code { font-family: var(--mono); font-size: var(--fs-xs); color: var(--text-muted);
   background: var(--surface-alt); padding: 1px var(--s-1); border-radius: var(--r-badge); }
 
@@ -214,8 +219,8 @@
 .ui .inline-note.is-info { color: var(--sev-info); }
 
 /* ---- Drawer — row detail, right side, 480px ------------------------------ */
-.ui-scrim { position: fixed; inset: 0; z-index: 60; background: var(--scrim); }
-.ui-drawer { position: fixed; top: 0; right: 0; bottom: 0; z-index: 61; width: 480px; max-width: 100%;
+.ui-scrim { position: fixed; inset: 0; z-index: var(--z-scrim); background: var(--scrim); }
+.ui-drawer { position: fixed; top: 0; right: 0; bottom: 0; z-index: var(--z-modal); width: 480px; max-width: 100%;
   display: flex; flex-direction: column; background: var(--surface);
   border-left: 1px solid var(--border); box-shadow: var(--shadow-lg); }
 .ui-drawer .drawer-head { display: flex; align-items: flex-start; gap: var(--s-3);
@@ -263,7 +268,7 @@
 .ui .count-field input { width: 72px; text-align: right; }
 
 /* ---- Toast — top right, stacked, errors stay ----------------------------- */
-.ui-toasts { position: fixed; top: var(--s-4); right: var(--s-4); z-index: 70;
+.ui-toasts { position: fixed; top: var(--s-4); right: var(--s-4); z-index: var(--z-toast);
   display: flex; flex-direction: column; gap: var(--s-2);
   width: 340px; max-width: calc(100vw - var(--s-6)); }
 .ui-toast { display: flex; align-items: flex-start; gap: var(--s-3); padding: var(--s-3) var(--s-4);
@@ -276,6 +281,11 @@
 .ui-toast .toast-title { font-weight: 600; }
 .ui-toast .toast-detail { margin-top: var(--s-1); color: var(--text-muted);
   font-size: var(--fs-xs); line-height: 1.45; }
+
+/* The field a toast is asking for. Rings until the operator touches it, so the
+   message and the control it means are visibly the same thing. */
+.ui .is-asked, .is-asked { outline: 2px solid var(--sev-crit); outline-offset: 1px;
+  border-color: var(--sev-crit); }
 
 /* ---- Narrow screens ------------------------------------------------------ */
 @media (max-width: 900px) {

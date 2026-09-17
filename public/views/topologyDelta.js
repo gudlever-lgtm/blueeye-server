@@ -149,7 +149,7 @@
         if (!events.length) {
           tableHost.replaceChildren(ui.panel({
             title: t('delta.panel'),
-            children: [ui.emptyState({ title: t('delta.none'), body: t('delta.noneHint') })],
+            children: [ui.emptyState({ kind: 'ok', title: t('delta.none'), body: t('delta.noneHint') })],
           }));
           return;
         }

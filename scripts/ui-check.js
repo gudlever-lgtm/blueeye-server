@@ -17,6 +17,7 @@
 //   colour           a hex/rgb literal outside tokens.css — IN ANY STYLESHEET,
 //                    contract or not, and in any migrated view
 //   px-size          a raw px spacing or font-size outside the token files
+//   z-index          a hand-picked layer number outside tokens.css
 //   legacy-class     a class the contract replaced, still in use
 //   tab-pattern      buttons used as tabs
 //   chip-metadata    a chip carrying metadata or a host name
@@ -135,6 +136,19 @@ function checkCss() {
       for (const m of src.matchAll(/#[0-9a-fA-F]{3,8}\b|\brgba?\(/g)) {
         report(rel, lineOf(src, m.index), 'colour',
           `${m[0].trim()} — colour belongs in css/tokens.css`);
+      }
+    }
+
+    if (!TOKEN_FILES.has(rel)) {
+      // A hand-picked z-index is how the sidebar ended up over the drawer, the
+      // modal under the page, and Leaflet's panes over all three. Every layer
+      // comes from the --z-* scale in tokens.css, so the ordering is readable
+      // in one place instead of inferred from a dozen guesses.
+      for (const m of src.matchAll(/z-index:\s*([^;{}]+)/g)) {
+        const value = m[1].trim();
+        if (/var\(--z-/.test(value) || value === 'auto' || value === '0') continue;
+        report(rel, lineOf(src, m.index), 'z-index',
+          `z-index: ${value} — use a --z-* token from css/tokens.css`);
       }
     }
 

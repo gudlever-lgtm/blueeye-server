@@ -772,6 +772,77 @@ function gotoView(viewKey) {
   currentView = viewKey;
   render();
 }
+// ---- Tabs -----------------------------------------------------------------
+// A tab is not a button, and until this existed the dashboard drew it as one:
+// a row of `small ghost` buttons where the selected one had a slightly
+// different background. Next to a form's Save/Cancel — often on the same screen
+// — nothing said which row switched a view and which row did something.
+//
+// So a tab strip looks like a tab strip: no button chrome, muted labels, and
+// the selected one carrying the accent underline on the strip's own rule. It
+// also BEHAVES like one, which is the half a stylesheet cannot do: the strip is
+// one stop in the tab order (arrow keys move between the tabs, Home/End jump to
+// the ends) and it announces itself as a tablist, so a screen reader says "tab
+// 2 of 3, selected" instead of reading out three unrelated buttons.
+//
+//   tabStrip([['run', 'Run a probe'], ['packages', 'Test packages']], {
+//     active: probesTab,
+//     onPick: (key) => { probesTab = key; render(); },
+//   })
+//
+// Returns the strip, with `setActive(key)` for the callers that switch tabs
+// without re-rendering the whole screen.
+function tabStrip(items, { active = null, onPick = null, className = '', ariaLabel = null } = {}) {
+  const list = items.filter(Boolean);
+  const strip = el('div', {
+    class: `subtabs${className ? ` ${className}` : ''}`,
+    role: 'tablist',
+    ...(ariaLabel ? { 'aria-label': ariaLabel } : {}),
+  });
+  const buttons = [];
+
+  const focusAt = (i) => {
+    const next = buttons[(i + buttons.length) % buttons.length];
+    if (next) next.focus();
+  };
+
+  function setActive(key) {
+    for (const b of buttons) {
+      const on = b.dataset.tab === String(key);
+      b.classList.toggle('active', on);
+      b.setAttribute('aria-selected', on ? 'true' : 'false');
+      // One stop in the tab order: Tab enters the strip at the selected tab and
+      // leaves it, arrows move within. This is what the pattern is for.
+      b.tabIndex = on ? 0 : -1;
+    }
+    // Nothing selected (a view whose tab key is not in this strip) would trap
+    // the keyboard with no way in, so the first tab stays reachable.
+    if (!buttons.some((b) => b.tabIndex === 0) && buttons[0]) buttons[0].tabIndex = 0;
+  }
+
+  list.forEach(([key, label], i) => {
+    const btn = el('button', {
+      type: 'button',
+      class: 'subtab',
+      role: 'tab',
+      'data-tab': String(key),
+      onclick: () => { setActive(key); if (onPick) onPick(key); },
+      onkeydown: (e) => {
+        const step = { ArrowRight: 1, ArrowLeft: -1, ArrowDown: 1, ArrowUp: -1 }[e.key];
+        if (step) { e.preventDefault(); focusAt(i + step); return; }
+        if (e.key === 'Home') { e.preventDefault(); focusAt(0); return; }
+        if (e.key === 'End') { e.preventDefault(); focusAt(buttons.length - 1); }
+      },
+    }, label);
+    buttons.push(btn);
+    strip.append(btn);
+  });
+
+  setActive(active);
+  strip.setActive = setActive;
+  return strip;
+}
+
 // Why a nav entry cannot be opened: 'role' (above the user's role), 'licence'
 // (not in this licence) or null (it can). One reading of the nav, used by the
 // help drawers' viewLink and by the guides, so a link is never offered where
@@ -8254,10 +8325,17 @@ views.interfaces = async () => {
 let probesTab = 'run'; // 'run' | 'connection' | 'packages'
 views.probes = async () => {
   const root = el('div');
-  const tab = (key, label) => el('button', { class: `small ghost${probesTab === key ? ' active' : ''}`,
-    onclick: () => { if (probesTab === key) return; if (key !== 'run') stopProbes(); probesTab = key; render(); } }, label);
   root.append(el('div', { class: 'section-head' }, el('h2', {}, 'Probes & Tests'),
-    el('div', { class: 'subtabs' }, tab('run', 'Run a probe'), tab('connection', t('ct.tab')), tab('packages', 'Test packages'))));
+    tabStrip([['run', 'Run a probe'], ['connection', t('ct.tab')], ['packages', 'Test packages']], {
+      active: probesTab,
+      ariaLabel: 'Probes & Tests',
+      onPick: (key) => {
+        if (probesTab === key) return;
+        if (key !== 'run') stopProbes();
+        probesTab = key;
+        render();
+      },
+    })));
   const sub = probesTab === 'packages' ? testPackagesView
     : (probesTab === 'connection' ? connectionTestView : probeRunnerView);
   root.append(await sub());
@@ -13404,7 +13482,7 @@ views.docs = async () => {
   const nav = el('div', { class: 'settings-nav docs-nav' }, ...sections.map((s) =>
     el('div', { class: 'settings-nav-group' },
       el('span', { class: 'settings-nav-label' }, s.section),
-      el('div', { class: 'subtabs docs-subtabs' }, ...s.articles.map((a) =>
+      el('div', { class: 'navlist docs-navlist' }, ...s.articles.map((a) =>
         el('button', { class: `small ghost${a.id === docsTopic ? ' active' : ''}`, onclick: () => { docsTopic = a.id; render(); } }, a.title))))));
 
   root.append(el('div', { class: 'section-head' },
@@ -13434,7 +13512,7 @@ views.settings = async () => {
   const nav = el('div', { class: 'settings-nav' }, ...groups.map(([label, tabs]) =>
     el('div', { class: 'settings-nav-group' },
       el('span', { class: 'settings-nav-label' }, label),
-      el('div', { class: 'subtabs' }, ...tabs.map(([k, lbl]) =>
+      el('div', { class: 'navlist' }, ...tabs.map(([k, lbl]) =>
         el('button', { class: `small ghost${k === settingsTab ? ' active' : ''}`, onclick: () => { settingsTab = k; render(); } }, lbl))))));
   root.append(el('div', { class: 'section-head' }, el('h2', {}, 'Settings')), nav);
   // Per-section licence pill (green = included in this licence, red = not).
@@ -16202,11 +16280,12 @@ views.reporting = async () => {
   if (role === 'admin') sections.push(['audit', 'Audit']);
   // Guard against a stale section the current user may no longer access.
   if (!sections.some(([k]) => k === reportingState.section)) reportingState.section = 'nis2';
-  const bar = el('div', { class: 'subtabs nis2-subtabs' },
-    ...sections.map(([key, label]) => el('button', {
-      class: `small ghost${reportingState.section === key ? ' active' : ''}`,
-      onclick: () => { reportingState.section = key; render(); },
-    }, label)));
+  const bar = tabStrip(sections, {
+    active: reportingState.section,
+    className: 'nis2-subtabs',
+    ariaLabel: 'Reporting',
+    onPick: (key) => { reportingState.section = key; render(); },
+  });
   root.append(el('div', { class: 'section-head' }, el('h2', {}, 'Reporting'), bar));
 
   const body = el('div', { class: 'nis2-body' }, el('div', { class: 'empty' }, 'Loading…'));
@@ -16230,11 +16309,12 @@ async function nis2Module() {
     ['incidents', 'Incidents'], ['reports', 'Reports'],
   ];
   if (role === 'admin') tabs.push(['audit', 'Audit Trail']);
-  wrap.append(el('div', { class: 'subtabs nis2-subtabs nis2-inner-tabs' },
-    ...tabs.map(([key, label]) => el('button', {
-      class: `small ghost${nis2State.tab === key ? ' active' : ''}`,
-      onclick: () => { nis2State.tab = key; render(); },
-    }, label))));
+  wrap.append(tabStrip(tabs, {
+    active: nis2State.tab,
+    className: 'nis2-subtabs nis2-inner-tabs',
+    ariaLabel: 'NIS2',
+    onPick: (key) => { nis2State.tab = key; render(); },
+  }));
 
   const body = el('div', { class: 'nis2-body' }, el('div', { class: 'empty' }, 'Loading…'));
   wrap.append(body);
@@ -16679,7 +16759,7 @@ async function auditModule() {
     return `/api/audit/export.csv${p.toString() ? `?${p}` : ''}`;
   };
   const exportBtn = el('button', { class: 'small ghost', onclick: () => nis2Download(csvHref(), 'audit.csv') }, '⤓ CSV');
-  wrap.append(el('div', { class: 'subtabs', style: 'gap:8px;align-items:center' },
+  wrap.append(el('div', { class: 'history-controls' },
     actorSel, actionSel, el('button', { class: 'small ghost', onclick: () => load() }, '↻ Refresh'), exportBtn));
 
   const body = el('div', { class: 'nis2-body' }, el('div', { class: 'empty' }, 'Loading…'));
@@ -17100,12 +17180,15 @@ views.guide = async () => {
 views.transactions = async () => {
   const root = el('div', { class: 'transactions' });
   const body = el('div', {});
-  const tabs = el('div', { class: 'subtabs' }, ...[['list', 'List'], ['matrix', 'Matrix']].map(([k, label]) =>
-    el('button', { class: `subtab${txTab === k ? ' active' : ''}`, onclick: () => { txTab = k; draw(); } }, label)));
+  const tabs = tabStrip([['list', 'List'], ['matrix', 'Matrix']], {
+    active: txTab,
+    ariaLabel: 'Transaction tests',
+    onPick: (k) => { txTab = k; draw(); },
+  });
   const head = el('div', { class: 'section-head' }, el('h2', {}, 'Transaction tests'),
     isAdmin() ? el('button', { class: 'primary', onclick: () => txMount(body, () => txForm(null, body)) }, '+ New test') : null);
   function draw() {
-    tabs.querySelectorAll('.subtab').forEach((b, i) => b.classList.toggle('active', ['list', 'matrix'][i] === txTab));
+    tabs.setActive(txTab);
     if (txTab === 'matrix') txMount(body, () => txMatrixView(body));
     else txMount(body, () => txListView(body));
   }

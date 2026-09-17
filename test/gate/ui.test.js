@@ -119,6 +119,41 @@ test('data-min-role and data-feature attributes use known values', () => {
   for (const must of ['discovery', 'logs', 'enrollment']) assert.ok(roleGated.includes(must), `${must} lost its role gate`);
 });
 
+test('every tab strip is built by tabStrip(), and the tab look is a strip rather than a button', () => {
+  // A hand-rolled .subtabs container renders the same and behaves worse: no
+  // roving tabindex, no arrow keys, and nothing telling a screen reader the row
+  // is a tablist. The helper is the only place allowed to make one.
+  const HELPER = "class: `subtabs${className ? ` ${className}` : ''}`,";
+  const rogue = [];
+  for (const f of jsFiles) {
+    if (f === 'i18n.js') continue;
+    const src = fs.readFileSync(path.join(PUBLIC, f), 'utf8');
+    for (const m of src.matchAll(/class:\s*[`'"][^`'"]*\bsubtabs\b[^`'"]*[`'"],?/g)) {
+      if (f === 'app.js' && m[0].startsWith('class: `subtabs${className')) continue;
+      rogue.push(`${f}: ${m[0].slice(0, 70)}`);
+    }
+  }
+  assert.deepEqual(rogue, [], 'build tab strips with tabStrip() so they keep the keyboard and the screen reader');
+  assert.ok(appJs.includes(HELPER), 'tabStrip() no longer builds the strip — update this rule with it');
+
+  // Service Assurance ships its own stylesheet and its own tab bar (the module
+  // is extractable by design), so it is checked where it lives rather than
+  // exempted: same roles, same roving tabindex.
+  const sa = fs.readFileSync(path.join(PUBLIC, 'serviceAssurance.js'), 'utf8');
+  for (const needed of ["role: 'tablist'", "role: 'tab'", "'aria-selected'", 'ArrowRight']) {
+    assert.ok(sa.includes(needed), `serviceAssurance.js tab bar is missing ${needed}`);
+  }
+
+  // The look itself: the selected tab is marked by the accent rule under the
+  // strip, not by a button's background — that similarity is what made a tab
+  // indistinguishable from a form control in the first place.
+  const css = fs.readFileSync(path.join(PUBLIC, 'styles.css'), 'utf8');
+  const active = css.slice(css.indexOf('.subtabs .subtab.active'));
+  assert.match(active.slice(0, 200), /border-bottom-color:\s*var\(--accent\)/, 'the active tab lost its underline');
+  const saCss = fs.readFileSync(path.join(PUBLIC, 'serviceAssurance.css'), 'utf8');
+  assert.match(saCss.slice(saCss.indexOf('.sa-tab.active'), saCss.indexOf('.sa-tab.active') + 200), /border-bottom-color/);
+});
+
 test('every t() key used by the dashboard exists in BOTH locales, and the catalogues are in parity', () => {
   const missing = [];
   for (const f of jsFiles) {

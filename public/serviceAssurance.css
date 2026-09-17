@@ -11,14 +11,31 @@
   color: var(--muted, #6b7280);
 }
 
-/* ---- sub-tabs ---- */
-.sa-tabs { display: flex; flex-wrap: wrap; gap: 4px; border-bottom: 1px solid var(--hairline, #e5e7eb); }
-.sa-tab {
-  background: none; border: none; border-bottom: 2px solid transparent;
-  padding: 8px 14px; cursor: pointer; color: var(--muted, #6b7280); font: inherit;
+/* ---- sub-tabs ----
+   The same tab strip as the rest of the dashboard (.subtabs in styles.css).
+   Duplicated rather than shared because this module ships its own stylesheet on
+   purpose — it is meant to be extractable whole — so the values are kept in
+   step deliberately, not by accident. */
+.sa-tabs {
+  display: flex; flex-wrap: wrap; gap: 2px; max-width: 100%;
+  border-bottom: 1px solid var(--hairline, #e5e7eb);
 }
-.sa-tab:hover { color: var(--text, #111827); }
-.sa-tab.active { color: var(--accent, #2563eb); border-bottom-color: var(--accent, #2563eb); }
+.sa-tab {
+  background: none; border: 0; border-bottom: 2px solid transparent;
+  border-radius: var(--radius-sm, 10px) var(--radius-sm, 10px) 0 0;
+  margin-bottom: -1px; padding: 8px 14px;
+  font: inherit; font-size: 13px; font-weight: 500; line-height: 1.45;
+  color: var(--muted, #6b7280); cursor: pointer;
+  transition: color .15s ease, border-color .15s ease, background .15s ease;
+}
+.sa-tab:hover:not(.active) { color: var(--text, #111827); background: var(--hover, rgba(0, 0, 0, .04)); }
+.sa-tab.active {
+  color: var(--text-accent, #2563eb); border-bottom-color: var(--accent, #2563eb); font-weight: 600;
+}
+.sa-tab:focus-visible {
+  outline: none; box-shadow: var(--ring, 0 0 0 3px rgba(37, 99, 235, .25));
+  border-radius: var(--radius-sm, 10px);
+}
 
 /* ---- sections + panels ---- */
 .sa-section-head {

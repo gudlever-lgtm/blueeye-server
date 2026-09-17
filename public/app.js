@@ -1342,6 +1342,7 @@ const CONTRACT_VIEWS = new Map([
   ['investigation', 'investigate'],
   ['diagnose', 'diagnose'],
   ['troubleshooting', 'troubleshooting'],
+  ['topology', 'topology'],
 ]);
 
 function hero(viewKey) {
@@ -5969,558 +5970,308 @@ function topoLayersSvg(vm, { onNodeClick, focusId } = {}) {
 // Site filter scopes the graph to one location; window selector adjusts depth.
 // Action buttons (Ping / Vis rute) let an operator run live diagnostics against
 // any observed host directly from this view, using a selectable online agent.
-views.topology = async () => {
-  const root = el('div', { class: 'topology' });
-  const headInfo = el('span', { class: 'muted' }, 'Service/host dependencies from observed flows');
-  root.append(el('div', { class: 'section-head' }, el('h2', {}, 'Topology'), headInfo));
+// ---- Topology (MIGRATED — see public/views/topology.js) ---------------------
+// The three drawing primitives and the probe modals stay here: topoGraphSvg and
+// topoLayersSvg are their own components, the Leaflet map carries the reader's
+// pan and zoom, and the path visualisation is shared with Probes & Tests.
+const EXT_COLOR = '#f59e0b'; // external peer (matches the diagram's amber)
+const SITE_COLOR = '#38bdf8'; // internal site anchor
 
-  const [agentList, locations] = await Promise.all([
-    api('/agents').catch(() => []),
-    api('/locations').catch(() => []),
-  ]);
-  const onlineAgents = agentList.filter((a) => a.status === 'online');
+let topologyPage = null;
+const topologyPageState = {};
 
-  // Site and time-window selectors — control what the graph covers.
-  const locSel = el('select', { class: 'small' },
-    el('option', { value: '' }, 'All sites'),
-    ...locations.map((l) => el('option', { value: String(l.id) }, l.name)));
-  const winSel = el('select', { class: 'small' },
-    el('option', { value: '30' }, '30 min'),
-    el('option', { value: '60' }, '60 min'),
-    el('option', { value: '240' }, '4 hours'),
-    el('option', { value: '1440' }, '24 hours'));
-  winSel.value = '60';
-  const refreshBtn = el('button', { class: 'small ghost' }, 'Refresh');
-
-  // View-mode toggle: the who-talks-to-whom SVG diagram (default), the unified
-  // resilience "Layers" graph (LLDP links + service dependencies from
-  // /api/topology/graph), or a map of the public peers by country. Internal hosts
-  // are never geolocated, so the map only covers the external subset — see
-  // drawTopoMap. A ?layer/?focus deep-link opens straight into Layers.
-  const topoState = TopologyGraph.parseParams(window.location.search);
-  let mode = (window.location.search && /[?&](layer|focus)=/.test(window.location.search)) ? 'layers' : 'diagram';
-  const diagramBtn = el('button', { class: 'small', 'aria-pressed': 'true' }, 'Diagram');
-  const layersBtn = el('button', { class: 'small ghost', 'aria-pressed': 'false' }, 'Layers');
-  const mapBtn = el('button', { class: 'small ghost', 'aria-pressed': 'false' }, 'Map');
-  const modeToggle = el('div', { class: 'topo-mode', role: 'group', 'aria-label': 'View mode' }, diagramBtn, layersBtn, mapBtn);
-
-  root.append(el('div', { class: 'topo-action-bar' },
-    el('label', { class: 'inline muted' }, 'Site ', locSel),
-    el('label', { class: 'inline muted' }, ' Window ', winSel),
-    refreshBtn,
-    el('span', { class: 'spacer' }),
-    modeToggle));
-
-  // Agent selector — shown only when at least one agent is online so action
-  // buttons have something to send probes from. A specific choice scopes the
-  // diagram/tables to that agent's own exported flows AND is the vantage point
-  // for the per-node probes (Ping/Route/Path); "All agents" keeps the fleet view.
-  const agentSel = el('select', { class: 'small' });
-  if (onlineAgents.length) {
-    agentSel.append(el('option', { value: '' }, 'All agents (fleet)'));
-    onlineAgents.forEach((a) => agentSel.append(el('option', { value: String(a.id) }, a.display_name || a.hostname)));
-    agentSel.addEventListener('change', () => {
-      // Server-side, agent scope takes precedence over the Site filter, so grey
-      // Site out while one agent is selected to avoid a "my site is ignored"
-      // surprise; re-enable it when back on the fleet view.
-      const scoped = !!agentSel.value;
-      locSel.disabled = scoped;
-      locSel.title = scoped ? 'Ignored while a single agent is selected — the map is scoped to that agent’s flows.' : '';
-      loadTopology();
-    });
-    root.append(el('div', { class: 'topo-action-bar' },
-      el('span', { class: 'muted' }, 'View / run actions from agent:'), agentSel));
+// Send a probe and poll until a result newer than sentAt appears (or timeout).
+async function topoProbeAndWait(agentId, type, host, maxAttempts, intervalMs) {
+  const sentAt = Date.now();
+  await api(`/agents/${agentId}/probe`, { method: 'POST', body: { type, host } });
+  for (let i = 0; i < maxAttempts; i += 1) {
+    // eslint-disable-next-line no-await-in-loop
+    await new Promise((res) => setTimeout(res, intervalMs));
+    // eslint-disable-next-line no-await-in-loop
+    const d = await api(`/api/probes/latest?agentId=${encodeURIComponent(agentId)}`);
+    const r = (d.results || []).find(
+      (x) => x.type === type && x.target === host && new Date(x.ts).getTime() > sentAt - 500);
+    if (r) return r;
   }
+  throw new Error(t('topo.probe.noResult'));
+}
 
-  const summary = el('p', { class: 'muted' });
-  root.append(summary);
-  // The visual area holds either the diagram (graphHost) or the map (mapHost);
-  // the tables below stay visible in both modes (full list). lastData is the most
-  // recent /api/topology response so the toggle can redraw without refetching.
-  const graphHost = el('div', {});
-  const mapHost = el('div', { class: 'topo-maphost hidden' });
-  const layerHost = el('div', { class: 'topo-layerhost hidden' });
-  root.append(el('div', {}, graphHost, mapHost, layerHost));
-  const tableHost = el('div', {});
-  root.append(tableHost);
-  let lastData = null;
-  let graphData = null; // cached /api/topology/graph (unified l2_link + service_dep)
-  let layersApi = null; // handles returned by topoLayersSvg (highlight control)
-  let changeSets = null; // { changed:Set, flapping:Set } from /api/topology/changes
-  let whatIf = topoState.focus != null && canWrite(); // "what if this node fails?" preview mode
-
-  // Persist ONLY the topology-owned query params (layer + focus) without
-  // clobbering unrelated ones — the SPA's replaceState persistence pattern.
-  function syncTopoUrl() {
-    try {
-      const q = new URLSearchParams(window.location.search || '');
-      const patch = TopologyGraph.paramsPatch(topoState);
-      for (const [k, v] of Object.entries(patch)) { if (v == null) q.delete(k); else q.set(k, v); }
-      const qs = q.toString();
-      window.history.replaceState(null, '', qs ? `${window.location.pathname}?${qs}` : window.location.pathname);
-    } catch { /* URL API off — best-effort */ }
-  }
-
-  // byId index is rebuilt on each load; shared by label() and actionBtns().
-  const byId = {};
-  const label = (id) => {
-    const n = byId[id];
-    if (n && n.kind === 'external') return `${id}${n.asnName ? ` · ${n.asnName}` : ''}${n.country ? ` (${n.country})` : ''}`;
-    return id;
-  };
-  const kindBadge = (kind) => el('span', { class: `badge ${kind === 'external' ? 'warn' : 'ok'}` }, kind || '?');
-
-  // Send a probe and poll until a result newer than sentAt appears (or timeout).
-  async function runProbeAndWait(type, host, maxAttempts, intervalMs) {
-    const id = agentSel.value;
-    if (!id) throw new Error('Select an agent.');
-    const sentAt = Date.now();
-    await api(`/agents/${id}/probe`, { method: 'POST', body: { type, host } });
-    for (let i = 0; i < maxAttempts; i++) {
-      await new Promise((res) => setTimeout(res, intervalMs));
-      const d = await api(`/api/probes/latest?agentId=${encodeURIComponent(id)}`);
-      const r = (d.results || []).find(
-        (x) => x.type === type && x.target === host && new Date(x.ts).getTime() > sentAt - 500);
-      if (r) return { r, agentId: id };
-    }
-    throw new Error('No result yet — check Probes & Tests.');
-  }
-
-  // Per-row action buttons: Ping shows a quick RTT/loss summary; Show route runs
-  // traceroute and opens the full path-graph panel (same as Probes & Tests).
-  function actionBtns(host) {
-    const pingBtn = el('button', { class: 'small ghost', onclick: async () => {
-      if (!agentSel.value) { toast('Select an agent.', true); return; }
-      pingBtn.disabled = true;
-      const card = $('#modal-card');
-      const st = el('p', { class: 'muted' }, 'Sending ping…');
-      card.replaceChildren(
-        el('h3', {}, `Ping → ${esc(host)}`), st,
-        el('div', { class: 'form-actions' }, el('button', { class: 'ghost', onclick: closeModal }, 'Close')));
-      $('#modal').classList.remove('hidden');
-      try {
-        const { r } = await runProbeAndWait('ping', host, 8, 2500);
-        st.className = r.ok ? '' : 'error';
-        st.textContent = r.ok
-          ? `RTT: ${r.rttMs} ms · Tab: ${r.lossPct ?? 0}% · Jitter: ${r.jitterMs != null ? r.jitterMs + ' ms' : '–'}`
-          : `Error: ${r.detail || 'no response'}`;
-      } catch (e) {
-        st.className = 'error'; st.textContent = errText(e);
-      } finally { pingBtn.disabled = false; }
-    }}, 'Ping');
-
-    const routeBtn = el('button', { class: 'small ghost', onclick: async () => {
-      if (!agentSel.value) { toast('Select an agent.', true); return; }
-      routeBtn.disabled = true;
-      const agentId = agentSel.value;
-      const card = $('#modal-card');
-      const st = el('p', { class: 'muted' }, 'Running traceroute (up to ~30 s)…');
-      card.replaceChildren(
-        el('h3', {}, `Route → ${esc(host)}`), st,
-        el('div', { class: 'form-actions' }, el('button', { class: 'ghost', onclick: closeModal }, 'Close')));
-      $('#modal').classList.remove('hidden');
-      $('#modal-card').classList.add('wide');
-      try {
-        const { r } = await runProbeAndWait('traceroute', host, 12, 3000);
-        const detail = await probeDetail(r, agentId);
-        st.replaceWith(detail);
-      } catch (e) {
-        st.className = 'error'; st.textContent = errText(e);
-      } finally { routeBtn.disabled = false; }
-    }}, 'Show route');
-
-    // "Path" opens the shared Path Visualization (graph + brushable timeline) for
-    // the selected peer, sourced from the chosen agent — a drawer over the topology.
-    const pathBtn = el('button', { class: 'small ghost', onclick: async () => {
-      if (!agentSel.value) { toast('Select an agent.', true); return; }
-      const card = $('#modal-card');
-      card.replaceChildren(el('h3', {}, `Path → ${esc(host)}`), el('p', { class: 'muted' }, 'Loading path…'),
-        el('div', { class: 'form-actions' }, el('button', { class: 'ghost', onclick: closeModal }, 'Close')));
-      $('#modal').classList.remove('hidden');
-      $('#modal-card').classList.add('wide');
-      try {
-        const viz = await pathVisualization({ sourceId: agentSel.value, targetId: host });
-        card.replaceChildren(el('h3', {}, `Path → ${esc(host)}`), viz,
-          el('div', { class: 'form-actions' }, el('button', { class: 'ghost', onclick: closeModal }, 'Close')));
-      } catch (e) {
-        card.replaceChildren(el('h3', {}, `Path → ${esc(host)}`), el('p', { class: 'error' }, errText(e)),
-          el('div', { class: 'form-actions' }, el('button', { class: 'ghost', onclick: closeModal }, 'Close')));
-      }
-    }}, 'Path');
-
-    return el('div', { class: 'row-actions' }, pingBtn, routeBtn, pathBtn);
-  }
-
-  // Map mode: plots the PUBLIC peers by country (circles sized by traffic) over
-  // the shared EU/self-hosted tiles, your sites as anchor pins, and the observed
-  // dependencies as routes. Internal (RFC1918) hosts are never geolocated, so the
-  // map deliberately shows only the external subset; the diagram remains the tool
-  // for the internal structure. Routes internal→external are drawn from a single
-  // anchor site — the selected Site, or the only located site — because the graph
-  // doesn't tie each internal IP to a site; when the fleet spans several sites we
-  // show the peers without those lines and say so. External↔external edges (both
-  // ends geolocated) are always drawn.
-  const EXT_COLOR = '#f59e0b'; // external peer (matches the diagram's amber)
-  const SITE_COLOR = '#38bdf8'; // internal site anchor
-
-  async function drawTopoMap() {
-    stopTopoMap();
-    if (typeof L === 'undefined') {
-      mapHost.replaceChildren(el('div', { class: 'empty' }, 'Map library (Leaflet) could not be loaded — the map is unavailable offline. Use the Diagram.'));
+// Ping / Show route / Path, each in the shared modal. Ping is a summary; the
+// other two open the full panel the Probes screen uses.
+async function topoProbeModal(kind, host, agentId) {
+  const card = $('#modal-card');
+  const title = { ping: t('topo.ping'), route: t('topo.route'), path: t('topo.path') }[kind];
+  const heading = `${title} → ${host}`;
+  const status = el('p', { class: 'muted' }, t('topo.probe.working'));
+  const close = () => el('div', { class: 'form-actions' },
+    el('button', { class: 'ghost', onclick: closeModal }, t('common.close')));
+  card.replaceChildren(el('h3', {}, heading), status, close());
+  $('#modal').classList.remove('hidden');
+  if (kind !== 'ping') $('#modal-card').classList.add('wide');
+  try {
+    if (kind === 'ping') {
+      const r = await topoProbeAndWait(agentId, 'ping', host, 8, 2500);
+      status.className = r.ok ? '' : 'error';
+      status.textContent = r.ok
+        ? t('topo.probe.ping', { rtt: r.rttMs, loss: r.lossPct == null ? 0 : r.lossPct, jitter: r.jitterMs == null ? '–' : `${r.jitterMs} ms` })
+        : t('topo.probe.failed', { detail: r.detail || t('topo.probe.noReply') });
       return;
     }
-    const nodes = (lastData && lastData.nodes) || [];
-    const edges = (lastData && lastData.edges) || [];
-    const byId = {}; nodes.forEach((n) => { byId[n.id] = n; });
-    const located = locations.filter((l) => l.latitude != null && l.longitude != null);
-    const extNodes = nodes.filter((n) => n.kind === 'external');
-    const geoNodes = extNodes.filter((n) => n.lat != null && n.lng != null);
-
-    // Aggregate the geolocated peers to their country centroid (many peer IPs
-    // stack on one point otherwise): sum bytes, count peers, collect ASN names.
-    const byCountry = new Map();
-    for (const n of geoNodes) {
-      const e = byCountry.get(n.country) || { country: n.country, lat: n.lat, lng: n.lng, bytes: 0, peers: 0, asns: new Set() };
-      e.bytes += n.bytes || 0; e.peers += 1; if (n.asnName) e.asns.add(n.asnName);
-      byCountry.set(n.country, e);
-    }
-
-    // Which site anchors the internal→external routes (see the note above).
-    const selLoc = locSel.value ? located.find((l) => String(l.id) === locSel.value) : null;
-    const anchor = selLoc || (located.length === 1 ? located[0] : null);
-
-    if (!geoNodes.length && !located.length) {
-      mapHost.replaceChildren(el('div', { class: 'empty' },
-        extNodes.length
-          ? 'No public peers could be placed on the map yet. Country-level placement needs the offline GeoIP/ASN database (Settings → Map).'
-          : 'Nothing to map in this window — the graph is all internal hosts, which are never geolocated. Use the Diagram.'));
+    if (kind === 'route') {
+      const r = await topoProbeAndWait(agentId, 'traceroute', host, 12, 3000);
+      status.replaceWith(await probeDetail(r, agentId));
       return;
     }
+    const viz = await pathVisualization({ sourceId: agentId, targetId: host });
+    card.replaceChildren(el('h3', {}, heading), viz, close());
+  } catch (e) {
+    status.className = 'error';
+    status.textContent = errText(e);
+  }
+}
 
-    let cfg = {};
-    try { cfg = await api('/api/map/config'); } catch { /* fall back to default tiles */ }
-    // The user may have switched mode / left the view while awaiting.
-    if (mode !== 'map' || !mapHost.isConnected) return;
+// Map mode: the PUBLIC peers by country (circles sized by traffic) over the
+// shared EU/self-hosted tiles, your sites as anchor pins, and the observed
+// dependencies as routes. Internal (RFC1918) hosts are never geolocated, so the
+// map deliberately shows only the external subset; the diagram remains the tool
+// for the internal structure. Routes internal→external are drawn from a single
+// anchor site — the selected Site, or the only located site — because the graph
+// does not tie each internal IP to a site; when the fleet spans several sites
+// the peers are shown without those lines and the page says so.
+async function drawTopoMapInto(host, { data, locations, siteId }) {
+  stopTopoMap();
+  if (typeof L === 'undefined') {
+    host.replaceChildren(el('div', { class: 'empty' }, t('topo.map.noLibrary')));
+    return;
+  }
+  const nodes = (data && data.nodes) || [];
+  const edges = (data && data.edges) || [];
+  const nodeById = {};
+  nodes.forEach((n) => { nodeById[n.id] = n; });
+  const located = locations.filter((l) => l.latitude != null && l.longitude != null);
+  const extNodes = nodes.filter((n) => n.kind === 'external');
+  const geoNodes = extNodes.filter((n) => n.lat != null && n.lng != null);
 
-    const canvas = el('div', { class: 'map' });
-    // GeoIP-missing banner: peers exist but none could be placed by country.
-    const banner = (extNodes.length && !geoNodes.length)
-      ? el('div', { class: 'alert-banner sev-WARN' },
-          el('span', { class: 'alert-ic' }, '⚠'),
-          el('span', {}, el('strong', {}, 'GeoIP database not configured. '),
-            'External peers can’t be placed by country until the offline GeoIP/ASN database is loaded. ',
-            role === 'admin' ? settingsLink('map', 'Configure it in Settings → Map') : 'Ask an administrator to configure it in Settings → Map', '.'))
-      : null;
-    const noAnchor = geoNodes.length && !anchor;
-    const legend = el('div', { class: 'legend geo-legend' },
-      el('span', {}, el('span', { class: 'dot ring', style: `background:${SITE_COLOR}` }), ' site'),
-      el('span', {}, el('span', { class: 'dot', style: `background:${EXT_COLOR}` }), ' external peer'),
-      el('span', { class: 'muted' }, '· circle size = traffic · lines = observed routes · public peers placed at country level'));
-    const note = el('p', { class: 'muted small' },
-      `Internal (private) hosts are never geolocated — the map shows only the ${byCountry.size} external ${byCountry.size === 1 ? 'country' : 'countries'} (${geoNodes.length} peers). `,
-      noAnchor ? 'Select a single Site above to draw its routes to those peers.' : (anchor ? `Routes are drawn from ${esc(anchor.name)}.` : ''));
-    mapHost.replaceChildren(...[banner, canvas, legend, note].filter(Boolean));
-
-    const center = anchor ? [anchor.latitude, anchor.longitude]
-      : (geoNodes.length ? [geoNodes[0].lat, geoNodes[0].lng] : [located[0].latitude, located[0].longitude]);
-    const map = createLeafletMap(canvas, cfg, { center, zoom: 3 });
-    if (!map) return;
-    topoMapState.map = map;
-    const pts = [];
-
-    // Routes: internal→external anchored to the site; external↔external between
-    // the two country centroids. Aggregate by endpoints so repeated conversations
-    // become one line weighted (log-scaled) by total bytes.
-    const routes = new Map();
-    const addRoute = (key, a, b, bytes) => {
-      const r = routes.get(key) || { a, b, bytes: 0 };
-      r.bytes += bytes || 0; routes.set(key, r);
-    };
-    for (const e of edges) {
-      const a = byId[e.from]; const b = byId[e.to];
-      if (!a || !b) continue;
-      const aExt = a.kind === 'external' && a.lat != null;
-      const bExt = b.kind === 'external' && b.lat != null;
-      if (aExt && bExt) {
-        if (a.country === b.country) continue; // same centroid — nothing to draw
-        addRoute(`x:${[a.country, b.country].sort().join('>')}`, [a.lat, a.lng], [b.lat, b.lng], e.bytes);
-      } else if (anchor && (aExt || bExt)) {
-        const ext = aExt ? a : b;
-        addRoute(`s:${ext.country}`, [anchor.latitude, anchor.longitude], [ext.lat, ext.lng], e.bytes);
-      }
-    }
-    const maxRouteBytes = Math.max(1, ...[...routes.values()].map((r) => r.bytes));
-    for (const r of routes.values()) {
-      const w = 1 + (Math.log2(1 + r.bytes) / Math.log2(1 + maxRouteBytes)) * 4;
-      L.polyline([r.a, r.b], { color: EXT_COLOR, weight: w, opacity: 0.5 }).addTo(map);
-    }
-
-    // Site anchor pins (the anchor is emphasised; others give geographic context).
-    for (const l of located) {
-      const isAnchor = anchor && String(l.id) === String(anchor.id);
-      L.circleMarker([l.latitude, l.longitude], {
-        radius: isAnchor ? 9 : 7, color: '#fff', weight: 2,
-        fillColor: SITE_COLOR, fillOpacity: isAnchor ? 0.95 : 0.6,
-      }).addTo(map).bindTooltip(`${esc(l.name)}${isAnchor ? ' · routes anchor' : ''}`);
-      pts.push([l.latitude, l.longitude]);
-    }
-
-    // External peers by country.
-    for (const c of byCountry.values()) {
-      const asns = [...c.asns].slice(0, 4).join(', ');
-      L.circleMarker([c.lat, c.lng], {
-        radius: radiusForBytes(c.bytes), color: EXT_COLOR, fillColor: EXT_COLOR, fillOpacity: 0.5, weight: 1,
-      }).addTo(map).bindTooltip(
-        `${esc(c.country)} · ${c.peers} peer${c.peers === 1 ? '' : 's'} · ${fmtBytes(c.bytes)}${asns ? ` · ${esc(asns)}` : ''}`);
-      pts.push([c.lat, c.lng]);
-    }
-
-    if (pts.length > 1) { try { map.fitBounds(pts, { padding: [40, 40], maxZoom: 7 }); } catch { /* single point */ } }
-    setTimeout(() => { try { map.invalidateSize(); } catch { /* ignore */ } }, 60);
+  // Aggregate the geolocated peers to their country centroid — many peer IPs
+  // stack on one point otherwise.
+  const byCountry = new Map();
+  for (const n of geoNodes) {
+    const e = byCountry.get(n.country) || { country: n.country, lat: n.lat, lng: n.lng, bytes: 0, peers: 0, asns: new Set() };
+    e.bytes += n.bytes || 0;
+    e.peers += 1;
+    if (n.asnName) e.asns.add(n.asnName);
+    byCountry.set(n.country, e);
   }
 
-  // Show the active mode's host, keep the others hidden, and (re)draw it. Three
-  // modes: 'diagram' (flow-derived), 'layers' (unified resilience graph), 'map'.
-  function applyMode() {
-    graphHost.classList.toggle('hidden', mode !== 'diagram');
-    layerHost.classList.toggle('hidden', mode !== 'layers');
-    mapHost.classList.toggle('hidden', mode !== 'map');
-    for (const [btn, m] of [[diagramBtn, 'diagram'], [layersBtn, 'layers'], [mapBtn, 'map']]) {
-      btn.classList.toggle('ghost', mode !== m);
-      btn.setAttribute('aria-pressed', String(mode === m));
-    }
-    if (mode === 'map') drawTopoMap(); else stopTopoMap();
-    if (mode === 'layers') drawLayers();
-  }
-  diagramBtn.addEventListener('click', () => { if (mode !== 'diagram') { mode = 'diagram'; applyMode(); } });
-  layersBtn.addEventListener('click', () => { if (mode !== 'layers') { mode = 'layers'; applyMode(); } });
-  mapBtn.addEventListener('click', () => { if (mode !== 'map') { mode = 'map'; applyMode(); } });
+  const selLoc = siteId ? located.find((l) => String(l.id) === String(siteId)) : null;
+  const anchor = selLoc || (located.length === 1 ? located[0] : null);
 
-  // Layers mode: the unified resilience graph (LLDP l2_link + service_dep) with a
-  // layer toggle. Fetches /api/topology/graph once (cached), then re-renders the
-  // chosen layer locally. Distinct from the flow-derived diagram — see the note
-  // in the empty state. The layer choice persists to the URL.
-  // What-if / blast-radius result panel for the map. Null ⇒ the click-a-host
-  // prompt; otherwise the shared blastRadiusPanel.
-  function blastPanel(blast, nameFor) {
-    if (!blast) return el('div', { class: 'muted small' }, 'What-if mode: click a host to preview what fails if it goes down.');
-    return blastRadiusPanel(blast, { nameFor });
+  if (!geoNodes.length && !located.length) {
+    host.replaceChildren(el('div', { class: 'empty' },
+      extNodes.length ? t('topo.map.noGeoip') : t('topo.map.allInternal')));
+    return;
   }
 
-  async function runBlast(id) {
-    if (!layersApi) return;
-    topoState.focus = id; syncTopoUrl();
-    const panel = layerHost.querySelector('.blast-slot');
-    if (panel) panel.replaceChildren(el('div', { class: 'muted small' }, `Computing blast radius for ${id}…`));
-    let blast;
-    try {
-      blast = await api(`/api/topology/blast-radius/${encodeURIComponent(id)}`);
-    } catch (e) {
-      layersApi.setHighlight({ focus: id, isolated: new Set(), affected: new Set() });
-      if (panel) panel.replaceChildren(el('div', { class: 'error small' }, errText(e)));
-      return;
-    }
-    const sets = TopologyGraph.blastSets(blast);
-    layersApi.setHighlight(sets);
-    const nameFor = (nid) => { const n = (graphData.nodes || []).find((x) => x.id === Number(nid)); return n ? n.label : String(nid); };
-    if (panel) panel.replaceChildren(blastPanel(blast, nameFor));
+  let cfg = {};
+  try { cfg = await api('/api/map/config'); } catch { /* fall back to default tiles */ }
+  if (!host.isConnected) return; // the reader left while we awaited
+
+  const canvas = el('div', { class: 'map' });
+  const banner = (extNodes.length && !geoNodes.length)
+    ? el('div', { class: 'empty' }, t('topo.map.noGeoip'))
+    : null;
+  const note = (!anchor && located.length > 1)
+    ? el('p', { class: 'muted small' }, t('topo.map.manySites'))
+    : null;
+  host.replaceChildren(...[banner, canvas, note].filter(Boolean));
+
+  const centre = anchor ? [anchor.latitude, anchor.longitude]
+    : (geoNodes.length ? [geoNodes[0].lat, geoNodes[0].lng] : [20, 0]);
+  const map = createLeafletMap(canvas, cfg, { center: centre, zoom: 3 });
+  if (!map) return;
+  topoMapState.map = map;
+
+  const pts = [];
+  for (const l of located) {
+    L.circleMarker([l.latitude, l.longitude], {
+      radius: 7, color: SITE_COLOR, fillColor: SITE_COLOR, fillOpacity: 0.9, weight: 2,
+    }).addTo(map).bindTooltip(l.name);
+    pts.push([l.latitude, l.longitude]);
   }
 
-  function renderLayers() {
-    const layerBtn = (val, txt) => {
-      const active = topoState.layer === val;
-      const b = el('button', { class: `small${active ? '' : ' ghost'}`, 'aria-pressed': String(active) }, txt);
-      b.addEventListener('click', () => {
-        if (topoState.layer === val) return;
-        topoState.layer = val;
-        syncTopoUrl();
-        renderLayers();
-      });
-      return b;
-    };
-    const layerBar = el('div', { class: 'topo-layerbar', role: 'group', 'aria-label': 'Topology layer' },
-      el('span', { class: 'muted' }, 'Layer:'),
-      layerBtn('both', 'Both'), layerBtn('l2', 'L2 links'), layerBtn('dep', 'Dependencies'));
-    // "What if" is a blast-radius preview — operator+ only (the endpoint is
-    // operator+). Viewers don't see the toggle.
-    let whatIfBtn = null;
-    if (canWrite()) {
-      whatIfBtn = el('button', { class: `small${whatIf ? '' : ' ghost'}`, 'aria-pressed': String(whatIf), title: 'Preview which hosts fail if a node goes down' }, 'What if?');
-      whatIfBtn.addEventListener('click', () => {
-        whatIf = !whatIf;
-        if (!whatIf) { topoState.focus = null; syncTopoUrl(); }
-        renderLayers();
-      });
-      // Force a fresh service-dependency aggregation (normally a scheduled job),
-      // then reload the graph — operator+ (the recompute endpoint is).
-      const recomputeBtn = el('button', { class: 'small ghost', title: 'Recompute service dependencies now' }, 'Recompute');
-      recomputeBtn.addEventListener('click', async () => {
-        recomputeBtn.disabled = true;
-        try {
-          await api('/api/topology/dependencies/recompute', { method: 'POST' });
-          graphData = null;
-          await drawLayers();
-          toast('Service dependencies recomputed');
-        } catch (e) { toast(errText(e), true); } finally { recomputeBtn.disabled = false; }
-      });
-      layerBar.append(el('span', { class: 'spacer' }), recomputeBtn, whatIfBtn);
-    }
+  // External↔external edges are always drawn; internal→external only from the
+  // anchor site.
+  for (const e of edges) {
+    const from = nodeById[e.from];
+    const to = nodeById[e.to];
+    if (!to || to.lat == null || to.lng == null) continue;
+    const isExtExt = from && from.lat != null && from.lng != null;
+    const a = isExtExt ? [from.lat, from.lng] : (anchor ? [anchor.latitude, anchor.longitude] : null);
+    if (!a) continue;
+    L.polyline([a, [to.lat, to.lng]], { color: EXT_COLOR, weight: 1, opacity: 0.35 }).addTo(map);
+  }
 
-    if (!graphData) {
-      layerHost.replaceChildren(layerBar, el('div', { class: 'muted' }, 'Loading graph…'));
-      return;
-    }
-    const totals = graphData.totals || { nodes: 0, l2_link: 0, service_dep: 0 };
+  for (const c of byCountry.values()) {
+    const asns = [...c.asns].slice(0, 4).join(', ');
+    L.circleMarker([c.lat, c.lng], {
+      radius: radiusForBytes(c.bytes), color: EXT_COLOR, fillColor: EXT_COLOR, fillOpacity: 0.5, weight: 1,
+    }).addTo(map).bindTooltip(
+      `${c.country} · ${t('topo.map.peers', { n: c.peers })} · ${fmtBytes(c.bytes)}${asns ? ` · ${asns}` : ''}`);
+    pts.push([c.lat, c.lng]);
+  }
+
+  if (pts.length > 1) { try { map.fitBounds(pts, { padding: [40, 40], maxZoom: 7 }); } catch { /* single point */ } }
+  setTimeout(() => { try { map.invalidateSize(); } catch { /* ignore */ } }, 60);
+}
+
+// Layers mode: the unified resilience graph (LLDP l2_link + service_dep). The
+// graph is fetched once and cached; the layer choice re-renders locally.
+const topoLayersState = { graph: null, changeSets: null, api: null };
+
+async function drawTopoLayersInto(host, opts) {
+  const render = () => {
+    const graphData = topoLayersState.graph;
+    if (!graphData) { host.replaceChildren(el('div', { class: 'muted' }, t('topo.layers.loading'))); return; }
     if (!(graphData.edges || []).length) {
-      layerHost.replaceChildren(layerBar, el('div', { class: 'empty' },
-        'No topology graph yet. L2 links come from agents reporting LLDP neighbours; dependency edges are aggregated from TCP flows by a scheduled job.'));
-      layersApi = null;
+      host.replaceChildren(el('div', { class: 'empty' }, t('topo.layers.empty')));
+      topoLayersState.api = null;
       return;
     }
-    const vm = TopologyGraph.buildViewModel(graphData, topoState.layer, { focus: topoState.focus });
+    const vm = TopologyGraph.buildViewModel(graphData, opts.layer, { focus: opts.focus });
     if (!vm.nodes.length) {
-      layerHost.replaceChildren(layerBar, el('div', { class: 'empty' }, 'No edges in this layer — switch the layer above.'));
-      layersApi = null;
+      host.replaceChildren(el('div', { class: 'empty' }, t('topo.layers.emptyLayer')));
+      topoLayersState.api = null;
       return;
     }
-    layersApi = topoLayersSvg(vm, {
-      focusId: topoState.focus,
+    const api2 = topoLayersSvg(vm, {
+      focusId: opts.focus,
       onNodeClick: (id) => {
-        if (whatIf && canWrite()) runBlast(id);
-        else if (layersApi) layersApi.neighbourhood(id);
+        if (opts.whatIf) runTopoBlast(host, id, opts);
+        else if (topoLayersState.api) topoLayersState.api.neighbourhood(id);
       },
     });
-    // Flag recently-changed + flapping hosts (operator+ data) on their nodes.
-    if (changeSets) {
-      layersApi.nodeEls.forEach((g, id) => {
-        g.classList.toggle('flapping', changeSets.flapping.has(id));
-        g.classList.toggle('changed', changeSets.changed.has(id));
+    topoLayersState.api = api2;
+    // Recently-changed + flapping hosts (operator+ data) flagged on their nodes.
+    if (topoLayersState.changeSets) {
+      api2.nodeEls.forEach((g, id) => {
+        g.classList.toggle('flapping', topoLayersState.changeSets.flapping.has(id));
+        g.classList.toggle('changed', topoLayersState.changeSets.changed.has(id));
       });
     }
+    const totals = graphData.totals || { nodes: 0, l2_link: 0, service_dep: 0 };
     const legend = el('div', { class: 'pg-legend' },
-      el('span', { class: 'lg' }, el('span', { class: 'topo-swatch l2' }), 'Physical link (L2)'),
-      el('span', { class: 'lg' }, el('span', { class: 'topo-swatch dep' }), 'Service dependency'),
-      changeSets && (changeSets.changed.size || changeSets.flapping.size)
-        ? el('span', { class: 'lg' }, el('span', { class: 'topo-dot flapping' }), 'Recently changed / flapping') : null,
-      el('span', { class: 'lg muted' }, `${totals.nodes} hosts · ${totals.l2_link} links · ${totals.service_dep} dependencies · line width = bytes`));
-    const children = [layerBar, el('div', { class: 'pg-head' }, legend), layersApi.wrap];
-    if (canWrite()) children.push(el('div', { class: 'blast-slot' }, blastPanel(null)));
-    layerHost.replaceChildren(...children);
+      el('span', { class: 'lg' }, el('span', { class: 'topo-swatch l2' }), t('topo.legend.l2')),
+      el('span', { class: 'lg' }, el('span', { class: 'topo-swatch dep' }), t('topo.legend.dep')),
+      topoLayersState.changeSets && (topoLayersState.changeSets.changed.size || topoLayersState.changeSets.flapping.size)
+        ? el('span', { class: 'lg' }, el('span', { class: 'topo-dot flapping' }), t('topo.legend.changed'))
+        : null,
+      el('span', { class: 'lg muted' }, t('topo.legend.totals', {
+        nodes: totals.nodes, links: totals.l2_link, deps: totals.service_dep,
+      })));
+    const children = [el('div', { class: 'pg-head' }, legend), api2.wrap];
+    if (opts.whatIf) children.push(el('div', { class: 'blast-slot' }, el('div', { class: 'muted small' }, t('topo.whatIf.prompt'))));
+    host.replaceChildren(...children);
+    if (opts.whatIf && opts.focus != null) runTopoBlast(host, opts.focus, opts);
+  };
 
-    // Deep-linked (or re-render while) a node is focused in what-if mode: re-run.
-    if (whatIf && canWrite() && topoState.focus != null) runBlast(topoState.focus);
+  render();
+  if (topoLayersState.graph) return;
+  try {
+    topoLayersState.graph = await api('/api/topology/graph');
+  } catch (e) {
+    host.replaceChildren(el('div', { class: 'error' }, errText(e)));
+    return;
   }
-  async function drawLayers() {
-    if (graphData) { renderLayers(); return; }
-    renderLayers(); // shows "Loading…" with the layer bar
+  if (canWrite() && topoLayersState.changeSets === null) {
     try {
-      graphData = await api('/api/topology/graph');
-    } catch (e) {
-      layerHost.replaceChildren(el('div', { class: 'error' }, errText(e)));
-      return;
-    }
-    // Recently-changed / flapping links are operator+ data — fetch best-effort.
-    if (canWrite() && changeSets === null) {
+      const cg = await api('/api/topology/changes?limit=200');
+      topoLayersState.changeSets = TopologyGraph.changedHostSets(cg.events || []);
+    } catch { topoLayersState.changeSets = { changed: new Set(), flapping: new Set() }; }
+  }
+  if (host.isConnected) render();
+}
+
+async function runTopoBlast(host, id, opts) {
+  if (!topoLayersState.api) return;
+  if (opts.onFocus) opts.onFocus(id);
+  const slot = host.querySelector('.blast-slot');
+  if (slot) slot.replaceChildren(el('div', { class: 'muted small' }, t('topo.whatIf.computing', { id })));
+  let blast;
+  try {
+    blast = await api(`/api/topology/blast-radius/${encodeURIComponent(id)}`);
+  } catch (e) {
+    topoLayersState.api.setHighlight({ focus: id, isolated: new Set(), affected: new Set() });
+    if (slot) slot.replaceChildren(el('div', { class: 'error small' }, errText(e)));
+    return;
+  }
+  topoLayersState.api.setHighlight(TopologyGraph.blastSets(blast));
+  const nameFor = (nid) => {
+    const n = ((topoLayersState.graph && topoLayersState.graph.nodes) || []).find((x) => x.id === Number(nid));
+    return n ? n.label : String(nid);
+  };
+  if (slot) slot.replaceChildren(blastRadiusPanel(blast, { nameFor }));
+}
+
+function getTopologyPage() {
+  if (topologyPage) return topologyPage;
+  if (typeof window === 'undefined' || !window.TopologyPage || !ui) return null;
+  topologyPage = window.TopologyPage.create({
+    el, t, ui, errText, fmtBytes, gotoView,
+    state: topologyPageState,
+    TopologyGraph,
+    canWrite,
+    params: () => TopologyGraph.parseParams(window.location.search),
+    modeParam: () => {
+      try { return new URLSearchParams(window.location.search || '').get('mode'); } catch { return null; }
+    },
+    // parseParams defaults `layer` to 'both', so only the raw query can say
+    // whether a layer (or a focus) was actually deep-linked.
+    wantsLayers: () => /[?&](layer|focus)=/.test(window.location.search || ''),
+    // Only the topology-owned params are written, so an unrelated one on the
+    // URL survives — the SPA's replaceState persistence pattern.
+    syncParams: (patch) => {
       try {
-        const cg = await api('/api/topology/changes?limit=200');
-        changeSets = TopologyGraph.changedHostSets(cg.events || []);
-      } catch { changeSets = { changed: new Set(), flapping: new Set() }; }
-    }
-    renderLayers();
-  }
+        const q = new URLSearchParams(window.location.search || '');
+        for (const [k, v] of Object.entries(patch)) { if (v == null) q.delete(k); else q.set(k, String(v)); }
+        const qs = q.toString();
+        window.history.replaceState(null, '', qs ? `${window.location.pathname}?${qs}` : window.location.pathname);
+      } catch { /* URL API off — best-effort */ }
+    },
+    help: () => {
+      const info = PAGE_INFO.topology || {};
+      return { lead: info.hero || '', title: info.title || t('topo.title'), body: info.body || (() => []) };
+    },
+    fetchScope: async () => {
+      const [agents, locations] = await Promise.all([
+        api('/agents').catch(() => []),
+        api('/locations').catch(() => []),
+      ]);
+      return { agents, locations };
+    },
+    // Agent scope wins over Site, mirroring the backend precedence.
+    fetchTopology: async ({ minutes, agentId, siteId }) => {
+      const qp = new URLSearchParams({ minutes });
+      if (agentId) qp.set('agentId', agentId);
+      else if (siteId) qp.set('locationId', siteId);
+      return api(`/api/topology?${qp}`);
+    },
+    graphSvg: topoGraphSvg,
+    drawLayers: drawTopoLayersInto,
+    drawMap: drawTopoMapInto,
+    stopMap: stopTopoMap,
+    recompute: async () => {
+      await api('/api/topology/dependencies/recompute', { method: 'POST' });
+      topoLayersState.graph = null;
+    },
+    probe: topoProbeModal,
+  });
+  return topologyPage;
+}
 
-  async function loadTopology() {
-    const qp = new URLSearchParams({ minutes: winSel.value });
-    const agentId = agentSel.value; // '' = whole fleet
-    const locId = locSel.value;
-    // Agent scope wins over Site (mirrors the backend precedence): a specific
-    // agent limits the map to its own flows; otherwise fall back to the Site filter.
-    if (agentId) qp.set('agentId', agentId);
-    else if (locId) qp.set('locationId', locId);
-
-    const agentName = agentId ? (agentSel.options[agentSel.selectedIndex] || {}).text : null;
-    const locName = (!agentId && locId) ? (locations.find((l) => String(l.id) === locId) || {}).name : null;
-    const winLabel = winSel.options[winSel.selectedIndex].text;
-    const scopeName = agentName || locName;
-    headInfo.textContent = `Service/host dependencies · ${winLabel}${scopeName ? ` · ${scopeName}` : ''}`;
-
-    let data;
-    try {
-      data = await api(`/api/topology?${qp}`);
-    } catch (e) {
-      lastData = null;
-      graphHost.replaceChildren();
-      tableHost.replaceChildren(el('div', { class: 'error' }, errText(e)));
-      summary.textContent = '';
-      applyMode();
-      return;
-    }
-    lastData = data;
-
-    const t = data.totals || { nodes: 0, internal: 0, external: 0, edges: 0 };
-    summary.textContent = `${t.nodes} hosts (${t.internal} internal, ${t.external} external) · ${t.edges} dependencies${data.truncated ? ' · showing the heaviest' : ''}`;
-
-    if (!data.edges || !data.edges.length) {
-      graphHost.replaceChildren();
-      tableHost.replaceChildren(el('div', { class: 'empty' }, 'No flow data in this window. Topology is built from agents whose traffic source is NetFlow or sFlow.'));
-      applyMode();
-      return;
-    }
-
-    Object.keys(byId).forEach((k) => delete byId[k]);
-    (data.nodes || []).forEach((n) => { byId[n.id] = n; });
-
-    // Diagram: capped to the busiest hosts for legibility — the tables below
-    // carry the full (still-capped-by-the-API) list. Both draw from the same
-    // response, so the diagram and the tables always agree.
-    const GRAPH_MAX_NODES = 40;
-    const graphNodes = (data.nodes || []).slice(0, GRAPH_MAX_NODES);
-    const graphIds = new Set(graphNodes.map((n) => n.id));
-    const graphEdges = (data.edges || []).filter((e) => graphIds.has(e.from) && graphIds.has(e.to)).slice(0, 90);
-    const graphNote = graphNodes.length < (data.nodes || []).length
-      ? el('p', { class: 'muted small' }, `Diagram shows the ${graphNodes.length} busiest of ${data.nodes.length} hosts — see the tables below for the full list.`)
-      : null;
-    graphHost.replaceChildren(
-      ...[el('h3', {}, 'Diagram'),
-        topoGraphSvg(graphNodes, graphEdges, { label, kindBadge, actionBtns: onlineAgents.length ? actionBtns : null }),
-        graphNote].filter(Boolean));
-
-    tableHost.replaceChildren(
-      el('h3', {}, 'Top dependencies'),
-      el('table', { class: 'agents-table' },
-        el('thead', {}, el('tr', {},
-          el('th', { scope: 'col' }, 'From'), el('th', { scope: 'col' }, 'To'),
-          el('th', { scope: 'col' }, 'Peer'), el('th', { scope: 'col' }, 'Bytes'), el('th', { scope: 'col' }, 'Flows'),
-          onlineAgents.length ? el('th', { scope: 'col' }, 'Actions') : null)),
-        el('tbody', {}, ...data.edges.slice(0, 100).map((e) => el('tr', {},
-          el('td', {}, label(e.from)),
-          el('td', {}, label(e.to)),
-          el('td', {}, kindBadge(byId[e.to] && byId[e.to].kind)),
-          el('td', {}, fmtBytes(e.bytes)),
-          el('td', {}, String(e.flows)),
-          onlineAgents.length ? el('td', {}, actionBtns(e.to)) : null)))),
-      el('h3', {}, 'Busiest hosts'),
-      el('table', { class: 'agents-table' },
-        el('thead', {}, el('tr', {},
-          el('th', { scope: 'col' }, 'Host'), el('th', { scope: 'col' }, 'Kind'),
-          el('th', { scope: 'col' }, 'Peers'), el('th', { scope: 'col' }, 'In'), el('th', { scope: 'col' }, 'Out'),
-          onlineAgents.length ? el('th', { scope: 'col' }, 'Actions') : null)),
-        el('tbody', {}, ...(data.nodes || []).slice(0, 50).map((n) => el('tr', {},
-          el('td', {}, label(n.id)),
-          el('td', {}, kindBadge(n.kind)),
-          el('td', {}, String(n.degree)),
-          el('td', {}, fmtBytes(n.bytesIn)),
-          el('td', {}, fmtBytes(n.bytesOut)),
-          onlineAgents.length ? el('td', {}, actionBtns(n.id)) : null)))));
-
-    applyMode();
-  }
-
-  locSel.addEventListener('change', loadTopology);
-  winSel.addEventListener('change', loadTopology);
-  refreshBtn.addEventListener('click', loadTopology);
-  await loadTopology();
-  return root;
+views.topology = async () => {
+  const v = getTopologyPage();
+  if (!v) return el('div', { class: 'empty error' }, t('topo.err.title'));
+  return v.view();
 };
 
 // ---- Delta / Changes view (topology change feed) ---------------------------

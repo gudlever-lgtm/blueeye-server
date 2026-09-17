@@ -446,6 +446,7 @@ Administration → login and error screens.
 | Investigate | `/investigate` | C · FormPage | [`public/views/investigate.js`](../public/views/investigate.js) |
 | Diagnose | `/diagnose` | C · FormPage | [`public/views/diagnose.js`](../public/views/diagnose.js) |
 | Troubleshooting | `/troubleshooting` | B · DashboardPage | [`public/views/troubleshooting.js`](../public/views/troubleshooting.js) |
+| Topology | `/topology` | B · DashboardPage | [`public/views/topology.js`](../public/views/topology.js) |
 
 **What Changes kept:** the window vocabulary the server accepts (`30m`, `6h`,
 `24h`, `7d` — not the preview's three), the marker rule (it moves only on an
@@ -678,3 +679,28 @@ the old one under a new heading.
 timeline rows (`TimelineView.renderRow`) and the brush geometry, which moved to
 `tshootBrushSvg` in app.js as an object the view paints into. Two of the three
 are shared with other screens.
+
+
+**Topology** had three buttons pretending to be tabs — Diagram, Layers, Map —
+with a `.topo-mode` rule that rounded the first and last to fake a segmented
+control. They are a SubTabs strip now, with the mode in the URL, which is the
+contract's one tab pattern and carries the keyboard and the ARIA the buttons
+never had.
+
+Every table row carried three probe buttons — Ping, Show route, Path — stacking
+into a three-line column on a narrow screen. Ping is the row's one action and
+the other two are behind the ⋯ menu. All three need an agent to run from, so
+when no agent is online the column is not there at all.
+
+The two tables became sortable DataTables, so "the busiest host" is a click.
+The scope line — "Service/host dependencies · 60 min · Oslo" — moved from a grey
+span beside the heading into the Panel that shows the data, where it belongs.
+
+A `?layer` or `?focus` deep link still opens on Layers. That test reads the
+**raw query**, because `TopologyGraph.parseParams` defaults `layer` to `both`
+and would claim every URL was a layer link.
+
+**Not migrated, passed in whole:** `topoGraphSvg`, `topoLayersSvg`, the Leaflet
+map (now `drawTopoMapInto`), the blast-radius panel and the probe modals (now
+`topoProbeModal`) — the path visualisation among them is shared with Probes &
+Tests.

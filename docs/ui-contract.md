@@ -778,5 +778,18 @@ than to two of them. Eight rather than the chart contract's six because a
 journey chart genuinely has eight lines, and dropping two would drop two
 applications.
 
-Remaining: **154 literals in `styles.css`**, the chrome of the screens phase 3
-has not reached.
+`styles.css` followed, and the same two passes emptied it: 31 dead fallbacks
+(five of them for tokens defined nowhere — `--code-bg`, `--danger`, `--fg`,
+`--surface-1`, `--surface-2`), and ~120 real colours. One of those five was
+worse than a dead fallback: `.tl-src` read `color: var(--fg)` with **no**
+fallback at all, so the declaration was invalid and the colour simply inherited.
+
+The incident, confidence, risk, root-cause and guide badges were a flat-UI
+palette — `#c0392b`, `#e67e22`, `#2980b9`, `#8e44ad`, `#27ae60`, `#95a5a6` —
+painted flat with white text, and none of it moved with the palette. They are
+severity pairs now. Two meanings shared one purple: "investigating" and
+"acknowledged". Both read as warn, which says more than the purple did —
+somebody has it, and it is not fixed.
+
+**`npm run ui:check -- --all` is clean.** There is no colour literal anywhere in
+`public/` outside `css/tokens.css`.

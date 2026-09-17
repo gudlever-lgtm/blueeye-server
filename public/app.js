@@ -1365,6 +1365,7 @@ const CONTRACT_VIEWS = new Map([
   ['location', 'location'],
   ['about', 'about'],
   ['docs', 'docs'],
+  ['users', 'users'],
 ]);
 
 function hero(viewKey) {
@@ -11228,7 +11229,7 @@ views.docs = async () => {
 // contract's.
 let settingsPage = null;
 const SETTINGS_SECTIONS = {
-  users: () => views.users(),
+  users: () => views.users({ embedded: true }),
   license: () => views.license(),
   appearance: settingsAppearanceView,
   database: settingsDatabaseView,
@@ -13609,48 +13610,50 @@ function geoipSettingsCard(geoip) {
       el('div', { class: 'form-actions' }, btn, updateBtn)));
 }
 
-views.users = async () => {
-  const [users, avail] = await Promise.all([
-    api('/users'),
-    api('/users/local-availability').catch(() => ({ available: false, ssoActive: false, mailerReady: false })),
-  ]);
-  const root = el('div');
-  const headBtns = [el('button', { class: 'small', onclick: () => editUser() }, '+ New user')];
-  // Local user creation with a one-time password — only offered when no SSO/LDAP
-  // is active. The server enforces the same rule (403); this just hides the UI.
-  if (avail.available) {
-    headBtns.unshift(el('button', { class: 'small', onclick: () => createLocalUser() }, '+ Invite user (one-time password)'));
-  }
-  root.append(el('div', { class: 'section-head' }, el('h2', {}, 'Users'), ...headBtns));
-  root.append(el('p', { class: 'muted' }, ['Roles: viewer (read), operator (create/edit), admin (all). Only admins see this tab. A name is optional and display-only — it is what ', viewLink('userLogs', 'User Logs'), ' shows next to each action instead of an email address.']));
-  if (!avail.available && avail.ssoActive) {
-    root.append(el('p', { class: 'muted' }, 'Local user invitations are disabled while SSO/LDAP is active — manage users in your directory.'));
-  } else if (!avail.available && !avail.mailerReady) {
-    root.append(el('p', { class: 'muted' }, ['One-time-password invitations need SMTP configured in ', settingsLink('alerting', 'Settings → Alerting'), '.']));
-  }
-  root.append(el('table', {},
-    el('thead', {}, el('tr', {}, ...['ID', 'Name', 'Email', 'Role', 'Status', 'Created', ''].map((h) => el('th', {}, h)))),
-    el('tbody', {}, ...users.map((u) => el('tr', {},
-      el('td', {}, String(u.id)),
-      // The name is display only — the email stays the identity. It is what
-      // User Logs shows next to an action, so an unnamed account is worth
-      // pointing out here rather than leaving blank.
-      el('td', {}, u.name || el('span', { class: 'muted' }, '—')),
-      el('td', {}, u.email),
-      el('td', {}, el('span', { class: 'badge' }, u.role),
-        u.protected ? el('span', { class: 'badge', title: 'Superadmin — cannot be changed/deleted, password only', style: 'margin-left:6px' }, 'superadmin') : null),
-      el('td', {}, u.must_change_password
-        ? el('span', { class: 'badge', title: u.temp_password_expires_at ? `One-time password expires ${fmtDate(u.temp_password_expires_at)}` : 'Awaiting first password change' }, 'pending first login')
-        : el('span', { class: 'badge active', title: 'Account active — first-login password change completed' }, 'Active')),
-      el('td', { class: 'muted' }, fmtDate(u.created_at)),
-      el('td', {}, el('div', { class: 'row-actions' },
-        (avail.available && u.must_change_password)
-          ? el('button', { class: 'small ghost', title: 'Generate and email a new one-time password', onclick: () => resendTempPassword(u) }, 'Resend password')
-          : null,
-        el('button', { class: 'small ghost', onclick: () => editUser(u) }, u.protected ? 'Change password' : 'Edit'),
-        u.protected ? null : el('button', { class: 'small danger', onclick: () => deleteUser(u) }, 'Delete'))),
-    )))));
-  return root;
+// ---- Users (MIGRATED — see public/views/users.js)
+// Reached at /users and as the Users section inside Settings; the second one
+// passes mode 'embedded', which drops the PageHeader the Settings strip has
+// already said.
+let usersPage = null;
+let usersEmbedded = false;
+function getUsersPage() {
+  if (usersPage) return usersPage;
+  if (typeof window === 'undefined' || !window.UsersPage || !ui) return null;
+  usersPage = window.UsersPage.create({
+    el, t, ui, errText,
+    settingsLink,
+    mode: () => (usersEmbedded ? 'embedded' : 'standalone'),
+    help: () => ({ title: t('usr.info.title'), body: () => [
+      el('p', {}, t('usr.info.p1')),
+      el('p', {}, t('usr.info.p2')),
+      el('p', { class: 'muted' }, t('usr.info.p3')),
+    ] }),
+    fetchAll: async () => {
+      const [users, availability] = await Promise.all([
+        api('/users'),
+        // Local user creation with a one-time password is only offered when no
+        // SSO/LDAP is active. The server enforces the same rule (403); this
+        // decides what the screen shows.
+        api('/users/local-availability').catch(() => ({ available: false, ssoActive: false, mailerReady: false })),
+      ]);
+      return { users, availability };
+    },
+    invite: createLocalUser,
+    edit: editUser,
+    resend: resendTempPassword,
+    remove: deleteUser,
+    rerender: () => render(),
+  });
+  return usersPage;
+}
+
+views.users = async (opts) => {
+  const v = getUsersPage();
+  if (!v) return el('div', { class: 'empty error' }, t('usr.err.title'));
+  usersEmbedded = !!(opts && opts.embedded);
+  // The list is re-read per entry, so the page is rebuilt with it.
+  usersPage = null;
+  return getUsersPage().view();
 };
 
 // Invite a local user: the server generates a one-time password and emails it;
@@ -15424,6 +15427,11 @@ const PREVIEW_OF = { uiPreviewChanges: 'changes', uiPreviewProbes: 'probes' };
 const DETAIL_OF = {
   agent: 'agents', location: 'locations', event: 'events', cluster: 'clusters',
 };
+// Three Settings sections that also answer at an address of their own
+// (/users, /license, /test-settings). The rail has no entry for them — they are
+// reached through Settings — so the sidebar marked nothing and the crumb
+// printed the view key: a bare lowercase "users" at the reader.
+const SECTION_OF = { users: 'settings', license: 'settings', screening: 'settings' };
 // A screen with no rail entry at all still needs a name in the crumb, or the
 // topbar prints a view key at the reader.
 const CRUMB_ONLY = { kitchenSink: 'route.crumb.kitchenSink' };
@@ -15540,7 +15548,7 @@ function syncCrumb() {
     host.replaceChildren(el('span', { class: 'crumb-here' }, t(CRUMB_ONLY[currentView])));
     return;
   }
-  const marks = PREVIEW_OF[currentView] || DETAIL_OF[currentView] || currentView;
+  const marks = PREVIEW_OF[currentView] || DETAIL_OF[currentView] || SECTION_OF[currentView] || currentView;
   const tab = routeTabFor(currentView);
   const btn = [...document.querySelectorAll(NAV_BUTTONS)].find((b) => b.dataset.view === marks
     && (!b.dataset.saTab || b.dataset.saTab === tab)
@@ -15555,6 +15563,7 @@ function syncCrumb() {
   const id = routeIdFor(currentView);
   if (PREVIEW_OF[currentView]) parts.push(t('uip.crumb'));
   else if (id != null) parts.push(`#${id}`);
+  else if (SECTION_OF[currentView]) parts.push(settingsLabel(currentView));
   else if (tab && !(btn && (btn.dataset.saTab || btn.dataset.guide))) parts.push(crumbTabLabel(currentView, tab));
 
   const kids = [];
@@ -15754,7 +15763,7 @@ async function render({ silent = false } = {}) {
   for (const b of document.querySelectorAll(NAV_BUTTONS)) {
     // Several entries can share one data-view when they deep-link to different
     // sub-tabs; the sub-tab is what tells them apart.
-    const marks = PREVIEW_OF[currentView] || DETAIL_OF[currentView] || currentView;
+    const marks = PREVIEW_OF[currentView] || DETAIL_OF[currentView] || SECTION_OF[currentView] || currentView;
     const active = b.dataset.view === marks
       && (!b.dataset.saTab || b.dataset.saTab === serviceAssuranceTab)
       && (!b.dataset.guide || b.dataset.guide === guideTrack);

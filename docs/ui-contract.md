@@ -1474,3 +1474,39 @@ how-tos" holds thirteen of the twenty-three articles** and wraps to four rows
 while "Getting started" holds two. The strip is as tight as it can be made; the
 section is genuinely overfull, and splitting it is an editorial call, not one
 this migration should make.
+
+
+**Users** is the first of the three screens that answer at two addresses: `/users`
+and Settings → Users. `mode: 'embedded'` is what the second one passes — the
+Settings strip has already said "Users", so the page drops its own PageHeader
+there and the two actions move into a Toolbar. Same seam Service Assurance,
+Guides and Situations use.
+
+The `.section-head` held the `<h2>` and both buttons in one flex row, with the
+explanation and up to two preconditions as loose grey paragraphs under it. It is
+a PageHeader with the explanation as the lead, "New user" as the one primary,
+and each precondition as an **InlineNote** — "invitations are off while SSO/LDAP
+is active" is the answer to "where is the invite button", so it belongs where
+the button would be rather than in the same grey as everything else.
+
+**Three badges in two columns were not states.** `viewer` / `operator` / `admin`
+is what the account *is* and `superadmin` is a kind of account; both are
+metadata, so both are text. "pending first login" and "Active" are states, so
+that column keeps its Badge — one badge per row instead of three.
+
+The `ID` column went: it is a database key, and nothing on this screen or any
+other asks the reader for it. The three buttons in `.row-actions` are rowActions
+— Edit on hover, Resend password and Delete behind the ⋯.
+
+**A hidden button still holds its width.** The hover primary read "Change
+password" on the protected account and "Edit" on the rest, so the action column
+had to fit the longer label on every row — and the space came out of Email, the
+one column on this screen that is an identity. The primary is "Edit" everywhere;
+editing the superadmin *is* setting its password, and the dialog says so.
+
+**Fixed for three screens, found here:** `/users`, `/license` and
+`/test-settings` are Settings sections that also answer at an address of their
+own. The rail has no entry for them, so the sidebar marked nothing and the
+breadcrumb printed the view key — a bare lowercase "users" at the reader.
+`SECTION_OF` maps them onto Settings, the same way `DETAIL_OF` maps a record
+page onto its list, and the crumb reads "Administration / Settings / Users".

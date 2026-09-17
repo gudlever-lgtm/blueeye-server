@@ -17426,6 +17426,221 @@ function txTrendSvg(rows) {
 // green does not tell a shift what happened while they were away. The fleet grid
 // is still the right screen for bulk operations, so it keeps its own route.
 let currentView = 'changes';
+
+// ---- Routing ---------------------------------------------------------------
+// Every screen has an address (see public/routes.js). Two rules keep the URL and
+// `currentView` honest without rewriting the ~25 places that assign it directly:
+//
+//   1. render() is the single writer. Whatever set currentView, by the time the
+//      view is drawn the address is brought in line with it — pushed onto the
+//      history stack when the path actually changes, so Back steps through the
+//      screens the user visited.
+//   2. popstate is the single reader. Going Back parses the address and sets
+//      currentView from it, with the push suppressed so the step is not undone.
+//
+// The query string is left alone: several views own it for their own filters
+// (fleet ?severity, topology ?layer, delta ?changeTypes) and all of them
+// preserve window.location.pathname, so paths and filters do not collide.
+const Routes = (typeof window !== 'undefined' && window.AppRoutes) || null;
+// The screen a preview route stands in for: it has no rail entry of its own, so
+// without this the sidebar marks nothing and the breadcrumb prints a view key.
+const PREVIEW_OF = { uiPreviewChanges: 'changes', uiPreviewProbes: 'probes' };
+// Set while a popstate is being applied: the address is already correct, so
+// render() must replace rather than push (a push would strand the Back button).
+let routerReplacing = false;
+// The address the user asked for when it turned out not to exist — shown by the
+// not-found view so the message can name it.
+let notFoundPath = '';
+// The role the blocked address needs, so the forbidden screen can name it.
+let forbiddenRole = '';
+
+// The sub-tab state variable each tabbed view reports its position through.
+// `let` declarations below this line are hoisted but in the temporal dead zone,
+// so this is a function rather than a table built at load time.
+function routeTabFor(view) {
+  switch (view) {
+    case 'probes': return probesTab;
+    case 'transactions': return txTab;
+    case 'serviceAssurance': return serviceAssuranceTab;
+    case 'settings': return settingsTab;
+    case 'guide': return guideTrack;
+    default: return null;
+  }
+}
+function routeIdFor(view) {
+  switch (view) {
+    case 'agent': return selectedAgentId;
+    case 'location': return selectedLocationId;
+    case 'event': return selectedEventId;
+    case 'cluster': return selectedClusterId;
+    default: return null;
+  }
+}
+function setRouteTab(view, tab) {
+  if (!tab) return;
+  if (view === 'probes') probesTab = tab;
+  else if (view === 'transactions') txTab = tab;
+  else if (view === 'serviceAssurance') serviceAssuranceTab = tab;
+  else if (view === 'settings') settingsTab = tab;
+  else if (view === 'guide') guideTrack = tab;
+}
+function setRouteId(view, id) {
+  if (id == null) return;
+  if (view === 'agent') selectedAgentId = id;
+  else if (view === 'location') selectedLocationId = id;
+  else if (view === 'event') selectedEventId = id;
+  else if (view === 'cluster') selectedClusterId = id;
+}
+
+// Read the address into view state. Returns false when the path names no screen
+// (the server already answered 404 with this same shell) or when the screen is
+// above the reader's role — a typed URL does not pass the nav rail, so the check
+// that hides the tab has to happen here as well.
+function applyRoute(loc) {
+  if (!Routes) return true;
+  const hit = Routes.match((loc || window.location).pathname);
+  if (!hit) {
+    notFoundPath = (loc || window.location).pathname;
+    currentView = Routes.NOT_FOUND;
+    return false;
+  }
+  const min = Routes.MIN_ROLE[hit.view];
+  if (min && !roleAtLeast(min)) {
+    // A typed URL does not pass the nav rail, so the role gate that hides the
+    // tab has to be applied here too. It is NOT a 404: saying "no such page"
+    // about a page that does exist is the kind of half-truth that sends people
+    // to support. The API behind every one of these screens refuses the same
+    // reader with a real 403, so the screen says the same thing.
+    notFoundPath = (loc || window.location).pathname;
+    forbiddenRole = min;
+    currentView = 'forbidden';
+    return false;
+  }
+  currentView = hit.view;
+  setRouteTab(hit.view, hit.tab);
+  setRouteId(hit.view, hit.id);
+  return true;
+}
+
+// Bring the address in line with the view being drawn. Called from render().
+function syncLocation() {
+  // notFound and forbidden are answers ABOUT an address, not screens with one:
+  // rewriting the bar to '/' would hide the very address the message names.
+  if (!Routes || !Routes.VIEWS[currentView]) return;
+  try {
+    const target = Routes.pathFor(currentView, { tab: routeTabFor(currentView), id: routeIdFor(currentView) });
+    if (Routes.normalise(window.location.pathname) === target) return;
+    const url = target + (window.location.search || '') + (window.location.hash || '');
+    if (routerReplacing) window.history.replaceState(null, '', url);
+    else window.history.pushState(null, '', url);
+  } catch { /* URL/History API off — the app still works, the address does not follow */ }
+}
+
+// Section / page / sub-page, rebuilt from the route on every render. The labels
+// come from the sidebar the route points at, so the crumb and the rail can never
+// disagree, and a language switch relabels both.
+function syncCrumb() {
+  const host = $('#crumb');
+  if (!host || !Routes) return;
+  // The two answers ABOUT an address rather than screens with one.
+  if (currentView === Routes.NOT_FOUND || currentView === 'forbidden') {
+    host.replaceChildren(el('span', { class: 'crumb-here' },
+      currentView === 'forbidden' ? t('route.forbidden.crumb') : t('route.notFound.crumb')));
+    return;
+  }
+  const marks = PREVIEW_OF[currentView] || currentView;
+  const tab = routeTabFor(currentView);
+  const btn = [...document.querySelectorAll('.tabs button[data-view]')].find((b) => b.dataset.view === marks
+    && (!b.dataset.saTab || b.dataset.saTab === tab)
+    && (!b.dataset.guide || b.dataset.guide === tab))
+    || document.querySelector(`.tabs button[data-view="${marks}"]`);
+  const group = btn && btn.closest('.nav-group');
+  const groupLabel = group && group.querySelector('.nav-group-label');
+  const parts = [];
+  if (groupLabel) parts.push(groupLabel.textContent.trim());
+  parts.push(btn ? btn.textContent.trim() : (VIEW_LABELS[currentView] || currentView));
+  // A sub-page the rail does not name: the open record, or a tab of its own.
+  const id = routeIdFor(currentView);
+  if (PREVIEW_OF[currentView]) parts.push(t('uip.crumb'));
+  else if (id != null) parts.push(`#${id}`);
+  else if (tab && !(btn && (btn.dataset.saTab || btn.dataset.guide))) parts.push(crumbTabLabel(currentView, tab));
+
+  const kids = [];
+  parts.filter(Boolean).forEach((text, i) => {
+    if (i) kids.push(el('span', { class: 'crumb-sep', 'aria-hidden': 'true' }, '/'));
+    kids.push(i === parts.length - 1
+      ? el('span', { class: 'crumb-here', 'aria-current': 'page' }, text)
+      : el('span', { class: 'crumb-step' }, text));
+  });
+  host.replaceChildren(...kids);
+}
+// A sub-tab's own label. Falls back to the segment itself, which is already the
+// word in the URL, so an untranslated tab reads as its address rather than blank.
+function crumbTabLabel(view, tab) {
+  const key = `route.tab.${view}.${tab}`;
+  const label = t(key);
+  return label === key ? tab : label;
+}
+
+if (typeof window !== 'undefined' && Routes) {
+  window.addEventListener('popstate', () => {
+    closeDrawer();
+    routerReplacing = true;
+    applyRoute(window.location);
+    Promise.resolve(render()).finally(() => { routerReplacing = false; });
+  });
+}
+
+// The address that did not resolve. Rendered inside the ordinary shell — the
+// sidebar, the topbar and the search are all still there, because a mistyped
+// URL is not a reason to take the way out away.
+views.notFound = async () => el('div', { class: 'ui ui-page' },
+  el('header', { class: 'page-head' },
+    el('div', {},
+      el('h1', {}, t('route.notFound.title')),
+      el('p', {}, t('route.notFound.lead')))),
+  el('section', { class: 'panel-ui' },
+    el('div', { class: 'state is-error' },
+      el('div', { class: 'state-ico' }, '404'),
+      el('h3', {}, t('route.notFound.heading')),
+      el('p', {}, t('route.notFound.body'), ' ', el('code', {}, notFoundPath || '/')),
+      el('button', {
+        class: 'btn btn-primary',
+        onclick: () => { currentView = Routes ? Routes.HOME : 'changes'; render(); },
+      }, t('route.notFound.home')))));
+
+// The address exists; this reader may not open it. Same shell, same way out.
+views.forbidden = async () => el('div', { class: 'ui ui-page' },
+  el('header', { class: 'page-head' },
+    el('div', {},
+      el('h1', {}, t('route.forbidden.title')),
+      el('p', {}, t('route.forbidden.lead')))),
+  el('section', { class: 'panel-ui' },
+    el('div', { class: 'state is-error' },
+      el('div', { class: 'state-ico' }, '403'),
+      el('h3', {}, t('route.forbidden.heading', { role: forbiddenRole || 'admin' })),
+      el('p', {}, t('route.forbidden.body', { role: forbiddenRole || 'admin' }), ' ', el('code', {}, notFoundPath || '/')),
+      el('button', {
+        class: 'btn btn-primary',
+        onclick: () => { currentView = Routes ? Routes.HOME : 'changes'; render(); },
+      }, t('route.notFound.home')))));
+
+// ---- UI-contract preview (Phase 1, admin only) ------------------------------
+// Two example screens built from the contract's components, on their own routes
+// so nothing live changes while the direction is reviewed. Deleted once Changes
+// and Probes & Tests are migrated onto their real routes.
+const uiPreview = (typeof window !== 'undefined' && window.UiPreview)
+  ? window.UiPreview.create({
+    el, api, t, plural, toast, errText, fmtDate, fmtTimeShort, openAgent, gotoView,
+  })
+  : null;
+views.uiPreviewChanges = async () => (uiPreview
+  ? uiPreview.changes()
+  : el('div', { class: 'empty' }, t('uip.unavailable')));
+views.uiPreviewProbes = async () => (uiPreview
+  ? uiPreview.probes()
+  : el('div', { class: 'empty' }, t('uip.unavailable')));
+
 const modalOpen = () => !$('#modal').classList.contains('hidden');
 
 // One-time per session: stamp the sidebar foot with this server's build —
@@ -17493,6 +17708,9 @@ async function render({ silent = false } = {}) {
   maybePromptSigningKey();
 
   // Stop the overview poller when leaving that view (it restarts itself when shown).
+  // The preview screens own their drawer, popover and row menu; they are
+  // appended to <body>, so leaving the view does not remove them.
+  if (uiPreview && currentView !== 'uiPreviewChanges' && currentView !== 'uiPreviewProbes') uiPreview.closeOverlays();
   if (currentView !== 'overview') stopOverview();
   if (currentView !== 'probes') stopProbes();
   if (currentView !== 'interfaces') stopIfaces();
@@ -17512,11 +17730,28 @@ async function render({ silent = false } = {}) {
   for (const b of document.querySelectorAll('.tabs button[data-view], #sidebar-foot button[data-view]')) {
     // Several entries can share one data-view when they deep-link to different
     // sub-tabs; the sub-tab is what tells them apart.
-    const active = b.dataset.view === currentView
+    const marks = PREVIEW_OF[currentView] || currentView;
+    const active = b.dataset.view === marks
       && (!b.dataset.saTab || b.dataset.saTab === serviceAssuranceTab)
       && (!b.dataset.guide || b.dataset.guide === guideTrack);
     b.classList.toggle('active', active);
+    // The section you are in is open. Groups start collapsed and the collapsed
+    // set is remembered per browser, so without this a deep link (or a reload
+    // on any page) marks an item inside a folded group — a "you are here" that
+    // nobody can see. Unfolding does not touch the remembered set: close it
+    // again and the choice still sticks.
+    if (active) {
+      const group = b.closest('.nav-group');
+      if (group && group.classList.contains('collapsed')) {
+        group.classList.remove('collapsed');
+        const label = group.querySelector('.nav-group-label');
+        if (label) label.setAttribute('aria-expanded', 'true');
+      }
+    }
   }
+
+  syncLocation();
+  syncCrumb();
 
   const view = $('#view');
   if (!silent) view.replaceChildren(el('div', { class: 'empty' }, 'Loading…'));
@@ -17783,7 +18018,14 @@ setupNavGroups();
 $('#modal').addEventListener('click', (e) => { if (e.target.id === 'modal') closeModal(); });
 installModalA11y(); // focus management + trap + Escape for every modal flow
 
-render();
+// The first paint comes from the address bar, not from a default. A reload, a
+// bookmark and a shared link all land on the screen they name; the bare '/'
+// lands on Changes as before. The address is already correct at this point, so
+// the first render replaces rather than pushes — otherwise Back would have to
+// step past an entry the user never navigated to.
+routerReplacing = true;
+applyRoute(window.location);
+Promise.resolve(render()).finally(() => { routerReplacing = false; });
 
 // ---- Scheduled reports ----------------------------------------------------
 // The exports answer a question somebody asked. This answers the recurring

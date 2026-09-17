@@ -14,9 +14,11 @@ const { makeApp } = require('../test-support/fakes');
 
 const PUBLIC = path.join(__dirname, '..', 'public');
 
-// The dashboard's look is carried by one token scale in public/styles.css
-// (radii, elevation, hairlines, easing) that every palette re-themes for free.
-// These tests guard the scale itself: a surface that hard-codes a radius or an
+// The dashboard's look is carried by one token scale — radii, elevation,
+// hairlines, easing — that every palette re-themes for free. The scale and the
+// palettes live in public/css/tokens.css (the UI contract's one file for
+// colour, see docs/ui-contract.md); public/styles.css is the rules that READ
+// them. These tests guard both halves: a surface that hard-codes a radius or an
 // rgba tint drops out of the palette system silently, which is exactly the
 // class of change nobody notices until a customer switches theme.
 
@@ -32,8 +34,14 @@ test('a stylesheet that does not exist is a 404, not a 500', async () => {
   assert.equal(res.body.error, 'Not Found');
 });
 
+test('GET /css/tokens.css serves the token file the whole UI reads', async () => {
+  const res = await request(makeApp()).get('/css/tokens.css');
+  assert.equal(res.status, 200);
+  assert.match(res.headers['content-type'], /text\/css/);
+});
+
 test('the soft-surface token scale is defined on :root', async () => {
-  const css = (await request(makeApp()).get('/styles.css')).text;
+  const css = (await request(makeApp()).get('/css/tokens.css')).text;
   for (const token of [
     '--radius-xs:', '--radius-sm:', '--radius:', '--radius-lg:', '--radius-pill:',
     '--shadow:', '--shadow-md:', '--shadow-lg:',
@@ -55,7 +63,8 @@ test('panel radii come from the token scale, not from literal pixels', async () 
 });
 
 test('status tints are derived from the palette, not hard-coded rgba', async () => {
-  const css = (await request(makeApp()).get('/styles.css')).text;
+  const css = (await request(makeApp()).get('/styles.css')).text
+    + (await request(makeApp()).get('/css/tokens.css')).text;
   const at = css.indexOf('\n.badge {'); // the base rule, not `.storage-store .badge {`
   const badgeBlock = css.slice(at, at + 1200);
   assert.match(badgeBlock, /\.badge\.online[^\n]*var\(--ok-weak\)/);

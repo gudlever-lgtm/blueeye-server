@@ -90,10 +90,13 @@ test('dashboard offers selectable colour themes saved per user', async () => {
   assert.match(js, /dual: p\.dark\.key/); // every variant knows its opposite-brightness pair
   assert.match(js, /themeMeta\(document\.documentElement\.dataset\.theme\)\.dual/); // toggle flips brightness within the palette
 
+  // The palettes live in tokens.css (the UI contract's one file for colour);
+  // the picker that switches between them is ordinary chrome in styles.css.
+  const tokens = (await request(app).get('/css/tokens.css')).text;
+  assert.match(tokens, /\[data-theme="nord"\]/); // a dark colour palette is defined
+  assert.match(tokens, /\[data-theme="nord-light"\]/); // …paired with a light variant
+  assert.match(tokens, /\[data-theme="solarized-dark"\]/);
   const css = (await request(app).get('/styles.css')).text;
-  assert.match(css, /\[data-theme="nord"\]/); // a dark colour palette is defined
-  assert.match(css, /\[data-theme="nord-light"\]/); // …paired with a light variant
-  assert.match(css, /\[data-theme="solarized-dark"\]/);
   assert.match(css, /\.theme-grid/); // picker styling
 });
 

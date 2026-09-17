@@ -1332,6 +1332,7 @@ const CONTRACT_VIEWS = new Map([
   ['changes', 'changes'],
   ['probes', 'probes'],
   ['findings', 'analysis'],
+  ['fleet', 'fleet'],
 ]);
 
 function hero(viewKey) {
@@ -9672,209 +9673,79 @@ function fleetIssues(w) {
 // The landing view: all agents with a probe-derived health verdict, worst-first.
 // Click a row to pivot into that agent's combined detail page. For Professional+
 // licences it also surfaces an "Open issues" rollup (events + findings).
+// ---- Fleet (MIGRATED — see public/views/fleet.js) ---------------------------
+// Built lazily: `ui` is declared far down this file. app.js keeps what outlives
+// the view — the cross-view fleet filter, the health sort, and the 10 s poll —
+// and hands the view the three panels that are not the contract's: the NOC
+// header, the traffic map and the licence-gated issues rollup.
+let fleetView = null;
+const fleetViewState = {};
+function getFleetView() {
+  if (fleetView) return fleetView;
+  if (typeof window === 'undefined' || !window.FleetView || !ui) return null;
+  fleetView = window.FleetView.create({
+    el, t, ui, FleetFilter,
+    state: fleetViewState,
+    errText,
+    openAgent, gotoView,
+    summaryTotal,
+    latencyText,
+    throughputText,
+    // The health verdict as a contract Badge rather than the legacy .badge.
+    healthBadgeUi: (h) => {
+      const [cls, label] = HEALTH_BADGE[(h && h.status) || 'unknown'] || HEALTH_BADGE.unknown;
+      const tone = { online: 'ok', warn: 'warn', crit: 'crit', down: 'crit', stale: 'neutral', grace: 'neutral' }[cls] || 'neutral';
+      return ui.badge(tone, label);
+    },
+    filter: () => fleetFilter,
+    setFilter: (next) => { fleetFilter = next; },
+    getSortByHealth: () => fleetSortByHealth,
+    setSortByHealth: (v) => { fleetSortByHealth = v; },
+    syncUrl: () => syncFleetUrl(),
+    help: () => {
+      const info = PAGE_INFO.fleet || {};
+      return { lead: info.hero || '', title: info.title || t('fleet.title'), body: info.body || (() => []) };
+    },
+    // Filtering is client-side on the dataset the page already holds. Only for a
+    // large fleet (>500 agents) is the severity filter offloaded to the server
+    // to shrink the payload; the summary stays whole-fleet either way, so the
+    // StatStrip counts remain correct.
+    fetchHealth: (last) => {
+      const big = last && summaryTotal(last.summary) > 500;
+      const q = big && fleetFilter.severity.length
+        ? `?severity=${encodeURIComponent(fleetFilter.severity.join(','))}` : '';
+      return api(`/api/fleet/health${q}`);
+    },
+    maintenance: () => api('/api/settings/maintenance').then((m) => (m && m.windows) || []),
+    // Licence-gated (dashboard_advanced): when the licence excludes it the
+    // panels are simply omitted, so the core Overview always renders.
+    issues: async () => {
+      if (!featureEntitled('dashboard_advanced')) return null;
+      return fleetIssues((await api('/api/dashboard/advanced')).widgets);
+    },
+    noc: (data) => nocDashboard(data, {}),
+    // Rendered once per view entry: the poll redraws the grid, and rebuilding
+    // the Leaflet instance under the reader would throw away their pan and zoom.
+    trafficMap: () => trafficMapCard({
+      subtitle: t('fleet.trafficSub'),
+      onArcClick: (a, site) => openFlows(null, { mode: 'map', locationId: site.locationId ?? null }),
+      onSiteClick: (s) => { if (s.locationId != null) openLocation(s.locationId); },
+    }),
+    startPolling: (refresh) => {
+      stopFleet();
+      fleetState.timer = setInterval(() => {
+        if (currentView !== 'fleet') { stopFleet(); return; }
+        if (!modalOpen()) refresh();
+      }, 10000);
+    },
+  });
+  return fleetView;
+}
+
 views.fleet = async () => {
-  const root = el('div', { class: 'fleet' });
-  root.append(el('div', { class: 'section-head' }, el('h2', {}, 'Overview'),
-    el('span', { class: 'muted' }, 'All agents · health from reachability · loss · latency · jitter')));
-  const bannerHost = el('div', {});
-  const nocHost = el('div', {});
-  // Fleet-wide traffic map (colored directional arrows, below the network
-  // path). Rendered ONCE per view entry — the 10 s poll re-renders nocHost
-  // only, so the Leaflet instance isn't rebuilt under the user.
-  const trafficHost = el('div', { class: 'fleet-traffic' });
-  const chipsHost = el('div', { class: 'filter-chips' });   // active-filter chips (self-hides when empty)
-  const cardsHost = el('div', { class: 'fleet-cards' });     // four clickable metric cards
-  const tableHost = el('div', {});
-  const issuesHost = el('div', {}); // gated (dashboard_advanced): events + findings
-  root.append(bannerHost, nocHost, trafficHost, chipsHost, cardsHost, tableHost, issuesHost);
-  trafficHost.append(trafficMapCard({
-    subtitle: 'all sites · last 6 h · arrows = traffic type + live direction',
-    // Clicking a dataflow opens the Flows page in Map mode scoped to that
-    // site; clicking a site pin opens the location's drill-down page.
-    onArcClick: (a, site) => openFlows(null, { mode: 'map', locationId: site.locationId ?? null }),
-    onSiteClick: (s) => { if (s.locationId != null) openLocation(s.locationId); },
-  }));
-
-  // Maintenance banner (viewer-readable) — shown while a window is active now.
-  api('/api/settings/maintenance').then((m) => {
-    const now = Date.now();
-    const active = (m.windows || []).filter((w) => Date.parse(w.from) <= now && now <= Date.parse(w.to));
-    if (active.length) bannerHost.replaceChildren(el('div', { class: 'mw-banner' }, '🛠 Maintenance active: ', esc(active.map((w) => w.name).join(', ')), el('span', { class: 'muted' }, ' — alert notifications suppressed')));
-    else bannerHost.replaceChildren();
-  }).catch(() => {});
-
-  // The four metric cards (Kritiske / Advarsler / Offline) are whole-card filter
-  // toggles over the shared `fleetFilter` state; "Fleet health" is a sort, not a
-  // filter (it orders the grid by health score, worst-first, and scrolls to it).
-  // The latest fetch is cached so a toggle re-renders instantly without a
-  // refetch, and every change mirrors into the URL so the view is shareable.
-  let lastData = null;
-  // Independent of the metric-card filters: the NOC header (KPI cards + live
-  // network path) can be narrowed to a single location. null = whole fleet.
-  let locationScope = null;
-  function applyFleet() {
-    if (!lastData) return;
-    renderChips();
-    renderCards(lastData);
-    renderTable(lastData.agents);
-  }
-  function updateFilter(next) { fleetFilter = next; syncFleetUrl(); applyFleet(); }
-  function clearAllFilters() { updateFilter(FleetFilter.emptyState()); }
-
-  // Distinct locations present in the latest poll (only sites that actually have
-  // an agent are offered as scope options), name-sorted.
-  function nocLocations(agents) {
-    const seen = new Map();
-    for (const a of agents || []) {
-      if (a.locationId != null && !seen.has(a.locationId)) seen.set(a.locationId, a.locationName || `#${a.locationId}`);
-    }
-    return [...seen].map(([id, name]) => ({ id, name })).sort((x, y) => x.name.localeCompare(y.name));
-  }
-  // Narrow the fleet rollup to one location, recomputing the status summary so
-  // the KPI cards + the network path reflect just that site. null ⇒ whole fleet.
-  function scopeData(data, locId) {
-    if (locId == null) return data;
-    const agents = (data.agents || []).filter((a) => a.locationId === locId);
-    const summary = { ok: 0, warn: 0, bad: 0, down: 0, stale: 0, unknown: 0, total: agents.length };
-    for (const a of agents) summary[a.health.status] = (summary[a.health.status] || 0) + 1;
-    return { ...data, agents, summary };
-  }
-  // (Re)render the NOC header for the current scope. The <select> is rebuilt on
-  // every poll with the active scope preselected, so the choice survives the
-  // 10 s refresh; picking a location just re-runs this (no refetch).
-  function renderNoc() {
-    if (!lastData) return;
-    const locs = nocLocations(lastData.agents);
-    // Forget a scope whose location dropped out of the latest poll.
-    if (locationScope != null && !locs.some((l) => l.id === locationScope)) locationScope = null;
-    const scopeName = locationScope != null ? (locs.find((l) => l.id === locationScope) || {}).name : null;
-    const controls = locs.length
-      ? el('label', { class: 'inline muted' }, 'Location ',
-        el('select', { onchange: (e) => { locationScope = e.target.value ? Number(e.target.value) : null; renderNoc(); } },
-          el('option', { value: '' }, 'All locations'),
-          ...locs.map((l) => el('option', { value: String(l.id), selected: l.id === locationScope ? '' : null }, l.name))))
-      : null;
-    nocHost.replaceChildren(nocDashboard(scopeData(lastData, locationScope), { controls, scopeName }));
-  }
-
-  // A whole-card filter toggle. `onActivate` runs on click and on Enter/Space;
-  // aria-pressed mirrors the active state for screen readers.
-  function metricCard({ cls, label, value, sub, active, onActivate }) {
-    return el('div', {
-      class: `metric-card ${cls}${active ? ' active' : ''}`,
-      role: 'button', tabindex: '0', 'aria-pressed': active ? 'true' : 'false',
-      title: sub,
-      onclick: onActivate,
-      onkeydown: (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onActivate(); } },
-    }, el('div', { class: 'mc-k' }, label), el('div', { class: 'mc-v' }, value), el('div', { class: 'mc-sub' }, sub));
-  }
-  // "Fleet health" doesn't filter — it toggles a worst-first sort of the grid by
-  // health score (ascending) and scrolls the grid into view.
-  function onFleetHealth() {
-    fleetSortByHealth = !fleetSortByHealth;
-    applyFleet();
-    try { tableHost.scrollIntoView({ behavior: 'smooth', block: 'start' }); } catch { /* jsdom / old browsers */ }
-  }
-  function renderCards(data) {
-    const s = data.summary || {};
-    const agents = data.agents || [];
-    const total = summaryTotal(s);
-    const crit = (s.bad || 0) + (s.down || 0);
-    const warn = s.warn || 0;
-    // The summary always reflects the whole fleet (even when the returned agent
-    // list is narrowed by a server-side severity filter), so the card counts stay
-    // honest. `offline` counts connection state; fall back to the list for older
-    // servers that don't emit summary.offline.
-    const offline = typeof s.offline === 'number' ? s.offline : agents.filter((a) => !a.online).length;
-    const healthPct = total ? Math.round(((s.ok || 0) / total) * 100) : null;
-    cardsHost.replaceChildren(
-      metricCard({ cls: 'health', label: 'Fleet health', value: healthPct == null ? '–' : `${healthPct}%`, sub: 'sortér grid efter score', active: fleetSortByHealth, onActivate: onFleetHealth }),
-      metricCard({ cls: 'crit', label: 'Kritiske', value: String(crit), sub: 'CRIT · klik for at filtrere', active: fleetFilter.severity.includes('CRIT'), onActivate: () => updateFilter(FleetFilter.toggleSeverity(fleetFilter, 'CRIT')) }),
-      metricCard({ cls: 'warn', label: 'Advarsler', value: String(warn), sub: 'WARN · klik for at filtrere', active: fleetFilter.severity.includes('WARN'), onActivate: () => updateFilter(FleetFilter.toggleSeverity(fleetFilter, 'WARN')) }),
-      metricCard({ cls: 'offline', label: 'Offline', value: String(offline), sub: 'ikke forbundet', active: fleetFilter.offline, onActivate: () => updateFilter(FleetFilter.toggleOffline(fleetFilter)) }));
-  }
-  // One removable chip per active filter; a "Ryd alle" appears once two or more
-  // filters are stacked. The row self-hides (CSS :empty) when nothing is active.
-  function renderChips() {
-    const cs = FleetFilter.chips(fleetFilter);
-    if (!cs.length) { chipsHost.replaceChildren(); return; }
-    const kids = cs.map((c) => el('button', {
-      class: 'filter-chip', type: 'button', 'aria-label': `Fjern filter: ${c.label}`,
-      onclick: () => updateFilter(FleetFilter.removeChip(fleetFilter, c)),
-    }, el('span', {}, c.label), el('span', { class: 'fc-x', 'aria-hidden': 'true' }, '✕')));
-    if (cs.length >= 2) kids.push(el('button', { class: 'filter-chip clear-all', type: 'button', onclick: clearAllFilters }, 'Ryd alle'));
-    chipsHost.replaceChildren(...kids);
-  }
-  function fleetRow(a) {
-    const m = a.health.metrics;
-    const dq = a.quality && a.quality.status && a.quality.status !== 'ok' && a.quality.status !== 'unknown'
-      ? el('span', { class: 'dq-flag', title: `Data quality: ${a.quality.reason || a.quality.status}` }, ' ⚠')
-      : null;
-    return el('tr', { class: 'fleet-row', tabindex: '0', onclick: () => openAgent(a.agentId), onkeydown: (e) => { if (e.key === 'Enter') openAgent(a.agentId); } },
-      el('td', {}, el('div', {}, esc(a.displayName), dq), a.displayName !== a.hostname ? el('div', { class: 'muted' }, esc(a.hostname)) : null),
-      el('td', {}, el('span', { class: `badge ${a.online ? 'online' : 'offline'}` }, a.online ? 'online' : 'offline')),
-      el('td', {}, healthBadge(a.health)),
-      el('td', { class: 'num' }, m.lossPct != null ? `${m.lossPct}%` : '–'),
-      el('td', { class: 'num' }, latencyText(m)),
-      el('td', { class: 'num' }, m.jitterMs != null ? `${m.jitterMs} ms` : '–'),
-      el('td', { class: 'num muted' }, m.targets ? `${m.reachable}/${m.targets}` : '–'),
-      el('td', { class: 'num' }, throughputText(a.throughput)),
-      el('td', { class: 'muted' }, a.locationName || '–'),
-      el('td', { class: 'muted' }, m.lastTs ? fmtTimeShort(new Date(m.lastTs).getTime()) : '–'));
-  }
-  function renderTable(agents) {
-    // Total across the whole fleet — from the summary so it's right even when the
-    // list was pre-narrowed by a server-side severity filter (an empty list then
-    // means "nothing matched", not "no agents enrolled").
-    const total = summaryTotal((lastData && lastData.summary)) || agents.length;
-    if (!total) { tableHost.replaceChildren(el('div', { class: 'empty' }, 'No agents yet — go to Agents to enrol one.')); return; }
-    const filtered = FleetFilter.applyFilter(agents, fleetFilter);
-    const active = FleetFilter.isActive(fleetFilter);
-    // "3 af 47 agenter" over the table, shown while a filter is active.
-    const countLine = active ? el('div', { class: 'fleet-count' }, `${filtered.length} af ${total} agenter`) : null;
-    // Empty result: an explicit message + a way out — never a bare empty table.
-    if (!filtered.length) {
-      tableHost.replaceChildren(...[countLine, el('div', { class: 'empty fleet-empty' },
-        el('div', {}, 'Ingen agenter matcher filteret'),
-        el('button', { class: 'small ghost', onclick: clearAllFilters }, 'Ryd filter'))].filter(Boolean));
-      return;
-    }
-    const ordered = fleetSortByHealth ? FleetFilter.sortByHealth(filtered) : filtered;
-    const body = el('table', { class: 'fleet-table' },
-      el('thead', {}, el('tr', {}, ...['Agent', 'Status', 'Health', 'Loss', 'Latency', 'Jitter', 'Targets', 'Speed', 'Location', 'Last seen'].map((h) => el('th', {}, h)))),
-      el('tbody', {}, ...ordered.map(fleetRow)));
-    tableHost.replaceChildren(...[countLine, body].filter(Boolean));
-  }
-  // Open issues (events + findings) — a Professional+ rollup (feature
-  // dashboard_advanced). Best-effort + gated: when the licence doesn't include
-  // it the panels are simply omitted, so the core Overview always renders.
-  async function refreshIssues() {
-    if (!featureEntitled('dashboard_advanced')) { issuesHost.replaceChildren(); return; }
-    try { issuesHost.replaceChildren(fleetIssues((await api('/api/dashboard/advanced')).widgets)); }
-    catch { issuesHost.replaceChildren(); }
-  }
-  async function refresh() {
-    refreshIssues(); // gated events/findings panels, fetched in parallel
-    // Filtering is client-side on the dataset the Overview already holds. Only
-    // for a large fleet (>500 agents) do we offload the severity filter to the
-    // server as a query param to shrink the payload; the summary stays whole-
-    // fleet either way, so the metric-card counts remain correct.
-    const big = lastData && summaryTotal(lastData.summary) > 500;
-    const q = big && fleetFilter.severity.length ? `?severity=${encodeURIComponent(fleetFilter.severity.join(','))}` : '';
-    let data;
-    try { data = await api(`/api/fleet/health${q}`); } catch (e) { tableHost.replaceChildren(el('div', { class: 'error' }, e.message)); return; }
-    lastData = data;
-    renderNoc();
-    applyFleet();
-  }
-
-  await refresh();
-  stopFleet();
-  fleetState.timer = setInterval(() => {
-    if (currentView !== 'fleet') { stopFleet(); return; }
-    if (!modalOpen()) refresh();
-  }, 10000);
-  return root;
+  const v = getFleetView();
+  if (!v) return el('div', { class: 'empty error' }, t('fleet.err.title'));
+  return v.view();
 };
 
 // Combined per-agent page: health résumé + probes (latency/loss/jitter) +

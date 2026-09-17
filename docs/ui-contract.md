@@ -438,6 +438,7 @@ Administration → login and error screens.
 | Changes | `/changes` | A · ListPage | [`public/views/changes.js`](../public/views/changes.js) |
 | Probes & Tests | `/probes/:tab` | C · FormPage (shell) | [`public/views/probes.js`](../public/views/probes.js) |
 | Analysis | `/analysis` | A · ListPage | [`public/views/analysis.js`](../public/views/analysis.js) |
+| Fleet | `/fleet` | A · ListPage | [`public/views/fleet.js`](../public/views/fleet.js) |
 
 **What Changes kept:** the window vocabulary the server accepts (`30m`, `6h`,
 `24h`, `7d` — not the preview's three), the marker rule (it moves only on an
@@ -484,3 +485,24 @@ the Drawer.
 name differ here: the key is `findings` (the records it lists), the product calls
 the screen Analysis. The UI gate reads the pairs, checks the module exists, that
 it builds a PageHeader with help — and that `ui-check` is actually watching it.
+
+
+**Fleet** kept the four metric cards as the StatStrip they always were, and lost
+the removable filter-chip row: a StatStrip card already shows its own state, so
+the chips repeated it. What the chips said that a card could not — a site, a
+health threshold — reads as one line above the table.
+
+The grid became a DataTable with sorting in the header. Three panels on the page
+are **not** the contract's and are passed in whole: the NOC header (KPI cards and
+the live network path), the fleet-wide traffic map (Leaflet, rendered once per
+view entry so the 10 s poll does not rebuild it under the reader), and the
+licence-gated issues rollup. They migrate in their own commits.
+
+Six hardcoded Danish strings on an English screen — "Kritiske", "Advarsler",
+"Ryd alle", "agenter", "Ingen agenter matcher filteret", "sortér grid efter
+score" — now go through the catalogue in both languages.
+
+**Known redundancy, not yet resolved:** the NOC header and the StatStrip say
+some of the same things (Active agents "5 of 6" against Offline "1"). Both are
+kept for now because the NOC header is its own unmigrated component; when it
+migrates, one of the two loses those figures.

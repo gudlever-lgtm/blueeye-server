@@ -1,7 +1,6 @@
-/* Colour lives in public/css/tokens.css — the palette and every [data-theme]
-   block moved there so there is one file to read when a colour is wrong, and
-   one file for `npm run ui:check` to allow hex in. tokens.css is loaded first,
-   so every rule below reads the same tokens it always did.
+/* Colour lives in public/css/tokens.css and the reset, typography, links and
+   focus ring in public/css/base.css — both load before this file, so every rule
+   below reads the same tokens and sits on the same baseline it always did.
 
    Semantic-colour contract (every theme defines all of these):
      --accent  primary/accent     --ok    success      --warn  warning
@@ -9,29 +8,10 @@
      --panel / --panel-2  panel backgrounds   --text  body text   --bg  app bg
    Derived helpers (--*-weak tints, --card, --mono), the layout primitives
    (--sidebar-w, --radius*, --shadow*) and the UI-contract scale (--s-*, --fs-*,
-   --control-h, --r-*) are all defined there too. */
-* { box-sizing: border-box; }
-body {
-  margin: 0;
-  /* Prefer Inter / Hanken Grotesk if present locally, else a clean system sans.
-     No external webfont (keeps it offline + EU-friendly). */
-  font: 14px/1.55 'Inter', 'Hanken Grotesk', system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
-  background: var(--bg);
-  color: var(--text);
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-}
-.hidden { display: none !important; }
+   --control-h, --r-*) are all defined there too.
 
-/* Typography hierarchy (NOC): tighter headings, aligned numerals. */
-h1, h2, h3 { letter-spacing: -0.01em; }
-h4 { letter-spacing: 0.02em; }
-.kpi-v, .stat .v, .storage-row .v, td.num, .ta-bw, .big-chart .axis, .legend,
-.kv td, .assistant-meta { font-variant-numeric: tabular-nums; font-feature-settings: 'tnum' 1; }
-.muted { color: var(--muted); font-weight: 400; }
-.error { color: var(--bad); min-height: 1em; }
-a { color: var(--accent); }
-
+   What is left here is the page-specific chrome, and it shrinks with every
+   screen phase 3 migrates onto the components in css/components.css. */
 /* Login */
 .login { min-height: 100vh; display: grid; place-items: center; }
 /* Federated sign-in block on the login card (OIDC/SAML). */
@@ -84,10 +64,6 @@ button {
               color .15s var(--ease), box-shadow .15s var(--ease);
 }
 /* One focus ring for every control (soft halo, no hard outline). */
-button:focus-visible, .chip:focus-visible, summary:focus-visible,
-a:focus-visible, [tabindex]:focus-visible {
-  outline: none; box-shadow: var(--ring); border-radius: var(--radius-sm);
-}
 /* Quiet button: a panel-coloured surface with a hairline, not a hole in the
    page — it should sit at the same depth as the card it lives on. */
 button.ghost { background: var(--panel); color: var(--text); border-color: var(--border); font-weight: 500; }
@@ -2449,8 +2425,6 @@ button.ghost.small:has(> .icon-glyph) {
 .diag-test input[type="checkbox"] { accent-color: var(--accent); margin-right: 8px; vertical-align: middle; }
 .diag-select { margin: 8px 0 2px; }
 .diag-actions .ct-chip { margin-left: 4px; }
-
-
 
 /* ---- Breadcrumb (topbar) --------------------------------------------------
    Section / page / sub-page, rebuilt from the route on every render (syncCrumb

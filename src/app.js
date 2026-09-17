@@ -170,6 +170,7 @@ function createApp({
       .replace('src="/app.js"', `src="/app.js?v=${appVersion}"`)
       .replace('href="/styles.css"', `href="/styles.css?v=${appVersion}"`)
       .replace('href="/css/tokens.css"', `href="/css/tokens.css?v=${appVersion}"`)
+      .replace('href="/css/base.css"', `href="/css/base.css?v=${appVersion}"`)
       .replace('href="/css/components.css"', `href="/css/components.css?v=${appVersion}"`);
   } catch (err) {
     logger.warn({ err }, 'could not read index.html for version stamping; serving raw');

@@ -1587,3 +1587,73 @@ Also added: `ui.fmt.date` — a calendar date with no clock, for a licence expir
 or a release date, where a minute reads as precision the value does not have.
 The contract had `abs`, `short`, `clock`, `rel` and `duration`; this is the
 sixth and the family is now complete.
+
+
+---
+
+## Phase 4 — verification
+
+Every screen the dashboard has is on the contract. `views` in `public/app.js`
+defines 42 entries; 37 of them are in `CONTRACT_VIEWS`, and the five that are
+not are the two answers *about* an address (`notFound`, `forbidden`) and the
+component reference (`kitchenSink`) — none of which is a screen the product
+navigates to.
+
+Two things could therefore go:
+
+* **`/ui-preview/changes` and `/ui-preview/probes`.** They existed to show the
+  ListPage and the FormPage before Changes and Probes were migrated. Both
+  screens have been on their real routes since phase 3.1 and 3.2, and both have
+  their own suites, so the preview module, its routes, its 74 catalogue keys ×2
+  and its seven boot tests are gone. `/ui-kitchen-sink` stays: it is the visual
+  reference for this document and the surface the component tests read. The
+  fifteen keys it shared with the preview are now its own, under `ks.*`;
+* **the hero banner.** `hero(viewKey)` returned `null` for anything in
+  `CONTRACT_VIEWS` — which, as of 3.38, is every screen. It could no longer
+  render, so the function, its call site in `render()` and its six CSS rules are
+  gone. The `hero` getters stay on the `PAGE_INFO` entries: several migrated
+  screens pass one as their PageHeader lead.
+
+### The sweep, before and after
+
+Measured across every `public/**/*.js` the dashboard ships, from the commit
+before phase 1 (`48c0647`) to here.
+
+| | before | after |
+|---|---|---|
+| colour literals outside `css/tokens.css` | 625 | **0** |
+| `.hero` (the info banner) | 2 | **0** |
+| `.seg-btn` / `.fs-chip` / `.chip-det` | 4 | **0** |
+| hand-built `.subtabs` strips | 7 | **1** (`tabStrip()` itself) |
+| `.section-head` | 57 | 19 |
+| inline `style:` in a view | 76 | 56 |
+| `public/styles.css` | 2656 lines | 2140 lines |
+
+`npm run ui:check` reports **clean across 39 migrated files and 5 stylesheets**,
+and it runs in the gate on every push.
+
+### What the remaining numbers are
+
+The 19 `.section-head`, the 22 `.settings-card` and most of the inline styles
+are in **bodies behind a shell migration**, not on a page:
+
+* Settings' twenty-two section bodies (3.24 migrated the page they sit on);
+* the NIS2 Reporting sections — Risks, Controls, Incidents, Reports (3.19);
+* Service Assurance's eight tab bodies (3.15) and the Transaction detail (3.14);
+* Documentation's twenty-three articles (3.35), which are prose, and Guides'
+  stepper (3.20);
+* the Agent page's four `<details>` folds (3.32) and Situation's five panels
+  (3.31).
+
+Every one of them is reached through a page that *is* on the contract, so the
+reader still finds the title, the actions, the tabs and the data where the other
+screens put them. Migrating a body is a change to that feature's screen, not to
+the page template, and each is worth doing on its own terms rather than as part
+of this pass.
+
+### Not verified here
+
+`ui:check` reads the source; it cannot see a rendered page. Every screen in
+phases 3.23–3.38 was also rendered at 1280 and 1440 and read for clipping,
+which is how the column widths on Agents, System Logs, User Logs, Discovery,
+Location, Users and Test Settings were found — none of them failed a test.

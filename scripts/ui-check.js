@@ -46,7 +46,6 @@ const CONTRACT_CSS = new Set(['css/base.css', 'css/components.css']);
 // this as each screen is migrated; nothing is ever removed.
 const MIGRATED = [
   'ui.js',
-  'uiPreview.js',
   'kitchenSink.js',
   // Phase 3, in the order docs/ui-contract.md sets out.
   'views/changes.js',

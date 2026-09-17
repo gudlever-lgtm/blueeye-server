@@ -1370,17 +1370,6 @@ const CONTRACT_VIEWS = new Map([
   ['license', 'license'],
 ]);
 
-function hero(viewKey) {
-  if (CONTRACT_VIEWS.has(viewKey)) return null;
-  // Probes & Tests is one view with two sub-tabs; show the matching help for each.
-  let info = PAGE_INFO[viewKey];
-  if (viewKey === 'probes' && probesTab === 'packages') info = PAGE_INFO.tests;
-  if (viewKey === 'probes' && probesTab === 'connection') info = PAGE_INFO.connectionTest;
-  if (!info) return null;
-  return el('div', { class: 'hero' },
-    el('div', { class: 'hero-text' }, info.hero),
-    el('button', { class: 'ghost small', onclick: () => openDrawer(info.title, info.body) }, 'More info'));
-}
 
 // ---- Framed page section --------------------------------------------------
 // The Overview page sets the pattern every page follows: data lives inside a
@@ -15263,9 +15252,6 @@ let currentView = 'changes';
 // (fleet ?severity, topology ?layer, delta ?changeTypes) and all of them
 // preserve window.location.pathname, so paths and filters do not collide.
 const Routes = (typeof window !== 'undefined' && window.AppRoutes) || null;
-// The screen a preview route stands in for: it has no rail entry of its own, so
-// without this the sidebar marks nothing and the breadcrumb prints a view key.
-const PREVIEW_OF = { uiPreviewChanges: 'changes', uiPreviewProbes: 'probes' };
 // A record's own page has no rail entry — it is reached from the list. Without
 // this the sidebar marks nothing (no "you are here" anywhere on the screen) and
 // the crumb prints the raw view key at the reader: "event / #11".
@@ -15393,7 +15379,7 @@ function syncCrumb() {
     host.replaceChildren(el('span', { class: 'crumb-here' }, t(CRUMB_ONLY[currentView])));
     return;
   }
-  const marks = PREVIEW_OF[currentView] || DETAIL_OF[currentView] || SECTION_OF[currentView] || currentView;
+  const marks = DETAIL_OF[currentView] || SECTION_OF[currentView] || currentView;
   const tab = routeTabFor(currentView);
   const btn = [...document.querySelectorAll(NAV_BUTTONS)].find((b) => b.dataset.view === marks
     && (!b.dataset.saTab || b.dataset.saTab === tab)
@@ -15406,8 +15392,7 @@ function syncCrumb() {
   parts.push(btn ? btn.textContent.trim() : (VIEW_LABELS[currentView] || currentView));
   // A sub-page the rail does not name: the open record, or a tab of its own.
   const id = routeIdFor(currentView);
-  if (PREVIEW_OF[currentView]) parts.push(t('uip.crumb'));
-  else if (id != null) parts.push(`#${id}`);
+  if (id != null) parts.push(`#${id}`);
   else if (SECTION_OF[currentView]) parts.push(settingsLabel(currentView));
   else if (tab && !(btn && (btn.dataset.saTab || btn.dataset.guide))) parts.push(crumbTabLabel(currentView, tab));
 
@@ -15492,16 +15477,6 @@ const ui = (typeof window !== 'undefined' && window.Ui)
   })
   : null;
 
-const uiPreview = (typeof window !== 'undefined' && window.UiPreview && ui)
-  ? window.UiPreview.create({ el, api, t, plural, errText, openAgent, gotoView, ui })
-  : null;
-views.uiPreviewChanges = async () => (uiPreview
-  ? uiPreview.changes()
-  : el('div', { class: 'empty' }, t('uip.unavailable')));
-views.uiPreviewProbes = async () => (uiPreview
-  ? uiPreview.probes()
-  : el('div', { class: 'empty' }, t('uip.unavailable')));
-
 // ---- Component reference ----------------------------------------------------
 // /ui-kitchen-sink, admin only. Every component in every state, built from the
 // same ui.js a migrated screen uses. Stays after the migration: it is the visual
@@ -15511,7 +15486,7 @@ const kitchenSink = (typeof window !== 'undefined' && window.KitchenSink && ui)
   : null;
 views.kitchenSink = async () => (kitchenSink
   ? kitchenSink.view()
-  : el('div', { class: 'empty' }, t('uip.unavailable')));
+  : el('div', { class: 'empty' }, t('ks.unavailable')));
 
 // Every control that navigates: the sidebar rail, the rail's foot (Documentation)
 // and the account menu (About). One selector, so a new home for a nav entry is
@@ -15585,10 +15560,9 @@ async function render({ silent = false } = {}) {
   maybePromptSigningKey();
 
   // Stop the overview poller when leaving that view (it restarts itself when shown).
-  // The preview screens own their drawer, popover and row menu; they are
-  // appended to <body>, so leaving the view does not remove them.
-  if (ui && currentView !== 'uiPreviewChanges' && currentView !== 'uiPreviewProbes'
-    && currentView !== 'kitchenSink') ui.closeOverlays();
+  // The kitchen sink owns its drawer, popover and row menu; they are appended
+  // to <body>, so leaving the view does not remove them.
+  if (ui && currentView !== 'kitchenSink') ui.closeOverlays();
   if (currentView !== 'overview') stopOverview();
   if (currentView !== 'probes') stopProbes();
   if (currentView !== 'interfaces') stopIfaces();
@@ -15608,7 +15582,7 @@ async function render({ silent = false } = {}) {
   for (const b of document.querySelectorAll(NAV_BUTTONS)) {
     // Several entries can share one data-view when they deep-link to different
     // sub-tabs; the sub-tab is what tells them apart.
-    const marks = PREVIEW_OF[currentView] || DETAIL_OF[currentView] || SECTION_OF[currentView] || currentView;
+    const marks = DETAIL_OF[currentView] || SECTION_OF[currentView] || currentView;
     const active = b.dataset.view === marks
       && (!b.dataset.saTab || b.dataset.saTab === serviceAssuranceTab)
       && (!b.dataset.guide || b.dataset.guide === guideTrack);
@@ -15635,8 +15609,7 @@ async function render({ silent = false } = {}) {
   if (!silent) view.replaceChildren(el('div', { class: 'empty' }, 'Loading…'));
   try {
     const node = await views[currentView]();
-    const h = hero(currentView);
-    view.replaceChildren(...(h ? [h, node] : [node]));
+    view.replaceChildren(node);
     // On user navigation (not the silent auto-refresh) move focus to the new
     // content, so keyboard/screen-reader users land on it instead of being left
     // on the nav button. #view has tabindex="-1" to be programmatically focusable.

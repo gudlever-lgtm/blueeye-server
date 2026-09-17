@@ -64,7 +64,7 @@ test('routes: the bare root is Changes, and an unknown address matches nothing',
   assert.equal(Routes.match('/').view, Routes.HOME);
   assert.equal(Routes.match('/index.html').view, Routes.HOME);
   assert.equal(Routes.match('/changes/').view, 'changes', 'a trailing slash is the same screen');
-  for (const bad of ['/nope', '/agents/abc', '/probes/nope', '/agents/1/2', '/ui-preview', '/ui-preview/nope']) {
+  for (const bad of ['/nope', '/agents/abc', '/probes/nope', '/agents/1/2', '/ui-preview', '/ui-preview/changes']) {
     assert.equal(Routes.match(bad), null, `${bad} should match nothing`);
     assert.equal(Routes.isAppPath(bad), false, bad);
   }
@@ -78,7 +78,7 @@ test('routes: a query string or a fragment does not change which screen an addre
 // ---------------------------------------------------------------- the server
 test('a navigation to an app path is answered 200 with the version-stamped shell', async () => {
   const version = require('../package.json').version;
-  for (const p of ['/', '/changes', '/probes/connection', '/agents/12', '/settings/retention', '/ui-preview/changes']) {
+  for (const p of ['/', '/changes', '/probes/connection', '/agents/12', '/settings/retention', '/ui-kitchen-sink']) {
     const res = await navigate(p);
     assert.equal(res.status, 200, `${p} → ${res.status}`);
     assert.match(res.headers['content-type'], /text\/html/, p);
@@ -89,7 +89,7 @@ test('a navigation to an app path is answered 200 with the version-stamped shell
 });
 
 test('a navigation to an unknown address is answered 404 with the SAME shell', async () => {
-  for (const p of ['/nope', '/agents/abc', '/ui-preview/nope', '/deep/unknown/path']) {
+  for (const p of ['/nope', '/agents/abc', '/ui-preview/changes', '/deep/unknown/path']) {
     const res = await navigate(p);
     assert.equal(res.status, 404, `${p} → ${res.status}`);
     assert.match(res.headers['content-type'], /text\/html/, p);
@@ -244,155 +244,6 @@ test('boot: navigating pushes history, and Back returns to the previous screen',
   assert.equal(doc.querySelector('.tabs button.active').dataset.view, 'changes');
 });
 
-// ---------------------------------------------------------------- the preview
-test('boot: /ui-preview/changes renders the ListPage for an admin', async (t) => {
-  const { doc, errors } = bootAt('http://server.test/ui-preview/changes', { t, routes: SESSION('admin') });
-  await settle();
-  assert.deepEqual(errors, []);
-  const view = doc.getElementById('view');
-  const ui = view.querySelector('.ui');
-  assert.ok(ui, 'the page is not built from the contract components');
-  // Template A: PageHeader → StatStrip → Toolbar → DataTable.
-  assert.ok(ui.querySelector('.page-head h1'), 'no PageHeader');
-  assert.ok(ui.querySelector('.page-head .help-btn'), 'no (?) help control');
-  assert.equal(ui.querySelectorAll('.hero').length, 0, 'the info banner came back');
-  assert.equal(ui.querySelectorAll('.page-head-actions .btn-primary').length, 1,
-    'a PageHeader carries at most one primary button');
-  assert.match(ui.querySelector('.page-head-actions .btn-primary').textContent, /Mark as seen/);
-  assert.ok(ui.querySelector('.statstrip .stat-card.crit'), 'no StatStrip');
-  assert.ok(ui.querySelector('.toolbar-ui'), 'no Toolbar');
-  const table = ui.querySelector('table.dt');
-  assert.ok(table, 'the list is not a real <table>');
-  assert.deepEqual([...table.querySelectorAll('thead th')].map((th) => th.textContent.replace(/[↑↓↕]/g, '').trim()),
-    ['Time', 'Severity', 'Type', 'Title', 'Host', 'Repeats', '']);
-  assert.equal(table.querySelectorAll('tbody tr').length, 2);
-  // A host is a link in its own column, and a repeat count is muted text.
-  assert.ok(table.querySelector('tbody tr a.hostlink'), 'the host is not a link');
-  assert.equal(table.querySelectorAll('tbody .badge-ui:not(.crit):not(.warn):not(.info):not(.ok)').length, 0,
-    'a badge outside the severity set means metadata rendered as a chip');
-});
-
-test('boot: a row opens the Drawer, with the explanation and the history in it', async (t) => {
-  const { doc, window } = bootAt('http://server.test/ui-preview/changes', { t, routes: SESSION('admin') });
-  await settle();
-  const row = doc.querySelector('#view table.dt tbody tr');
-  row.dispatchEvent(new window.Event('click', { bubbles: true }));
-  await settle();
-  const drawer = doc.querySelector('.ui-drawer');
-  assert.ok(drawer, 'the row did not open a Drawer');
-  assert.equal(row.getAttribute('aria-selected'), 'true', 'the open row is not marked');
-  assert.ok(drawer.querySelector('.drawer-head .badge-ui.crit'), 'the Drawer header has no status');
-  const headings = [...drawer.querySelectorAll('.dsec h3')].map((h) => h.textContent);
-  assert.ok(headings.some((h) => /What happened/i.test(h)), headings.join(', '));
-  assert.ok(headings.some((h) => /History/i.test(h)), headings.join(', '));
-  assert.match(drawer.textContent, /Round-trip time is well above its baseline/,
-    'the severity explanation is not in the Drawer');
-  drawer.querySelector('.drawer-head .btn-icon').dispatchEvent(new window.Event('click', { bubbles: true }));
-  await settle();
-  assert.equal(doc.querySelector('.ui-drawer'), null, 'the Drawer would not close');
-});
-
-test('boot: ?state=empty and ?state=error show the shared Empty and Error states', async (t) => {
-  const empty = bootAt('http://server.test/ui-preview/changes?state=empty', { t, routes: SESSION('admin') });
-  await settle();
-  const e = empty.doc.querySelector('#view .state');
-  assert.ok(e, 'no EmptyState');
-  assert.equal(e.classList.contains('is-error'), false);
-  assert.equal(empty.doc.querySelector('#view table.dt'), null, 'the table is still there');
-
-  const bad = bootAt('http://server.test/ui-preview/changes?state=error', { t, routes: SESSION('admin') });
-  await settle();
-  const err = bad.doc.querySelector('#view .state.is-error');
-  assert.ok(err, 'no ErrorState');
-  assert.match(err.textContent, /GET \/api\/changes/, 'the error does not say what failed');
-  assert.ok(err.querySelector('.btn'), 'an ErrorState always offers a retry');
-  // The shell is intact either way — an error in a panel is not a broken page.
-  assert.ok(bad.doc.querySelector('.sidebar'));
-  assert.ok(bad.doc.querySelector('#view .page-head h1'));
-});
-
-test('boot: a 500 from the API lands in the ErrorState, not in a broken layout', async (t) => {
-  const routes = Object.assign({}, SESSION('admin'), { 'GET /api/changes': { status: 500, body: { error: 'boom' } } });
-  const { doc, errors } = bootAt('http://server.test/ui-preview/changes', { t, routes });
-  await settle();
-  assert.deepEqual(errors, [], 'a 500 threw instead of rendering');
-  assert.ok(doc.querySelector('#view .state.is-error'), 'no ErrorState for a 500');
-  assert.ok(doc.querySelector('#view .page-head h1'), 'the PageHeader did not survive the 500');
-  assert.ok(doc.querySelector('.sidebar'), 'the shell did not survive the 500');
-});
-
-test('boot: /ui-preview/probes renders the FormPage, with the checks the agent cannot run dimmed', async (t) => {
-  const { doc, errors } = bootAt('http://server.test/ui-preview/probes', { t, routes: SESSION('admin') });
-  await settle();
-  assert.deepEqual(errors, []);
-  const ui = doc.querySelector('#view .ui');
-  assert.ok(ui.querySelector('.page-head h1'), 'no PageHeader');
-  // Template C: SubTabs → Panel with FormSection → FormActions bottom right.
-  const tabs = [...ui.querySelectorAll('.subtabs[role="tablist"] .subtab')];
-  assert.deepEqual(tabs.map((b) => b.textContent), ['Run a probe', 'Connection test', 'Test packages']);
-  assert.equal(tabs.filter((b) => b.getAttribute('aria-selected') === 'true').length, 1);
-  // tabStrip()'s roving tabindex: one stop in the tab order, arrows move within.
-  assert.equal(tabs.filter((b) => b.tabIndex === 0).length, 1, 'the strip has one tab stop');
-  assert.ok(ui.querySelector('.form-sec .form-grid-ui .f label[for="uip-agent"]'), 'no Agent field');
-  assert.ok(ui.querySelector('.form-sec .form-grid-ui .f label[for="uip-target"]'), 'no Target field');
-  const actions = ui.querySelector('.form-actions-ui .actions-right');
-  assert.ok(actions.querySelector('.count-field input'), 'the round count is not its own field');
-  assert.equal(actions.querySelectorAll('.btn-primary').length, 1, 'Run is the only primary');
-  assert.match(actions.querySelector('.btn-primary').textContent, /^Run /);
-  const secondary = [...actions.querySelectorAll('.btn-secondary')].map((b) => b.textContent);
-  assert.deepEqual(secondary, ['Repeat', 'Stop']);
-  // The catalogue: two runnable, two not — and the two that cannot run say why.
-  const rows = [...ui.querySelectorAll('table.dt tbody tr')];
-  assert.equal(rows.length, 4);
-  const dimmed = rows.filter((r) => r.classList.contains('is-dimmed'));
-  assert.equal(dimmed.length, 2, 'the checks the agent cannot run are not dimmed');
-  assert.ok(dimmed.every((r) => r.querySelector('.badge-ui.neutral')),
-    'a check that cannot run must not wear a severity colour');
-  assert.match(dimmed[0].textContent, /Not available yet/);
-});
-
-test('boot: an empty Target is refused in the field, before anything is dispatched', async (t) => {
-  const { doc, window, log } = bootAt('http://server.test/ui-preview/probes', { t, routes: SESSION('admin') });
-  await settle();
-  const before = log.length;
-  doc.querySelector('#view .form-actions-ui .btn-primary').dispatchEvent(new window.Event('click', { bubbles: true }));
-  await settle();
-  const input = doc.getElementById('uip-target');
-  assert.equal(input.getAttribute('aria-invalid'), 'true', 'the field is not marked invalid');
-  assert.match(doc.querySelector('#view .f .field-error').textContent, /IP address or a DNS name/);
-  assert.equal(log.length, before, 'a run was dispatched anyway');
-});
-
-test('boot: the preview toasts stack top right, and the error one stays', async (t) => {
-  const { doc, window } = bootAt('http://server.test/ui-preview/probes', { t, routes: SESSION('admin') });
-  await settle();
-  doc.getElementById('uip-target').value = '10.24.8.19';
-  doc.querySelector('#view .form-actions-ui .btn-primary').dispatchEvent(new window.Event('click', { bubbles: true }));
-  await settle();
-  const host = doc.getElementById('ui-toasts');
-  assert.ok(host, 'no toast host');
-  assert.equal(host.querySelectorAll('.ui-toast').length, 2, 'toasts do not stack');
-  assert.ok(host.querySelector('.ui-toast.err'), 'the error toast is missing');
-  host.querySelector('.ui-toast.err .btn').dispatchEvent(new window.Event('click', { bubbles: true }));
-  await settle();
-  assert.equal(host.querySelectorAll('.ui-toast.err').length, 0, 'the error toast would not close');
-});
-
-test('boot: a non-admin asking for /ui-preview/* is told it is not theirs, not shown it', async (t) => {
-  for (const role of ['viewer', 'operator']) {
-    for (const p of ['/ui-preview/changes', '/ui-preview/probes']) {
-      const { doc } = bootAt(`http://server.test${p}`, { t, role, routes: SESSION(role) });
-      await settle();
-      const view = doc.getElementById('view');
-      assert.match(view.textContent, /403/, `${role} ${p}: no 403`);
-      assert.match(view.textContent, /admin role/, `${role} ${p}: the required role is not named`);
-      assert.equal(view.querySelector('.statstrip'), null, `${role} ${p}: the screen rendered anyway`);
-      assert.equal(view.querySelector('table.dt'), null, `${role} ${p}: the data rendered anyway`);
-      assert.ok(doc.querySelector('.sidebar'), `${role} ${p}: the way out is gone`);
-    }
-  }
-});
-
 test('boot: a role-gated screen is refused by address as well as hidden in the rail', async (t) => {
   // /discovery is admin-only. A viewer typing the address must not get it just
   // because they did not go through the nav.
@@ -477,10 +328,12 @@ test('boot: the kitchen sink is admin only, by address as well as by rail', asyn
   }
 });
 
-test('boot: leaving a component screen takes its body-level overlays with it', async (t) => {
+test('boot: leaving a screen takes its body-level overlays with it', async (t) => {
   // The Drawer, the popover and the toasts hang off <body>, so a view switch
   // does not remove them — which would leave a Drawer floating over Fleet.
-  const { doc, window } = bootAt('http://server.test/ui-preview/changes', { t, routes: SESSION('admin') });
+  // This ran against /ui-preview/changes; it runs against the real Changes
+  // screen now that the preview routes are gone.
+  const { doc, window } = bootAt('http://server.test/changes', { t, routes: SESSION('admin') });
   await settle();
   doc.querySelector('#view table.dt tbody tr').dispatchEvent(new window.Event('click', { bubbles: true }));
   await settle();

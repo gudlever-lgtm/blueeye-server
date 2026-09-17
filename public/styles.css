@@ -686,14 +686,6 @@ label.check { display: flex; align-items: center; gap: 8px; padding: 3px 0; font
 label.check input { width: auto; }
 .section-head h2 { margin: 0; font-size: 18px; }
 
-/* Hero: short per-page explanation under the section head. */
-.hero { display: flex; align-items: flex-start; gap: 10px; background: var(--panel);
-  border: 1px solid var(--border); border-left: 3px solid var(--accent);
-  border-radius: var(--radius-sm); padding: 10px 14px; margin: 0 0 16px; color: var(--muted); }
-.hero .hero-text { flex: 1; }
-.hero .hero-text b { color: var(--text); }
-.hero button { white-space: nowrap; }
-
 /* Slide-in info drawer from the right. */
 .drawer-backdrop { position: fixed; inset: 0; background: var(--scrim); backdrop-filter: blur(2px); opacity: 0;
   transition: opacity .2s ease; z-index: var(--z-scrim); }
@@ -1708,7 +1700,7 @@ ul.timeline-list li.tl .chg-open { margin-left: auto; flex: 0 0 auto; }
 .overview-chart, .settings-card, .stat,
 .kpi, .metric-card, .agent-health, .assistant,
 details.sec, .theme-card, .nis2-cat, .nis2-readiness, .blast-panel,
-.pathmap, .pv-timeline, .topo-graph, .netpath, .fleet-summary .fs-chip, .hero {
+.pathmap, .pv-timeline, .topo-graph, .netpath, .fleet-summary .fs-chip {
   box-shadow: var(--shadow);
 }
 /* …except where the "surface" is really a transparent block nested inside

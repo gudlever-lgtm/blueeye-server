@@ -50,6 +50,7 @@ const VERB_LABELS = {
   create: 'Created', update: 'Updated', delete: 'Deleted', remove: 'Removed',
   login: 'Signed in', logout: 'Signed out', upload: 'Uploaded', export: 'Exported',
   run: 'Ran', upgrade: 'Upgraded', resend: 'Re-sent', revoke: 'Revoked', reset: 'Reset',
+  revalidate: 'Re-validated',
 };
 
 // Resource names as a person would say them.

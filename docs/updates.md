@@ -96,6 +96,75 @@ A malformed version from the signer is dropped rather than shown — a phantom
 (they are cached with the proof) and an unreachable license server (the last
 known values are kept).
 
+## When the agent refuses the update
+
+An agent installed by `install.sh` pins the server's Ed25519 release **public**
+key (systemd drop-in `10-release-key.conf`) and verifies every self-update
+against it. It therefore refuses:
+
+* an **unsigned** push — `refusing unsigned update: a release public key is
+  pinned or signed updates are required (possible signature downgrade)`
+* a release signed with a **different** key — `release signature did not verify`
+
+Both are the fail-closed answer to a server that cannot prove what it is
+shipping, and both show up the same way in the dashboard: the command is
+accepted, the agent then reports the failure, and its version never moves.
+
+Two things have to be true for a one-click update to land on a pinned agent:
+
+1. **This server can sign.** `POST /agents/:id/update` now returns
+   `signedReason` when it could not, and the dashboard says which it is:
+
+   | `signedReason` | What it means | Fix |
+   | --- | --- | --- |
+   | `no-key` | no release key at all | generate one in Settings → Agent key |
+   | `verify-only` | only `AGENT_RELEASE_PUBLIC_KEY` — no private half here | generate a managed key |
+   | `undecryptable` | a managed key is stored but will not decrypt (`SECRET_ENCRYPTION_KEY`/`JWT_SECRET` changed after it was generated) | delete it, generate a new one |
+   | `sign-failed` | signing threw — see the system log | as logged |
+
+   Each unsigned push is recorded in the system log as `agent.update-unsigned`
+   with the reason, so the cause outlives the toast.
+
+2. **The agent pins the key this server signs with.** After generating a new
+   key, existing agents still trust the old one. Re-pin them **from the server** —
+   an installed agent is managed from here, and nothing assumes a shell on the
+   host:
+
+   * `POST /agents/:id/rekey` (admin) sends this server's current release key to
+     that agent over the same channel that carries `update` and `delete`. The
+     agent validates it is an Ed25519 public key, stores it beside its token
+     (`release-key.pem`, which outranks the installer's
+     `BLUEEYE_RELEASE_PUBLIC_KEY` from then on), mirrors it into its systemd
+     drop-in best-effort, and applies it **in memory** — so the retried update
+     verifies immediately and monitoring is not interrupted.
+   * When this server can still sign, the rekey command itself is signed with the
+     key being **replaced**: a proper rotation, and the only form an agent running
+     `BLUEEYE_REQUIRE_SIGNED_COMMANDS=1` accepts. When it cannot, the rekey is
+     unsigned — accepted exactly where an unsigned `delete` already is, which is
+     what lets a fleet recover after a signing key is lost.
+   * The dashboard offers it where the failure appears: a refused update shows
+     **Re-pin this agent now** and retries the update straight after, and
+     Settings → Updates has **Re-pin agents** for the whole set that is behind.
+   * The agent must be connected — a command cannot reach one that is offline.
+     For that case only, `GET /enroll/repin.sh` does the same thing from the host
+     (no enrollment code, so it can never create a second agent), and the modal
+     keeps it behind "Agent offline? Host command".
+
+## When the update installs but nothing changes
+
+The agent extracts the new release, installs dependencies and then asks systemd
+to restart the unit. If that restart does not happen (no privilege, no systemd,
+a masked unit), the new code is on disk and the **old process is still running**
+— so the agent keeps reporting the old version. That used to be reported as a
+successful update, for ever. The agent now checks the restart and reports
+
+```
+installed v0.27.0 but the service restart failed (…) — run: systemctl restart blueeye-agent
+```
+
+as a FAILED action instead, which is what the dashboard shows and what the audit
+row records.
+
 ## Deploying a server update
 
 **Settings → Updates** shows what is available. How it is deployed depends on one

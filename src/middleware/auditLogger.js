@@ -19,6 +19,11 @@ function createAuditLogger({ auditRepo, logger = null } = {}) {
   function skip(req) {
     const p = req.path || req.originalUrl || '';
     if (p.startsWith('/api/audit')) return true;
+    // Reporting a client-side error is not a user ACTION — it is the dashboard
+    // filing the error it just displayed into the system log. Auditing it put a
+    // "Created logs" row in the user log for every toast, which buried the
+    // actions the log exists to show.
+    if (p.startsWith('/api/logs')) return true;
     if (p.startsWith('/agents/results') || p.startsWith('/agents/probe-results')) return true;
     if (p.startsWith('/agents/me/')) return true;
     if (p === '/agents/enroll' || p.startsWith('/agents/enroll')) return true;

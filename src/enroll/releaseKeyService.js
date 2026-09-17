@@ -15,8 +15,14 @@ const { resolveReleasePublicKey } = require('../license/releaseKey');
 // on-prem server; a multi-instance deploy would reload() on change.) When no managed
 // key is stored it falls back to the env/embedded key, so existing deployments that
 // set AGENT_RELEASE_PUBLIC_KEY keep working unchanged.
-function createReleaseKeyService({ repo, secretBox, env = process.env, logger = console } = {}) {
+function createReleaseKeyService({ repo, secretBox, env = process.env, logger = console, onKeyError = null } = {}) {
   let cache = null; // { publicPem, privateKey, fingerprint, createdAt, createdBy } | null
+  // Why signing is unavailable, when it is. A key that is stored but cannot be
+  // DECRYPTED (SECRET_ENCRYPTION_KEY / JWT_SECRET changed since it was written)
+  // used to be one warn line at startup and nothing else: the dashboard reported
+  // the key "configured", every update went out unsigned, and every pinned agent
+  // refused it with no way for an operator to see why. It is reported now.
+  let keyError = null;
 
   function warn(msg) { if (logger && typeof logger.warn === 'function') logger.warn(msg); }
 
@@ -24,6 +30,7 @@ function createReleaseKeyService({ repo, secretBox, env = process.env, logger = 
   // private key). Safe to call repeatedly.
   async function load() {
     cache = null;
+    keyError = null;
     if (!repo) return;
     const row = await repo.getWithSecret();
     if (!row) return;
@@ -32,7 +39,13 @@ function createReleaseKeyService({ repo, secretBox, env = process.env, logger = 
       const pem = secretBox.decrypt(row.private_pem_encrypted);
       privateKey = crypto.createPrivateKey({ key: pem, format: 'pem' });
     } catch (err) {
+      keyError = `The stored private key cannot be decrypted (${err.message}). This happens when SECRET_ENCRYPTION_KEY / JWT_SECRET changed after the key was generated. Delete the key and generate a new one — agents pinned to the old key must then be re-pinned.`;
       warn(`release key: could not decrypt the stored private key (${err.message}) — signing disabled until it is regenerated.`);
+      // An error nobody can see is an error nobody fixes: hand it to the system
+      // log as well, so it is on the record next to the failed updates it causes.
+      if (typeof onKeyError === 'function') {
+        try { onKeyError({ reason: 'undecryptable', detail: keyError }); } catch { /* best-effort */ }
+      }
     }
     cache = { publicPem: row.public_pem, privateKey, fingerprint: row.fingerprint, createdAt: row.created_at, createdBy: row.created_by };
   }
@@ -50,16 +63,37 @@ function createReleaseKeyService({ repo, secretBox, env = process.env, logger = 
   // public key configures verification but not signing.
   function canSign() { return !!(cache && cache.privateKey); }
 
+  // Why this server cannot sign a release right now — the single fact behind
+  // every "update sent UNSIGNED" and every agent that refuses one. '' when it CAN
+  // sign.
+  //   'undecryptable' — a managed key is stored but its private half won't decrypt
+  //   'verify-only'   — only an AGENT_RELEASE_PUBLIC_KEY (no private key here)
+  //   'no-key'        — nothing configured at all
+  function signBlockedReason() {
+    if (canSign()) return '';
+    if (cache && cache.publicPem) return 'undecryptable';
+    if (resolveReleasePublicKey(env)) return 'verify-only';
+    return 'no-key';
+  }
+
   // Status for the UI — never any private material, only the non-secret fingerprint.
   function status() {
     if (cache) {
-      return { configured: true, source: 'managed', createdAt: cache.createdAt || null, createdBy: cache.createdBy ?? null, fingerprint: cache.fingerprint || null, canSign: !!cache.privateKey };
+      return {
+        configured: true, source: 'managed', createdAt: cache.createdAt || null,
+        createdBy: cache.createdBy ?? null, fingerprint: cache.fingerprint || null,
+        canSign: !!cache.privateKey, signBlocked: signBlockedReason(), keyError,
+      };
     }
     const envKey = resolveReleasePublicKey(env);
     if (envKey) {
-      return { configured: true, source: 'env', createdAt: null, createdBy: null, fingerprint: crypto.createHash('sha256').update(envKey).digest('hex'), canSign: false };
+      return {
+        configured: true, source: 'env', createdAt: null, createdBy: null,
+        fingerprint: crypto.createHash('sha256').update(envKey).digest('hex'),
+        canSign: false, signBlocked: 'verify-only', keyError: null,
+      };
     }
-    return { configured: false, source: null, createdAt: null, createdBy: null, fingerprint: null, canSign: false };
+    return { configured: false, source: null, createdAt: null, createdBy: null, fingerprint: null, canSign: false, signBlocked: 'no-key', keyError: null };
   }
 
   // Generate + persist a NEW Ed25519 key pair. Write-once: throws code 'EXISTS' when
@@ -80,6 +114,7 @@ function createReleaseKeyService({ repo, secretBox, env = process.env, logger = 
   async function remove() {
     if (repo) await repo.remove();
     cache = null;
+    keyError = null;
     return status();
   }
 
@@ -91,7 +126,7 @@ function createReleaseKeyService({ repo, secretBox, env = process.env, logger = 
     return crypto.sign(null, Buffer.from(canonicalize(manifest)), cache.privateKey).toString('base64');
   }
 
-  return { load, getPublicKey, isConfigured, canSign, status, generate, remove, sign };
+  return { load, getPublicKey, isConfigured, canSign, signBlockedReason, status, generate, remove, sign };
 }
 
 module.exports = { createReleaseKeyService };

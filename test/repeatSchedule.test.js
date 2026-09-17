@@ -242,7 +242,7 @@ test('Reporting → Scheduled reports creates a mailed, recurring report', async
   const { doc, window } = await boot(t, { role: 'admin', app });
   doc.querySelector('.tabs button[data-view="reporting"]').click();
   await tick(300);
-  byText(doc, '.nis2-subtabs button', /Scheduled reports/).click();
+  byText(doc, '[role="tablist"][aria-label="Reporting"] .subtab', /Scheduled reports/).click();
   await tick(300);
   assert.ok(doc.querySelector('.rs'), 'the scheduled-reports panel did not render');
 
@@ -291,7 +291,7 @@ test('a scheduled report that has been failing says so in its row', async (t) =>
   const { doc } = await boot(t, { role: 'admin', app });
   doc.querySelector('.tabs button[data-view="reporting"]').click();
   await tick(300);
-  byText(doc, '.nis2-subtabs button', /Scheduled reports/).click();
+  byText(doc, '[role="tablist"][aria-label="Reporting"] .subtab', /Scheduled reports/).click();
   await tick(300);
   const row = doc.querySelector('.rs-table tbody tr');
   assert.ok(row, 'no schedule row');
@@ -312,7 +312,7 @@ test('a viewer may read the schedules but is offered neither New nor Delete', as
   const { doc } = await boot(t, { role: 'viewer', app });
   doc.querySelector('.tabs button[data-view="reporting"]').click();
   await tick(300);
-  byText(doc, '.nis2-subtabs button', /Scheduled reports/).click();
+  byText(doc, '[role="tablist"][aria-label="Reporting"] .subtab', /Scheduled reports/).click();
   await tick(300);
   assert.ok(doc.querySelector('.rs-table'), 'a viewer must still see the schedules');
   assert.equal(byText(doc, '.rs button', /New schedule/), undefined);

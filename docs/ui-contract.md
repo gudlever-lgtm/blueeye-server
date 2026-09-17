@@ -863,3 +863,28 @@ The status filter is a StatStrip — open / acknowledged / resolved with their
 counts — and the confidence filter is a Toolbar select. Confidence sorts by
 rank (high / medium / low), not alphabetically, which is what "sort by
 confidence" is asking for.
+
+
+**Reporting** is the fourth shell migration. The page name and its navigation
+were one line of markup — a `<h2>Reporting</h2>` with the section strip wedged
+in beside it inside `.section-head`. The name is a PageHeader with the (?)
+popover, and the strip is under it, where every other tabbed screen puts it.
+
+The section is in the URL now (`/reporting/schedules`), so the audit trail can
+be linked to. Picking a section used to go through `render()` and rebuild the
+whole view; only the body is rebuilt.
+
+"Loading…" and the failure were both a `.empty` div — the same grey box for
+"wait" and for "it broke". They are a skeleton and an ErrorState with a Retry.
+The page is returned before the section resolves, so the header, the strip and
+the skeleton are on screen while the body loads; awaiting the body first left
+the reader on the previous screen and the skeleton was never seen at all.
+
+Audit is admin-only. A reader who deep-links to `/reporting/audit` without the
+role lands on the first section **and the address follows**, so a reload does
+not try it again.
+
+**Not migrated, passed in whole:** the four bodies — the NIS2 module (with its
+own second-level tab strip), the report generator, the schedules panel and the
+audit trail. The nested strip is the one place in the app with two levels of
+tabs; it stays until the NIS2 module migrates, which is its own commit.

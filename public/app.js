@@ -1348,6 +1348,7 @@ const CONTRACT_VIEWS = new Map([
   ['serviceAssurance', 'serviceAssurance'],
   ['events', 'events'],
   ['clusters', 'situations'],
+  ['reporting', 'reporting'],
 ]);
 
 function hero(viewKey) {
@@ -14290,33 +14291,47 @@ async function nis2Print(path) {
   } catch (err) { toast(`Export failed: ${err.message}`, true); }
 }
 
-// Top-level Reporting view: NIS2 (a stationary page with fixed parameters) and
-// the Report Generator (a flexible, selector-driven custom report builder).
-views.reporting = async () => {
-  const root = el('div', { class: 'nis2' });
-  const sections = [['nis2', 'NIS2'], ['generator', 'Report Generator'], ['schedules', t('rs.tab')]];
-  // Audit is RBAC-gated: only admins may see who did what on the server.
-  if (role === 'admin') sections.push(['audit', 'Audit']);
-  // Guard against a stale section the current user may no longer access.
-  if (!sections.some(([k]) => k === reportingState.section)) reportingState.section = 'nis2';
-  const bar = tabStrip(sections, {
-    active: reportingState.section,
-    className: 'nis2-subtabs',
-    ariaLabel: 'Reporting',
-    onPick: (key) => { reportingState.section = key; render(); },
-  });
-  root.append(el('div', { class: 'section-head' }, el('h2', {}, 'Reporting'), bar));
+// ---- Reporting (SHELL MIGRATED — see public/views/reporting.js)
+// Top-level Reporting view: NIS2 (a stationary page with fixed parameters), the
+// Report Generator (a flexible, selector-driven custom report builder), the
+// schedules and the audit trail. The four bodies stay here; the page they sit
+// on is the contract's.
+let reportingPage = null;
 
-  const body = el('div', { class: 'nis2-body' }, el('div', { class: 'empty' }, 'Loading…'));
-  root.append(body);
-  try {
-    body.replaceChildren(
-      reportingState.section === 'generator' ? await reportGenerator()
-        : reportingState.section === 'schedules' ? await reportSchedulesPanel()
-          : reportingState.section === 'audit' ? await auditModule()
-            : await nis2Module());
-  } catch (err) { body.replaceChildren(el('div', { class: 'empty error' }, err.message)); }
-  return root;
+function reportingSections() {
+  // Audit is RBAC-gated: only admins may see who did what on the server.
+  return role === 'admin'
+    ? ['nis2', 'generator', 'schedules', 'audit']
+    : ['nis2', 'generator', 'schedules'];
+}
+
+function getReportingPage() {
+  if (reportingPage) return reportingPage;
+  if (typeof window === 'undefined' || !window.ReportingPage || !ui) return null;
+  reportingPage = window.ReportingPage.create({
+    el, t, ui,
+    sections: reportingSections,
+    section: () => reportingState.section,
+    setSection: (key) => { reportingState.section = key; syncLocation(); },
+    help: () => {
+      const info = PAGE_INFO.reporting || {};
+      return { lead: info.hero || '', title: info.title || t('rep.title'), body: info.body || (() => []) };
+    },
+    render: (key) => (key === 'generator' ? reportGenerator()
+      : key === 'schedules' ? reportSchedulesPanel()
+        : key === 'audit' ? auditModule()
+          : nis2Module()),
+    errText,
+  });
+  return reportingPage;
+}
+
+views.reporting = async () => {
+  const v = getReportingPage();
+  if (!v) return el('div', { class: 'empty error' }, t('rep.err.load'));
+  // The bodies hold their own open detail, so the page is rebuilt per entry.
+  reportingPage = null;
+  return v.view();
 };
 
 // The NIS2 module — a fixed set of pages (Dashboard, Risk Register, Controls,
@@ -15638,6 +15653,7 @@ function routeTabFor(view) {
     case 'serviceAssurance': return serviceAssuranceTab;
     case 'settings': return settingsTab;
     case 'guide': return guideTrack;
+    case 'reporting': return reportingState.section;
     default: return null;
   }
 }
@@ -15657,6 +15673,7 @@ function setRouteTab(view, tab) {
   else if (view === 'serviceAssurance') serviceAssuranceTab = tab;
   else if (view === 'settings') settingsTab = tab;
   else if (view === 'guide') guideTrack = tab;
+  else if (view === 'reporting') reportingState.section = tab;
 }
 function setRouteId(view, id) {
   if (id == null) return;

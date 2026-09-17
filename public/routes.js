@@ -58,7 +58,11 @@
     event: { path: '/events', param: true },
     clusters: { path: '/situations' },
     cluster: { path: '/situations', param: true },
-    reporting: { path: '/reporting' },
+    reporting: {
+      path: '/reporting',
+      tabs: ['nis2', 'generator', 'schedules', 'audit'],
+      tabKey: 'reportingSection',
+    },
 
     guide: {
       path: '/guides',

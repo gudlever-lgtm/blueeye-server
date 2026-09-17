@@ -1362,6 +1362,7 @@ const CONTRACT_VIEWS = new Map([
   ['event', 'event'],
   ['cluster', 'situation'],
   ['agent', 'agent'],
+  ['location', 'location'],
 ]);
 
 function hero(viewKey) {
@@ -9942,98 +9943,96 @@ async function deleteAgent(a) {
 // dataflows (traffic map + list). Full-width; no tab — reached via
 // openLocation(id). Clicking a dataflow opens the Flows page in Map mode
 // scoped to this location.
-views.location = async () => {
-  const id = selectedLocationId;
-  const root = el('div', { class: 'location-detail' });
-  if (id == null) { root.append(el('div', { class: 'empty' }, 'Pick a location first.')); return root; }
-
-  const [locations, agents, fleet] = await Promise.all([
-    api('/locations').catch(() => []),
-    api('/agents').catch(() => []),
-    api('/api/fleet/health').catch(() => ({ agents: [], summary: {} })),
-  ]);
-  const loc = locations.find((l) => String(l.id) === String(id));
-  if (!loc) { root.append(el('div', { class: 'error' }, 'Location not found.')); return root; }
-  const members = agents.filter((a) => String(a.location_id) === String(id));
-  const fleetById = new Map((fleet.agents || []).map((a) => [a.agentId, a]));
-  const scoped = members.map((m) => fleetById.get(m.id)).filter(Boolean);
-
-  root.append(el('div', { class: 'section-head' },
-    el('button', { class: 'small ghost', onclick: () => { currentView = 'locations'; render(); } }, '← Locations'),
-    el('h2', {}, '📍 ', loc.name),
-    loc.description ? el('span', { class: 'muted' }, loc.description) : null,
-    loc.latitude != null ? el('span', { class: 'muted' }, `· ${Number(loc.latitude).toFixed(3)}, ${Number(loc.longitude).toFixed(3)}`) : null,
-    el('span', { class: 'spacer' }),
-    el('button', { class: 'small ghost', onclick: () => openFlows(null, { mode: 'map', locationId: id }) }, 'Flows →'),
-    el('button', { class: 'small ghost', onclick: () => showLocationTraffic(loc) }, 'Live traffic'),
-    featureEnabled('assistant') ? el('button', { class: 'small ghost', onclick: () => showLocationSummary(loc) }, 'AI status') : null,
-    canWrite() ? el('button', { class: 'small ghost', onclick: () => editLocation(loc) }, 'Edit') : null));
-
-  // Health summary for just this site's agents (same KPI language as Overview).
-  const summary = { ok: 0, warn: 0, bad: 0, down: 0, stale: 0, unknown: 0 };
-  for (const a of scoped) if (a.health && a.health.status in summary) summary[a.health.status] += 1;
-  const k = fleetKpis({ agents: scoped, summary });
-  const lossStatus = k.loss == null ? 'accent' : k.loss >= 20 ? 'bad' : k.loss >= 2 ? 'warn' : 'ok';
-  const agStatus = k.total && k.online === 0 ? 'bad' : k.online < k.total ? 'warn' : 'ok';
-  root.append(el('div', { class: 'noc-kpis loc-kpis' },
-    kpiCard('Agents', `${k.online}/${k.total}`, 'online at this site', agStatus),
-    kpiCard('Latency', k.latency == null ? '–' : `${k.latency} ms`, 'median RTT', 'accent'),
-    kpiCard('Packet loss', k.loss == null ? '–' : `${k.loss}%`, 'worst agent', lossStatus),
-    kpiCard('Jitter', k.jitter == null ? '–' : `${k.jitter} ms`, 'median', k.jitter >= 30 ? 'warn' : 'accent'),
-    kpiCard('Test paths', `${k.paths}`, 'monitored targets', 'accent'),
-    kpiCard('Alerts', `${k.alerts}`, k.crit ? `${k.crit} critical` : (k.warn ? `${k.warn} warning` : 'all clear'), k.crit ? 'bad' : (k.warn ? 'warn' : 'ok'))));
-
-  // Agents at this location — the fleet table's columns, scoped. Click → agent page.
-  const agentRow = (m) => {
-    const a = fleetById.get(m.id);
-    const h = a && a.health; const met = (h && h.metrics) || {};
-    return el('tr', { class: 'fleet-row', tabindex: '0', onclick: () => openAgent(m.id), onkeydown: (e) => { if (e.key === 'Enter') openAgent(m.id); } },
-      el('td', {}, el('div', {}, m.display_name || m.hostname), m.display_name && m.display_name !== m.hostname ? el('div', { class: 'muted' }, m.hostname) : null),
-      el('td', {}, el('span', { class: `badge ${m.status}` }, m.status)),
-      el('td', {}, h ? healthBadge(h) : el('span', { class: 'muted' }, '–')),
-      el('td', { class: 'num' }, met.lossPct != null ? `${met.lossPct}%` : '–'),
-      el('td', { class: 'num' }, latencyText(met)),
-      el('td', { class: 'num' }, met.jitterMs != null ? `${met.jitterMs} ms` : '–'),
-      el('td', { class: 'num muted' }, met.targets ? `${met.reachable}/${met.targets}` : '–'),
-      el('td', { class: 'num' }, throughputText(a && a.throughput)),
-      el('td', { class: 'muted' }, (a && a.quality && a.quality.version) || (m.capabilities && m.capabilities.version) || '–'),
-      el('td', { class: 'muted' }, m.last_seen ? fmtDate(m.last_seen) : '–'));
-  };
-  const agentsCard = el('div', { class: 'card loc-card' }, el('h3', {}, `Agents (${members.length})`));
-  if (!members.length) agentsCard.append(el('div', { class: 'empty' }, 'No agents at this location yet.'));
-  else agentsCard.append(el('table', { class: 'agents-table' },
-    el('thead', {}, el('tr', {}, ...['Agent', 'Connection', 'Health', 'Loss', 'Latency', 'Jitter', 'Targets', 'Throughput', 'Version', 'Last seen'].map((h) => el('th', {}, h)))),
-    el('tbody', {}, ...members.map(agentRow))));
-  root.append(agentsCard);
-
-  // Dataflows: the site's external traffic as colored directional arrows + a
-  // clickable list. Every dataflow row/arc opens Flows → Map for this site.
-  const toFlows = () => openFlows(null, { mode: 'map', locationId: id });
-  const flowsListHost = el('div', { class: 'flowmap-list' }, el('div', { class: 'muted' }, 'Loading…'));
-  const flowsCard = el('div', { class: 'card loc-card' },
-    el('h3', {}, 'Data flows ', el('span', { class: 'muted' }, '· click a flow to inspect it in Flows')),
-    flowsListHost);
-  const mapCard = trafficMapCard({
-    scope: { locationId: id },
-    title: `Traffic map — ${loc.name}`,
-    onArcClick: toFlows,
-    onData: (data) => {
-      const siteByKey = new Map((data.sites || []).map((s) => [s.key, s]));
-      if (!data.arcs.length) { flowsListHost.replaceChildren(el('div', { class: 'empty' }, 'No geolocated flows in the window.')); return; }
-      flowsListHost.replaceChildren(...data.arcs.slice(0, 20).map((a) => {
-        const site = siteByKey.get(a.siteKey);
-        const dirTxt = a.direction === 'in' ? '◂ in' : a.direction === 'both' ? '⇄ both' : 'out ▸';
-        return el('div', { class: 'flowmap-row', role: 'button', tabindex: '0', onclick: toFlows, onkeydown: (e) => { if (e.key === 'Enter') toFlows(); } },
-          el('span', { class: 'tc-dot', style: `background:${trafficTypeColor(a.category)}` }),
-          el('span', { class: 'fmr-dst' },
-            el('span', {}, `${site ? site.name : loc.name} → ${a.country}`),
-            el('span', { class: 'muted' }, `${a.label}${a.asnNames && a.asnNames.length ? ' · ' + a.asnNames[0] : ''}`)),
-          el('span', { class: 'fmr-vol num' }, fmtBytes(a.bytes), el('span', { class: `fmr-dir dir-${a.direction}` }, dirTxt)));
-      }));
+// ---- Location detail (MIGRATED — see public/views/location.js)
+// The traffic map and the data-flow list stay here: the map carries the
+// reader's pan and zoom, and the flow rows use the traffic-type colour ramp.
+let locationPage = null;
+function getLocationPage() {
+  if (locationPage) return locationPage;
+  if (typeof window === 'undefined' || !window.LocationPage || !ui) return null;
+  locationPage = window.LocationPage.create({
+    el, t, ui, errText,
+    canWrite,
+    hasAssistant: () => featureEnabled('assistant'),
+    id: () => selectedLocationId,
+    openList: () => { currentView = 'locations'; render(); },
+    openAgent,
+    openEnrollment: () => { currentView = 'enrollment'; render(); },
+    rerender: () => render(),
+    edit: editLocation,
+    traffic: showLocationTraffic,
+    summary: showLocationSummary,
+    latencyText,
+    throughputText,
+    helpBody: () => [
+      el('p', {}, t('ld.info.p1')),
+      el('p', {}, t('ld.info.p2')),
+      el('p', { class: 'muted' }, t('ld.info.p3')),
+    ],
+    fetchAll: async (id) => {
+      const [locations, agents, fleet] = await Promise.all([
+        api('/locations').catch(() => []),
+        api('/agents').catch(() => []),
+        api('/api/fleet/health').catch(() => ({ agents: [], summary: {} })),
+      ]);
+      const location = locations.find((l) => String(l.id) === String(id));
+      if (!location) { const e = new Error('Not Found'); e.status = 404; throw e; }
+      const members = agents.filter((a) => String(a.location_id) === String(id));
+      const byId = new Map((fleet.agents || []).map((a) => [a.agentId, a]));
+      return { location, members, byId, scoped: members.map((m) => byId.get(m.id)).filter(Boolean) };
+    },
+    // The same KPI arithmetic the Overview uses, scoped to this site's agents.
+    kpis: (scoped) => {
+      const summary = { ok: 0, warn: 0, bad: 0, down: 0, stale: 0, unknown: 0 };
+      for (const a of scoped) if (a.health && a.health.status in summary) summary[a.health.status] += 1;
+      return fleetKpis({ agents: scoped, summary });
+    },
+    flows: (loc, id) => {
+      // Every arc and every row opens Flows → Map for this site, so the header
+      // does not also need a "Flows →" button.
+      const toFlows = () => openFlows(null, { mode: 'map', locationId: id });
+      const listHost = el('div', { class: 'flowmap-list' }, el('div', { class: 'muted' }, t('common.loading')));
+      const map = trafficMapCard({
+        scope: { locationId: id },
+        title: t('ld.map', { name: loc.name }),
+        onArcClick: toFlows,
+        onData: (data) => {
+          const siteByKey = new Map((data.sites || []).map((s) => [s.key, s]));
+          if (!data.arcs.length) {
+            listHost.replaceChildren(el('div', { class: 'empty' }, t('ld.noFlows')));
+            return;
+          }
+          listHost.replaceChildren(...data.arcs.slice(0, 20).map((a) => {
+            const site = siteByKey.get(a.siteKey);
+            const dirTxt = a.direction === 'in' ? '◂ in' : a.direction === 'both' ? '⇄ both' : 'out ▸';
+            return el('div', { class: 'flowmap-row', role: 'button', tabindex: '0', onclick: toFlows, onkeydown: (e) => { if (e.key === 'Enter') toFlows(); } },
+              trafficTypeDot(a.category),
+              el('span', { class: 'fmr-dst' },
+                el('span', {}, `${site ? site.name : loc.name} → ${a.country}`),
+                el('span', { class: 'muted' }, `${a.label}${a.asnNames && a.asnNames.length ? ' · ' + a.asnNames[0] : ''}`)),
+              el('span', { class: 'fmr-vol num' }, fmtBytes(a.bytes), el('span', { class: `fmr-dir dir-${a.direction}` }, dirTxt)));
+          }));
+        },
+      });
+      return [
+        map,
+        ui.panel({
+          title: t('ld.dataflows'),
+          note: t('ld.dataflowsHint'),
+          children: [el('div', { class: 'panel-body' }, listHost)],
+        }),
+      ];
     },
   });
-  root.append(el('div', { class: 'loc-grid' }, mapCard, flowsCard));
-  return root;
+  return locationPage;
+}
+
+views.location = async () => {
+  const v = getLocationPage();
+  if (!v) return el('div', { class: 'empty error' }, t('ld.err.title'));
+  // The record is re-read per entry, so the page is rebuilt with it.
+  locationPage = null;
+  return v.view();
 };
 
 // ---- Locations (MIGRATED — see public/views/locations.js)

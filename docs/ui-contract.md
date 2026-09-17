@@ -1370,3 +1370,37 @@ Also fixed here, in the test rather than the app: the boot helper these suites
 share read `hit.status` as the HTTP status, and an agent payload carries its own
 `status: 'online'` — so every load answered "HTTP online". An envelope is
 `{ status, body }` now; anything else is the body.
+
+
+**Location** is the fourth DetailPage and the last of the record pages. The
+heading was a `.section-head` with eight things in it: Back, an `<h2>` with a 📍
+glued to the name, the description, the coordinates, a spacer, and four buttons.
+It is a PageHeader — name, description + coordinates as the lead, Edit as the
+one primary, Live traffic / AI status / Back beside it. "Flows →" is gone: every
+arc on the map and every row in the flow list already opens Flows for this site,
+so the header does not need a fifth way in.
+
+The six `kpiCard`s are a StatStrip. Each card carried a label *and* a sub-line
+("Agents" over "online at this site"); a stat has one label, so the two folded
+into one — **Agents online**, **Median latency**, **Worst packet loss**.
+
+The agents table had **ten columns**. Three went:
+
+* **Connection** — the socket, next to **Health**, which is derived from it.
+  `down` and `offline` were the same fact printed twice on the same row;
+* **Targets** and **Version** — both are on the agent's own page, and the row
+  opens it.
+
+**The denominator was wrong.** "Agents online" read `k.online/k.total` where
+both came from the fleet-health payload, so an agent enrolled a minute ago — or
+a health read that failed — shrank the site itself: two agents at a site with a
+500 on `/api/fleet/health` reported `0/0` rather than `0/2`. The roster comes
+from the site's own members now; only the numerator is the health read's.
+
+"No agents at this location yet" was a grey sentence in a card. A site with
+nobody at it is what every site looks like the minute after somebody adds one,
+so it is an EmptyState that offers the enrollment screen.
+
+**Not migrated:** the traffic map and the data-flow list. The map carries the
+reader's pan and zoom across a re-render, and the flow rows use the traffic-type
+colour ramp; both are passed in whole and sit side by side in a panel grid.

@@ -9,9 +9,14 @@
 // number it is investigating, so uptime and fleet health leave it out. It is
 // still stored, still read, still charted; it just does not vote on "is this
 // agent healthy".
-const DIAGNOSTIC_TYPES = ['path_mtu'];
+// `tls` and `rdns` (migration 101) join it for the same reason, arrived at from
+// the other side: a certificate that expired yesterday and an address with no
+// PTR are both real faults and neither is a REACHABILITY fault — the host
+// answers. Counting them would put a perfectly reachable service in the outage
+// numbers and drag an SLA figure down for something no network change can fix.
+const DIAGNOSTIC_TYPES = ['path_mtu', 'tls', 'rdns'];
 
-const COLUMNS = ['agent_id', 'ts', 'type', 'target', 'ok', 'rtt_ms', 'min_ms', 'max_ms', 'jitter_ms', 'loss_pct', 'status', 'cert_expiry_days', 'bytes', 'content_type', 'elements', 'hops', 'mtu', 'sizes', 'detail'];
+const COLUMNS = ['agent_id', 'ts', 'type', 'target', 'ok', 'rtt_ms', 'min_ms', 'max_ms', 'jitter_ms', 'loss_pct', 'status', 'cert_expiry_days', 'bytes', 'content_type', 'elements', 'hops', 'mtu', 'sizes', 'tls', 'rdns', 'detail'];
 
 function toRow(agentId, r) {
   const ts = r.ts instanceof Date ? r.ts : (r.ts ? new Date(r.ts) : new Date());
@@ -36,6 +41,10 @@ function toRow(agentId, r) {
     // carry one; every other probe type stores null here.
     r.mtu && typeof r.mtu === 'object' ? JSON.stringify(r.mtu) : null,
     Array.isArray(r.sizes) ? JSON.stringify(r.sizes) : null,
+    // The certificate and the reverse-DNS answer (migration 101), each written
+    // whole by the one probe type that produces it.
+    r.tls && typeof r.tls === 'object' ? JSON.stringify(r.tls) : null,
+    r.rdns && typeof r.rdns === 'object' ? JSON.stringify(r.rdns) : null,
     r.detail != null ? String(r.detail).slice(0, 255) : null,
   ];
 }
@@ -75,6 +84,11 @@ function fromRow(row) {
     // updating — a reader must treat absent as "not measured", never as
     // "no problem".
     sizes: parseJson(row.sizes),
+    // The certificate verdict and the reverse-DNS answer (migration 101). NULL
+    // on every row written before the fleet reached agent 0.27 — absent means
+    // "not measured", never "nothing wrong".
+    tls: parseJson(row.tls),
+    rdns: parseJson(row.rdns),
     detail: row.detail,
   };
 }

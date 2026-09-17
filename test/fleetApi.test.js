@@ -389,9 +389,14 @@ test('probeResultsRepository.fleetHealth selects a recent window, newest-first, 
 // path_mtu is something an operator runs on purpose, in the middle of an
 // outage, against a host that may already be down. If it voted on health or
 // uptime, an investigation would move the number it is investigating.
+//
+// tls and rdns are excluded from the other direction: an expired certificate
+// and a missing PTR are real faults that are not REACHABILITY faults — the host
+// answers — so counting them would drag an SLA figure down for something no
+// network change can fix.
 test('fleet health and uptime exclude the on-demand diagnostic probes', async () => {
   const { createProbeResultsRepository, DIAGNOSTIC_TYPES: types } = require('../src/repositories/probeResultsRepository');
-  assert.deepEqual(types, ['path_mtu']);
+  assert.deepEqual(types, ['path_mtu', 'tls', 'rdns']);
   const seen = [];
   const pool = { async query(sql, params) { seen.push({ sql, params }); return [[]]; } };
   const repo = createProbeResultsRepository({ pool });

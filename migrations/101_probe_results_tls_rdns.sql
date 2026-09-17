@@ -1,0 +1,40 @@
+-- 101 — the certificate a port presents, and what the address says it is called.
+--
+-- Two probes the agent gained in blueeye-agent 0.27, and two columns for what
+-- they measure. Both are nullable and every other probe leaves them NULL, the
+-- same way `mtu` (096) and `sizes` (097) belong to one probe each.
+--
+-- `tls` — the certificate, with the four faults APART, because they are four
+-- different jobs:
+--
+--   { "protocol": "TLSv1.3", "cipher": "TLS_AES_256_GCM_SHA384",
+--     "authorized": false, "authorizationError": "DEPTH_ZERO_SELF_SIGNED_CERT",
+--     "hostnameMatches": true, "expiryDays": 12, "expired": false,
+--     "validTo": "2026-06-13T09:00:00.000Z", "subject": "mail.example.dk",
+--     "issuer": "Example CA", "altNames": ["DNS:mail.example.dk"],
+--     "chainLength": 2, "selfSigned": true }
+--
+-- An expiry goes in a diary; an untrusted chain is a deployment mistake; a name
+-- mismatch is usually the wrong virtual host; the protocol is what an audit
+-- asks for. One "invalid" flag would throw away which of them it was.
+-- `hostnameMatches` is deliberately TRI-STATE: null means there was no name to
+-- check (an IP target with no SNI), and coercing that to false would report
+-- every IP as serving the wrong certificate.
+--
+-- `rdns` — the reverse lookup, and whether it holds up:
+--
+--   { "address": "93.184.216.34", "ptrNames": ["host.example.com"],
+--     "forwardConfirmed": true }
+--
+-- `forwardConfirmed` is the field worth storing. A PTR that does not resolve
+-- back to the address it came from looks fine until somebody checks it, and the
+-- services that care — mail above all — do check (RFC 1912 §2.1).
+--
+-- NOTE what is NOT here: neither probe gets its own outage or uptime treatment.
+-- They are added to DIAGNOSTIC_TYPES in probeResultsRepository.js, so an
+-- expired certificate or a missing PTR never moves an SLA number or a fleet
+-- health verdict — the host is reachable, and saying otherwise would let a
+-- certificate fault read as a network outage.
+ALTER TABLE probe_results
+  ADD COLUMN tls JSON NULL DEFAULT NULL AFTER sizes,
+  ADD COLUMN rdns JSON NULL DEFAULT NULL AFTER tls;

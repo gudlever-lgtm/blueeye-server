@@ -308,6 +308,29 @@ test('probeValidation: type enum, host required, port range, hop/count caps; res
   assert.ok(rejected(validateProbeResults({ results: 'nope' })));
 });
 
+test('probeValidation: the tls and rdns specs, and the certificate block a result may carry', () => {
+  const { validateProbeSpec, validateProbeResults, PROBE_TYPES } = require('../../src/validation/probeValidation');
+  assert.ok(PROBE_TYPES.includes('tls') && PROBE_TYPES.includes('rdns'));
+  // A certificate lives on a port; the port defaults rather than being required.
+  assert.equal(validateProbeSpec({ type: 'tls', host: 'example.com' }).value.port, 443);
+  // Host AND SNI name both reach a network call, so both are held to the
+  // target rule rather than only the one somebody remembered.
+  for (const field of ['host', 'servername']) {
+    for (const bad of ['-rf', 'a b', 'a;rm -rf /', '$(id)', 'x'.repeat(300)]) {
+      const spec = { type: 'tls', host: 'example.com', [field]: bad };
+      assert.ok(errorsOf(validateProbeSpec(spec)).length, `${field}=${bad}`);
+    }
+  }
+  assert.ok(errorsOf(validateProbeSpec({ type: 'rdns', host: '-rf' })).includes('host'));
+  // The stored certificate is copied field by field: a key a future agent
+  // invents must not reach the database, and the name verdict stays tri-state
+  // (null = there was no name to check).
+  const { value } = validateProbeResults({ results: [{ type: 'tls', target: 'x:443', ok: true, hostnameMatches: 'maybe', authorized: 'yes', invented: 1 }] });
+  assert.equal(value.results[0].tls.hostnameMatches, null);
+  assert.equal(value.results[0].tls.authorized, false, 'only an explicit true is a trusted chain');
+  assert.equal(value.results[0].tls.invented, undefined);
+});
+
 test('testPackageValidation: schedule floor/ceiling, item cap, target modes', () => {
   const v = require('../../src/validation/testPackageValidation');
   assert.ok(v.MIN_SCHEDULE_MS >= 30_000 && v.MAX_SCHEDULE_MS <= 24 * 3600 * 1000 && v.MAX_ITEMS <= 50);

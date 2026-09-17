@@ -217,13 +217,41 @@ function fromEvents(rows) {
 }
 
 // Cross-agent clusters ("situations").
+//
+// "Situation across 2 findings" says nothing about WHY those two were put
+// together, which is the first thing anyone reading the feed asks. The cluster
+// already carries the answer — its confidence tier IS the list of signals that
+// matched (src/analysis/crossAgentCorrelator.js):
+//
+//   low ..... time only: >=2 distinct agents inside the 5-minute window
+//   medium .. time + topology: those agents also share a site
+//   high .... time + topology + type: and >=2 of them report the same metric
+//
+// so the summary states the basis rather than leaving the reader to open the
+// cluster to find out whether this is a real correlation or two things that
+// happened to land in the same five minutes.
+const CLUSTER_BASIS = Object.freeze({
+  low: 'within 5 min of each other',
+  medium: 'within 5 min, same site',
+  high: 'within 5 min, same site, same metric',
+});
+
+function clusterSummary(c) {
+  if (c.title) return c.title;
+  const n = (c.memberFindingIds || []).length;
+  const basis = CLUSTER_BASIS[c.confidence];
+  const head = `Situation across ${n} finding${n === 1 ? '' : 's'}`;
+  const why = basis ? `${head} — ${basis}` : head;
+  return c.suspectedCommonCause ? `${why}; suspected cause: ${c.suspectedCommonCause}` : why;
+}
+
 function fromClusters(rows) {
   return (rows || []).map((c) => makeEvent({
     timestamp: c.createdAt || c.created_at || c.firstSeenAt,
     source: 'cluster',
     type: `cluster.${c.status}`,
     severity: c.severity || 'WARN',
-    summary: c.title || `Situation across ${(c.memberFindingIds || []).length} findings`,
+    summary: clusterSummary(c),
     refId: c.id,
     kind: 'cluster',
   }));

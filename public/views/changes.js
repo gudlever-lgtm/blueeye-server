@@ -178,7 +178,9 @@
             { key: 'title', label: t('changes.col.title'), sortable: true },
             { key: 'host', label: t('changes.col.host'), width: '172px', sortable: true },
             { key: 'count', label: t('changes.col.count'), width: '122px', sortable: true, num: true },
-            { key: 'actions', label: '', width: '104px' },
+            // Wide enough for the hover primary ("Acknowledge") PLUS the ⋯, or
+            // the button spills over the Repeats column next to it.
+            { key: 'actions', label: '', width: '156px' },
           ],
           rows: rows,
           sort: state.sort,

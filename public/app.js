@@ -2045,11 +2045,52 @@ async function updateAgent(a, target) {
   if (!confirm(`Update ${name} ${verText}?\n\nThe agent will rebuild from the server's source bundle and restart, briefly interrupting monitoring on that host.`)) return;
   try {
     const r = await api(`/agents/${a.id}/update`, { method: 'POST' });
-    if (r.accepted) { toast(`${name}: update sent — rebuilding and restarting.`); return; }
+    if (r.accepted) {
+      // An UNSIGNED push is the one an agent pinned to a release key refuses,
+      // and it refuses it after accepting the command — so say it here, while
+      // the operator is still looking, not only in the audit trail.
+      if (r.signed === false) {
+        toast(`${name}: update sent UNSIGNED (this server has no release signing key). `
+          + 'An agent pinned to a release key will refuse it — generate a key under Settings → License.', true);
+      } else {
+        toast(`${name}: update sent — rebuilding and restarting.`);
+      }
+      // "Update sent" is not "update done". The agent rebuilds, restarts and
+      // echoes the outcome back into its action-audit row; until now that
+      // outcome only existed behind the connection modal, which is how a failed
+      // rebuild looked exactly like a successful one. Follow the row.
+      if (r.auditId) followAgentAction(a, r.auditId);
+      return;
+    }
     if (r.reason === 'docker-managed') { toast(`${name} runs under Docker — update it by re-running the host installer.`, true); return; }
     if (r.reason === 'unmanaged') { toast(`${name} isn't service-managed — update it manually (re-run the installer).`, true); return; }
     toast(`${name}: the agent did not accept the update.`, true);
   } catch (err) { toast(`${name}: ${err.message}`, true); }
+}
+
+// Polls one agent-action audit row until it goes terminal, then says what
+// happened. A rebuild takes a minute or two on a small host, so this watches for
+// three, backing off; past that it stops rather than polling forever and points
+// at the trail, which keeps the answer whether or not this tab is still open.
+const ACTION_POLL_MS = [5000, 5000, 10000, 10000, 15000, 15000, 20000, 20000, 30000, 30000, 30000];
+async function followAgentAction(a, auditId) {
+  const name = a.display_name || a.hostname;
+  for (const wait of ACTION_POLL_MS) {
+    await new Promise((r) => setTimeout(r, wait));
+    let rows;
+    try { rows = await api(`/agents/${a.id}/audit`); } catch { return; } // not admin, or gone — the trail still has it
+    const row = (rows || []).find((x) => String(x.id) === String(auditId));
+    if (!row || row.state === 'requested') continue;
+    if (row.state === 'completed') {
+      toast(`${name}: updated${row.target_version ? ` to v${row.target_version}` : ''}.`);
+    } else {
+      toast(`${name}: the update FAILED — ${row.result_detail || 'the agent gave no reason'}.`, true);
+    }
+    render();
+    return;
+  }
+  toast(`${name}: the update has not reported back yet. Click the agent's status badge → `
+    + '"Update / delete history" for the outcome.', true);
 }
 
 // A Windows agent can't be upgraded from the server (it runs under a scheduled

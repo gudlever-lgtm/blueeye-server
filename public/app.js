@@ -17654,6 +17654,9 @@ const Routes = (typeof window !== 'undefined' && window.AppRoutes) || null;
 // The screen a preview route stands in for: it has no rail entry of its own, so
 // without this the sidebar marks nothing and the breadcrumb prints a view key.
 const PREVIEW_OF = { uiPreviewChanges: 'changes', uiPreviewProbes: 'probes' };
+// A screen with no rail entry at all still needs a name in the crumb, or the
+// topbar prints a view key at the reader.
+const CRUMB_ONLY = { kitchenSink: 'route.crumb.kitchenSink' };
 // Set while a popstate is being applied: the address is already correct, so
 // render() must replace rather than push (a push would strand the Back button).
 let routerReplacing = false;
@@ -17757,6 +17760,10 @@ function syncCrumb() {
       currentView === 'forbidden' ? t('route.forbidden.crumb') : t('route.notFound.crumb')));
     return;
   }
+  if (CRUMB_ONLY[currentView]) {
+    host.replaceChildren(el('span', { class: 'crumb-here' }, t(CRUMB_ONLY[currentView])));
+    return;
+  }
   const marks = PREVIEW_OF[currentView] || currentView;
   const tab = routeTabFor(currentView);
   const btn = [...document.querySelectorAll(NAV_BUTTONS)].find((b) => b.dataset.view === marks
@@ -17858,6 +17865,17 @@ views.uiPreviewProbes = async () => (uiPreview
   ? uiPreview.probes()
   : el('div', { class: 'empty' }, t('uip.unavailable')));
 
+// ---- Component reference ----------------------------------------------------
+// /ui-kitchen-sink, admin only. Every component in every state, built from the
+// same ui.js a migrated screen uses. Stays after the migration: it is the visual
+// reference for docs/ui-contract.md and the surface the component tests read.
+const kitchenSink = (typeof window !== 'undefined' && window.KitchenSink && ui)
+  ? window.KitchenSink.create({ el, t, ui })
+  : null;
+views.kitchenSink = async () => (kitchenSink
+  ? kitchenSink.view()
+  : el('div', { class: 'empty' }, t('uip.unavailable')));
+
 // Every control that navigates: the sidebar rail, the rail's foot (Documentation)
 // and the account menu (About). One selector, so a new home for a nav entry is
 // wired for both the click and the active-state pass.
@@ -17932,7 +17950,8 @@ async function render({ silent = false } = {}) {
   // Stop the overview poller when leaving that view (it restarts itself when shown).
   // The preview screens own their drawer, popover and row menu; they are
   // appended to <body>, so leaving the view does not remove them.
-  if (uiPreview && currentView !== 'uiPreviewChanges' && currentView !== 'uiPreviewProbes') uiPreview.closeOverlays();
+  if (ui && currentView !== 'uiPreviewChanges' && currentView !== 'uiPreviewProbes'
+    && currentView !== 'kitchenSink') ui.closeOverlays();
   if (currentView !== 'overview') stopOverview();
   if (currentView !== 'probes') stopProbes();
   if (currentView !== 'interfaces') stopIfaces();

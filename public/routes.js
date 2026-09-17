@@ -88,6 +88,10 @@
     // UI-contract preview (admin only, removed once Changes and Probes are migrated).
     uiPreviewChanges: { path: '/ui-preview/changes' },
     uiPreviewProbes: { path: '/ui-preview/probes' },
+    // The component reference. Unlike the previews this one stays: it is the
+    // visual reference for docs/ui-contract.md and a test surface for the
+    // components, neither of which stops being useful after the migration.
+    kitchenSink: { path: '/ui-kitchen-sink' },
   };
 
   // The view the bare '/' opens, and the view an unknown path renders.
@@ -101,7 +105,7 @@
     delta: 'operator', troubleshooting: 'operator', investigation: 'operator',
     enrollment: 'operator', serviceAssurance: 'operator',
     discovery: 'admin', logs: 'admin', userLogs: 'admin', users: 'admin', screening: 'admin',
-    uiPreviewChanges: 'admin', uiPreviewProbes: 'admin',
+    uiPreviewChanges: 'admin', uiPreviewProbes: 'admin', kitchenSink: 'admin',
   };
 
   function normalise(pathname) {

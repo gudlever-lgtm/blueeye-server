@@ -123,9 +123,10 @@
 /* ---- Panel --------------------------------------------------------------- */
 .ui .panel-ui { background: var(--surface); border: 1px solid var(--border);
   border-radius: var(--r-panel); overflow: hidden; }
-.ui .panel-head { display: flex; align-items: center; gap: var(--s-3);
+.ui .panel-head { display: flex; align-items: center; gap: var(--s-2) var(--s-3); flex-wrap: wrap;
   padding: var(--s-4) var(--s-5); border-bottom: 1px solid var(--hairline); }
-.ui .panel-head h2 { margin: 0; font-size: var(--fs-md); font-weight: 650; }
+.ui .panel-head h2 { margin: 0; flex: 0 0 auto; font-size: var(--fs-md); font-weight: 650; }
+.ui .panel-head .meta-xs { flex: 1 1 22ch; min-width: 0; }
 .ui .panel-actions { margin-left: auto; display: flex; gap: var(--s-2); }
 .ui .panel-body { padding: var(--s-5); }
 .ui .panel-foot { display: flex; align-items: center; gap: var(--s-3);
@@ -312,3 +313,47 @@
 .ui rect.ui-series-3, .ui .ui-legend-dot.ui-series-3 { fill: var(--series-3); background: var(--series-3); }
 .ui rect.ui-series-4, .ui .ui-legend-dot.ui-series-4 { fill: var(--series-4); background: var(--series-4); }
 .ui rect.ui-series-5, .ui .ui-legend-dot.ui-series-5 { fill: var(--series-5); background: var(--series-5); }
+
+/* ---- Kitchen sink (/ui-kitchen-sink) -------------------------------------
+   The reference page's own scaffolding — labels around specimens, and the
+   token swatches. Not a component: nothing outside that page uses these. */
+.ui .ks-item + .ks-item { margin-top: var(--s-5); padding-top: var(--s-5); border-top: 1px solid var(--hairline); }
+.ui .ks-label { font-size: var(--fs-sm); font-weight: 650; }
+.ui .ks-note { margin-top: var(--s-1); font-size: var(--fs-xs); color: var(--text-muted); max-width: 70ch; }
+.ui .ks-demo { margin-top: var(--s-3); }
+.ui .ks-shelf { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s-3); }
+
+.ui .ks-swatches { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: var(--s-3); }
+.ui .ks-swatch { display: flex; align-items: center; gap: var(--s-2); font-size: var(--fs-xs); }
+.ui .ks-chipcolor { width: 26px; height: 26px; flex: 0 0 auto;
+  border: 1px solid var(--border); border-radius: var(--r-badge); }
+.ui .ks-chipcolor[data-token="--sev-crit"] { background: var(--sev-crit); }
+.ui .ks-chipcolor[data-token="--sev-warn"] { background: var(--sev-warn); }
+.ui .ks-chipcolor[data-token="--sev-info"] { background: var(--sev-info); }
+.ui .ks-chipcolor[data-token="--sev-ok"]   { background: var(--sev-ok); }
+.ui .ks-chipcolor[data-token="--bg"]           { background: var(--bg); }
+.ui .ks-chipcolor[data-token="--surface"]      { background: var(--surface); }
+.ui .ks-chipcolor[data-token="--surface-alt"]  { background: var(--surface-alt); }
+.ui .ks-chipcolor[data-token="--border"]       { background: var(--border); }
+.ui .ks-chipcolor[data-token="--text"]         { background: var(--text); }
+.ui .ks-chipcolor[data-token="--text-muted"]   { background: var(--text-muted); }
+.ui .ks-chipcolor[data-token="--accent"]       { background: var(--accent); }
+
+.ui .ks-ruler { display: flex; flex-direction: column; gap: var(--s-2); }
+.ui .ks-rule { display: flex; align-items: center; gap: var(--s-3); font-size: var(--fs-xs); }
+.ui .ks-bar { height: 12px; background: var(--accent); border-radius: 0; flex: 0 0 auto; }
+.ui .ks-bar[data-token="--s-1"] { width: var(--s-1); }
+.ui .ks-bar[data-token="--s-2"] { width: var(--s-2); }
+.ui .ks-bar[data-token="--s-3"] { width: var(--s-3); }
+.ui .ks-bar[data-token="--s-4"] { width: var(--s-4); }
+.ui .ks-bar[data-token="--s-5"] { width: var(--s-5); }
+.ui .ks-bar[data-token="--s-6"] { width: var(--s-6); }
+
+.ui .ks-typelist { display: flex; flex-direction: column; gap: var(--s-2); }
+.ui .ks-typerow { display: flex; align-items: baseline; gap: var(--s-3); }
+.ui .ks-typerow code { font-size: var(--fs-xs); color: var(--text-muted); }
+.ui .ks-typerow[data-token="--fs-xs"] > span:first-child { font-size: var(--fs-xs); }
+.ui .ks-typerow[data-token="--fs-sm"] > span:first-child { font-size: var(--fs-sm); }
+.ui .ks-typerow[data-token="--fs-md"] > span:first-child { font-size: var(--fs-md); }
+.ui .ks-typerow[data-token="--fs-lg"] > span:first-child { font-size: var(--fs-lg); }
+.ui .ks-typerow[data-token="--fs-xl"] > span:first-child { font-size: var(--fs-xl); }

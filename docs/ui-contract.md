@@ -332,9 +332,19 @@ reads as a Dane expects it to without a second formatter.
 |---|---|---|
 | 0 | Audit | done |
 | 1 | `tokens.css`, the components the examples need, two example screens on `/ui-preview/*`, routing | **done — awaiting approval** |
-| 2 | Finish `tokens.css` + `base.css`, remaining components, `/ui-kitchen-sink`, `scripts/ui-check.js` | **in progress** — base.css and `ui.js` done |
+| 2 | Finish `tokens.css` + `base.css`, remaining components, `/ui-kitchen-sink`, `scripts/ui-check.js` | **in progress** — base.css, `ui.js` and the kitchen sink done |
 | 3 | Migration, one screen per commit | not started |
 | 4 | Verification: `ui:check` clean, before/after grep report | not started |
+
+### Component reference
+
+**`/ui-kitchen-sink`** (admin only) renders every component in every state it
+has, built from `ui.js` like any migrated screen. Two jobs: a visual reference,
+so "what does an ErrorState look like" is a link rather than a hunt; and a test
+surface, so a regression in a component shows up on a page that is checked
+rather than only on whichever screen happens to use it.
+
+Unlike the previews it stays after the migration.
 
 ### Phase 1 examples
 

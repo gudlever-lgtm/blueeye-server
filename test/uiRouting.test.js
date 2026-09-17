@@ -414,3 +414,79 @@ test('boot: the 403 and the 404 keep the address in the bar and say so in the br
   assert.equal(denied.window.location.pathname, '/discovery', 'the 403 rewrote the address');
   assert.match(denied.doc.getElementById('crumb').textContent, /not allowed/i);
 });
+
+// ---------------------------------------------------------------- kitchen sink
+test('boot: /ui-kitchen-sink renders every component section, admin only', async (t) => {
+  const { doc, window, errors } = bootAt('http://server.test/ui-kitchen-sink', { t, routes: SESSION('admin') });
+  await settle();
+  assert.deepEqual(errors, []);
+  const ui = doc.querySelector('#view .ui');
+  assert.ok(ui, 'the reference is not built from the contract components');
+  assert.ok(ui.querySelector('.page-head h1'), 'no PageHeader');
+  const KitchenSink = require('../public/kitchenSink.js');
+  const tabs = [...ui.querySelectorAll('.subtabs .subtab')];
+  assert.ok(tabs.length >= 8, `only ${tabs.length} sections`);
+
+  // Every section renders without throwing, and none of them is empty.
+  for (const tab of tabs) {
+    tab.dispatchEvent(new window.Event('click', { bubbles: true }));
+    await settle();
+    const body = ui.lastElementChild;
+    assert.ok(body.querySelector('.panel-ui'), `${tab.textContent}: rendered no panel`);
+    assert.ok(body.textContent.trim().length > 20, `${tab.textContent}: rendered nothing`);
+  }
+  assert.deepEqual(errors, [], 'a section threw while rendering');
+  void KitchenSink;
+});
+
+test('boot: the kitchen sink shows each state, and its overlays open and close', async (t) => {
+  const { doc, window } = bootAt('http://server.test/ui-kitchen-sink', { t, routes: SESSION('admin') });
+  await settle();
+  const pick = (name) => [...doc.querySelectorAll('#view .subtabs .subtab')]
+    .find((b) => b.dataset.tab === name);
+
+  pick('states').dispatchEvent(new window.Event('click', { bubbles: true }));
+  await settle();
+  const plain = [...doc.querySelectorAll('#view .state')].filter((n) => !n.classList.contains('is-error'));
+  assert.equal(plain.length, 1, 'no EmptyState');
+  assert.ok(doc.querySelector('#view .state.is-error'), 'no ErrorState');
+  assert.ok(doc.querySelector('#view .skel-row'), 'no LoadingState');
+  assert.ok(doc.querySelector('#view .inline-note.is-warn'), 'no warning inline note');
+
+  pick('overlays').dispatchEvent(new window.Event('click', { bubbles: true }));
+  await settle();
+  const [drawerBtn, okBtn, errBtn] = [...doc.querySelectorAll('#view .panel-body .btn')];
+  drawerBtn.dispatchEvent(new window.Event('click', { bubbles: true }));
+  assert.ok(doc.querySelector('.ui-drawer'), 'the Drawer did not open');
+  doc.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape' }));
+  assert.equal(doc.querySelector('.ui-drawer'), null, 'Escape did not close the Drawer');
+
+  okBtn.dispatchEvent(new window.Event('click', { bubbles: true }));
+  errBtn.dispatchEvent(new window.Event('click', { bubbles: true }));
+  const toasts = doc.querySelectorAll('#ui-toasts .ui-toast');
+  assert.equal(toasts.length, 2, 'toasts do not stack');
+  assert.ok(doc.querySelector('#ui-toasts .ui-toast.err'));
+});
+
+test('boot: the kitchen sink is admin only, by address as well as by rail', async (t) => {
+  for (const role of ['viewer', 'operator']) {
+    const { doc } = bootAt('http://server.test/ui-kitchen-sink', { t, role, routes: SESSION(role) });
+    await settle();
+    assert.match(doc.getElementById('view').textContent, /403/, role);
+    assert.equal(doc.querySelector('#view .statstrip'), null, `${role}: it rendered anyway`);
+  }
+});
+
+test('boot: leaving a component screen takes its body-level overlays with it', async (t) => {
+  // The Drawer, the popover and the toasts hang off <body>, so a view switch
+  // does not remove them — which would leave a Drawer floating over Fleet.
+  const { doc, window } = bootAt('http://server.test/ui-preview/changes', { t, routes: SESSION('admin') });
+  await settle();
+  doc.querySelector('#view table.dt tbody tr').dispatchEvent(new window.Event('click', { bubbles: true }));
+  await settle();
+  assert.ok(doc.querySelector('.ui-drawer'), 'no Drawer to leave behind');
+  doc.querySelector('.tabs button[data-view="fleet"]').dispatchEvent(new window.Event('click', { bubbles: true }));
+  await settle();
+  assert.equal(doc.querySelector('.ui-drawer'), null, 'the Drawer followed us to Fleet');
+  assert.equal(doc.querySelector('.ui-scrim'), null, 'the scrim followed us to Fleet');
+});

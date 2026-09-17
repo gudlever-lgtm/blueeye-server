@@ -1336,6 +1336,7 @@ const CONTRACT_VIEWS = new Map([
   ['map', 'sites'],
   ['overview', 'traffic'],
   ['geo', 'destinations'],
+  ['delta', 'topologyDelta'],
 ]);
 
 function hero(viewKey) {
@@ -6533,127 +6534,61 @@ PAGE_INFO.delta = {
   ],
 };
 
-const CHANGE_SEV_CLASS = { CRIT: 'bad', WARN: 'warn', INFO: 'muted' };
+// ---- Topology delta (MIGRATED — see public/views/topologyDelta.js) ----------
+let topologyDeltaView = null;
+const topologyDeltaState = {};
+
+function getTopologyDeltaView() {
+  if (topologyDeltaView) return topologyDeltaView;
+  if (typeof window === 'undefined' || !window.TopologyDeltaView || !ui) return null;
+  topologyDeltaView = window.TopologyDeltaView.create({
+    el, t, ui, errText, openAgent, gotoView,
+    state: topologyDeltaState,
+    Delta: DeltaView,
+    search: () => window.location.search,
+    help: () => {
+      const info = PAGE_INFO.delta || {};
+      return { lead: info.hero || '', title: info.title || t('delta.title'), body: info.body || (() => []) };
+    },
+    // The site and severity are the SHARED global filter, not a second copy:
+    // editing them here moves the same fleetFilter the Overview uses.
+    filter: () => fleetFilter,
+    setSite: (site) => { fleetFilter = FleetFilter.setSite(fleetFilter, site); syncFleetUrl(); },
+    // FleetFilter has no setter for the whole list, and writing the array in
+    // by hand would skip its normalisation. Toggling off, then on, does not.
+    setSeverity: (tokens) => {
+      let next = fleetFilter;
+      for (const tok of next.severity.slice()) next = FleetFilter.toggleSeverity(next, tok);
+      for (const tok of tokens) next = FleetFilter.toggleSeverity(next, tok);
+      fleetFilter = next;
+      syncFleetUrl();
+    },
+    // The change types live in the URL so a filtered feed is one link.
+    syncTypes: (types) => {
+      try {
+        const q = new URLSearchParams(window.location.search || '');
+        const patch = DeltaView.changeTypesPatch(types);
+        if (patch.changeTypes == null) q.delete('changeTypes'); else q.set('changeTypes', patch.changeTypes);
+        const qs = q.toString();
+        window.history.replaceState(null, '', window.location.pathname + (qs ? `?${qs}` : '') + window.location.hash);
+      } catch { /* best-effort */ }
+    },
+    fetchAll: async () => {
+      const [chg, ag, loc] = await Promise.all([
+        api('/api/topology/changes?limit=500'),
+        api('/agents').catch(() => []),
+        api('/locations').catch(() => []),
+      ]);
+      return { events: chg.events || [], agents: ag || [], locations: loc || [] };
+    },
+  });
+  return topologyDeltaView;
+}
 
 views.delta = async () => {
-  const root = el('div', { class: 'delta-view' });
-  root.append(el('div', { class: 'section-head' }, el('h2', {}, 'Changes'), el('span', { class: 'muted' }, 'Topology delta feed')));
-  const controls = el('div', { class: 'delta-controls' });
-  const listHost = el('div', {});
-  root.append(controls, listHost);
-
-  let types = DeltaView.parseChangeTypes(window.location.search);
-  let events = [];
-  let agents = [];
-  let locations = [];
-
-  function syncDeltaUrl() {
-    try {
-      const q = new URLSearchParams(window.location.search || '');
-      const patch = DeltaView.changeTypesPatch(types);
-      if (patch.changeTypes == null) q.delete('changeTypes'); else q.set('changeTypes', patch.changeTypes);
-      const qs = q.toString();
-      window.history.replaceState(null, '', window.location.pathname + (qs ? `?${qs}` : '') + window.location.hash);
-    } catch { /* best-effort */ }
-  }
-
-  const nameById = {};
-  const nameFor = (hid) => nameById[hid] || `host ${hid}`;
-  function siteAgentIdSet() {
-    if (!fleetFilter.site) return null;
-    const want = String(fleetFilter.site).toLowerCase();
-    const s = new Set();
-    agents.forEach((a) => {
-      if (String(a.location_name || '').toLowerCase() === want || String(a.location_id) === want) s.add(Number(a.id));
-    });
-    return s;
-  }
-
-  function changeTypeRow() {
-    const counts = DeltaView.countByType(events);
-    const chip = (t) => {
-      const on = types.includes(t.key);
-      const b = el('button', { class: `chip${on ? ' active' : ''}`, 'aria-pressed': String(on) },
-        t.label, el('span', { class: 'chip-count' }, String(counts[t.key] || 0)));
-      b.addEventListener('click', () => {
-        types = on ? types.filter((k) => k !== t.key) : DeltaView.normalizeTypes(types.concat(t.key));
-        syncDeltaUrl();
-        renderDelta();
-      });
-      return b;
-    };
-    const row = el('div', { class: 'delta-typebar', role: 'group', 'aria-label': 'Change type' },
-      el('span', { class: 'muted' }, 'Type:'), ...DeltaView.CHANGE_TYPES.map(chip));
-    if (types.length) row.append(el('button', { class: 'small ghost', onclick: () => { types = []; syncDeltaUrl(); renderDelta(); } }, 'All'));
-    return row;
-  }
-
-  function globalFilterRow() {
-    // Site + severity come from the shared global filter — editing here mutates
-    // the SAME fleetFilter the Overview uses and re-syncs the shared URL params.
-    const siteSel = el('select', { class: 'small' }, el('option', { value: '' }, 'All sites'),
-      ...locations.map((l) => el('option', { value: String(l.id) }, l.name)));
-    if (fleetFilter.site) siteSel.value = String(fleetFilter.site);
-    siteSel.addEventListener('change', () => { fleetFilter = FleetFilter.setSite(fleetFilter, siteSel.value || null); syncFleetUrl(); renderDelta(); });
-    const sevBtn = (tok, label) => {
-      const on = fleetFilter.severity.includes(tok);
-      const b = el('button', { class: `chip${on ? ' active' : ''}`, 'aria-pressed': String(on) }, label);
-      b.addEventListener('click', () => { fleetFilter = FleetFilter.toggleSeverity(fleetFilter, tok); syncFleetUrl(); renderDelta(); });
-      return b;
-    };
-    const chips = FleetFilter.chips(fleetFilter).map((c) => el('button', { class: 'chip removable', title: 'Remove filter',
-      onclick: () => { fleetFilter = FleetFilter.removeChip(fleetFilter, c); syncFleetUrl(); renderDelta(); } }, c.label, ' ×'));
-    return el('div', { class: 'delta-globalbar' },
-      el('label', { class: 'inline muted' }, 'Site ', siteSel),
-      el('span', { class: 'muted' }, 'Severity:'), sevBtn('CRIT', 'Kritiske'), sevBtn('WARN', 'Advarsler'),
-      chips.length ? el('span', { class: 'delta-chips' }, ...chips) : null);
-  }
-
-  function changeTable(rows) {
-    return el('table', { class: 'agents-table delta-table' },
-      el('thead', {}, el('tr', {},
-        el('th', { scope: 'col' }, 'Time'), el('th', { scope: 'col' }, 'Type'),
-        el('th', { scope: 'col' }, 'Host'), el('th', { scope: 'col' }, 'Severity'), el('th', { scope: 'col' }, 'What changed'))),
-      el('tbody', {}, ...rows.map((e) => {
-        const sev = DeltaView.severityToken(e);
-        const ct = DeltaView.changeTypeOf(e);
-        return el('tr', {},
-          el('td', {}, e.timestamp ? fmtDate(e.timestamp) : '–'),
-          el('td', {}, el('span', { class: 'badge' }, ct.replace(/_/g, ' '))),
-          el('td', {}, e.agentId != null ? el('button', { class: 'linklike', onclick: () => openAgent(e.agentId) }, esc(nameFor(e.agentId))) : '–'),
-          el('td', {}, el('span', { class: `badge ${CHANGE_SEV_CLASS[sev] || 'muted'}` }, sev)),
-          el('td', {}, esc(e.summary || '')));
-      })));
-  }
-
-  function renderDelta() {
-    controls.replaceChildren(changeTypeRow(), globalFilterRow());
-    if (!events.length) { listHost.replaceChildren(el('div', { class: 'empty' }, 'No topology changes recorded yet. Changes appear as agents report LLDP neighbours across poll cycles.')); return; }
-    const filtered = DeltaView.filterChanges(events, { types, severityTokens: fleetFilter.severity, siteAgentIds: siteAgentIdSet() });
-    listHost.replaceChildren(filtered.length
-      ? changeTable(filtered)
-      : el('div', { class: 'empty' }, 'No changes match the current filter.'));
-  }
-
-  controls.replaceChildren(el('div', { class: 'muted' }, 'Loading…'));
-  try {
-    const [chg, ag, loc] = await Promise.all([
-      api('/api/topology/changes?limit=500'),
-      api('/agents').catch(() => []),
-      api('/locations').catch(() => []),
-    ]);
-    events = chg.events || [];
-    agents = ag || [];
-    locations = loc || [];
-  } catch (e) {
-    controls.replaceChildren();
-    listHost.replaceChildren(el('div', { class: e.status === 403 ? 'empty' : 'error' },
-      e.status === 403 ? 'The changes feed is available to operators and admins.' : errText(e)));
-    return root;
-  }
-  agents.forEach((a) => { nameById[a.id] = a.display_name || a.hostname || `host ${a.id}`; });
-  renderDelta();
-  return root;
+  const v = getTopologyDeltaView();
+  if (!v) return el('div', { class: 'empty error' }, t('delta.err.title'));
+  return v.view();
 };
 
 // ---- Admin → Discovery (active scan scope + candidate queue) ---------------

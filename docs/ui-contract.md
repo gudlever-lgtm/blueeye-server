@@ -442,6 +442,7 @@ Administration → login and error screens.
 | Sites | `/sites` | A · ListPage | [`public/views/sites.js`](../public/views/sites.js) |
 | Traffic | `/traffic` | B · DashboardPage | [`public/views/traffic.js`](../public/views/traffic.js) |
 | Destinations | `/destinations` | A · ListPage | [`public/views/destinations.js`](../public/views/destinations.js) |
+| Topology delta | `/topology-delta` | A · ListPage | [`public/views/topologyDelta.js`](../public/views/topologyDelta.js) |
 
 **What Changes kept:** the window vocabulary the server accepts (`30m`, `6h`,
 `24h`, `7d` — not the preview's three), the marker rule (it moves only on an
@@ -583,3 +584,21 @@ overview it is about to draw.
 **Not migrated, passed in whole:** the Leaflet instance, the two marker layers,
 the region rectangle and the traceroute path layer, plus `pathGeoStops` /
 `renderPathStops`, which the Probes traceroute map shares.
+
+
+**Topology delta** carried three rows of controls: change-type chips, a
+site/severity bar, and a third row of removable chips repeating what the second
+one already said. The types are a StatStrip now — counting is what they were
+doing anyway — and the rest is one Toolbar. The feed is a sortable DataTable.
+
+The change-type filter is still in the URL, so a filtered feed is still one
+link, and the site and severity still come from the shared `fleetFilter` rather
+than a second copy of it: setting a severity goes through
+`FleetFilter.toggleSeverity` rather than writing the array in, which is what
+keeps its normalisation.
+
+Two Danish strings on an English screen — "Kritiske" and "Advarsler" — now come
+from the catalogue in both languages.
+
+The page is called **Topology delta** here, in the nav and in the breadcrumb.
+Two screens were both called "Changes", which is one too many.

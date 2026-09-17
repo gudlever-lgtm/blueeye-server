@@ -493,12 +493,6 @@ main#view .card { width: auto; padding: 18px 20px; box-shadow: var(--shadow); }
 .bl-dot { fill: var(--accent); }
 
 /* Delta / Changes view: change-type filter + shared global filter bar. */
-.delta-controls { display: flex; flex-direction: column; gap: 8px; margin: 6px 0 12px; }
-.delta-typebar, .delta-globalbar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
-.delta-typebar .chip-count { margin-left: 6px; opacity: .7; font-variant-numeric: tabular-nums; }
-.delta-globalbar .chip.removable { border-style: dashed; }
-.delta-chips { display: inline-flex; gap: 6px; flex-wrap: wrap; }
-.delta-table td:last-child { color: var(--muted); }
 
 /* Admin → Discovery: scope form + candidate queue. */
 .discovery-view .card { margin-bottom: 16px; }

@@ -1334,6 +1334,7 @@ const CONTRACT_VIEWS = new Map([
   ['findings', 'analysis'],
   ['fleet', 'fleet'],
   ['map', 'sites'],
+  ['overview', 'traffic'],
 ]);
 
 function hero(viewKey) {
@@ -4355,269 +4356,100 @@ views.cluster = async () => {
   return container;
 };
 
-views.overview = async () => {
-  const root = el('div', { class: 'overview' });
-  root.append(el('div', { class: 'section-head' }, el('h2', {}, 'Traffic'),
-    el('span', { class: 'muted' }, 'auto-updates every 3 sec.')));
+// ---- Traffic (MIGRATED — see public/views/traffic.js) -----------------------
+// The chart plotter, the storage fold, the history explorer and the traffic-type
+// breakdown stay here: each is its own unmigrated component, and Traffic is the
+// only screen that mounts them. The view asks for them and app.js hands them over.
+let trafficView = null;
+// ovState is declared below this block, so the state object is built on first
+// use rather than at module level.
+const trafficViewState = {};
 
-  // NOC: alert banner (latest unacked CRIT/WARN finding) + KPI grid.
-  const alertBanner = el('div', { class: 'alert-banner hidden' });
-  root.append(alertBanner);
-
-  // Compact KPI strip: one slim row instead of four tall cards.
-  const kpiStat = (cls, label) => {
-    const value = el('span', { class: 'v num' }, '–');
-    const sub = el('span', { class: 'kpi-mini' });
-    return { node: el('div', { class: `kpi ${cls}` }, el('span', { class: 'k' }, label), value, sub), value, sub };
+function getTrafficView() {
+  if (trafficView) return trafficView;
+  if (typeof window === 'undefined' || !window.TrafficView || !ui) return null;
+  trafficViewState.selection = ovState.selection;
+  // The three folds are built once per view entry and handed to the view to
+  // append. They carry their own polling and their own state.
+  let extras = null;
+  const buildExtras = () => {
+    const storageSummary = el('summary', { class: 'storage-line' }, el('span', { class: 'muted' }, 'Storage …'));
+    const storageBody = el('div', { class: 'storage-detail-body' });
+    const typesCard = trafficTypesCard();
+    const histSection = trafficHistorySection({ onData: (d) => typesCard.update(d) });
+    const typeSection = trafficTypeSection();
+    return {
+      storageSummary,
+      storageBody,
+      nodes: [
+        el('details', { class: 'storage-fold' }, storageSummary, storageBody),
+        el('div', { class: 'hist-row' },
+          el('details', { class: 'sec hist-main' },
+            el('summary', {}, 'History — inspect time window ', el('span', { class: 'muted' }, '· select agent + period')),
+            histSection.node),
+          typesCard.node),
+        el('details', { class: 'sec' },
+          el('summary', {}, 'Traffic type ', el('span', { class: 'muted' }, '· per agent · DNS, Facebook, …')),
+          typeSection.node),
+      ],
+    };
   };
-  const kRx = kpiStat('rx', '↓ RX');
-  const kTx = kpiStat('tx', '↑ TX');
-  const kAg = kpiStat('ag', 'Agents');
-  const kLoc = kpiStat('loc', 'Locations');
-  root.append(el('div', { class: 'kpis' }, kRx.node, kTx.node, kAg.node, kLoc.node));
 
-  async function refreshAlert() {
-    try {
-      const fs = await api(`/api/findings?since=${new Date(Date.now() - 3600000).toISOString()}`);
-      const hit = fs.find((f) => (f.severity === 'CRIT' || f.severity === 'WARN') && !f.acked);
-      if (hit) {
-        alertBanner.className = `alert-banner sev-${hit.severity}`;
-        alertBanner.replaceChildren(
-          el('span', { class: 'alert-ic' }, '⚠'),
-          el('span', {}, `${hit.severity}: ${esc(hit.metric || '')} — ${esc(hit.explanation || '')}`),
-          el('span', { class: 'spacer' }),
-          el('span', { class: 'muted small' }, fmtDate(hit.createdAt)),
-          el('button', { class: 'small ghost', onclick: () => { currentView = 'findings'; render(); } }, 'Details'));
-      } else { alertBanner.className = 'alert-banner hidden'; alertBanner.replaceChildren(); }
-    } catch { alertBanner.className = 'alert-banner hidden'; }
-  }
-  refreshAlert();
-  api('/locations').then((locs) => {
-    kLoc.value.textContent = String(locs.length);
-    kLoc.node.title = `${locs.filter((l) => l.latitude != null).length} with coordinates`;
-  }).catch(() => {});
+  trafficView = window.TrafficView.create({
+    el, t, ui, errText, fmtBytes, gotoView, openAgent,
+    state: trafficViewState,
+    plot: (series, opts) => multiChart(series, opts),
+    help: () => {
+      const info = PAGE_INFO.overview || {};
+      return { lead: info.hero || '', title: info.title || t('traffic.title'), body: info.body || (() => []) };
+    },
+    // One tick: every agent's latest traffic totals, in parallel. An agent that
+    // has not reported counts as zero rather than dropping out of the total.
+    fetchTick: async () => {
+      const agents = await api('/agents');
+      const latest = await Promise.all(agents.map(async (a) => {
+        try {
+          const rows = await api(`/agents/${a.id}/results?limit=1`);
+          const tr = rows[0] && rows[0].payload && rows[0].payload.traffic && rows[0].payload.traffic.totals;
+          return { a, rx: tr ? Number(tr.rxBytesPerSec) || 0 : 0, tx: tr ? Number(tr.txBytesPerSec) || 0 : 0 };
+        } catch { return { a, rx: 0, tx: 0 }; }
+      }));
+      return { agents, latest };
+    },
+    fetchAlert: async () => {
+      const list = await api(`/api/findings?since=${new Date(Date.now() - 3600000).toISOString()}`);
+      return list.find((f) => (f.severity === 'CRIT' || f.severity === 'WARN') && !f.acked) || null;
+    },
+    fetchSites: async () => {
+      const locs = await api('/locations');
+      const mapped = locs.filter((l) => l.latitude != null).length;
+      return { count: locs.length, hint: t('traffic.stat.sitesHint', { mapped }) };
+    },
+    mountExtras: (page) => { extras = buildExtras(); page.append(...extras.nodes); },
+    refreshExtras: () => {
+      if (!extras) return;
+      api('/system/storage').then((s) => {
+        extras.storageSummary.replaceChildren(...storageLineParts(s));
+        extras.storageBody.replaceChildren(storageCards(s));
+      }).catch(() => { /* the line keeps its placeholder */ });
+    },
+    startPolling: (refresh) => {
+      stopOverview();
+      ovState.timer = setInterval(() => {
+        if (currentView !== 'overview') { stopOverview(); return; }
+        if (modalOpen()) return;
+        refresh();
+      }, 3000);
+    },
+  });
+  return trafficView;
+}
 
-  // Top agents by current bandwidth (updated each tick).
-  const topAgents = el('div', { class: 'top-agents' });
-
-  // Hero chart: the chart fills the card's full width. Dragging across it zooms
-  // into the selected timespan (freezing the live view to that window); the
-  // "Reset zoom" chip returns to the live rolling view.
-  const chartHost = el('div', { class: 'overview-chart' });
-  const controls = el('div', { class: 'peragent-list' });
-  const chipRx = el('button', { class: 'chip rx', onclick: () => toggleSeries('total:rx') }, 'Total RX');
-  const chipTx = el('button', { class: 'chip tx', onclick: () => toggleSeries('total:tx') }, 'Total TX');
-  const perAgentCnt = el('span', { class: 'cnt muted' });
-  const perAgent = el('details', { class: 'chip-det' },
-    el('summary', { class: 'chip' }, 'Pr. agent ', perAgentCnt), controls);
-  const zoomBtn = el('button', { class: 'chip size-toggle', onclick: () => resetZoom() });
-  let zoom = null; // frozen snapshot of the dragged window, or null while live
-  const chartCard = el('div', { class: 'chart-card' },
-    el('div', { class: 'bar' }, el('h3', {}, 'Live traffic'), el('span', { class: 'spacer' }), chipRx, chipTx, perAgent, zoomBtn),
-    el('div', { class: 'chart-row' }, chartHost));
-  root.append(chartCard);
-
-  // Slim storage line; the full disk/DB/forbrug breakdown folds open below it.
-  const storageSummary = el('summary', { class: 'storage-line' }, el('span', { class: 'muted' }, 'Storage …'));
-  const storageBody = el('div', { class: 'storage-detail-body' });
-  root.append(el('details', { class: 'storage-fold' }, storageSummary, storageBody));
-  function refreshStorage() {
-    api('/system/storage').then((s) => {
-      storageSummary.replaceChildren(...storageLineParts(s));
-      storageBody.replaceChildren(storageCards(s));
-    }).catch(() => {});
-  }
-  refreshStorage();
-
-  root.append(el('details', { class: 'sec' }, el('summary', {}, 'Top agents ', el('span', { class: 'muted' }, '· by current bandwidth')), topAgents));
-
-  // history[seriesId] = [{ y }]; selection is a Set of seriesId.
-  const history = new Map();
-  const selection = ovState.selection;
-  const MAX = 60;
-  let agentsMeta = [];
-  let tickN = 0;
-
-  function pushPoint(id, label, y) {
-    if (!history.has(id)) history.set(id, { label, points: [] });
-    const h = history.get(id);
-    h.label = label;
-    h.points.push({ y, t: Date.now() });
-    if (h.points.length > MAX) h.points.shift();
-  }
-
-  async function tick() {
-    let agents;
-    try { agents = await api('/agents'); } catch (err) { chartHost.replaceChildren(el('p', { class: 'error' }, err.message)); return; }
-    agentsMeta = agents;
-    // Fetch each agent's latest result (rate) in parallel.
-    const latest = await Promise.all(agents.map(async (a) => {
-      try {
-        const rows = await api(`/agents/${a.id}/results?limit=1`);
-        const t = rows[0] && rows[0].payload && rows[0].payload.traffic && rows[0].payload.traffic.totals;
-        return { a, rx: t ? Number(t.rxBytesPerSec) || 0 : 0, tx: t ? Number(t.txBytesPerSec) || 0 : 0 };
-      } catch { return { a, rx: 0, tx: 0 }; }
-    }));
-    let totalRx = 0;
-    let totalTx = 0;
-    for (const { a, rx, tx } of latest) {
-      const name = a.display_name || a.hostname;
-      pushPoint(`rx:${a.id}`, `${name} RX`, rx);
-      pushPoint(`tx:${a.id}`, `${name} TX`, tx);
-      totalRx += rx; totalTx += tx;
-    }
-    pushPoint('total:rx', 'Total RX', totalRx);
-    pushPoint('total:tx', 'Total TX', totalTx);
-
-    // KPI cards.
-    kRx.value.textContent = `${fmtBytes(totalRx)}/s`;
-    kTx.value.textContent = `${fmtBytes(totalTx)}/s`;
-    const online = agents.filter((a) => a.status === 'online').length;
-    kAg.value.textContent = `${online} / ${agents.length}`;
-    kAg.sub.replaceChildren(usageBar(agents.length ? Math.round((online / agents.length) * 100) : 0));
-
-    // Top agents by current bandwidth.
-    const top = latest.slice().sort((a, b) => (b.rx + b.tx) - (a.rx + a.tx)).slice(0, 5);
-    topAgents.replaceChildren(
-      ...(top.length ? top.map(({ a, rx, tx }) => el('div', { class: 'ta-row' },
-        el('span', { class: `badge ${a.status}` }, a.status === 'online' ? '●' : '○'),
-        el('span', { class: 'ta-name' }, esc(a.display_name || a.hostname)),
-        el('span', { class: 'ta-bw muted' }, `↓ ${fmtBytes(rx)}/s · ↑ ${fmtBytes(tx)}/s`))) : [el('div', { class: 'muted' }, 'No agents.')]));
-
-    // Default selection on first load: the two totals.
-    if (!selection.size) { selection.add('total:rx'); selection.add('total:tx'); }
-
-    renderChart();
-    renderControls();
-
-    // Periodically refresh the alert banner + storage (not every 3s tick).
-    tickN += 1;
-    if (tickN % 10 === 0) { refreshAlert(); refreshStorage(); }
-  }
-
-  // The live series: the selected ids mapped onto their rolling history
-  // buffers, coloured cyan for RX / emerald for TX and the palette otherwise.
-  function liveSeries() {
-    const colorFor = (id, idx) => (id.includes('rx') ? '#06b6d4' : id.includes('tx') ? '#10b981' : SERIES_COLORS[idx % SERIES_COLORS.length]);
-    return [...selection].filter((id) => history.has(id)).map((id, idx) => ({
-      id, label: history.get(id).label, color: colorFor(id, idx),
-      points: history.get(id).points,
-    }));
-  }
-
-  function renderChart() {
-    // While zoomed the chart is frozen to the snapshot taken at drag time, so
-    // the 3-second live tick doesn't fight the zoom; otherwise it's the rolling
-    // live series.
-    const seriesList = zoom ? zoom.series : liveSeries();
-    const legend = legendFor(seriesList);
-    // Running clock ticks (HH:MM:SS) from the actual point timestamps, so the
-    // x-axis shows the (live or zoomed) timeframe rather than a static label.
-    const ref = seriesList.find((s) => s.points.length >= 2);
-    const TICKS = 5;
-    let xLabels = ['~3 min ago', '', 'now'];
-    if (ref) {
-      const pts = ref.points;
-      xLabels = Array.from({ length: TICKS }, (_, i) =>
-        fmtClock(pts[Math.round((i / (TICKS - 1)) * (pts.length - 1))].t));
-    }
-    chartHost.replaceChildren(
-      seriesList.length ? multiChart(seriesList, { height: 300, area: true, xLabels, onBrush: (f0, f1) => { if (f0 === null) resetZoom(); else zoomTo(f0, f1); } }) : el('div', { class: 'empty' }, 'Select series in the toolbar ↑'),
-      legend);
-    syncChips();
-  }
-
-  // Drag-to-zoom: freeze the chart to the dragged slice of whatever is shown
-  // now (the live buffer, or an existing zoom — so a second drag zooms in
-  // further). Snapshots the points so later live ticks leave the window be.
-  function zoomTo(f0, f1) {
-    const base = zoom ? zoom.series : liveSeries();
-    if (!base.length) return;
-    const lo = Math.min(f0, f1);
-    const hi = Math.max(f0, f1);
-    // multiChart stretches each series across the full width using its own
-    // point count, so map the dragged fraction onto each series' own index
-    // range. A single shared length would slice a shorter series past its end
-    // (it would vanish from the zoom) or zoom it to the wrong interval.
-    const series = base
-      .map((s) => {
-        const n = s.points.length;
-        const i0 = Math.round(lo * (n - 1));
-        const i1 = Math.round(hi * (n - 1));
-        return { id: s.id, label: s.label, color: s.color, points: s.points.slice(i0, i1 + 1).map((p) => ({ t: p.t, y: p.y })) };
-      })
-      .filter((s) => s.points.length >= 2);
-    if (!series.length) return;
-    zoom = { series };
-    updateZoomBtn();
-    renderChart();
-  }
-  function resetZoom() {
-    if (!zoom) return;
-    zoom = null;
-    updateZoomBtn();
-    renderChart();
-  }
-  // The toolbar chip only does something while zoomed; greyed out otherwise.
-  function updateZoomBtn() {
-    zoomBtn.textContent = '↺ Reset zoom';
-    zoomBtn.disabled = !zoom;
-    zoomBtn.classList.toggle('on', !!zoom);
-    zoomBtn.title = zoom ? 'Return to the live rolling view' : 'Drag across the chart to zoom into a timespan';
-  }
-
-  function checkbox(id, label) {
-    const cb = el('input', { type: 'checkbox' });
-    cb.checked = selection.has(id);
-    cb.addEventListener('change', () => { if (cb.checked) selection.add(id); else selection.delete(id); if (zoom) resetZoom(); else renderChart(); });
-    return el('label', { class: 'check' }, cb, label);
-  }
-
-  // Per-agent series live in the "Pr. agent" chip menu; totals are the chips.
-  function renderControls() {
-    const items = [];
-    for (const a of agentsMeta) {
-      const name = a.display_name || a.hostname;
-      items.push(checkbox(`rx:${a.id}`, `${name} · RX`), checkbox(`tx:${a.id}`, `${name} · TX`));
-    }
-    controls.replaceChildren(...(items.length ? items : [el('div', { class: 'muted' }, 'No agents.')]));
-    syncChips();
-  }
-
-  // Toolbar chips toggle the two totals and reflect the live selection.
-  function toggleSeries(id) {
-    if (selection.has(id)) selection.delete(id); else selection.add(id);
-    if (zoom) resetZoom(); else renderChart();
-  }
-  function syncChips() {
-    chipRx.classList.toggle('on', selection.has('total:rx'));
-    chipTx.classList.toggle('on', selection.has('total:tx'));
-    let n = 0;
-    for (const id of selection) if (id.startsWith('rx:') || id.startsWith('tx:')) n += 1;
-    perAgentCnt.textContent = n ? `(${n})` : '';
-  }
-
-  // Historical traffic explorer (date range, types, time axis, brush-to-zoom),
-  // with the Traffic types aggregate card beside it (side by side; stacks on
-  // narrow viewports). The card derives its figures from the history samples.
-  const typesCard = trafficTypesCard();
-  const histSection = trafficHistorySection({ onData: (d) => typesCard.update(d) });
-  const histDetails = el('details', { class: 'sec hist-main' }, el('summary', {}, 'History — inspect time window ', el('span', { class: 'muted' }, '· select agent + period')), histSection.node);
-  root.append(el('div', { class: 'hist-row' }, histDetails, typesCard.node));
-
-  // Traffic-type breakdown (DNS, Web, Facebook, …) — opt-in, collapsed.
-  const typeSection = trafficTypeSection();
-  root.append(el('details', { class: 'sec' }, el('summary', {}, 'Traffic type ', el('span', { class: 'muted' }, '· per agent · DNS, Facebook, …')), typeSection.node));
-
-  // Set the zoom-button state and render once before the first tick.
-  updateZoomBtn();
-  renderChart();
-
-  // Lifecycle: poll while this view is mounted; stop when leaving.
+views.overview = async () => {
+  const v = getTrafficView();
+  if (!v) return el('div', { class: 'empty error' }, t('traffic.err.title'));
   stopOverview();
-  ovState.timer = setInterval(() => { if (!modalOpen()) tick(); }, 3000);
-  tick();
-  return root;
+  return v.view();
 };
 
 // Overview polling state, so switching tabs stops it.

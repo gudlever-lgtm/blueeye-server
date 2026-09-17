@@ -440,6 +440,7 @@ Administration → login and error screens.
 | Analysis | `/analysis` | A · ListPage | [`public/views/analysis.js`](../public/views/analysis.js) |
 | Fleet | `/fleet` | A · ListPage | [`public/views/fleet.js`](../public/views/fleet.js) |
 | Sites | `/sites` | A · ListPage | [`public/views/sites.js`](../public/views/sites.js) |
+| Traffic | `/traffic` | B · DashboardPage | [`public/views/traffic.js`](../public/views/traffic.js) |
 
 **What Changes kept:** the window vocabulary the server accepts (`30m`, `6h`,
 `24h`, `7d` — not the preview's three), the marker rule (it moves only on an
@@ -531,3 +532,27 @@ The Leaflet instance stays in `app.js`: it is a live object carrying the
 reader's pan and zoom, and the 10 s poll has to move its markers rather than
 rebuild it. The view asks for a canvas and `app.js` mounts the map into it —
 which is the shape every remaining map screen will use.
+
+
+**Traffic** is the first DashboardPage (template B). The four KPI tiles were a
+StatStrip written by hand, so they are one now; the alert bar became an inline
+note above the data it is about.
+
+Three controls used to ask one question — which series to plot: a "Total RX"
+chip, a "Total TX" chip, and a "Pr. agent" fold holding one checkbox per agent
+per direction. They are one picker, and the legend under the chart is where a
+series comes off again. The series take their colour from `--series-0..5`
+instead of two hardcoded hues plus a fixed ramp, which is also what let the
+legend dot become a class rather than an inline style.
+
+Drag-to-zoom survives unchanged, including the part that matters: the zoom is a
+frozen snapshot, so the 3-second poll cannot move the window out from under
+whoever is reading it.
+
+**Not migrated, passed in whole:** the chart plotter (`multiChart`, which owns
+the brush), the storage fold, the history explorer with its traffic-types card,
+and the traffic-type breakdown. Traffic is the only screen that mounts them, so
+they stay in `app.js` until they migrate on their own. The one accommodation is
+a single rule in `styles.css` — `.ui .overview-chart` drops its own card
+background — so the unmigrated plotter does not draw a second panel inside the
+contract's.

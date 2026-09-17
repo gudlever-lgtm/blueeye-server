@@ -52,6 +52,7 @@ const MIGRATED = [
   'views/analysis.js',
   'views/fleet.js',
   'views/sites.js',
+  'views/traffic.js',
 ];
 
 // Classes the contract replaced. A migrated file may not use them.

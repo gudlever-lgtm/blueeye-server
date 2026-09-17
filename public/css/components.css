@@ -204,6 +204,8 @@
 .ui .inline-note { display: flex; align-items: center; gap: var(--s-2); margin: 0;
   font-size: var(--fs-sm); color: var(--text-muted); }
 .ui .inline-note.is-warn { color: var(--sev-warn); }
+.ui .inline-note.is-crit { color: var(--sev-crit); }
+.ui .inline-note.is-info { color: var(--sev-info); }
 
 /* ---- Drawer — row detail, right side, 480px ------------------------------ */
 .ui-scrim { position: fixed; inset: 0; z-index: 60; background: var(--scrim); }

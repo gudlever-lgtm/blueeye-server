@@ -14,7 +14,8 @@
 // (docs/ui-contract.md):
 //
 //   inline-style     style=" in a view
-//   colour           a hex/rgb literal outside tokens.css
+//   colour           a hex/rgb literal outside tokens.css — IN ANY STYLESHEET,
+//                    contract or not, and in any migrated view
 //   px-size          a raw px spacing or font-size outside the token files
 //   legacy-class     a class the contract replaced, still in use
 //   tab-pattern      buttons used as tabs
@@ -86,11 +87,6 @@ const LEGACY_CLASSES = {
   'sa-empty': 'ui.emptyState()',
 };
 
-// --all sweeps the whole codebase, including the screens phase 3 has not
-// reached yet. That is the phase 4 target; the default is what must stay green
-// on every commit while the migration is in flight.
-const ALL = process.argv.includes('--all');
-
 // `ui-check | head` closes the pipe while the report is still being written,
 // and an unhandled EPIPE on stdout crashes node with a stack trace instead of
 // the findings. Piping a long report into head is exactly how somebody reads
@@ -124,13 +120,12 @@ function cssFiles() {
 }
 
 function checkCss() {
-  // styles.css and serviceAssurance.css are the unmigrated screens' chrome.
-  // They are swept in --all mode (the phase 4 target) and counted, not failed
-  // on, by default — a lint that cannot pass until the last screen is migrated
-  // is a lint nobody runs until then.
-  const files = cssFiles().filter((rel) => ALL || TOKEN_FILES.has(rel) || CONTRACT_CSS.has(rel));
-
-  for (const rel of files) {
+  // COLOUR is swept in every stylesheet, always. It was once counted rather
+  // than failed on — the unmigrated chrome carried 461 literals and a lint that
+  // cannot pass is a lint nobody runs — but phase 4 emptied them, so the rule
+  // is now what keeps them empty. The SIZE rule is still contract-only: the old
+  // sheets are full of hand-set px that migrate with their screens.
+  for (const rel of cssFiles()) {
     const raw = read(rel);
     const src = stripComments(raw);
 
@@ -233,22 +228,6 @@ function checkJs() {
   }
 }
 
-// What phase 3 still owes: the colour literals left in the unmigrated chrome.
-// Counted rather than listed, so the number is visible and shrinking on every
-// commit without drowning the findings that are actionable now.
-function pendingDebt() {
-  if (ALL) return null;
-  let colours = 0;
-  const per = [];
-  for (const rel of cssFiles()) {
-    if (TOKEN_FILES.has(rel) || CONTRACT_CSS.has(rel)) continue;
-    const src = stripComments(read(rel));
-    const n = (src.match(/#[0-9a-fA-F]{3,8}\b|\brgba?\(/g) || []).length;
-    if (n) { colours += n; per.push(`${rel}: ${n}`); }
-  }
-  return colours ? { colours, per } : null;
-}
-
 // ---------------------------------------------------------------- run
 checkCss();
 checkJs();
@@ -260,7 +239,7 @@ for (const f of findings) {
 
 const scanned = MIGRATED.length;
 if (findings.length) {
-  process.stdout.write(`\nui:check — ${findings.length} finding(s)${ALL ? ' (--all)' : ''}\n`);
+  process.stdout.write(`\nui:check — ${findings.length} finding(s)\n`);
   // NOT process.exit(): it tears the process down with writes still queued, so
   // on a pipe (CI, a test harness, a shell pipeline) the tail of the report is
   // lost — and with hundreds of findings, that is most of it. Setting exitCode
@@ -268,11 +247,6 @@ if (findings.length) {
   process.exitCode = 1;
 }
 
-const debt = findings.length ? null : pendingDebt();
 if (!findings.length) {
-  process.stdout.write(`ui:check — clean (${scanned} migrated file(s), ${TOKEN_FILES.size + CONTRACT_CSS.size} contract stylesheet(s))\n`);
-}
-if (debt) {
-  process.stdout.write(`           phase 3 still owes ${debt.colours} colour literal(s): ${debt.per.join(', ')}\n`);
-  process.stdout.write('           run `npm run ui:check -- --all` to list them\n');
+  process.stdout.write(`ui:check — clean (${scanned} migrated file(s), ${cssFiles().length} stylesheet(s))\n`);
 }

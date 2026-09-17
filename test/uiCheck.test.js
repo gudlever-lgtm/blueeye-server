@@ -34,23 +34,18 @@ test('ui:check passes on the codebase as it stands', () => {
   assert.match(out, /ui:check — clean/);
 });
 
-test('ui:check reports what phase 3 still owes, so the number is visible and shrinking', () => {
-  const { out } = run();
-  const m = out.match(/phase 3 still owes (\d+) colour literal/);
-  // Once phase 3 finishes there is nothing left to owe and the line is gone —
-  // which is the phase 4 target, not a reason for this test to fail.
-  if (m) assert.ok(Number(m[1]) > 0);
-});
-
-test('ui:check --all sweeps the unmigrated chrome too, and says so', () => {
-  const { code, out } = run(['--all']);
-  // This is the phase 4 target. Until then it is expected to find the colour
-  // literals in styles.css and serviceAssurance.css.
-  if (code === 0) {
-    assert.match(out, /ui:check — clean/);
-  } else {
-    assert.match(out, /--all/);
-    assert.match(out, /public\/(styles|serviceAssurance)\.css:\d+:colour/);
+test('the colour rule sweeps EVERY stylesheet, not only the contract ones', () => {
+  // It was once contract-only, counting the rest as debt. Phase 4 emptied them,
+  // so the rule is what keeps them empty — including the old chrome.
+  const sheet = path.join(ROOT, 'public', 'styles.css');
+  const before = fs.readFileSync(sheet, 'utf8');
+  try {
+    fs.writeFileSync(sheet, `${before}\n.zz-fixture { color: #ff00ff; }\n`);
+    const { code, out } = run([]);
+    assert.equal(code, 1, 'a literal in the old chrome no longer fails the default run');
+    assert.match(out, /public\/styles\.css:\d+:colour/);
+  } finally {
+    fs.writeFileSync(sheet, before);
   }
 });
 

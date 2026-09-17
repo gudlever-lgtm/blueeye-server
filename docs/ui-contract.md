@@ -348,8 +348,12 @@ rather than being switched off while the work is in flight. A finding is either
 fixed or the file is not migrated yet — the rules are never loosened to make one
 go away.
 
-`npm run ui:check -- --all` sweeps the unmigrated chrome too. That is the phase 4
-target; the default run prints what is still owed as a single shrinking number.
+**The colour rule sweeps every stylesheet**, contract or not. It did not always:
+while the unmigrated chrome carried 461 literals, they were counted as a
+shrinking debt rather than failed on, because a lint that cannot pass is a lint
+nobody runs. Phase 4 emptied them, so the rule is now what keeps them empty.
+The **size** rule is still contract-only — the old sheets are full of hand-set
+px that migrate with their screens.
 
 **One exemption**, and it is an element rather than a file: a `<col>` width is
 table geometry the caller supplies per table, and expressing it in CSS would mean

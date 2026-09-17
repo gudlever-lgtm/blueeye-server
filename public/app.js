@@ -1356,6 +1356,7 @@ const CONTRACT_VIEWS = new Map([
   ['logs', 'systemLogs'],
   ['userLogs', 'userLogs'],
   ['settings', 'settings'],
+  ['agents', 'agents'],
 ]);
 
 function hero(viewKey) {
@@ -1545,154 +1546,68 @@ views.screening = async () => {
   return root;
 };
 
-views.agents = async () => {
-  const [agents, locations, ver] = await Promise.all([api('/agents'), api('/locations'), api('/system/version').catch(() => null)]);
-  // Two served versions: `offered` is what a systemd one-click Update pushes (a
-  // signed release, else the source bundle); `source` is what installer-based
-  // agents can reach (always the source bundle). They diverge when a signed
-  // release is newer than the packaged source — each agent is judged against the
-  // one IT can actually reach (agentUpdateTarget), so an installer-only agent
-  // that's on the newest installable build isn't flagged as forever "behind".
-  const offered = ver && ver.agent ? ver.agent : null;
-  const versions = { offered, source: (ver && ver.agentSource) || offered };
-  locationCache = locations;
-  // Only systemd agents can be rebuilt-and-restarted from here; Docker/unmanaged/
-  // Windows agents would just decline, so the bulk action targets (and counts)
-  // the self-updatable ones — the rest are flagged with an "installer" badge.
-  const outdated = agents.filter((a) => agentSelfUpdatable(a) && agentIsBehind(a, agentUpdateTarget(a, versions)));
-  const root = el('div');
-  const countLabel = el('span', { class: 'muted' }, `${agents.length} total`);
-  root.append(el('div', { class: 'section-head' },
-    el('h2', {}, 'Agents'),
-    countLabel,
-    canWrite() ? el('button', { class: 'small', onclick: () => newAgent() }, '+ New agent') : null,
-    (canDelete() && outdated.length)
-      ? el('button', { class: 'small', onclick: () => bulkUpdateAgents(outdated, offered), title: 'Rebuild every self-updatable (systemd) outdated agent from the server source, one at a time' }, `Update outdated (${outdated.length})`)
-      : null));
-  if (!agents.length) { root.append(el('div', { class: 'empty' }, 'No agents yet. Click "+ New agent" to get an enrollment code for installation.')); return root; }
-
-  // Client-side filter + sort over the already-loaded agents (no refetch).
-  let filter = '';
-  let sortKey = 'id';
-  let sortDir = 'asc';
-
-  // Columns: { label, key, get }. key:null = not sortable (Source, actions).
-  const columns = [
-    { label: 'ID', key: 'id', get: (a) => a.id },
-    { label: 'Name / hostname', key: 'name', get: (a) => (a.display_name || a.hostname || '').toLowerCase() },
-    { label: 'Platform', key: 'platform', get: (a) => `${a.platform}/${a.arch}`.toLowerCase() },
-    { label: 'Status', key: 'status', get: (a) => a.status || '' },
-    { label: 'Health', key: 'health', get: agentHealthRank },
-    { label: 'Location', key: 'location', get: (a) => (a.location_name || '').toLowerCase() },
-    { label: 'Source', key: null },
-    { label: 'Last reported', key: 'last', get: (a) => (a.last_report_at ? new Date(a.last_report_at).getTime() : 0) },
-    { label: '', key: null },
-  ];
-
-  const search = el('input', {
-    type: 'search', class: 'table-filter',
-    placeholder: 'Filter agents — name, IP, platform, location, source…',
-    oninput: (e) => { filter = e.target.value.trim().toLowerCase(); update(); },
+// ---- Agents (MIGRATED — see public/views/agents.js)
+// The panels the row menu opens (traffic, flows, ping, the flow-pipeline
+// self-check, the speed test, the edit form and the three update flows) stay
+// here — each is a modal with its own machinery.
+let agentsPage = null;
+const agentsPageState = {};
+function getAgentsPage() {
+  if (agentsPage) return agentsPage;
+  if (typeof window === 'undefined' || !window.AgentsPage || !ui) return null;
+  agentsPage = window.AgentsPage.create({
+    el, t, ui, errText,
+    state: agentsPageState,
+    canWrite, canDelete,
+    help: () => ({ title: t('ag.info.title'), body: () => [
+      el('p', {}, t('ag.info.p1')),
+      el('p', {}, t('ag.info.p2')),
+      el('p', { class: 'muted' }, t('ag.info.p3')),
+    ] }),
+    fetchAll: async () => {
+      const [agents, locations, ver] = await Promise.all([
+        api('/agents'), api('/locations'), api('/system/version').catch(() => null),
+      ]);
+      locationCache = locations;
+      // Two served versions: `offered` is what a systemd one-click Update pushes
+      // (a signed release, else the source bundle); `source` is what
+      // installer-based agents can reach. They diverge when a signed release is
+      // newer than the packaged source, so each agent is judged against the one
+      // IT can actually reach — an installer-only agent on the newest
+      // installable build is not flagged as forever behind.
+      const offered = ver && ver.agent ? ver.agent : null;
+      return { agents, versions: { offered, source: (ver && ver.agentSource) || offered } };
+    },
+    // Version arithmetic stays in app.js, where the update flows read it too.
+    selfUpdatable: agentSelfUpdatable,
+    isWindows: agentIsWindows,
+    isBehind: agentIsBehind,
+    updateTarget: agentUpdateTarget,
+    versionLine: agentVersionLine,
+    sourceCell: agentSourceCell,
+    open: openAgent,
+    newAgent,
+    runTest,
+    edit: editAgent,
+    remove: deleteAgent,
+    update: updateAgent,
+    windowsUpdate: showWindowsUpdateCommand,
+    bulkUpdate: bulkUpdateAgents,
+    showResults,
+    showFlows: showAgentFlows,
+    showConnection,
+    ping: pingAgent,
+    diagnose: diagnoseAgent,
+    speedtest: showSpeedtest,
   });
-  root.append(el('div', { class: 'table-toolbar' }, search));
+  return agentsPage;
+}
 
-  const headerEls = columns.map((c) => (c.key
-    ? el('th', {
-      class: 'sortable', scope: 'col', tabindex: '0', 'aria-sort': 'none',
-      title: `Sort by ${c.label}`,
-      onclick: () => sortBy(c.key),
-      onkeydown: (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); sortBy(c.key); } },
-    })
-    : el('th', { scope: 'col' }, c.label)));
-  const tbody = el('tbody');
-  root.append(el('table', { class: 'agents-table' },
-    el('thead', {}, el('tr', {}, ...headerEls)),
-    tbody));
-
-  function sortBy(key) {
-    if (sortKey === key) sortDir = sortDir === 'asc' ? 'desc' : 'asc';
-    else { sortKey = key; sortDir = 'asc'; }
-    update();
-  }
-  function matchesFilter(a) {
-    if (!filter) return true;
-    return [a.id, a.display_name, a.hostname, a.platform, a.arch, a.status,
-      a.location_name, a.monitor_config && a.monitor_config.source,
-      a.capabilities && a.capabilities.agentVersion]
-      .filter((v) => v != null).join(' ').toLowerCase().includes(filter);
-  }
-  function update() {
-    const col = columns.find((c) => c.key === sortKey) || columns[0];
-    const list = agents.filter(matchesFilter).sort((x, y) => {
-      const vx = col.get(x);
-      const vy = col.get(y);
-      const r = (typeof vx === 'number' && typeof vy === 'number')
-        ? vx - vy
-        : String(vx).localeCompare(String(vy));
-      return sortDir === 'asc' ? r : -r;
-    });
-    tbody.replaceChildren(...(list.length
-      ? list.map((a) => agentRow(a, versions))
-      : [el('tr', {}, el('td', { colspan: String(columns.length), class: 'muted' }, 'No agents match your filter.'))]));
-    columns.forEach((c, i) => {
-      if (!c.key) return;
-      const on = sortKey === c.key;
-      headerEls[i].textContent = c.label + (on ? (sortDir === 'asc' ? ' ▲' : ' ▼') : '');
-      headerEls[i].classList.toggle('sorted', on);
-      headerEls[i].setAttribute('aria-sort', on ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none');
-    });
-    countLabel.textContent = filter ? `${list.length} of ${agents.length}` : `${agents.length} total`;
-  }
-
-  update();
-  return root;
+views.agents = async () => {
+  const v = getAgentsPage();
+  if (!v) return el('div', { class: 'empty error' }, t('ag.err.title'));
+  return v.view();
 };
-
-// One agent table row (extracted so the agents view can re-render on filter/sort).
-function agentRow(a, versions) {
-  const target = agentUpdateTarget(a, versions);
-  const behind = agentIsBehind(a, target);
-  return el('tr', {},
-    el('td', {}, String(a.id)),
-    el('td', {}, el('div', {}, a.display_name || a.hostname), a.display_name ? el('div', { class: 'muted' }, a.hostname) : null),
-    el('td', {}, `${a.platform} / ${a.arch}`, agentVersionLine(a, target)),
-    el('td', {}, el('span', {
-      class: `badge ${a.status} clickable`,
-      role: 'button',
-      tabindex: '0',
-      title: 'Connection diagnosis — why this agent is online/offline, with a reconnect option',
-      onclick: () => showConnection(a),
-      onkeydown: (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); showConnection(a); } },
-    }, a.status)),
-    el('td', {}, agentHealthCell(a)),
-    el('td', {}, a.location_name || '–'),
-    el('td', {}, agentSourceCell(a)),
-    el('td', { class: 'muted' }, fmtDate(a.last_report_at)),
-    el('td', {}, el('div', { class: 'row-actions' },
-      el('button', { class: 'small ghost', onclick: () => showResults(a) }, 'Traffic'),
-      (a.monitor_config && (a.monitor_config.source === 'netflow' || a.monitor_config.source === 'sflow'))
-        ? el('button', { class: 'small ghost', onclick: () => showAgentFlows(a) }, 'Flows')
-        : null,
-      el('button', { class: 'small ghost', onclick: () => pingAgent(a), title: 'Confirm the live connection to this agent' }, 'Ping'),
-      el('button', { class: 'small ghost', onclick: () => diagnoseAgent(a), title: 'Flow-pipeline self-check: source, collector counters, exporter state' }, 'Diagnose'),
-      el('button', { class: 'small ghost', onclick: () => showSpeedtest(a), title: 'Active download/upload speed test to the server' }, 'Speed'),
-      canWrite() ? el('button', { class: 'small', onclick: () => runTest(a) }, 'Run test') : null,
-      canWrite() ? el('button', { class: 'small ghost', onclick: () => editAgent(a) }, 'Edit') : null,
-      canDelete() ? agentUpdateButton(a, target, behind) : null,
-      canDelete() ? el('button', { class: 'small danger', onclick: () => deleteAgent(a) }, 'Delete') : null,
-    )),
-  );
-}
-
-// Health ordering for sorting: healthy(0) < delayed / no-data(1) < down(2).
-// Mirrors agentHealthCell so the column sorts the way it reads.
-function agentHealthRank(a) {
-  const last = a.last_report_at ? new Date(a.last_report_at).getTime() : 0;
-  const ageMs = last ? Date.now() - last : Infinity;
-  if (a.status !== 'online') return 2;
-  if (ageMs <= 5 * 60 * 1000) return 0;
-  return 1;
-}
 
 // Small "v<x>" line under the platform, with an "update" badge when the agent is
 // behind the version the server currently serves. Version comes from the agent's
@@ -1815,21 +1730,6 @@ function agentUpdateHint(a) {
   return managed === 'docker'
     ? 'Runs under Docker — update it by re-running the install one-liner on the host (it rebuilds the container there, not from the server).'
     : "Isn't service-managed (a bare-process agent) — update it by re-running the installer on the host.";
-}
-
-// Health derived from how recently the agent last reported in. online + a fresh
-// report = healthy; online but stale (or never reported) = degraded; offline = down.
-function agentHealthCell(a) {
-  const last = a.last_report_at ? new Date(a.last_report_at).getTime() : 0;
-  const ageMs = last ? Date.now() - last : Infinity;
-  const FRESH = 5 * 60 * 1000; // 5 min
-  let cls;
-  let label;
-  if (a.status !== 'online') { cls = 'offline'; label = 'down'; }
-  else if (ageMs <= FRESH) { cls = 'online'; label = 'healthy'; }
-  else { cls = 'grace'; label = last ? 'delayed' : 'no data'; }
-  const title = last ? `Last reported ${fmtDate(a.last_report_at)}` : 'Has not reported yet';
-  return el('span', { class: `badge ${cls}`, title }, label);
 }
 
 // "+ New agent" jumps to the Enrollment screen, where the wizard generates a code

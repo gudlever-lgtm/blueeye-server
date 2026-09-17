@@ -786,8 +786,6 @@ table.matrix td:not(:first-child), table.matrix th:not(:first-child) { text-alig
 table.matrix .active { background: var(--accent-weak); font-weight: 600; }
 
 /* Table filter toolbar (e.g. Agents tab) + sortable column headers. */
-.table-toolbar { display: flex; justify-content: flex-end; margin: 0 0 12px; }
-.table-filter { min-width: 260px; max-width: 360px; }
 th.sortable { cursor: pointer; user-select: none; white-space: nowrap; }
 th.sortable:hover { color: var(--text); }
 th.sortable.sorted { color: var(--accent); }

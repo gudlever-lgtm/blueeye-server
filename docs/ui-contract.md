@@ -1163,3 +1163,44 @@ underline the global anchor rule would otherwise put back.
 **Not a page template.** These two are on the contract's components but on no
 page template: there is no shell around them, and a sidebar the reader cannot
 use would be a lie.
+
+
+**Agents** carried **nine** buttons in every row's last cell — Traffic, Flows,
+Ping, Diagnose, Speed, Run test, Edit, Update, Delete — with Delete at the end
+of the run. The row opens the agent, "Run test" is the row's action, and the
+rest are in the ⋯ menu, grouped: the six checks that only look, then the two
+that change something, then Delete alone behind a separator.
+
+The table sorted itself by rewriting `th.textContent` with a ▲ or ▼ glued to the
+label and setting `aria-sort` by hand. That is the DataTable's job.
+
+**Two columns went, and the table stopped overflowing.** Nine fixed widths came
+to 1196px; at 1280 "Last reported" and the whole action column were past the
+right edge.
+
+- **Status** was redundant *by construction*: Health is derived from it —
+  `status !== 'online'` **is** `down` — so the two columns said the same thing,
+  one of them less precisely. Health keeps the distinction Status could not
+  make: an agent that is connected and has gone quiet.
+- **ID** went with it. The row opens the agent, and the id is in that address.
+- **Platform** went too. It changes once in an agent's life, and the one
+  decision it drove — whether an update is one click or an installer job — is on
+  the version badge. The filter still matches it, so "windows" still finds the
+  Windows agents.
+- The **version** got a column of its own instead of a second line under the
+  platform. It is what "Update outdated (3)" in the header is about, and sorting
+  by it puts the stragglers first rather than sorting version strings
+  alphabetically.
+
+What is left is six columns, only three of them pinned — the badge, the
+timestamp and the actions. Pinning all of them squeezed the agent's own name,
+the point of the row, down to a hundred pixels and truncated it.
+
+The status chip was `.badge <status> clickable` — a chip you could click, which
+is a button wearing a badge. The connection diagnosis is a menu entry now, with
+the other checks. The source cell's capability list and hsflowd state moved to
+the agent page, where the detail lives.
+
+`agentHealthCell` and `agentHealthRank` are gone from `app.js`: two copies of
+the same rule, one for the cell and one for the sort, on a screen that no longer
+draws either.

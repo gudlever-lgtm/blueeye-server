@@ -43,8 +43,11 @@ test('dashboard exposes settings (users+license) tab, auto-refresh and traffic c
   assert.match(js, /monitor_config/); // source selection sent to the API
   assert.match(js, /showLocationTraffic/); // live per-location correlated traffic
   assert.match(js, /\/traffic/); // calls the location traffic endpoint
-  assert.match(js, /agentHealthCell/); // agent health derived from last report
   assert.match(js, /newAgent/); // operator "+ New agent" (enrollment code)
+  // Agent health is derived from the last report on the screen that shows it
+  // (public/views/agents.js) — app.js kept two copies of the rule, one for the
+  // cell and one for the sort.
+  assert.doesNotMatch(js, /function agentHealthCell/);
   assert.match(js, /function openDrawer/); // slide-in info drawer
   assert.match(js, /PAGE_INFO/); // per-page hero/info content
   assert.match(js, /refreshLicense/); // "Re-validate now" on the license page

@@ -351,7 +351,39 @@
   --popup-muted: #64748b;
   --popup-hover: #eef2f7;
 
+  /* Service Assurance's categorical ramp: eight hues for eight applications on
+     one chart, in the fixed order its design defines. It lives here because
+     this is the file colour lives in, and because it used to be re-stated for
+     two of the sixteen palettes and left wrong on the other fourteen.
+     Eight rather than the chart contract's six: a journey chart genuinely has
+     eight lines, and dropping two would drop two applications. */
+  --sa-hue-1: #2a78d6;
+  --sa-hue-2: #eb6834;
+  --sa-hue-3: #1baf7a;
+  --sa-hue-4: #eda100;
+  --sa-hue-5: #e87ba4;
+  --sa-hue-6: #008300;
+  --sa-hue-7: #4a3aa7;
+  --sa-hue-8: #e34948;
+
   /* DataTable row heights. Compact is the density toggle, not a second table. */
   --row-h: 44px;
   --row-h-compact: 36px;
+}
+
+
+/* The eight Service Assurance hues, re-stepped for a dark surface. A selected
+   set, not an automatic lightening of the light one. Applied to every DARK
+   palette: the module used to name only `dark` and `midnight`, which left the
+   other five dark themes reading the light values on a dark ground. */
+[data-theme="dark"], [data-theme="midnight"], [data-theme="nord"], [data-theme="forest"],
+[data-theme="sunset"], [data-theme="solarized-dark"], [data-theme="contrast"] {
+  --sa-hue-1: #3987e5;
+  --sa-hue-2: #d95926;
+  --sa-hue-3: #199e70;
+  --sa-hue-4: #c98500;
+  --sa-hue-5: #d55181;
+  --sa-hue-6: #008300;
+  --sa-hue-7: #9085e9;
+  --sa-hue-8: #e66767;
 }

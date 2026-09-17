@@ -8,7 +8,7 @@
 .sa-tagline {
   margin: 0 0 4px;
   font-size: 0.95rem;
-  color: var(--muted, #6b7280);
+  color: var(--muted);
 }
 
 /* ---- sub-tabs ----
@@ -18,22 +18,22 @@
    step deliberately, not by accident. */
 .sa-tabs {
   display: flex; flex-wrap: wrap; gap: 2px; max-width: 100%;
-  border-bottom: 1px solid var(--hairline, #e5e7eb);
+  border-bottom: 1px solid var(--hairline);
 }
 .sa-tab {
   background: none; border: 0; border-bottom: 2px solid transparent;
   border-radius: var(--radius-sm, 10px) var(--radius-sm, 10px) 0 0;
   margin-bottom: -1px; padding: 8px 14px;
   font: inherit; font-size: 13px; font-weight: 500; line-height: 1.45;
-  color: var(--muted, #6b7280); cursor: pointer;
+  color: var(--muted); cursor: pointer;
   transition: color .15s ease, border-color .15s ease, background .15s ease;
 }
-.sa-tab:hover:not(.active) { color: var(--text, #111827); background: var(--hover, rgba(0, 0, 0, .04)); }
+.sa-tab:hover:not(.active) { color: var(--text); background: var(--hover); }
 .sa-tab.active {
-  color: var(--text-accent, #2563eb); border-bottom-color: var(--accent, #2563eb); font-weight: 600;
+  color: var(--text-accent); border-bottom-color: var(--accent); font-weight: 600;
 }
 .sa-tab:focus-visible {
-  outline: none; box-shadow: var(--ring, 0 0 0 3px rgba(37, 99, 235, .25));
+  outline: none; box-shadow: var(--ring);
   border-radius: var(--radius-sm, 10px);
 }
 
@@ -45,14 +45,14 @@
 .sa-section-head h3 { margin: 0; font-size: 1rem; }
 .sa-actions { display: flex; gap: 6px; flex-wrap: wrap; }
 .sa-panel {
-  background: var(--panel, #fff); border: 1px solid var(--hairline, #e5e7eb);
+  background: var(--panel); border: 1px solid var(--hairline);
   border-radius: var(--radius, 8px); padding: 14px; margin-top: 12px;
 }
 .sa-body { display: flex; flex-direction: column; }
-.sa-empty, .sa-loading { padding: 18px; text-align: center; color: var(--muted, #6b7280); }
-.sa-help { font-size: 0.85rem; color: var(--muted, #6b7280); margin: 4px 0 10px; }
+.sa-empty, .sa-loading { padding: 18px; text-align: center; color: var(--muted); }
+.sa-help { font-size: 0.85rem; color: var(--muted); margin: 4px 0 10px; }
 .sa-url code { font-size: 0.9rem; }
-.sa-muted-chip { color: var(--muted, #6b7280); }
+.sa-muted-chip { color: var(--muted); }
 
 /* ---- forms ---- */
 .sa-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
@@ -63,70 +63,70 @@
 .sa-field-inline input[type="checkbox"] { width: auto; margin: 0; }
 .sa-field input[type="text"], .sa-field input[type="url"], .sa-field input[type="number"],
 .sa-field input[type="password"], .sa-field select, .sa-field textarea {
-  padding: 7px 9px; border: 1px solid var(--hairline, #e5e7eb);
-  border-radius: 6px; font: inherit; background: var(--bg, #fff); color: var(--text, #111827);
+  padding: 7px 9px; border: 1px solid var(--hairline);
+  border-radius: 6px; font: inherit; background: var(--bg); color: var(--text);
   width: 100%; box-sizing: border-box;
 }
 .sa-form-errors { margin-top: 8px; }
 .sa-form-errors:empty { display: none; }
 .sa-form-error-title {
-  color: var(--danger, #b91c1c); font-weight: 700; font-size: 0.9rem; margin-bottom: 6px;
+  color: var(--sev-crit); font-weight: 700; font-size: 0.9rem; margin-bottom: 6px;
 }
 .sa-form-error {
-  color: var(--danger, #b91c1c); font-size: 0.85rem;
-  padding: 6px 8px; border-left: 3px solid var(--danger, #b91c1c); margin-bottom: 4px;
+  color: var(--sev-crit); font-size: 0.85rem;
+  padding: 6px 8px; border-left: 3px solid var(--sev-crit); margin-bottom: 4px;
 }
 
 /* A rejected field says so where it stands. The box at the bottom lists the
    same reasons, but a long dialog scrolls and the input does not move. */
 .sa-field-invalid input, .sa-field-invalid select, .sa-field-invalid textarea {
-  border-color: var(--danger, #b91c1c) !important;
-  box-shadow: 0 0 0 2px rgba(185, 28, 28, 0.12);
+  border-color: var(--sev-crit) !important;
+  box-shadow: 0 0 0 2px var(--crit-weak);
 }
-.sa-field-invalid .sa-field-label { color: var(--danger, #b91c1c); }
+.sa-field-invalid .sa-field-label { color: var(--sev-crit); }
 .sa-field-error {
-  display: block; color: var(--danger, #b91c1c); font-size: 0.82rem; margin-top: 2px;
+  display: block; color: var(--sev-crit); font-size: 0.82rem; margin-top: 2px;
 }
 /* Paused reuses the pending callout's shape — one visual vocabulary for "this
    is not running right now, and here is why". */
-.sa-paused { border-left: 3px solid var(--muted, #6b7280); }
+.sa-paused { border-left: 3px solid var(--muted); }
 
 /* ---- status ---- */
 .sa-status {
   display: inline-block; padding: 2px 8px; border-radius: 999px;
   font-size: 0.72rem; font-weight: 700; letter-spacing: 0.03em;
 }
-.sa-status-pass { background: #dcfce7; color: #166534; }
-.sa-status-fail { background: #fee2e2; color: #991b1b; }
-.sa-status-error { background: #fee2e2; color: #991b1b; }
-.sa-status-warning { background: #fef3c7; color: #92400e; }
-.sa-status-skipped { background: #e5e7eb; color: #4b5563; }
-.sa-status-queued { background: #dbeafe; color: #1e40af; }
-.sa-status-running { background: #dbeafe; color: #1e40af; }
+.sa-status-pass { background: var(--ok-weak); color: var(--sev-ok); }
+.sa-status-fail { background: var(--crit-weak); color: var(--sev-crit); }
+.sa-status-error { background: var(--crit-weak); color: var(--sev-crit); }
+.sa-status-warning { background: var(--warn-weak); color: var(--sev-warn); }
+.sa-status-skipped { background: var(--surface-alt); color: var(--text-muted); }
+.sa-status-queued { background: var(--info-weak); color: var(--sev-info); }
+.sa-status-running { background: var(--info-weak); color: var(--sev-info); }
 
 /* Certificate statuses reuse the status chip, so an "expired" reads the same
    way a "fail" does — one visual vocabulary for one page. */
-.sa-status-ok { background: #dcfce7; color: #166534; }
-.sa-status-expiring { background: #fef3c7; color: #92400e; }
-.sa-status-expired { background: #fee2e2; color: #991b1b; }
-.sa-status-invalid { background: #fee2e2; color: #991b1b; }
-.sa-status-unreachable { background: #e5e7eb; color: #4b5563; }
+.sa-status-ok { background: var(--ok-weak); color: var(--sev-ok); }
+.sa-status-expiring { background: var(--warn-weak); color: var(--sev-warn); }
+.sa-status-expired { background: var(--crit-weak); color: var(--sev-crit); }
+.sa-status-invalid { background: var(--crit-weak); color: var(--sev-crit); }
+.sa-status-unreachable { background: var(--surface-alt); color: var(--text-muted); }
 
 /* ---- incident severity + days remaining ---- */
 .sa-sev {
   display: inline-block; padding: 2px 8px; border-radius: 999px;
   font-size: 0.72rem; font-weight: 700; letter-spacing: 0.03em;
 }
-.sa-sev-crit { background: #fee2e2; color: #991b1b; }
-.sa-sev-warn { background: #fef3c7; color: #92400e; }
-.sa-sev-info { background: #dbeafe; color: #1e40af; }
+.sa-sev-crit { background: var(--crit-weak); color: var(--sev-crit); }
+.sa-sev-warn { background: var(--warn-weak); color: var(--sev-warn); }
+.sa-sev-info { background: var(--info-weak); color: var(--sev-info); }
 
 /* A number alone does not say whether 12 days is fine. The tone does. */
 .sa-days { font-variant-numeric: tabular-nums; font-weight: 600; }
-.sa-days-ok { color: #166534; }
-.sa-days-warn { color: #92400e; }
-.sa-days-bad { color: #991b1b; }
-.sa-days-unknown { color: var(--muted, #6b7280); }
+.sa-days-ok { color: var(--sev-ok); }
+.sa-days-warn { color: var(--sev-warn); }
+.sa-days-bad { color: var(--sev-crit); }
+.sa-days-unknown { color: var(--muted); }
 
 /* The PASS PASS FAIL strip: the whole recent history at a glance. */
 .sa-strip { display: inline-flex; gap: 3px; }
@@ -136,28 +136,28 @@
 .sa-stats { display: flex; flex-wrap: wrap; gap: 20px; margin: 12px 0; }
 .sa-stat { min-width: 90px; }
 .sa-stat-value { font-size: 1.5rem; font-weight: 700; line-height: 1.1; }
-.sa-stat-label { font-size: 0.8rem; color: var(--muted, #6b7280); }
+.sa-stat-label { font-size: 0.8rem; color: var(--muted); }
 
 /* ---- the test designer ---- */
 .sa-steps { display: flex; flex-direction: column; gap: 6px; }
 .sa-step {
   display: flex; align-items: flex-start; gap: 10px;
-  padding: 10px 12px; border: 1px solid var(--hairline, #e5e7eb);
-  border-radius: 6px; background: var(--panel, #fff);
+  padding: 10px 12px; border: 1px solid var(--hairline);
+  border-radius: 6px; background: var(--panel);
 }
 .sa-step[draggable="true"] { cursor: grab; }
 .sa-step.sa-dragging { opacity: 0.4; }
-.sa-step.sa-drop { border-color: var(--accent, #2563eb); border-style: dashed; }
+.sa-step.sa-drop { border-color: var(--accent); border-style: dashed; }
 .sa-step-off { opacity: 0.5; }
-.sa-step-grip { color: var(--muted, #9ca3af); font-size: 1.1rem; line-height: 1.4; user-select: none; }
+.sa-step-grip { color: var(--muted); font-size: 1.1rem; line-height: 1.4; user-select: none; }
 .sa-step-main { flex: 1; min-width: 0; }
 .sa-step-title { display: flex; align-items: center; gap: 8px; font-weight: 600; }
 .sa-step-n {
   display: inline-flex; align-items: center; justify-content: center;
   width: 22px; height: 22px; border-radius: 50%;
-  background: var(--hairline, #e5e7eb); font-size: 0.75rem; font-weight: 700;
+  background: var(--hairline); font-size: 0.75rem; font-weight: 700;
 }
-.sa-step-detail { font-size: 0.85rem; color: var(--muted, #6b7280); margin-top: 2px; word-break: break-word; }
+.sa-step-detail { font-size: 0.85rem; color: var(--muted); margin-top: 2px; word-break: break-word; }
 .sa-step-tools { display: flex; gap: 2px; align-items: center; }
 
 /* The step-row actions. Stroked SVG at 16px rather than a font glyph: sharp at
@@ -166,82 +166,63 @@
 .sa-icon { width: 16px; height: 16px; display: block; }
 .sa-step-tools button { display: inline-flex; align-items: center; justify-content: center; padding: 5px; line-height: 0; }
 /* A trash can is the only delete affordance — never a "×", which closes. */
-.sa-step-tools button.danger { color: var(--danger, #b91c1c); }
+.sa-step-tools button.danger { color: var(--sev-crit); }
 
 /* ---- failures ---- */
 .sa-failure {
-  border-left: 3px solid var(--danger, #b91c1c);
+  border-left: 3px solid var(--sev-crit);
   padding: 12px 14px; margin: 12px 0;
-  background: var(--panel, #fff); border-radius: 0 6px 6px 0;
+  background: var(--panel); border-radius: 0 6px 6px 0;
 }
 .sa-failure h4 { margin: 0 0 6px; }
 .sa-failure-summary { font-weight: 600; margin: 0 0 6px; }
 .sa-failure p { margin: 4px 0; }
-.sa-screenshot { max-width: 100%; border: 1px solid var(--hairline, #e5e7eb); border-radius: 6px; margin-top: 8px; }
+.sa-screenshot { max-width: 100%; border: 1px solid var(--hairline); border-radius: 6px; margin-top: 8px; }
 .sa-pre {
-  background: var(--code-bg, #f9fafb); padding: 10px; border-radius: 6px;
+  background: var(--surface-alt); padding: 10px; border-radius: 6px;
   overflow-x: auto; font-size: 0.8rem; margin-top: 8px;
 }
-.sa-warn { color: var(--warn, #92400e); font-size: 0.85rem; }
+.sa-warn { color: var(--warn); font-size: 0.85rem; }
 .sa-warn-banner {
-  background: #fef3c7; color: #92400e; padding: 10px 14px;
+  background: var(--warn-weak); color: var(--sev-warn); padding: 10px 14px;
   border-radius: 6px; margin-bottom: 12px; font-size: 0.9rem;
 }
 .sa-error { padding: 18px; text-align: center; }
 
 /* ---- suggestions ---- */
 .sa-suggestions { display: flex; flex-direction: column; gap: 12px; }
-.sa-suggestion { padding: 10px 12px; border: 1px solid var(--hairline, #e5e7eb); border-radius: 6px; }
+.sa-suggestion { padding: 10px 12px; border: 1px solid var(--hairline); border-radius: 6px; }
 .sa-suggestion label { display: flex; align-items: center; gap: 8px; }
 .sa-suggestion-meta { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 6px; font-size: 0.85rem; }
-.chip-high { background: #dcfce7; color: #166534; }
-.chip-medium { background: #fef3c7; color: #92400e; }
-.chip-low { background: #e5e7eb; color: #4b5563; }
+.chip-high { background: var(--ok-weak); color: var(--sev-ok); }
+.chip-medium { background: var(--warn-weak); color: var(--sev-warn); }
+.chip-low { background: var(--surface-alt); color: var(--text-muted); }
 .sa-preview { margin: 8px 0; font-size: 0.9rem; }
 
 /* ---- modal ---- */
 .sa-modal-overlay {
-  position: fixed; inset: 0; background: rgba(0, 0, 0, 0.4);
+  position: fixed; inset: 0; background: var(--scrim);
   display: flex; align-items: center; justify-content: center; z-index: 1000; padding: 16px;
 }
 .sa-modal {
-  background: var(--panel, #fff); border-radius: 10px;
+  background: var(--panel); border-radius: 10px;
   max-width: 640px; width: 100%; max-height: 85vh;
-  display: flex; flex-direction: column; box-shadow: 0 10px 40px rgba(0, 0, 0, 0.25);
+  display: flex; flex-direction: column; box-shadow: var(--shadow-lg);
 }
 .sa-modal-head {
   display: flex; align-items: center; justify-content: space-between;
-  padding: 14px 16px; border-bottom: 1px solid var(--hairline, #e5e7eb);
+  padding: 14px 16px; border-bottom: 1px solid var(--hairline);
 }
 .sa-modal-head h3 { margin: 0; font-size: 1rem; }
 .sa-modal-body { padding: 16px; overflow-y: auto; }
 .sa-modal-body textarea { width: 100%; box-sizing: border-box; font-family: inherit; }
 .sa-modal-foot {
   display: flex; justify-content: flex-end; gap: 8px;
-  padding: 12px 16px; border-top: 1px solid var(--hairline, #e5e7eb);
+  padding: 12px 16px; border-top: 1px solid var(--hairline);
 }
 
 /* Dark variants: the module reads the same [data-theme] the rest of the
    dashboard sets, so a palette switch carries it along. */
-[data-theme="dark"] .sa-status-pass, [data-theme="midnight"] .sa-status-pass { background: #14532d; color: #bbf7d0; }
-[data-theme="dark"] .sa-status-fail, [data-theme="midnight"] .sa-status-fail,
-[data-theme="dark"] .sa-status-error, [data-theme="midnight"] .sa-status-error { background: #7f1d1d; color: #fecaca; }
-[data-theme="dark"] .sa-status-warning, [data-theme="midnight"] .sa-status-warning { background: #78350f; color: #fde68a; }
-[data-theme="dark"] .sa-status-queued, [data-theme="midnight"] .sa-status-queued,
-[data-theme="dark"] .sa-status-running, [data-theme="midnight"] .sa-status-running { background: #1e3a8a; color: #bfdbfe; }
-[data-theme="dark"] .sa-status-skipped, [data-theme="midnight"] .sa-status-skipped { background: #374151; color: #d1d5db; }
-[data-theme="dark"] .sa-warn-banner, [data-theme="midnight"] .sa-warn-banner { background: #78350f; color: #fde68a; }
-[data-theme="dark"] .sa-status-ok, [data-theme="midnight"] .sa-status-ok { background: #14532d; color: #bbf7d0; }
-[data-theme="dark"] .sa-status-expiring, [data-theme="midnight"] .sa-status-expiring { background: #78350f; color: #fde68a; }
-[data-theme="dark"] .sa-status-expired, [data-theme="midnight"] .sa-status-expired,
-[data-theme="dark"] .sa-status-invalid, [data-theme="midnight"] .sa-status-invalid { background: #7f1d1d; color: #fecaca; }
-[data-theme="dark"] .sa-status-unreachable, [data-theme="midnight"] .sa-status-unreachable { background: #374151; color: #d1d5db; }
-[data-theme="dark"] .sa-sev-crit, [data-theme="midnight"] .sa-sev-crit { background: #7f1d1d; color: #fecaca; }
-[data-theme="dark"] .sa-sev-warn, [data-theme="midnight"] .sa-sev-warn { background: #78350f; color: #fde68a; }
-[data-theme="dark"] .sa-sev-info, [data-theme="midnight"] .sa-sev-info { background: #1e3a8a; color: #bfdbfe; }
-[data-theme="dark"] .sa-days-ok, [data-theme="midnight"] .sa-days-ok { color: #bbf7d0; }
-[data-theme="dark"] .sa-days-warn, [data-theme="midnight"] .sa-days-warn { color: #fde68a; }
-[data-theme="dark"] .sa-days-bad, [data-theme="midnight"] .sa-days-bad { color: #fecaca; }
 
 
 /* Phone: the designer's tools wrap under the step rather than squeezing it. */
@@ -260,18 +241,18 @@
    it the same box without duplicating the palette. */
 .sa-actions a.sa-btn {
   display: inline-flex; align-items: center;
-  padding: 5px 11px; border: 1px solid var(--hairline, #e5e7eb);
+  padding: 5px 11px; border: 1px solid var(--hairline);
   border-radius: 6px; font-size: 0.85rem; line-height: 1.4;
-  color: var(--text, #111827); text-decoration: none; background: var(--panel, #fff);
+  color: var(--text); text-decoration: none; background: var(--panel);
 }
-.sa-actions a.sa-btn:hover { border-color: var(--accent, #2563eb); color: var(--accent, #2563eb); }
+.sa-actions a.sa-btn:hover { border-color: var(--accent); color: var(--accent); }
 
 /* The observed evidence behind a classification. It sits in the open, above
    "Technical details": the conclusion ("the server rejected the request") is
    useless without the observation that produced it (WHICH request, and what
    the allowed-hosts policy refused along the way). */
 .sa-evidence { margin-top: 10px; }
-.sa-evidence h5 { margin: 0 0 4px; font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted, #6b7280); }
+.sa-evidence h5 { margin: 0 0 4px; font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); }
 .sa-evidence ul { margin: 0; padding-left: 18px; }
 .sa-evidence li { margin: 2px 0; line-height: 1.45; }
 /* ---------------------------------------------------------------- charts */
@@ -280,9 +261,9 @@
    to make a chart say something untrue. */
 .sa-chart-panel { padding-bottom: 18px; }
 .sa-chart-svg { width: 100%; height: auto; display: block; }
-.sa-chart-title { margin: 14px 0 4px; font-size: 13px; font-weight: 600; color: var(--muted, #6b7280); }
-.sa-chart-grid { stroke: var(--hairline, #e5e7eb); stroke-width: 1; }
-.sa-chart-axis { fill: var(--muted, #6b7280); font-size: 11px; }
+.sa-chart-title { margin: 14px 0 4px; font-size: 13px; font-weight: 600; color: var(--muted); }
+.sa-chart-grid { stroke: var(--hairline); stroke-width: 1; }
+.sa-chart-axis { fill: var(--muted); font-size: 11px; }
 
 /* The segmented control: day / week / month / year, and the chart form picker.
    A recessed track with one raised pill in it, rather than four bordered
@@ -298,8 +279,8 @@
   display: inline-flex;
   gap: 2px;
   padding: 2px;
-  background: var(--panel-2, #f1f1ef);
-  border: 1px solid var(--hairline, #e5e7eb);
+  background: var(--panel-2);
+  border: 1px solid var(--hairline);
   /* Outer radius = inner radius + the padding, so the pill nests concentrically
      instead of leaving a crescent of track in each corner. */
   border-radius: 10px;
@@ -315,56 +296,56 @@
   line-height: 1.35;
   /* Inactive segments are labels for somewhere you are not. Muted, so the one
      you ARE on is the only thing with full contrast. */
-  color: var(--muted, #6b7280);
+  color: var(--muted);
   cursor: pointer;
   white-space: nowrap;
   transition: background .15s var(--ease, ease), color .15s var(--ease, ease);
 }
-.sa-segment:hover:not(.active) { background: var(--panel, #fff); color: var(--text, #111827); }
+.sa-segment:hover:not(.active) { background: var(--panel); color: var(--text); }
 .sa-segment.active {
-  background: var(--accent, #2563eb);
-  color: var(--btn-fg, #fff);
+  background: var(--accent);
+  color: var(--btn-fg);
   font-weight: 600;
   /* The app's resting elevation, not a hand-rolled shadow: the token scale is
      deliberately soft ("shadows you feel rather than see"), and a heavier one
      here made the pill look like it was poking out of the track. */
-  box-shadow: var(--shadow, 0 1px 2px rgb(15 23 42 / 0.06));
+  box-shadow: var(--shadow);
 }
 /* The shared focus halo, inside the track rather than around the whole group,
    so tabbing through says which segment is focused. */
-.sa-segment:focus-visible { outline: none; box-shadow: var(--ring, 0 0 0 3px rgb(37 99 235 / 0.35)); }
+.sa-segment:focus-visible { outline: none; box-shadow: var(--ring); }
 .sa-segment.active:focus-visible {
-  box-shadow: var(--shadow, 0 1px 2px rgb(15 23 42 / 0.06)), var(--ring, 0 0 0 3px rgb(37 99 235 / 0.35));
+  box-shadow: var(--shadow), var(--ring);
 }
 
 .sa-chart-nav { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 10px 0 4px; }
 .sa-chart-period { font-weight: 600; min-width: 12ch; }
 /* The sub-heading between a monitor's two charts — availability above, what it
    measured below. Quiet, because the charts are the content. */
-.sa-chart-sub { margin: 12px 0 2px; font-size: 13px; color: var(--muted, #6b7280); }
+.sa-chart-sub { margin: 12px 0 2px; font-size: 13px; color: var(--muted); }
 /* A monitor that is saved and not watching yet. Amber rather than red: nothing
    is broken, it just has not proved it works. */
-.sa-pending { border-left: 3px solid var(--warn, #d97706); }
-.sa-chart-jump { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted, #6b7280); }
+.sa-pending { border-left: 3px solid var(--warn); }
+.sa-chart-jump { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); }
 .sa-date-input, .sa-select {
-  padding: 5px 8px; border: 1px solid var(--hairline, #e5e7eb); border-radius: 6px;
-  font: inherit; font-size: 13px; background: var(--bg, #fff); color: var(--text, #111827);
+  padding: 5px 8px; border: 1px solid var(--hairline); border-radius: 6px;
+  font: inherit; font-size: 13px; background: var(--bg); color: var(--text);
 }
 
 /* Outcome colours. Status, not categories — reserved for state and never reused
    as "series 4". The light and dark steps are separately chosen and each was
    checked for colour-vision separation against its own surface, rather than one
    set being auto-lightened for dark mode. */
-.sa-bar-pass { fill: #15803d; }
-.sa-bar-warning { fill: #f59e0b; }
-.sa-bar-failed { fill: #b91c1c; }
-.sa-bar-skipped { fill: #9ca3af; }
+.sa-bar-pass { fill: var(--sev-ok); }
+.sa-bar-warning { fill: var(--sev-warn); }
+.sa-bar-failed { fill: var(--sev-crit); }
+.sa-bar-skipped { fill: var(--text-muted); }
 /* A bucket with no runs. Visible on purpose: a missing bar is ambiguous — "no
    runs" and "off the edge of the chart" look the same — and "it stopped running
    on Thursday" is exactly the reading this chart exists for. */
-.sa-bar-empty { fill: var(--muted, #6b7280); opacity: .5; }
-.sa-line-duration { fill: none; stroke: #0284c7; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
-.sa-dot-duration { fill: #0284c7; stroke: var(--panel, #fff); stroke-width: 2; }
+.sa-bar-empty { fill: var(--muted); opacity: .5; }
+.sa-line-duration { fill: none; stroke: var(--accent); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.sa-dot-duration { fill: var(--accent); stroke: var(--panel); stroke-width: 2; }
 
 /* A bar is a hit target: the whole column lights up, not the two pixels the
    pointer is actually over. */
@@ -372,24 +353,14 @@
 .sa-chart-bar:hover rect, .sa-chart-bar:hover path { opacity: 0.78; }
 .sa-chart-bar:hover circle { r: 6; }
 
-.sa-legend { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 8px; font-size: 12px; color: var(--muted, #6b7280); }
+.sa-legend { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 8px; font-size: 12px; color: var(--muted); }
 .sa-legend-item { display: inline-flex; align-items: center; gap: 6px; }
 .sa-legend-swatch { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
-.sa-legend-swatch.sa-bar-pass { background: #15803d; }
-.sa-legend-swatch.sa-bar-warning { background: #f59e0b; }
-.sa-legend-swatch.sa-bar-failed { background: #b91c1c; }
-.sa-legend-swatch.sa-bar-skipped { background: #9ca3af; }
+.sa-legend-swatch.sa-bar-pass { background: var(--sev-ok); }
+.sa-legend-swatch.sa-bar-warning { background: var(--sev-warn); }
+.sa-legend-swatch.sa-bar-failed { background: var(--sev-crit); }
+.sa-legend-swatch.sa-bar-skipped { background: var(--text-muted); }
 
-[data-theme="dark"] .sa-bar-pass, [data-theme="midnight"] .sa-bar-pass { fill: #34d399; }
-[data-theme="dark"] .sa-bar-warning, [data-theme="midnight"] .sa-bar-warning { fill: #fbbf24; }
-[data-theme="dark"] .sa-bar-failed, [data-theme="midnight"] .sa-bar-failed { fill: #f87171; }
-[data-theme="dark"] .sa-bar-skipped, [data-theme="midnight"] .sa-bar-skipped { fill: #94a3b8; }
-[data-theme="dark"] .sa-legend-swatch.sa-bar-pass, [data-theme="midnight"] .sa-legend-swatch.sa-bar-pass { background: #34d399; }
-[data-theme="dark"] .sa-legend-swatch.sa-bar-warning, [data-theme="midnight"] .sa-legend-swatch.sa-bar-warning { background: #fbbf24; }
-[data-theme="dark"] .sa-legend-swatch.sa-bar-failed, [data-theme="midnight"] .sa-legend-swatch.sa-bar-failed { background: #f87171; }
-[data-theme="dark"] .sa-legend-swatch.sa-bar-skipped, [data-theme="midnight"] .sa-legend-swatch.sa-bar-skipped { background: #94a3b8; }
-[data-theme="dark"] .sa-line-duration, [data-theme="midnight"] .sa-line-duration { stroke: #38bdf8; }
-[data-theme="dark"] .sa-dot-duration, [data-theme="midnight"] .sa-dot-duration { fill: #38bdf8; }
 
 /* On a phone the bars stay readable; the controls wrap instead of scrolling. */
 @media (max-width: 640px) {
@@ -406,15 +377,13 @@
   display: inline-flex; align-items: center; gap: 6px;
   padding: 3px 10px; border-radius: 999px; font-size: 0.8rem; font-weight: 600;
 }
-.sa-layer.ok { background: #dcfce7; color: #166534; }
-.sa-layer.bad { background: #fee2e2; color: #991b1b; }
+.sa-layer.ok { background: var(--ok-weak); color: var(--sev-ok); }
+.sa-layer.bad { background: var(--crit-weak); color: var(--sev-crit); }
 .sa-layer-mark { font-weight: 700; }
 .sa-api-calls { margin-top: 10px; }
 .sa-api-url { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.8rem; word-break: break-all; }
-.sa-api-bad td { color: var(--danger, #b91c1c); }
+.sa-api-bad td { color: var(--sev-crit); }
 
-[data-theme="dark"] .sa-layer.ok, [data-theme="midnight"] .sa-layer.ok { background: #14532d; color: #bbf7d0; }
-[data-theme="dark"] .sa-layer.bad, [data-theme="midnight"] .sa-layer.bad { background: #7f1d1d; color: #fecaca; }
 
 /* ---- critical incidents over time, one line per application ----
    The categorical palette, in the fixed order the design system defines. That
@@ -431,19 +400,19 @@
 
    The dark column is the same eight hues re-stepped for the dark surface — a
    selected set, not an automatic lightening of the light one. */
-.sa-series-1 { --sa-series: #2a78d6; }
-.sa-series-2 { --sa-series: #eb6834; }
-.sa-series-3 { --sa-series: #1baf7a; }
-.sa-series-4 { --sa-series: #eda100; }
-.sa-series-5 { --sa-series: #e87ba4; }
-.sa-series-6 { --sa-series: #008300; }
-.sa-series-7 { --sa-series: #4a3aa7; }
-.sa-series-8 { --sa-series: #e34948; }
-.sa-series-other { --sa-series: var(--muted, #6b7280); }
+.sa-series-1 { --sa-series: var(--sa-hue-1); }
+.sa-series-2 { --sa-series: var(--sa-hue-2); }
+.sa-series-3 { --sa-series: var(--sa-hue-3); }
+.sa-series-4 { --sa-series: var(--sa-hue-4); }
+.sa-series-5 { --sa-series: var(--sa-hue-5); }
+.sa-series-6 { --sa-series: var(--sa-hue-6); }
+.sa-series-7 { --sa-series: var(--sa-hue-7); }
+.sa-series-8 { --sa-series: var(--sa-hue-8); }
+.sa-series-other { --sa-series: var(--text-muted); }
 
 .sa-series-line { fill: none; stroke: var(--sa-series); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
 /* A surface ring on the markers, so overlapping series stay countable. */
-.sa-series-dot { fill: var(--sa-series); stroke: var(--panel, #fff); stroke-width: 2; }
+.sa-series-dot { fill: var(--sa-series); stroke: var(--panel); stroke-width: 2; }
 .sa-series-fill { fill: var(--sa-series); }
 .sa-legend-swatch.sa-series-1, .sa-legend-swatch.sa-series-2, .sa-legend-swatch.sa-series-3,
 .sa-legend-swatch.sa-series-4, .sa-legend-swatch.sa-series-5, .sa-legend-swatch.sa-series-6,
@@ -451,15 +420,6 @@
   background: var(--sa-series);
 }
 
-[data-theme="dark"] .sa-series-1, [data-theme="midnight"] .sa-series-1 { --sa-series: #3987e5; }
-[data-theme="dark"] .sa-series-2, [data-theme="midnight"] .sa-series-2 { --sa-series: #d95926; }
-[data-theme="dark"] .sa-series-3, [data-theme="midnight"] .sa-series-3 { --sa-series: #199e70; }
-[data-theme="dark"] .sa-series-4, [data-theme="midnight"] .sa-series-4 { --sa-series: #c98500; }
-[data-theme="dark"] .sa-series-5, [data-theme="midnight"] .sa-series-5 { --sa-series: #d55181; }
-[data-theme="dark"] .sa-series-6, [data-theme="midnight"] .sa-series-6 { --sa-series: #008300; }
-[data-theme="dark"] .sa-series-7, [data-theme="midnight"] .sa-series-7 { --sa-series: #9085e9; }
-[data-theme="dark"] .sa-series-8, [data-theme="midnight"] .sa-series-8 { --sa-series: #e66767; }
-[data-theme="dark"] .sa-series-dot, [data-theme="midnight"] .sa-series-dot { stroke: var(--panel, #1a1a19); }
 
 /* ---- the application filter ----
    A magnitude ranking over long, named categories: horizontal bars, ONE hue.
@@ -476,18 +436,18 @@
 .sa-chip {
   display: inline-flex; align-items: center; gap: 6px;
   padding: 2px 4px 2px 10px; border-radius: 999px; font-size: 0.8rem;
-  background: var(--panel-2, #f1f1ef); border: 1px solid var(--hairline, #e5e7eb);
+  background: var(--panel-2); border: 1px solid var(--hairline);
 }
-.sa-chip-x { background: none; border: none; cursor: pointer; font: inherit; line-height: 1; padding: 0 4px; color: var(--muted, #6b7280); }
-.sa-chip-x:hover { color: var(--danger, #b91c1c); }
+.sa-chip-x { background: none; border: none; cursor: pointer; font: inherit; line-height: 1; padding: 0 4px; color: var(--muted); }
+.sa-chip-x:hover { color: var(--sev-crit); }
 .sa-picker-panel {
   margin-top: 8px; padding: 8px; max-width: 340px;
-  border: 1px solid var(--hairline, #e5e7eb); border-radius: 8px; background: var(--panel, #fff);
+  border: 1px solid var(--hairline); border-radius: 8px; background: var(--panel);
 }
 .sa-picker-search { width: 100%; box-sizing: border-box; }
 .sa-picker-list { max-height: 220px; overflow-y: auto; margin-top: 8px; }
 .sa-picker-option { display: flex; align-items: center; gap: 8px; padding: 4px 2px; cursor: pointer; }
-.sa-picker-option:hover { background: var(--panel-2, #f1f1ef); }
+.sa-picker-option:hover { background: var(--panel-2); }
 
 
 /* ---- accessibility findings (V2 §9) ----
@@ -495,7 +455,7 @@
    can be mistaken for the run's verdict — the spec reports these separately from
    functional failures, and a panel that looks like a failure is one people
    switch off to get a green build. */
-.sa-a11y { border-left: 3px solid var(--muted-weak, #e5e7eb); }
+.sa-a11y { border-left: 3px solid var(--muted-weak); }
 .sa-a11y-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
 .sa-a11y-counts { display: inline-flex; gap: 6px; flex-wrap: wrap; }
 .sa-a11y-chip {
@@ -504,27 +464,27 @@
 }
 /* Impact, not severity: three weights of the same neutral, so the ordering is
    readable without borrowing the colours that mean "this service is down". */
-.sa-a11y-serious  { background: var(--panel-2, #f1f1ef); color: var(--text, #17171a); }
-.sa-a11y-moderate { background: var(--panel-2, #f1f1ef); color: var(--muted, #6d6d73); }
-.sa-a11y-minor    { background: var(--panel-2, #f1f1ef); color: var(--muted, #6d6d73); }
+.sa-a11y-serious  { background: var(--panel-2); color: var(--text); }
+.sa-a11y-moderate { background: var(--panel-2); color: var(--muted); }
+.sa-a11y-minor    { background: var(--panel-2); color: var(--muted); }
 .sa-a11y-list { display: flex; flex-direction: column; gap: 10px; margin-top: 10px; }
-.sa-a11y-item { padding: 10px 12px; border: 1px solid var(--hairline, #e5e7eb); border-radius: 8px; }
-.sa-a11y-item.sa-a11y-serious { border-left: 3px solid var(--muted, #6d6d73); }
+.sa-a11y-item { padding: 10px 12px; border: 1px solid var(--hairline); border-radius: 8px; }
+.sa-a11y-item.sa-a11y-serious { border-left: 3px solid var(--muted); }
 .sa-a11y-item-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
-.sa-a11y-why { font-size: 0.88rem; color: var(--muted, #6d6d73); margin: 6px 0 6px; }
+.sa-a11y-why { font-size: 0.88rem; color: var(--muted); margin: 6px 0 6px; }
 .sa-a11y-where { font-size: 0.82rem; word-break: break-word; }
-.sa-a11y-where code { background: var(--code-bg, #f9fafb); padding: 1px 5px; border-radius: 4px; }
+.sa-a11y-where code { background: var(--surface-alt); padding: 1px 5px; border-radius: 4px; }
 
 /* ---- visual regression (V2 §8) ----
    Shares the accessibility panel's restraint and for the same reason: a visual
    difference is reported beside the result, never as it. A moved button is not
    an outage, so nothing here borrows the colours that mean one. */
-.sa-visual { border-left: 3px solid var(--muted-weak, #e5e7eb); }
-.sa-visual-chip-match { background: var(--panel-2, #f1f1ef); color: var(--muted, #6d6d73); }
-.sa-visual-chip-changed { background: var(--panel-2, #f1f1ef); color: var(--text, #17171a); }
-.sa-visual-chip-resized { background: var(--panel-2, #f1f1ef); color: var(--text, #17171a); }
-.sa-visual-chip-uncomparable { background: var(--panel-2, #f1f1ef); color: var(--muted, #6d6d73); }
-.sa-visual-changed, .sa-visual-resized { border-left: 3px solid var(--muted, #6d6d73); }
+.sa-visual { border-left: 3px solid var(--muted-weak); }
+.sa-visual-chip-match { background: var(--panel-2); color: var(--muted); }
+.sa-visual-chip-changed { background: var(--panel-2); color: var(--text); }
+.sa-visual-chip-resized { background: var(--panel-2); color: var(--text); }
+.sa-visual-chip-uncomparable { background: var(--panel-2); color: var(--muted); }
+.sa-visual-changed, .sa-visual-resized { border-left: 3px solid var(--muted); }
 
 /* What happened about signing in, on a discovery that asked to.
    A discovery that could not sign in is a map of the PUBLIC site — so the
@@ -535,11 +495,11 @@
   border: 1px solid var(--hairline); border-left-width: 3px; border-radius: 8px;
   background: var(--panel-2); font-size: 0.9em; line-height: 1.45;
 }
-.sa-auth-note.ok { border-left-color: var(--ok, #2e7d5b); }
-.sa-auth-note.warn { border-left-color: var(--warn, #b8860b); }
+.sa-auth-note.ok { border-left-color: var(--ok); }
+.sa-auth-note.warn { border-left-color: var(--warn); }
 .sa-auth-icon { flex: none; font-weight: 700; }
-.sa-auth-note.ok .sa-auth-icon { color: var(--ok, #2e7d5b); }
-.sa-auth-note.warn .sa-auth-icon { color: var(--warn, #b8860b); }
+.sa-auth-note.ok .sa-auth-icon { color: var(--ok); }
+.sa-auth-note.warn .sa-auth-icon { color: var(--warn); }
 
 /* ---------------------------------------------------------- V3: why it failed
    The chain is the evidence, and the three outcomes have to be tellable apart
@@ -554,10 +514,10 @@
   padding: 6px 0 6px 2px; border-left: 2px solid var(--hairline); padding-left: 12px;
 }
 .sa-chain-mark { flex: none; width: 1em; font-weight: 700; }
-.sa-chain-bad { border-left-color: var(--crit, #c0392b); }
-.sa-chain-bad .sa-chain-mark { color: var(--crit, #c0392b); }
-.sa-chain-ok { border-left-color: var(--ok, #2e7d5b); }
-.sa-chain-ok .sa-chain-mark { color: var(--ok, #2e7d5b); }
+.sa-chain-bad { border-left-color: var(--sev-crit); }
+.sa-chain-bad .sa-chain-mark { color: var(--sev-crit); }
+.sa-chain-ok { border-left-color: var(--ok); }
+.sa-chain-ok .sa-chain-mark { color: var(--ok); }
 /* Deliberately faint. "Nobody looked" is a gap, not a finding, and it must not
    read as either good news or bad. */
 .sa-chain-unknown { border-left-style: dashed; }
@@ -582,9 +542,9 @@
   font-size: 0.78em; text-transform: uppercase; letter-spacing: 0.04em;
   padding: 1px 7px; border-radius: 999px; border: 1px solid var(--hairline); color: var(--muted);
 }
-.sa-basis-observed { color: var(--ok, #2e7d5b); border-color: currentColor; }
+.sa-basis-observed { color: var(--ok); border-color: currentColor; }
 .sa-basis-inferred { color: var(--muted); }
-.sa-basis-unobservable { color: var(--warn, #b8860b); border-color: currentColor; border-style: dashed; }
+.sa-basis-unobservable { color: var(--warn); border-color: currentColor; border-style: dashed; }
 .sa-cause-bar { height: 4px; border-radius: 2px; background: var(--hairline); margin: 8px 0; overflow: hidden; }
 .sa-cause-fill { height: 100%; background: var(--accent); }
 .sa-cause-why { margin: 0 0 8px; padding-left: 18px; color: var(--muted); font-size: 0.92em; }
@@ -603,9 +563,9 @@
 .sa-health-of { color: var(--muted); font-size: 0.9em; }
 .sa-health-status { font-weight: 600; letter-spacing: 0.03em; }
 .sa-health-reason { margin: 2px 0 0; color: var(--muted); }
-.sa-health-failed .sa-health-number { color: var(--crit, #c0392b); }
-.sa-health-degraded .sa-health-number { color: var(--warn, #b8860b); }
-.sa-health-healthy .sa-health-number { color: var(--ok, #2e7d5b); }
+.sa-health-failed .sa-health-number { color: var(--sev-crit); }
+.sa-health-degraded .sa-health-number { color: var(--warn); }
+.sa-health-healthy .sa-health-number { color: var(--ok); }
 .sa-health-unknown .sa-health-number { color: var(--muted); }
 
 .sa-health-parts { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
@@ -615,9 +575,9 @@
   padding: 8px 10px; border-radius: 8px; background: var(--panel-2);
   border-left: 3px solid var(--hairline);
 }
-.sa-health-part.sa-health-failed { border-left-color: var(--crit, #c0392b); }
-.sa-health-part.sa-health-degraded { border-left-color: var(--warn, #b8860b); }
-.sa-health-part.sa-health-healthy { border-left-color: var(--ok, #2e7d5b); }
+.sa-health-part.sa-health-failed { border-left-color: var(--sev-crit); }
+.sa-health-part.sa-health-degraded { border-left-color: var(--warn); }
+.sa-health-part.sa-health-healthy { border-left-color: var(--ok); }
 .sa-health-part-name { font-weight: 600; }
 .sa-health-part-score { font-variant-numeric: tabular-nums; color: var(--muted); }
 .sa-health-part-reason { color: var(--muted); font-size: 0.92em; }
@@ -629,8 +589,8 @@
   padding: 10px 12px; border: 1px solid var(--hairline); border-radius: 10px;
   background: var(--panel-2); border-left-width: 3px;
 }
-.sa-dep-failing { border-left-color: var(--crit, #c0392b); }
-.sa-dep-healthy { border-left-color: var(--ok, #2e7d5b); }
+.sa-dep-failing { border-left-color: var(--sev-crit); }
+.sa-dep-healthy { border-left-color: var(--ok); }
 .sa-dep-unknown { border-left-color: var(--hairline); border-left-style: dashed; }
 .sa-dep-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .sa-dep-why { margin: 6px 0 0; color: var(--muted); font-size: 0.92em; }
@@ -672,7 +632,7 @@
 .sa-ai { margin-top: 16px; }
 .sa-ai-state { display: flex; gap: 8px; flex-wrap: wrap; margin: 4px 0 8px; }
 .sa-ai-answer {
-  border: 1px solid var(--hairline); border-left: 3px solid var(--warn, #b8860b);
+  border: 1px solid var(--hairline); border-left: 3px solid var(--warn);
   border-radius: 8px; padding: 10px 12px; background: var(--panel-2); margin: 8px 0;
 }
 .sa-ai-label { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; font-size: 0.85em; }
@@ -723,7 +683,7 @@
 .guide-todo { margin: 10px 0; }
 .guide-code { margin: 6px 0 10px; white-space: pre-wrap; }
 .guide-note, .guide-watch { margin: 12px 0; }
-.guide-watch { border-left-color: var(--warn, #b8860b); }
+.guide-watch { border-left-color: var(--warn); }
 .guide-values { margin: 14px 0; }
 .guide-table td:first-child { white-space: nowrap; }
 .guide-empty { padding: 12px; color: var(--muted); }
@@ -738,25 +698,21 @@
   display: inline-block; padding: 1px 8px; border-radius: 999px;
   font-size: 0.75rem; font-weight: 600; white-space: nowrap;
 }
-.guide-pill-done { background: #dcfce7; color: #166534; }
-.guide-pill-todo { background: #e5e7eb; color: #4b5563; }
-.guide-pill-warn { background: #fef3c7; color: #92400e; }
-.guide-pill-unknown { background: #e5e7eb; color: #4b5563; }
+.guide-pill-done { background: var(--ok-weak); color: var(--sev-ok); }
+.guide-pill-todo { background: var(--surface-alt); color: var(--text-muted); }
+.guide-pill-warn { background: var(--warn-weak); color: var(--sev-warn); }
+.guide-pill-unknown { background: var(--surface-alt); color: var(--text-muted); }
 
 .guide-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; align-items: center; }
 /* A screen the reader's role or licence hides: named, greyed, with the reason —
    never a button that would land them somewhere else. */
 .guide-unavailable {
-  display: inline-block; padding: 3px 8px; border: 1px dashed var(--hairline, #e5e7eb);
-  border-radius: 6px; color: var(--muted, #6b7280); font-size: 0.85rem;
+  display: inline-block; padding: 3px 8px; border: 1px dashed var(--hairline);
+  border-radius: 6px; color: var(--muted); font-size: 0.85rem;
 }
 .guide-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .guide-count { color: var(--muted); font-variant-numeric: tabular-nums; }
 
-[data-theme="dark"] .guide-pill-done, [data-theme="midnight"] .guide-pill-done { background: #14532d; color: #bbf7d0; }
-[data-theme="dark"] .guide-pill-warn, [data-theme="midnight"] .guide-pill-warn { background: #78350f; color: #fde68a; }
-[data-theme="dark"] .guide-pill-todo, [data-theme="midnight"] .guide-pill-todo,
-[data-theme="dark"] .guide-pill-unknown, [data-theme="midnight"] .guide-pill-unknown { background: #374151; color: #d1d5db; }
 
 /* Narrow: the rail becomes a horizontal strip above the step. */
 @media (max-width: 860px) {
@@ -774,64 +730,61 @@
    writes to a production system and that should never look like body text. */
 .guide-action {
   margin: 16px 0; padding: 12px 14px;
-  border: 1px solid var(--hairline, #e5e7eb); border-left: 3px solid var(--accent, #2563eb);
+  border: 1px solid var(--hairline); border-left: 3px solid var(--accent);
   border-radius: 8px; background: var(--panel-2);
 }
 .guide-action .guide-h4 { margin-top: 0; }
-.guide-action-blocked { border-left-color: var(--muted, #6b7280); opacity: 0.85; }
+.guide-action-blocked { border-left-color: var(--muted); opacity: 0.85; }
 .guide-action-fields { display: flex; flex-wrap: wrap; gap: 12px; margin: 10px 0; }
 .guide-action-field { display: flex; flex-direction: column; gap: 4px; flex: 1 1 220px; min-width: 0; }
 .guide-action-label { font-size: 0.85rem; font-weight: 600; }
 .guide-action-input {
-  padding: 6px 8px; border: 1px solid var(--hairline, #e5e7eb); border-radius: 6px;
+  padding: 6px 8px; border: 1px solid var(--hairline); border-radius: 6px;
   background: var(--panel); color: var(--text); font: inherit; min-width: 0;
 }
 .guide-action-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
-.guide-action-error { margin: 0; font-size: 0.8rem; color: var(--danger, #b91c1c); }
-.guide-action-failure { margin: 0; font-size: 0.85rem; color: var(--danger, #b91c1c); }
-.guide-action-result { margin: 0; font-size: 0.85rem; color: var(--ok, #166534); }
+.guide-action-error { margin: 0; font-size: 0.8rem; color: var(--sev-crit); }
+.guide-action-failure { margin: 0; font-size: 0.85rem; color: var(--sev-crit); }
+.guide-action-result { margin: 0; font-size: 0.85rem; color: var(--ok); }
 
-[data-theme="dark"] .guide-action-result, [data-theme="midnight"] .guide-action-result { color: #bbf7d0; }
-[data-theme="dark"] .guide-action-error, [data-theme="midnight"] .guide-action-error,
-[data-theme="dark"] .guide-action-failure, [data-theme="midnight"] .guide-action-failure { color: #fecaca; }
 
 /* ---- the trace: where the time went, under the row that spent it ---- */
 .sa-result-row { cursor: pointer; }
-.sa-result-row:hover { background: var(--hover, #f9fafb); }
-.sa-result-row.open { background: var(--hover, #f3f4f6); }
-.sa-disclosure { display: inline-block; width: 14px; color: var(--muted, #6b7280); }
-.sa-trace-row > td { background: var(--panel, #fff); padding: 12px 16px; }
+.sa-result-row:hover { background: var(--hover); }
+.sa-result-row.open { background: var(--hover); }
+.sa-disclosure { display: inline-block; width: 14px; color: var(--muted); }
+.sa-trace-row > td { background: var(--panel); padding: 12px 16px; }
 .sa-trace { display: flex; flex-direction: column; gap: 14px; }
 .sa-trace h5 { margin: 0 0 6px; font-size: 0.85rem; }
 
 /* The waterfall: one bar per step, laid end to end in the order they happen. */
 .sa-waterfall { display: flex; flex-direction: column; gap: 3px; }
 .sa-wf-row { display: grid; grid-template-columns: 90px 1fr 70px; align-items: center; gap: 8px; font-size: 0.82rem; }
-.sa-wf-name { color: var(--muted, #6b7280); }
-.sa-wf-track { display: block; background: var(--hairline, #e5e7eb); border-radius: 3px; height: 12px; }
+.sa-wf-name { color: var(--muted); }
+.sa-wf-track { display: block; background: var(--hairline); border-radius: 3px; height: 12px; }
 .sa-wf-bar { display: block; height: 12px; border-radius: 3px; }
 .sa-wf-ms { text-align: right; font-variant-numeric: tabular-nums; }
 
 .sa-transcript td { font-size: 0.82rem; vertical-align: top; }
 .sa-transcript code { font-size: 0.8rem; word-break: break-all; }
-.sa-trace-bad td { background: #fef2f2; }
-.sa-trace-error { color: var(--danger, #b91c1c); }
+.sa-trace-bad td { background: var(--crit-weak); }
+.sa-trace-error { color: var(--sev-crit); }
 .sa-phase-dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; vertical-align: middle; }
 
 /* The delivery path, oldest relay first. */
 .sa-hops { margin: 0; padding-left: 20px; font-size: 0.85rem; }
 .sa-hops li { margin-bottom: 6px; }
 .sa-hop-by { font-weight: 600; }
-.sa-hop-with { color: var(--muted, #6b7280); font-size: 0.78rem; }
+.sa-hop-with { color: var(--muted); font-size: 0.78rem; }
 .sa-hop-ms { font-variant-numeric: tabular-nums; font-weight: 600; }
 
 .sa-poll-dots { display: flex; flex-wrap: wrap; gap: 3px; margin-top: 4px; }
-.sa-poll-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--hairline, #d1d5db); }
-.sa-poll-dot.found { background: #16a34a; }
-.sa-poll-dot.error { background: var(--danger, #b91c1c); }
+.sa-poll-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--hairline); }
+.sa-poll-dot.found { background: var(--sev-ok); }
+.sa-poll-dot.error { background: var(--sev-crit); }
 
 .sa-facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 8px; margin: 0; font-size: 0.82rem; }
-.sa-facts dt { color: var(--muted, #6b7280); }
+.sa-facts dt { color: var(--muted); }
 .sa-facts dd { margin: 0; word-break: break-all; }
 
 /* One line per step across the recent checks, in the waterfall's colours. */
@@ -839,13 +792,13 @@
 .sa-phase-legend { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
 .sa-phase-key {
   display: inline-flex; align-items: center; gap: 5px; padding: 3px 9px;
-  border: 1px solid var(--hairline, #e5e7eb); border-radius: 999px;
+  border: 1px solid var(--hairline); border-radius: 999px;
   /* The base `button` rule paints white on the accent colour. A legend that
      inherits it is a row of dots with invisible names next to them. */
-  background: var(--panel, #fff); color: var(--text, #111827);
+  background: var(--panel); color: var(--text);
   font-size: 0.78rem; font-weight: 500; cursor: pointer;
 }
-.sa-phase-key:hover { border-color: var(--border-strong, #9ca3af); }
+.sa-phase-key:hover { border-color: var(--border-strong); }
 .sa-phase-key.off { opacity: 0.4; text-decoration: line-through; }
 
 /* The lists a check recorded — DNS answers, the blacklists it asked. */
@@ -856,14 +809,14 @@
 /* Which lines move together, said in words under the chart that draws them. */
 .sa-corr { margin-top: 10px; }
 .sa-corr-list { margin: 4px 0 0; padding-left: 0; list-style: none; font-size: 0.85rem; }
-.sa-corr-list li { padding: 6px 0; border-top: 1px solid var(--hairline, #e5e7eb); }
+.sa-corr-list li { padding: 6px 0; border-top: 1px solid var(--hairline); }
 .sa-corr-list .muted { font-size: 0.8rem; }
 
 /* One panel per step, each scaled to itself — the readable answer to six
    magnitudes on one axis. The panels share an x-axis, so two lines that rise
    and fall together line up vertically. */
 .sa-split { display: flex; flex-direction: column; gap: 2px; }
-.sa-split-row { border-top: 1px solid var(--hairline, #e5e7eb); padding-top: 4px; }
+.sa-split-row { border-top: 1px solid var(--hairline); padding-top: 4px; }
 .sa-split-row:first-child { border-top: none; }
 .sa-split-head { display: flex; align-items: center; gap: 4px; font-size: 0.78rem; }
 .sa-split-svg { display: block; width: 100%; height: 42px; }

@@ -750,3 +750,33 @@ editor with secrets and agent assignment), the matrix, and the per-test detail
 with its heatmap and trend — about 350 lines between them. They navigate back to
 "the list", which is the view's now, so the view hands its list builder to
 app.js and `txListView()` forwards to it.
+
+
+## Phase 4, in progress: the colour debt
+
+`serviceAssurance.css` carried **283 colour literals**; it now carries none.
+They came off in two passes.
+
+**The dead fallbacks (142).** Most were `var(--muted, #6b7280)` — a token plus a
+literal that could only ever be reached if the token were missing, which it
+never is. They are dropped. Three of them were the exception that made the pass
+worth doing: `--danger`, `--crit` and `--code-bg` are **not defined anywhere**,
+so for those the fallback WAS the colour and it never followed a theme. They now
+read `--sev-crit` and `--surface-alt`.
+
+**The real colours (141).** Almost all were a status badge's light pair
+(`background: #fee2e2; color: #991b1b`) with a
+`[data-theme="dark"], [data-theme="midnight"]` block restating it for a dark
+ground. Each pair became `var(--crit-weak)` / `var(--sev-crit)` and the override
+blocks went. That fixed a real defect: the overrides named **two** palettes, and
+this app ships **seven dark ones** — on nord, forest, sunset, solarized-dark and
+contrast those badges were rendering the light values on a dark ground.
+
+Service Assurance's own eight-hue categorical ramp moved to `tokens.css` as
+`--sa-hue-1..8`, with its dark re-stepping applied to every dark palette rather
+than to two of them. Eight rather than the chart contract's six because a
+journey chart genuinely has eight lines, and dropping two would drop two
+applications.
+
+Remaining: **154 literals in `styles.css`**, the chrome of the screens phase 3
+has not reached.

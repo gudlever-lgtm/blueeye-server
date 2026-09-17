@@ -453,6 +453,8 @@ Administration → login and error screens.
 | Topology | `/topology` | B · DashboardPage | [`public/views/topology.js`](../public/views/topology.js) |
 | Flows | `/flows` | B · DashboardPage | [`public/views/flows.js`](../public/views/flows.js) |
 | Transaction tests | `/transaction-tests/:tab` | A · ListPage (shell) | [`public/views/transactions.js`](../public/views/transactions.js) |
+| Service Assurance | `/service-assurance/:tab` | A · ListPage (shell) | [`public/views/serviceAssurance.js`](../public/views/serviceAssurance.js) |
+| Events | `/events` | A · ListPage | [`public/views/events.js`](../public/views/events.js) |
 
 **What Changes kept:** the window vocabulary the server accepts (`30m`, `6h`,
 `24h`, `7d` — not the preview's three), the marker rule (it moves only on an
@@ -822,3 +824,25 @@ both now.
 **Not migrated:** the eight tab bodies. Each is hundreds of lines with its own
 forms, detail screens and polling, and each migrates in its own commit. Its
 **stylesheet** is done — see phase 4 above.
+
+
+**Events** was the only table in the app whose filters lived **inside the table
+header** — one control per column, under the sortable label. Clever, and unique,
+which is what made it a problem: it is the contract's Toolbar now, the same move
+Analysis made when it migrated.
+
+A StatStrip counts the events by status and filters on a click. "How many are
+still open" was a question this page could not answer without reading the rows.
+
+The "🧭 Guide" button sat in every row as a `pill` — a chip carrying an action,
+which is neither a state nor metadata. It is the row's action, on hover, like
+Acknowledge on Analysis.
+
+Eight columns will not fit fixed widths at 1280, and the flexible one — the
+condition, which is the point of the row — is what gets squeezed to nothing. Only
+severity, status and the action column are pinned; the browser lays the rest out,
+and the two timestamps read as "5 d ago" with the exact stamp as the tooltip.
+
+**Clear filters is always present and disabled when there is nothing to clear.**
+Showing it conditionally would mean rebuilding the toolbar on every keystroke in
+the location field — and losing the focus with it.

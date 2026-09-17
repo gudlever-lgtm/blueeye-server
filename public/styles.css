@@ -804,7 +804,6 @@ th.sortable.sorted { color: var(--accent); }
 /* Per-column filter row: a second header row of filter controls under the
    sortable labels, so the header both sorts (click label) and filters. */
 thead tr.filter-row th { padding: 4px 8px 8px; font-weight: 400; vertical-align: top; }
-.col-filter { width: 100%; max-width: 240px; box-sizing: border-box; font: inherit; padding: 3px 6px; }
 
 /* Analysis: the Host selector promoted out of the table header to sit directly
    under the page heading, scoping the whole page (summary + assistant + list). */
@@ -1370,7 +1369,7 @@ button.active-btn { outline: 2px solid var(--accent); }
 .fs-mini tbody tr.active { background: var(--accent-weak); }
 
 /* ---- Events (event_cases) ---- */
-.events-view .toolbar, .clusters-view .toolbar { display: flex; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; }
+.clusters-view .toolbar { display: flex; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; }
 .inc-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; }
 .inc-header h2 { margin: 0 0 4px; }
 .inc-meta { font-size: 13px; }

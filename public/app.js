@@ -1346,6 +1346,7 @@ const CONTRACT_VIEWS = new Map([
   ['flows', 'flows'],
   ['transactions', 'transactions'],
   ['serviceAssurance', 'serviceAssurance'],
+  ['events', 'events'],
 ]);
 
 function hero(viewKey) {
@@ -3652,102 +3653,44 @@ PAGE_INFO.events = {
   ],
 };
 
+// ---- Events (MIGRATED — see public/views/events.js) -------------------------
+let eventsPage = null;
+const eventsPageState = {};
+
+function getEventsPage() {
+  if (eventsPage) return eventsPage;
+  if (typeof window === 'undefined' || !window.EventsPage || !ui) return null;
+  eventsPage = window.EventsPage.create({
+    el, t, ui, errText, gotoView, openEvent, canWrite,
+    state: eventsPageState,
+    condition: incCondition,
+    agentLabel: incAgentLabel,
+    locationLabel: incLocationLabel,
+    guide: guideFromList,
+    help: () => {
+      const info = PAGE_INFO.events || {};
+      return { lead: info.hero || '', title: info.title || t('events.title'), body: info.body || (() => []) };
+    },
+    // Status, severity and device narrow the QUERY: the server keys events by
+    // device. Location does not, so the view filters it client-side.
+    fetchEvents: async ({ status, severity, device }) => {
+      const qs = new URLSearchParams();
+      if (status) qs.set('status', status);
+      if (severity) qs.set('severity', severity);
+      if (device) qs.set('device', String(device).trim());
+      const r = await api(`/api/events${qs.toString() ? `?${qs}` : ''}`);
+      return r.events || [];
+    },
+  });
+  return eventsPage;
+}
+
 views.events = async () => {
-  const wrap = el('div', { class: 'events-view' });
-  const filters = { status: '', severity: '', device: '', location: '' };
-
-  const incRow = (i) => el('tr', {
-    class: 'clickable', tabindex: '0',
-    onclick: () => openEvent(i.id), onkeydown: (e) => { if (e.key === 'Enter') openEvent(i.id); },
-  },
-    el('td', {}, incSevBadge(i.severity)),
-    el('td', {}, incStatusBadge(i.status)),
-    // The CONDITION only — severity, device and site are the columns either
-    // side of this one, and the stored title repeats all three. The full title
-    // is still the row's tooltip, and still what the detail page and an ITSM
-    // ticket show.
-    el('td', { title: i.title || '' }, esc(incCondition(i))),
-    // Agent + site: "which box, at which site" is the first thing an operator
-    // needs to act, and the event id alone answers neither. Inserted as text
-    // nodes by el(), so no esc() pass — it would render a site called "R&D" as
-    // "R&amp;D".
-    el('td', {}, incAgentLabel(i),
-      i.agentName && incHostId(i) != null ? el('span', { class: 'muted inc-where' }, ` #${incHostId(i)}`) : null),
-    el('td', { class: i.locationName ? '' : 'muted' }, incLocationLabel(i)),
-    el('td', { class: 'muted' }, fmtDate(i.firstEventAt)),
-    el('td', { class: 'muted' }, fmtDate(i.lastEventAt)),
-    el('td', {}, canWrite() ? el('button', { class: 'pill guide-pill small', title: 'Guided troubleshooting', onclick: (e) => { e.stopPropagation(); guideFromList(i.id); } }, '🧭 Guide') : ''));
-
-  // Filter controls live IN the header (a filter row under the sortable labels),
-  // so each column header both sorts (click the label) and filters — the same
-  // per-column model as the Analysis table. Server-side filters (status/severity/
-  // device) reload; the rest of the columns just sort client-side.
-  const statusSel = el('select', { class: 'col-filter', onchange: (e) => { filters.status = e.target.value; load(); } },
-    el('option', { value: '' }, 'All statuses'),
-    ...Object.keys(INC_STATUS_LABEL).map((s) => el('option', { value: s }, INC_STATUS_LABEL[s])));
-  const sevSel = el('select', { class: 'col-filter', onchange: (e) => { filters.severity = e.target.value; load(); } },
-    el('option', { value: '' }, 'All severities'),
-    ...['INFO', 'WARN', 'CRIT'].map((s) => el('option', { value: s }, s)));
-  const devInput = el('input', {
-    type: 'search', class: 'col-filter', placeholder: t('events.filterDevice'),
-    onchange: (e) => { filters.device = e.target.value.trim(); load(); },
-    onkeydown: (e) => { if (e.key === 'Enter') { filters.device = e.target.value.trim(); load(); } },
-  });
-  // Location is not a server-side filter (events are keyed by device, not by
-  // site), so this one narrows the loaded rows client-side.
-  const locInput = el('input', {
-    type: 'search', class: 'col-filter', placeholder: t('events.filterLocation'),
-    oninput: (e) => { filters.location = e.target.value.trim().toLowerCase(); apply(); },
-  });
-
-  const grid = sortableTable([
-    { label: 'Severity', key: 'severity', get: (i) => SEVERITY_RANK[i.severity] || 0, filter: sevSel },
-    { label: 'Status', key: 'status', get: (i) => i.status || '', filter: statusSel },
-    { label: t('events.colCondition'), key: 'title', get: (i) => incCondition(i).toLowerCase() },
-    { label: t('events.colDevice'), key: 'device', get: (i) => incAgentLabel(i).toLowerCase(), filter: devInput },
-    { label: t('events.colLocation'), key: 'location', get: (i) => String(i.locationName || '').toLowerCase(), filter: locInput },
-    { label: 'First seen', key: 'first', get: (i) => new Date(i.firstEventAt || 0).getTime() },
-    { label: 'Last activity', key: 'last', get: (i) => new Date(i.lastEventAt || 0).getTime() },
-    { label: '', key: null },
-  ], {
-    className: 'data',
-    sortKey: 'last',
-    sortDir: 'desc',
-    emptyText: 'No events match.',
-    renderRow: incRow,
-  });
-
-  let loaded = [];
-
-  // Client-side narrowing (location only — every other filter is server-side).
-  function apply() {
-    grid.setRows(filters.location
-      ? loaded.filter((i) => String(i.locationName || '').toLowerCase().includes(filters.location))
-      : loaded);
-  }
-
-  async function load() {
-    grid.setLoading('Loading…');
-    const qs = new URLSearchParams();
-    if (filters.status) qs.set('status', filters.status);
-    if (filters.severity) qs.set('severity', filters.severity);
-    if (filters.device) qs.set('device', filters.device);
-    try {
-      const { events: events } = await api(`/api/events${qs.toString() ? `?${qs}` : ''}`);
-      loaded = events;
-      apply();
-    } catch (err) {
-      grid.setError(err.message);
-    }
-  }
-
-  wrap.append(
-    el('div', { class: 'section-head' }, el('h2', {}, 'Events'),
-      el('span', { class: 'muted' }, 'related anomalies grouped into tracked cases')),
-    grid.table);
-  await load();
-  return wrap;
+  const v = getEventsPage();
+  if (!v) return el('div', { class: 'empty error' }, t('events.err.title'));
+  return v.view();
 };
+
 
 async function loadEventTimeline(id, card, deviceId) {
   const head = el('h3', {}, 'Timeline');

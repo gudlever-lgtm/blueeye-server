@@ -1096,3 +1096,42 @@ showing counts the load never returned. It is one ErrorState naming
 
 With both log screens migrated, the `.logs-table` / `.log-row-error` block is
 gone from `styles.css`.
+
+
+**Settings** is the sixth shell migration, and the one that reverses an earlier
+decision on purpose.
+
+The section picker was `.settings-nav`: five wrapped clusters of `.small ghost`
+buttons with an `.active` class — **twenty-two buttons pretending to be tabs**,
+which the "Forbidden after migration" list names outright. An earlier test
+defended them, on the reasoning that they were "destinations, not tabs". The
+addresses say otherwise: they are `/settings/<section>`, one screen with
+sections, and selecting one swaps the panel below it without leaving the page.
+That is a tablist.
+
+They are **two levels of SubTabs**: the five groups, then the sections of the
+group you are in. Five fits a strip and so does eight; twenty-two never did,
+which is why they wrapped. The group is derived from the section, so no route
+changed — `/settings/retention` still opens Retention, with **Data** selected
+above it. Picking a group opens that group's first section, because a group
+with nothing selected under it is a strip with no page behind it.
+
+**Deviation, recorded:** the contract asks for one SubTabs row per screen.
+Settings has two, for the same reason Reporting does — the second level belongs
+to whatever the first level selected.
+
+**The shell draws no panel around the section.** Every section body already
+builds its own `.settings-card`, so a contract panel around it was a box inside
+a box with the section's name written on both. The panel is kept for the two
+states a section cannot draw itself: the skeleton while it loads, and the
+ErrorState when it throws. The licence answer, which needed a home once the
+panel head was gone, is a Badge in a Toolbar row that moves with the section —
+it used to be `.badge active|bad` on a bare `div` above the strips, describing
+whichever section happened to be open.
+
+A section that threw used to replace the entire page body with a red box, so a
+failing section looked like a broken Settings. It is an ErrorState in the
+section's slot, with the section still selected, so Retry has something to
+retry.
+
+**Not migrated, passed in whole:** all twenty-two section bodies.

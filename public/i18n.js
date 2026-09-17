@@ -3135,6 +3135,21 @@
       'logs.user.info.p1': 'One row per action a PERSON performed: the account behind it, when, what was done, and what it was done to. System Logs answers "is the server healthy?" — this answers "what did people do here?".',
       'logs.user.info.p2': 'Both audit stores are read unconditionally, whatever the licence says. An audit record that is incomplete by plan is one nobody can trust.',
       'logs.user.info.p3': 'A row with no flag carries no badge — a green OK on every line is noise, and a flag only means something if it is rare enough to notice. The flag rules live on the server, so this screen and the CSV export can never disagree about why something was flagged.',
+
+      // Settings (public/views/settings.js)
+      'set.title': 'Settings',
+      'set.lead': 'Everything that changes how this server behaves, grouped by what it affects.',
+      'set.groups': 'Settings groups',
+      'set.lic.included': 'Licence: included',
+      'set.lic.baseline': 'Included in every BlueEyes licence — not a gateable feature.',
+      'set.lic.on': '{label}: in your licence',
+      'set.lic.off': '{label}: not in your licence',
+      'set.lic.onHint': '{label} is included in your licence.',
+      'set.err.title': '{section} could not be loaded',
+      'set.info.title': 'Settings',
+      'set.info.p1': 'Twenty-two sections in five groups: who may do what, how detection and alerting behave, what data is kept and for how long, how the system runs itself, and the two that are yours alone.',
+      'set.info.p2': 'Each section says whether your licence covers it. A section outside the licence is still readable — you can see what it would do — but it will not run.',
+      'set.info.p3': 'Almost everything here is admin-only. Appearance and License are the exceptions: they are per-account, so everyone has them.',
     },
 
     da: {
@@ -6248,6 +6263,21 @@
       'logs.user.info.p1': '\u00c9n r\u00e6kke pr. handling, en PERSON har foretaget: kontoen bag, hvorn\u00e5r, hvad der blev gjort, og hvad det blev gjort ved. Systemlog svarer p\u00e5 "er serveren rask?" \u2014 denne svarer p\u00e5 "hvad gjorde folk her?".',
       'logs.user.info.p2': 'Begge revisionslagre l\u00e6ses uanset hvad licensen siger. En revisionslog, der er ufuldst\u00e6ndig efter plan, er en ingen kan stole p\u00e5.',
       'logs.user.info.p3': 'En r\u00e6kke uden markering har intet m\u00e6rkat \u2014 et gr\u00f8nt OK p\u00e5 hver linje er st\u00f8j, og en markering betyder kun noget, hvis den er sj\u00e6lden nok til at falde i \u00f8jnene. Reglerne ligger p\u00e5 serveren, s\u00e5 denne sk\u00e6rm og CSV-eksporten kan aldrig blive uenige om hvorfor.',
+
+      // Settings (public/views/settings.js)
+      'set.title': 'Indstillinger',
+      'set.lead': 'Alt, der ændrer hvordan denne server opfører sig, grupperet efter hvad det påvirker.',
+      'set.groups': 'Indstillingsgrupper',
+      'set.lic.included': 'Licens: inkluderet',
+      'set.lic.baseline': 'Inkluderet i enhver BlueEyes-licens — ikke en funktion, der kan slås fra.',
+      'set.lic.on': '{label}: i din licens',
+      'set.lic.off': '{label}: ikke i din licens',
+      'set.lic.onHint': '{label} er inkluderet i din licens.',
+      'set.err.title': '{section} kunne ikke indlæses',
+      'set.info.title': 'Indstillinger',
+      'set.info.p1': 'To og tyve afsnit i fem grupper: hvem må hvad, hvordan detektion og alarmering opfører sig, hvilke data der gemmes og hvor længe, hvordan systemet kører sig selv, og de to der kun er dine.',
+      'set.info.p2': 'Hvert afsnit siger, om din licens dækker det. Et afsnit uden for licensen kan stadig læses — du kan se hvad det ville gøre — men det kører ikke.',
+      'set.info.p3': 'Naesten alt her er kun for administratorer. Udseende og Licens er undtagelserne: de er per konto, så alle har dem.',
     },
   };
 

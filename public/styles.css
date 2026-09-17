@@ -818,7 +818,6 @@ thead tr.filter-row th { padding: 4px 8px 8px; font-weight: 400; vertical-align:
 /* A badge that opens something (the agents' status badge -> connection diagnosis). */
 .badge.clickable { cursor: pointer; text-decoration: underline dotted; text-underline-offset: 2px; }
 /* Per-section licence pill row at the top of each Settings tab. */
-.settings-license-row { margin: 2px 0 14px; }
 /* Neutral/consumed (e.g. an enrollment code that's been used up). */
 .badge.used, .badge.neutral { background: var(--muted-weak); color: var(--muted); }
 /* Planned-but-not-built feature (license feature matrix). Distinct from warn. */

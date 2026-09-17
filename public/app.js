@@ -1355,6 +1355,7 @@ const CONTRACT_VIEWS = new Map([
   ['discovery', 'discovery'],
   ['logs', 'systemLogs'],
   ['userLogs', 'userLogs'],
+  ['settings', 'settings'],
 ]);
 
 function hero(viewKey) {
@@ -11193,58 +11194,76 @@ views.docs = async () => {
   return root;
 };
 
-views.settings = async () => {
-  const root = el('div');
-  // Drop admin-only tabs for non-admins, then drop any section left empty.
-  const groups = SETTINGS_GROUPS
+// ---- Settings (SHELL MIGRATED — see public/views/settings.js)
+// The twenty-two section bodies stay here; the page they sit on is the
+// contract's.
+let settingsPage = null;
+const SETTINGS_SECTIONS = {
+  users: () => views.users(),
+  license: () => views.license(),
+  appearance: settingsAppearanceView,
+  database: settingsDatabaseView,
+  map: settingsMapView,
+  types: settingsTypesView,
+  analyse: settingsAnalyseView,
+  alerting: settingsAlertingView,
+  severity: settingsSeverityRulesView,
+  runbooks: settingsRunbooksView,
+  integrations: settingsIntegrationsView,
+  cmdb: settingsCmdbView,
+  ai: settingsAiView,
+  maintenance: settingsMaintenanceView,
+  updates: settingsUpdatesView,
+  agentkey: settingsAgentKeyView,
+  agents: settingsAgentsView,
+  retention: settingsRetentionView,
+  auth: settingsAuthView,
+  apitokens: settingsApiTokensView,
+  screening: () => views.screening(),
+  assurance: settingsAssuranceView,
+};
+
+function settingsGroups() {
+  // Drop admin-only sections for non-admins, then drop any group left empty.
+  return SETTINGS_GROUPS
     .map(([label, tabs]) => [label, tabs.filter(([, , adminOnly]) => isAdmin() || !adminOnly)])
     .filter(([, tabs]) => tabs.length > 0);
-  const allKeys = groups.flatMap(([, tabs]) => tabs.map(([k]) => k));
-  if (!settingsTab || !allKeys.includes(settingsTab)) settingsTab = allKeys[0];
-
-  const nav = el('div', { class: 'settings-nav' }, ...groups.map(([label, tabs]) =>
-    el('div', { class: 'settings-nav-group' },
-      el('span', { class: 'settings-nav-label' }, label),
-      el('div', { class: 'navlist' }, ...tabs.map(([k, lbl]) =>
-        el('button', { class: `small ghost${k === settingsTab ? ' active' : ''}`, onclick: () => { settingsTab = k; render(); } }, lbl))))));
-  root.append(el('div', { class: 'section-head' }, el('h2', {}, 'Settings')), nav);
-  // Per-section licence pill (green = included in this licence, red = not).
-  // Needs the feature + plan maps; both are cached, so this is usually instant.
-  await Promise.all([loadFeatures(), loadPlan()]);
-  root.append(el('div', { class: 'settings-license-row' }, settingsLicensePill(settingsTab)));
-
-  const views2 = {
-    users: () => views.users(),
-    license: () => views.license(),
-    appearance: settingsAppearanceView,
-    database: settingsDatabaseView,
-    map: settingsMapView,
-    types: settingsTypesView,
-    analyse: settingsAnalyseView,
-    alerting: settingsAlertingView,
-    severity: settingsSeverityRulesView,
-    runbooks: settingsRunbooksView,
-    integrations: settingsIntegrationsView,
-    cmdb: settingsCmdbView,
-    ai: settingsAiView,
-    maintenance: settingsMaintenanceView,
-    updates: settingsUpdatesView,
-    agentkey: settingsAgentKeyView,
-    agents: settingsAgentsView,
-    retention: settingsRetentionView,
-    auth: settingsAuthView,
-    apitokens: settingsApiTokensView,
-    screening: () => views.screening(),
-    assurance: settingsAssuranceView,
-  };
-  let content;
-  try {
-    content = await (views2[settingsTab] || settingsAnalyseView)();
-  } catch (err) {
-    content = el('div', { class: 'empty error' }, err.message);
+}
+function settingsLabel(key) {
+  for (const [, tabs] of SETTINGS_GROUPS) {
+    for (const [k, label] of tabs) if (k === key) return label;
   }
-  root.append(content);
-  return root;
+  return key;
+}
+
+function getSettingsPage() {
+  if (settingsPage) return settingsPage;
+  if (typeof window === 'undefined' || !window.SettingsPage || !ui) return null;
+  settingsPage = window.SettingsPage.create({
+    el, t, ui, errText,
+    groups: settingsGroups,
+    label: settingsLabel,
+    tab: () => settingsTab,
+    setTab: (k) => { settingsTab = k; syncLocation(); },
+    licence: settingsLicence,
+    help: () => ({ title: t('set.info.title'), body: () => [
+      el('p', {}, t('set.info.p1')),
+      el('p', {}, t('set.info.p2')),
+      el('p', { class: 'muted' }, t('set.info.p3')),
+    ] }),
+    render: (key) => (SETTINGS_SECTIONS[key] || settingsAnalyseView)(),
+  });
+  return settingsPage;
+}
+
+views.settings = async () => {
+  const v = getSettingsPage();
+  if (!v) return el('div', { class: 'empty error' }, t('set.title'));
+  // The licence pill on each section reads the cached feature + plan maps.
+  await Promise.all([loadFeatures(), loadPlan()]);
+  // A section holds its own open form, so the page is rebuilt per entry.
+  settingsPage = null;
+  return v.view();
 };
 
 // A small "Licence: <feature> yes/no" badge so each feature tab shows whether the
@@ -11286,16 +11305,19 @@ async function settingsAssuranceView() {
 }
 
 // The green/red licence pill shown at the top of every Settings section.
-function settingsLicensePill(tabKey) {
+// What the licence says about one Settings section. A section not in
+// SETTINGS_FEATURE is baseline — always included, never gateable. The view
+// renders this as a contract Badge on the section's own panel head, so the
+// answer sits with the thing it is about.
+function settingsLicence(tabKey) {
   const info = SETTINGS_FEATURE[tabKey];
-  if (!info) {
-    return el('span', { class: 'badge active', title: 'Included in every BlueEyes licence — not a gateable feature.' },
-      'Licence: included');
-  }
+  if (!info) return { ok: true, text: t('set.lic.included'), title: t('set.lic.baseline') };
   const ok = featureEntitled(info.feature);
-  const title = ok ? `${info.label} is included in your licence.` : lockedHint(info.label, info.feature);
-  return el('span', { class: `badge ${ok ? 'active' : 'bad'}`, title },
-    `Licence: ${info.label} — ${ok ? 'included' : 'not in licence'}`);
+  return {
+    ok,
+    text: ok ? t('set.lic.on', { label: info.label }) : t('set.lic.off', { label: info.label }),
+    title: ok ? t('set.lic.onHint', { label: info.label }) : lockedHint(info.label, info.feature),
+  };
 }
 
 // Settings → Agent key: generate / show / delete the agent-release SIGNING key.
@@ -15469,6 +15491,9 @@ function syncCrumb() {
 // A sub-tab's own label. Falls back to the segment itself, which is already the
 // word in the URL, so an untranslated tab reads as its address rather than blank.
 function crumbTabLabel(view, tab) {
+  // Settings' twenty-two section labels already live in SETTINGS_GROUPS, so
+  // they are read from there rather than copied into both catalogues.
+  if (view === 'settings') return settingsLabel(tab);
   const key = `route.tab.${view}.${tab}`;
   const label = t(key);
   return label === key ? tab : label;

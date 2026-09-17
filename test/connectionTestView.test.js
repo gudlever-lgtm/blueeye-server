@@ -216,6 +216,81 @@ test('a result that comes back is shown on its own row', async (t) => {
   assert.ok(!/failed/i.test(row(/port 80/).querySelector('.ct-state').textContent), 'the :80 row took the :443 measurement');
 });
 
+test('a result row opens its full detail in place, the same renderer the probe tab uses', async (t) => {
+  const ts = new Date(Date.now() + 5000).toISOString();
+  const rows = [{ id: 1, type: 'ping', target: 'example.com', ok: 1, rttMs: 12, lossPct: 0, ts }];
+  const { doc } = await boot(t, { app: appWith({ probeRows: rows }) });
+  await open(doc);
+  await setTarget(doc, 'example.com');
+  doc.querySelector('.run-btn').click();
+  await tick(3000);
+
+  const pingRow = [...doc.querySelectorAll('.ct-row')].find((r) => /Ping/.test(r.textContent));
+  assert.equal(pingRow.querySelector('.ct-caret').hidden, false, 'a row with a result does not offer to open');
+  assert.match(pingRow.getAttribute('title') || '', /Open this result/);
+  pingRow.click();
+  await tick(400);
+  const detail = pingRow.nextSibling;
+  assert.equal(detail.hidden, false, 'the detail did not open');
+  assert.match(detail.textContent, /RTT history|No history yet/, `detail was: ${detail.textContent.slice(0, 120)}`);
+  // One at a time, and clicking again closes it.
+  pingRow.click();
+  await tick(100);
+  assert.equal(detail.hidden, true, 'the detail did not close again');
+});
+
+test('a failed check says WHY, in the agent\'s own words, and offers the missing tool', async (t) => {
+  const ts = new Date(Date.now() + 5000).toISOString();
+  const rows = [
+    { id: 1, type: 'traceroute', target: 'example.com', ok: 0, detail: 'traceroute not installed', ts },
+    { id: 2, type: 'ping', target: 'example.com', ok: 0, lossPct: 100, ts },
+    { id: 3, type: 'tcp', target: 'example.com:80', ok: 0, detail: 'connect ECONNREFUSED 93.184.216.34:80', ts },
+  ];
+  const { doc } = await boot(t, { app: appWith({ probeRows: rows }) });
+  await open(doc);
+  await setTarget(doc, 'example.com');
+  doc.querySelector('.run-btn').click();
+  await tick(3000);
+  const row = (re) => [...doc.querySelectorAll('.ct-row')].find((r) => re.test(r.textContent));
+
+  // A missing tool is named in the pill and installable from the row.
+  const trace = row(/^Traceroute/m);
+  assert.match(trace.querySelector('.ct-state').textContent, /traceroute missing/);
+  assert.match(trace.querySelector('.ct-reason').textContent, /traceroute not installed/);
+  assert.ok(byText(doc, '.ct-tools button', /Install traceroute/), 'no install button for a missing tool');
+
+  // 100% loss with no words from the agent is the one unambiguous reading.
+  assert.match(row(/Ping/).querySelector('.ct-state').textContent, /no reply/);
+  assert.match(row(/Ping/).querySelector('.ct-reason').textContent, /100%/);
+
+  // The agent's error is read for the word, and shown in full underneath.
+  assert.match(row(/port 80/).querySelector('.ct-state').textContent, /refused/);
+  assert.match(row(/port 80/).querySelector('.ct-reason').textContent, /ECONNREFUSED/);
+});
+
+test('a skipped check says which kind of skipped it is', async (t) => {
+  const { doc, window } = await boot(t);
+  await open(doc);
+  doc.querySelector('.ct-toggle').click();
+  await setTarget(doc, '1.1.1.1');
+
+  const row = (re) => [...doc.querySelectorAll('.ct-row')].find((r) => re.test(r.textContent));
+  // Before anything runs: the two the agent cannot run, and the one this target
+  // cannot answer, already say so.
+  assert.match(row(/Reverse DNS/).querySelector('.ct-state').textContent, /not supported/);
+  assert.match(row(/DNS lookup/).querySelector('.ct-state').textContent, /n\/a/);
+
+  // A check cleared by hand is a different kind of skipped.
+  const mtu = row(/Path MTU/);
+  const box = mtu.querySelector('input');
+  box.checked = false;
+  box.dispatchEvent(new window.Event('change', { bubbles: true }));
+  doc.querySelector('.run-btn').click();
+  await tick(400);
+  assert.match(mtu.querySelector('.ct-state').textContent, /not selected/);
+  assert.match(mtu.querySelector('.ct-reason').textContent, /Cleared for this run/);
+});
+
 test('Repeat saves a recurring test package and says what it saved', async (t) => {
   const packages = [];
   const { doc, window } = await boot(t, { app: appWith({ packages }) });

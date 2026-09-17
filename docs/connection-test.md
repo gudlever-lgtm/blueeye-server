@@ -70,6 +70,32 @@ row: a stale green tick for a probe that has not come back is exactly the lie
 this screen exists to avoid. The `:80` and `:443` rows are told apart by the
 `host:port` target a TCP probe stores.
 
+### Reading a row
+
+A row that succeeded shows **the measurement**, not the word OK — `12 hops · 4%
+worst hop loss` says more than a tick, and it is the same `probeMeasured()` the
+Run-a-probe table uses.
+
+A row that did not succeed shows **why**, in two lengths: a word in the pill and
+the sentence underneath. The sentence is the agent's own `detail` whenever it
+has one (`traceroute not installed`, `connect ECONNREFUSED 93.184.216.34:80`);
+the word is read off it (`ctFailureReason()` in `public/app.js`) and never
+invented. A failure nothing can classify says `failed` rather than dressing
+itself up. Where the reason is a missing tool, the row carries the same
+**Install** button the probe table offers — the answer to "why did this fail" is
+one click from the fix.
+
+"Skipped" is three different things, and the row says which: **not selected**
+(cleared by hand), **not supported** (the agent cannot run it), **n/a** (the
+target cannot answer it — a DNS lookup of an IP literal). The last two say so
+before anybody presses Run.
+
+A row with a result **opens in place** on click or Enter — the same
+`probeDetail()` the Run-a-probe tab renders: the path map and per-hop table for
+a traceroute, the MTU verdict for a path MTU, the RTT history for everything
+else. One at a time, because two open traceroutes would each mount a path
+visualisation and the second would overwrite the first's URL state.
+
 **Stop** ends the run: no further rounds are sent. A check already handed to the
 agent runs to the end on the agent — nothing can call it back — so its result
 may still arrive a moment later. The screen says so rather than pretending the

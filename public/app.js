@@ -8351,15 +8351,16 @@ async function connectionTestView() {
   }
 
   function setState(id, kind, label) {
-    const row = rows.get(id);
-    if (!row) return;
-    row.state.className = `ct-state ${kind}`;
-    row.state.textContent = label;
+    const entry = rows.get(id);
+    if (!entry) return;
+    entry.state.className = `ct-state ${kind}`;
+    entry.state.textContent = label;
   }
 
   function renderRows() {
     rows.clear();
-    listBody.replaceChildren(...catalogue.map((c) => {
+    const kids = [];
+    for (const c of catalogue) {
       const blocked = why(c);
       const cb = el('input', {
         type: 'checkbox',
@@ -8371,17 +8372,100 @@ async function connectionTestView() {
         syncCounter();
       });
       const state = el('span', { class: 'ct-state' }, '–');
+      // Why it says what it says. A verdict with no reason sends the operator to
+      // another screen to find out; the reason is the agent's own words when it
+      // has any, and ours when it does not.
+      const reason = el('div', { class: 'ct-reason', hidden: true });
+      const tools = el('div', { class: 'ct-tools', hidden: true });
+      // The disclosure, as on the Run-a-probe tab: the result opens IN PLACE,
+      // because comparing it with the checks around it is the whole point of
+      // running them together.
+      const caret = el('span', { class: 'ct-caret', hidden: true }, '▸');
+      const detail = el('div', { class: 'ct-detail', hidden: true });
       const node = el('div', { class: `ct-row${blocked ? ' blocked' : ''}` },
         cb,
         el('div', {},
           el('div', { class: 'ct-name' }, t(`ct.check.${c.id}`),
             c.port ? el('span', { class: 'ct-param' }, `port ${c.port}`) : null),
-          el('div', { class: 'ct-desc' }, blocked || t(`ct.check.${c.id}.desc`))),
-        state);
-      rows.set(c.id, { node, state });
-      return node;
-    }));
+          el('div', { class: 'ct-desc' }, t(`ct.check.${c.id}.desc`)),
+          reason, tools),
+        state, caret);
+      const entry = { node, state, reason, tools, caret, detail, check: c, result: null, loaded: false };
+      // A row with a result behaves like a probe row: click or Enter/Space opens
+      // it, and only one is open at a time — two open traceroutes would each
+      // mount a path visualisation, and those write the brush window to the URL.
+      const activate = (e) => {
+        if (e && e.target && e.target.closest('input, button')) return;
+        toggleDetail(entry);
+      };
+      node.addEventListener('click', activate);
+      node.addEventListener('keydown', (e) => {
+        if (e.key !== 'Enter' && e.key !== ' ') return;
+        if (e.target && e.target.closest('input, button')) return;
+        e.preventDefault();
+        activate();
+      });
+      rows.set(c.id, entry);
+      kids.push(node, detail);
+      // A check that cannot run says so from the start, before anybody presses
+      // Run — that is the difference between a greyed-out row and a mystery.
+      if (blocked) showReason(entry, c.available ? 'notApplicable' : 'notSupported', blocked);
+    }
+    listBody.replaceChildren(...kids);
     syncCounter();
+  }
+
+  // Marks a row with a short verdict in the pill and the long reason under it.
+  function showReason(entry, shortKey, full, kind = null) {
+    if (!entry) return;
+    if (shortKey) {
+      entry.state.className = `ct-state ${kind || (shortKey === 'notSupported' || shortKey === 'notApplicable' || shortKey === 'notSelected' ? 'skipped' : 'failed')}`;
+      entry.state.textContent = t(`ct.reason.${shortKey}`, entry.reasonParams || {});
+    }
+    entry.reason.hidden = !full;
+    entry.reason.textContent = full || '';
+    entry.reason.className = `ct-reason${kind === 'skipped' || shortKey === 'notSupported' || shortKey === 'notApplicable' || shortKey === 'notSelected' ? ' muted' : ' bad'}`;
+  }
+
+  function clearReason(entry) {
+    if (!entry) return;
+    entry.reason.hidden = true;
+    entry.reason.textContent = '';
+    entry.tools.hidden = true;
+    entry.tools.replaceChildren();
+  }
+
+  // One open at a time, and the row keeps what it fetched: re-opening must not
+  // re-run three HTTP calls.
+  let openDetail = null;
+  async function toggleDetail(entry) {
+    if (!entry || !entry.result) return;
+    if (openDetail === entry) {
+      entry.detail.hidden = true;
+      entry.caret.textContent = '▸';
+      entry.node.classList.remove('open');
+      openDetail = null;
+      return;
+    }
+    if (openDetail) {
+      openDetail.detail.hidden = true;
+      openDetail.caret.textContent = '▸';
+      openDetail.node.classList.remove('open');
+    }
+    openDetail = entry;
+    entry.detail.hidden = false;
+    entry.caret.textContent = '▾';
+    entry.node.classList.add('open');
+    if (entry.loaded) return;
+    entry.detail.replaceChildren(el('div', { class: 'pv-skel', style: 'height:120px' }));
+    try {
+      // The SAME renderer the Run-a-probe tab uses — path map, per-hop table,
+      // MTU verdict, RTT history — because it is the same probe result.
+      entry.detail.replaceChildren(await probeDetail(entry.result, agentSel.value));
+      entry.loaded = !entry.detail.querySelector('.error');
+    } catch (e) {
+      entry.detail.replaceChildren(el('div', { class: 'error' }, errText(e)));
+    }
   }
 
   function syncCounter() {
@@ -8438,12 +8522,6 @@ async function connectionTestView() {
     return results.find((r) => r.type === check.type && (r.target === withPort || (!check.port && r.target === host))) || null;
   }
 
-  function measured(r) {
-    if (!r.ok) return { kind: 'failed', label: t('ct.state.failed') };
-    if (r.rttMs != null) return { kind: 'ok', label: `${Math.round(r.rttMs)} ms` };
-    return { kind: 'ok', label: t('ct.state.ok') };
-  }
-
   async function collectResults(agentId, host, ids, since) {
     let results;
     try { results = (await api(`/api/probes/latest?agentId=${encodeURIComponent(agentId)}`)).results || []; }
@@ -8455,8 +8533,44 @@ async function connectionTestView() {
       // target would otherwise report a fresh green tick for a probe that has
       // not come back yet.
       if (!r || (since && r.ts && new Date(r.ts).getTime() < since)) continue;
-      const m = measured(r);
-      setState(id, m.kind, m.label);
+      const entry = rows.get(id);
+      if (!entry) continue;
+      // The row now HAS a result, so it opens like a probe row does.
+      entry.result = r;
+      entry.loaded = false;
+      entry.caret.hidden = false;
+      entry.node.setAttribute('tabindex', '0');
+      entry.node.setAttribute('title', t('ct.openRow'));
+      clearReason(entry);
+      if (r.ok) {
+        // The measurement itself is the verdict — "12 hops · 4% worst hop loss"
+        // says more than OK, and it is already computed for the probe table.
+        const m = probeMeasured(r);
+        setState(id, 'ok', m || t('ct.state.ok'));
+        // A path that carries small packets and drops full-size ones is `ok`
+        // and still the finding; the probe table surfaces it for the same
+        // reason, and a row that hides it gets scrolled past.
+        if (r.type === 'path_mtu' && r.mtu && r.mtu.blackholeDetected) {
+          entry.state.className = 'ct-state failed';
+          entry.state.textContent = t('ct.reason.blackhole');
+          showReason(entry, null, t('probe.mtu.status.blackhole'));
+        }
+      } else {
+        const reason = ctFailureReason(r);
+        entry.reasonParams = reason.params || {};
+        showReason(entry, reason.short, reason.full);
+        entry.reasonParams = {};
+        // The agent can install the missing tool itself — the same button the
+        // Run-a-probe table offers, in the row that is asking for it.
+        const tool = missingToolOf(r);
+        if (tool && canWrite()) {
+          entry.tools.hidden = false;
+          entry.tools.replaceChildren(el('button', {
+            class: 'small',
+            onclick: (e) => { e.stopPropagation(); requestToolInstall(agentSel.value, tool, e.target); },
+          }, t('ct.install', { tool })));
+        }
+      }
     }
   }
 
@@ -8471,7 +8585,15 @@ async function connectionTestView() {
     running = true; stopRequested = false;
     runBtn.disabled = true; stopBtn.disabled = false;
     if (listWrap.hidden) toggle.click();
-    for (const c of catalogue) setState(c.id, selected.has(c.id) && !why(c) ? '' : 'skipped', selected.has(c.id) && !why(c) ? t('ct.state.waiting') : t('ct.state.skipped'));
+    for (const c of catalogue) {
+      const entry = rows.get(c.id);
+      const blocked = why(c);
+      if (!blocked && selected.has(c.id)) { clearReason(entry); setState(c.id, '', t('ct.state.waiting')); continue; }
+      // Not "skipped" — WHY it was skipped: cleared by hand, not runnable by
+      // this agent, or not a question this target can answer.
+      if (blocked) showReason(entry, c.available ? 'notApplicable' : 'notSupported', blocked);
+      else showReason(entry, 'notSelected', t('ct.reason.notSelectedFull'));
+    }
 
     let completed = 0;
     for (let round = 1; round <= rounds && !stopRequested; round += 1) {
@@ -8499,10 +8621,11 @@ async function connectionTestView() {
     running = false;
     stopBtn.disabled = true;
     if (stopRequested) {
-      for (const [id, row] of rows) {
-        if (['', 'ct-state', 'ct-state running'].includes(row.state.className) || row.state.textContent === t('ct.state.waiting')) {
-          setState(id, 'skipped', t('ct.state.stopped'));
-        }
+      for (const [id, entry] of rows) {
+        const pending = entry.state.textContent === t('ct.state.waiting')
+          || entry.state.textContent === t('ct.state.running')
+          || entry.state.textContent === t('ct.state.sent');
+        if (pending) setState(id, 'skipped', t('ct.state.stopped'));
       }
       say(t('ct.status.stopped'));
     } else if (completed) {
@@ -8537,6 +8660,34 @@ async function connectionTestView() {
   });
 
   return root;
+}
+
+// Why a connection-test check did not succeed, in two lengths: a word for the
+// pill and a sentence under the row.
+//
+// The agent's own `detail` is the truth when there is one — "traceroute not
+// installed", "connect ECONNREFUSED" — so it is what the sentence says, and the
+// word is read off it rather than invented. Everything here is a reading of
+// what was measured; nothing is guessed, and a failure we cannot classify says
+// so instead of dressing itself up.
+function ctFailureReason(r) {
+  const detail = r && r.detail ? String(r.detail) : '';
+  const full = detail || null;
+  const tool = missingToolOf(r);
+  if (tool) return { short: 'missingTool', params: { tool }, full: full || t('ct.reason.missingToolFull', { tool }) };
+  if (/not installed|command not found|ENOENT/i.test(detail)) return { short: 'failed', full };
+  if (/refused|ECONNREFUSED/i.test(detail)) return { short: 'refused', full };
+  if (/timed?\s?out|ETIMEDOUT/i.test(detail)) return { short: 'timeout', full };
+  if (/unreachable|EHOSTUNREACH|ENETUNREACH/i.test(detail)) return { short: 'unreachable', full };
+  if (/NXDOMAIN|ENOTFOUND|not known|no such host|EAI_AGAIN/i.test(detail)) return { short: 'nameNotFound', full };
+  if (/permission|not permitted|EPERM|EACCES|raw socket|root/i.test(detail)) return { short: 'needsRoot', full };
+  if (r && r.type === 'path_mtu' && r.mtu && r.mtu.blackholeDetected) {
+    return { short: 'blackhole', full: full || t('probe.mtu.status.blackhole') };
+  }
+  // No words from the agent: read the measurement. 100% loss with nothing back
+  // is the one case that is unambiguous.
+  if (r && r.lossPct === 100) return { short: 'noReply', full: full || t('ct.reason.noReplyFull') };
+  return { short: 'failed', full: full || t('ct.reason.failedFull') };
 }
 
 // ---- Repeat: the shared recurrence editor ---------------------------------

@@ -1001,3 +1001,40 @@ advisory about the data is for; the head keeps the count.
 **Not migrated, passed in whole:** `renderEnrollResult` — the generated command,
 the live "waiting for agent" socket state, the Windows two-step variant and the
 manual download + checksum block.
+
+
+**Discovery** is a DashboardPage of four panels: the scan scope, a manual
+sweep, the candidates, and the sweep log.
+
+The scope form was `.discovery-form` + `.discovery-form-row` + a local
+`field()` — a page-local copy of FormSection, three classes deep, with its own
+grid. It is a FormSection; the whole `.discovery-*` block is gone from
+`styles.css`.
+
+A failed save used to write into a `<span class="error">` beside the button.
+That part was right, and it stayed: the server validates per field and returns
+`details` keyed by field, so the message belongs next to the button that
+failed, not in a toast that is gone before the reader looks back at the form.
+
+**The counts were the filter all along.** "discovered 4 · promoted 1 · ignored
+9" was a grey sentence, next to a `<select>` that did the filtering. They are a
+StatStrip now — the same move Events and Situations made — and clicking the
+pressed one clears it.
+
+Promote and Dismiss were two buttons in every candidate row. Promote is the
+row's action on hover; Dismiss is the ⋯ menu, because dismissing something you
+have not looked at should take one more beat than promoting it.
+
+Every status was `.badge <word>` — `online` for a promoted candidate, `muted`
+for an ignored one, styled by the server's vocabulary rather than by what the
+word means. They are Badges on tones.
+
+**Each panel fails on its own.** There were three separate greys for "Loading…"
+and three for the error. A 500 on the candidates now leaves the scope form and
+the sweep log standing, and names `GET /api/discovery/candidates` with a Retry.
+A 403 on the config is the exception: the nav hides this screen, so a reader who
+gets there typed the address — that is a locked EmptyState, not a server
+failure, and nothing else is drawn under it.
+
+Only **connected** agents are offered as a sweep vantage. An offline one was
+offered before and answered 409.

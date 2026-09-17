@@ -1352,6 +1352,7 @@ const CONTRACT_VIEWS = new Map([
   ['guide', 'guides'],
   ['locations', 'locations'],
   ['enrollment', 'enrollment'],
+  ['discovery', 'discovery'],
 ]);
 
 function hero(viewKey) {
@@ -6300,183 +6301,50 @@ PAGE_INFO.discovery = {
   ],
 };
 
-const DISCOVERY_STATUS_BADGE = { discovered: 'warn', promoted: 'online', ignored: 'muted' };
+// ---- Discovery (MIGRATED — see public/views/discovery.js)
+let discoveryPage = null;
+const discoveryPageState = {};
+function getDiscoveryPage() {
+  if (discoveryPage) return discoveryPage;
+  if (typeof window === 'undefined' || !window.DiscoveryPage || !ui) return null;
+  discoveryPage = window.DiscoveryPage.create({
+    el, t, ui, errText,
+    state: discoveryPageState,
+    confirm: (msg) => window.confirm(msg),
+    // The agent sweeps on its own clock, so its candidates arrive after the
+    // request does.
+    later: (fn) => setTimeout(fn, 4000),
+    help: () => ({ title: t('disc.info.title'), body: () => [
+      el('p', {}, t('disc.info.p1')),
+      el('p', {}, t('disc.info.p2')),
+      el('p', { class: 'muted' }, t('disc.info.p3')),
+    ] }),
+    fetchBoot: async () => {
+      const [cfg, agents] = await Promise.all([
+        api('/api/discovery/config'),
+        api('/agents').catch(() => []),
+      ]);
+      return { cfg, agents };
+    },
+    saveConfig: (body) => api('/api/discovery/config', { method: 'PUT', body }),
+    // The server validates per field; a 400 carries `details` keyed by field.
+    fieldErrors: (e) => (e && e.data && e.data.details
+      ? Object.entries(e.data.details).map(([k, v]) => `${k}: ${v}`).join(' · ')
+      : null),
+    scan: (agentId) => api('/api/discovery/scan', { method: 'POST', body: agentId ? { agentId } : {} }),
+    fetchCandidates: (status) => api(`/api/discovery/candidates${status ? `?status=${status}` : ''}`),
+    fetchSweeps: () => api('/api/discovery/sweeps?limit=50'),
+    promote: (c) => api(`/api/discovery/candidates/${c.id}/promote`, { method: 'POST' }),
+    ignore: (c) => api(`/api/discovery/candidates/${c.id}/ignore`, { method: 'POST' }),
+    openAgent,
+  });
+  return discoveryPage;
+}
 
 views.discovery = async () => {
-  const root = el('div', { class: 'discovery-view' });
-  root.append(el('div', { class: 'section-head' }, el('h2', {}, 'Discovery'), el('span', { class: 'muted' }, 'Active discovery scope + candidates')));
-
-  const cfgHost = el('div', { class: 'card' }, el('h3', {}, 'Scan scope'), el('div', { class: 'muted' }, 'Loading…'));
-  const scanHost = el('div', { class: 'card' });
-  const candHost = el('div', { class: 'card' }, el('h3', {}, 'Candidates'), el('div', { class: 'muted' }, 'Loading…'));
-  const sweepHost = el('div', { class: 'card' }, el('h3', {}, 'Sweep history'), el('div', { class: 'muted' }, 'Loading…'));
-  root.append(cfgHost, scanHost, candHost, sweepHost);
-  let agents = []; // for the "sweep from agent" picker + found-by resolution
-  const agentNameById = {};
-
-  function renderConfig(cfg) {
-    const enabledBadge = el('span', { class: `badge ${cfg.enabled ? 'online' : 'muted'}` }, cfg.enabled ? 'Scheduled sweep ON' : 'Scheduled sweep OFF (env)');
-    const cidrs = el('textarea', { class: 'mono', rows: '4', placeholder: '10.0.0.0/24\n192.168.1.0/24' }, (cfg.cidrs || []).join('\n'));
-    const ports = el('input', { type: 'text', class: 'mono', value: (cfg.ports || []).join(', '), placeholder: '22, 80, 161, 443, 3389' });
-    const rate = el('input', { type: 'number', min: '1', max: '10000', value: String(cfg.rateLimit ?? 50) });
-    const cap = el('input', { type: 'number', min: '1', max: '16777216', value: String(cfg.addressCap ?? 65536) });
-    const interval = el('input', { type: 'number', min: '1', max: '10080', value: String(cfg.intervalMinutes ?? 360) });
-    const status = el('span', { class: 'muted' });
-    const saveBtn = el('button', { class: 'small' }, 'Save scope');
-    const field = (label, node, hint) => el('label', { class: 'field' }, el('span', {}, label), node, hint ? el('span', { class: 'muted small' }, hint) : null);
-
-    saveBtn.addEventListener('click', async () => {
-      const body = {
-        cidrs: cidrs.value.split(/[\n,]+/).map((s) => s.trim()).filter(Boolean),
-        ports: ports.value.split(/[\s,]+/).map(Number).filter((n) => Number.isInteger(n) && n > 0),
-        rateLimit: Number(rate.value), addressCap: Number(cap.value), intervalMinutes: Number(interval.value),
-      };
-      saveBtn.disabled = true; status.className = 'muted'; status.textContent = 'Saving…';
-      try {
-        const r = await api('/api/discovery/config', { method: 'PUT', body });
-        status.className = ''; status.textContent = 'Saved.';
-        renderConfig(r.config);
-      } catch (e) {
-        status.className = 'error';
-        status.textContent = e.data && e.data.details ? Object.entries(e.data.details).map(([k, v]) => `${k}: ${v}`).join(' · ') : errText(e);
-      } finally { saveBtn.disabled = false; }
-    });
-
-    const children = [el('h3', {}, 'Scan scope'), el('div', { class: 'discovery-cfg-head' }, enabledBadge,
-      cfg.scopeConfigured ? null : el('span', { class: 'badge warn' }, 'Scope not configured — sweeps refuse to run'))];
-    if (cfg.editable === false) {
-      children.push(el('div', { class: 'muted' }, 'Scope is read-only (env-managed): CIDRs ', el('span', { class: 'mono' }, (cfg.cidrs || []).join(', ') || '—'),
-        ' · ports ', el('span', { class: 'mono' }, (cfg.ports || []).join(', '))));
-    } else {
-      children.push(el('div', { class: 'discovery-form' },
-        field('CIDR ranges (one per line)', cidrs),
-        el('div', { class: 'discovery-form-row' },
-          field('Ports', ports, 'TCP-connect targets'),
-          field('Rate (probes/sec)', rate),
-          field('Address cap', cap),
-          field('Sweep interval (min)', interval, 'applies on restart')),
-        el('div', { class: 'form-actions' }, saveBtn, status)));
-    }
-    cfgHost.replaceChildren(...children);
-  }
-
-  function renderScan() {
-    const status = el('span', { class: 'muted' });
-    // Choose where the sweep runs FROM: the server (its own vantage) or a
-    // connected agent (the segment it sits on — empty scope ⇒ the agent's own
-    // subnet). Only online agents can be sent a command.
-    const online = agents.filter((a) => a.status === 'online');
-    const fromSel = el('select', { class: 'small' },
-      el('option', { value: '' }, 'Server (default vantage)'),
-      ...online.map((a) => el('option', { value: String(a.id) }, `Agent · ${a.display_name || a.hostname}`)));
-    const btn = el('button', { class: 'small' }, 'Run a sweep now');
-    btn.addEventListener('click', async () => {
-      btn.disabled = true; status.className = 'muted'; status.textContent = 'Scanning…';
-      try {
-        const body = fromSel.value ? { agentId: Number(fromSel.value) } : {};
-        const r = await api('/api/discovery/scan', { method: 'POST', body });
-        if (r.mode === 'agent') {
-          status.className = '';
-          status.textContent = `Requested — the agent is sweeping; candidates will appear here shortly.`;
-          setTimeout(() => { loadCandidates(); loadSweeps(); }, 4000);
-        } else {
-          status.className = r.refused ? 'error' : '';
-          status.textContent = r.refused ? `Refused: ${r.reason}` : `Swept ${r.addresses ?? '?'} addresses · ${r.found ?? 0} candidate(s).`;
-          loadCandidates(); loadSweeps();
-        }
-      } catch (e) {
-        status.className = 'error';
-        status.textContent = e.status === 409 ? 'That agent is not connected right now.' : errText(e);
-      } finally { btn.disabled = false; }
-    });
-    scanHost.replaceChildren(el('h3', {}, 'Manual sweep'),
-      el('div', { class: 'form-actions' }, el('label', { class: 'inline muted' }, 'From ', fromSel), btn, status),
-      el('p', { class: 'muted small' }, 'Sweeping from an agent reaches segments the server can’t; leave the CIDR scope blank to scan that agent’s own subnet.'));
-  }
-
-  const statusFilter = el('select', { class: 'small' },
-    ...[['', 'All'], ['discovered', 'Discovered'], ['promoted', 'Promoted'], ['ignored', 'Ignored']].map(([v, l]) => el('option', { value: v }, l)));
-  statusFilter.addEventListener('change', loadCandidates);
-
-  async function loadCandidates() {
-    let data;
-    try {
-      const qs = statusFilter.value ? `?status=${statusFilter.value}` : '';
-      data = await api(`/api/discovery/candidates${qs}`);
-    } catch (e) {
-      candHost.replaceChildren(el('h3', {}, 'Candidates'), el('div', { class: 'error' }, errText(e)));
-      return;
-    }
-    const counts = data.counts || {};
-    const countLine = el('span', { class: 'muted' }, `discovered ${counts.discovered || 0} · promoted ${counts.promoted || 0} · ignored ${counts.ignored || 0}`);
-    const head = el('div', { class: 'discovery-cand-head' }, el('h3', {}, 'Candidates'), el('label', { class: 'inline muted' }, 'Status ', statusFilter), countLine);
-    if (!(data.candidates || []).length) {
-      candHost.replaceChildren(head, el('div', { class: 'empty' }, 'No candidates. Configure a scope and run a sweep.'));
-      return;
-    }
-    const foundByCell = (c) => (c.foundByAgentId
-      ? el('button', { class: 'linklike', onclick: () => openAgent(c.foundByAgentId) }, agentNameById[c.foundByAgentId] || `agent ${c.foundByAgentId}`)
-      : el('span', { class: 'muted' }, 'server'));
-    const rowEl = (c) => el('tr', {},
-      el('td', { class: 'mono' }, c.ip),
-      el('td', {}, c.hostname || '—'),
-      el('td', { class: 'mono' }, (c.openPorts || c.open_ports || []).join(', ')),
-      el('td', {}, foundByCell(c)),
-      el('td', {}, el('span', { class: `badge ${DISCOVERY_STATUS_BADGE[c.status] || 'muted'}` }, c.status)),
-      el('td', {}, c.status === 'discovered'
-        ? el('div', { class: 'row-actions' },
-            el('button', { class: 'small', onclick: () => promote(c) }, 'Promote'),
-            el('button', { class: 'small ghost', onclick: () => ignore(c) }, 'Dismiss'))
-        : (c.status === 'promoted' && c.promotedAgentId ? el('button', { class: 'linklike', onclick: () => openAgent(c.promotedAgentId) }, `agent ${c.promotedAgentId}`) : '—')));
-    candHost.replaceChildren(head, el('table', { class: 'agents-table' },
-      el('thead', {}, el('tr', {}, ...['IP', 'Hostname', 'Open ports', 'Found by', 'Status', ''].map((h) => el('th', { scope: 'col' }, h)))),
-      el('tbody', {}, ...(data.candidates || []).map(rowEl))));
-  }
-
-  async function promote(c) {
-    if (!window.confirm(`Promote ${c.ip} to a monitored SNMP device?`)) return;
-    try { const r = await api(`/api/discovery/candidates/${c.id}/promote`, { method: 'POST' }); toast(`Promoted → agent ${r.agentId}`); loadCandidates(); }
-    catch (e) { toast(errText(e), true); }
-  }
-  async function ignore(c) {
-    try { await api(`/api/discovery/candidates/${c.id}/ignore`, { method: 'POST' }); toast('Dismissed'); loadCandidates(); }
-    catch (e) { toast(errText(e), true); }
-  }
-
-  async function loadSweeps() {
-    let data;
-    try { data = await api('/api/discovery/sweeps?limit=50'); }
-    catch (e) { sweepHost.replaceChildren(el('h3', {}, 'Sweep history'), el('div', { class: 'error' }, errText(e))); return; }
-    if (!(data.sweeps || []).length) {
-      sweepHost.replaceChildren(el('h3', {}, 'Sweep history'), el('div', { class: 'empty' }, 'No sweeps recorded yet.'));
-      return;
-    }
-    sweepHost.replaceChildren(el('h3', {}, 'Sweep history'), el('table', { class: 'agents-table' },
-      el('thead', {}, el('tr', {}, ...['Time', 'Result', 'Detail'].map((h) => el('th', { scope: 'col' }, h)))),
-      el('tbody', {}, ...(data.sweeps || []).map((s) => el('tr', {},
-        el('td', {}, s.createdAt ? fmtDate(s.createdAt) : '—'),
-        el('td', {}, el('span', { class: `badge ${s.action === 'discovery_sweep_refused' ? 'warn' : 'online'}` }, s.action === 'discovery_sweep_refused' ? 'refused' : 'swept')),
-        el('td', { class: 'muted' }, s.detail || ''))))));
-  }
-
-  // Initial load — a 403 means the caller isn't an admin (nav should hide it).
-  try {
-    const [cfg, ag] = await Promise.all([
-      api('/api/discovery/config'),
-      api('/agents').catch(() => []),
-    ]);
-    agents = ag || [];
-    agents.forEach((a) => { agentNameById[a.id] = a.display_name || a.hostname || `agent ${a.id}`; });
-    renderConfig(cfg);
-    renderScan();
-  } catch (e) {
-    root.replaceChildren(el('div', { class: 'section-head' }, el('h2', {}, 'Discovery')),
-      el('div', { class: e.status === 403 ? 'empty' : 'error' }, e.status === 403 ? 'Discovery is available to administrators only.' : errText(e)));
-    return root;
-  }
-  loadCandidates();
-  loadSweeps();
-  return root;
+  const v = getDiscoveryPage();
+  if (!v) return el('div', { class: 'empty error' }, t('disc.err.config'));
+  return v.view();
 };
 
 // ---- Troubleshooting (location-driven investigation) ------------------------

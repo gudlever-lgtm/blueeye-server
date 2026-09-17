@@ -448,6 +448,7 @@ Administration → login and error screens.
 | Troubleshooting | `/troubleshooting` | B · DashboardPage | [`public/views/troubleshooting.js`](../public/views/troubleshooting.js) |
 | Topology | `/topology` | B · DashboardPage | [`public/views/topology.js`](../public/views/topology.js) |
 | Flows | `/flows` | B · DashboardPage | [`public/views/flows.js`](../public/views/flows.js) |
+| Transaction tests | `/transaction-tests/:tab` | A · ListPage (shell) | [`public/views/transactions.js`](../public/views/transactions.js) |
 
 **What Changes kept:** the window vocabulary the server accepts (`30m`, `6h`,
 `24h`, `7d` — not the preview's three), the marker rule (it moves only on an
@@ -728,3 +729,24 @@ can be selected and read.
 traffic-type colour ramp. The ramp is a per-category palette (17 named
 categories plus a hash fallback) that cannot become a class per colour, so the
 one dot that needs it is built in app.js and handed over as a node.
+
+
+**Transaction tests** is the second shell migration, and follows the Probes
+pattern exactly. The heading with a loose "+ New test" beside it is a PageHeader
+with one primary action and the (?) popover; the tab strip was already
+`tabStrip()`, so it only needed its labels through the catalogue; the list is a
+sortable DataTable.
+
+Edit and Delete were two buttons in every row's last cell. Edit is the row's one
+action and Delete is behind the ⋯ menu, marked destructive — a delete does not
+belong one mis-click away from an edit.
+
+A first click on a numeric column sorts high-first and on a text column
+A-first, which is what the reader is asking for when they click that particular
+column.
+
+**Not migrated, passed in whole:** the create/edit form (a multi-step http
+editor with secrets and agent assignment), the matrix, and the per-test detail
+with its heatmap and trend — about 350 lines between them. They navigate back to
+"the list", which is the view's now, so the view hands its list builder to
+app.js and `txListView()` forwards to it.

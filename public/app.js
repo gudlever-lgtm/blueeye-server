@@ -1344,6 +1344,7 @@ const CONTRACT_VIEWS = new Map([
   ['troubleshooting', 'troubleshooting'],
   ['topology', 'topology'],
   ['flows', 'flows'],
+  ['transactions', 'transactions'],
 ]);
 
 function hero(viewKey) {
@@ -15296,43 +15297,47 @@ views.about = async () => {
   });
 };
 
-views.transactions = async () => {
-  const root = el('div', { class: 'transactions' });
-  const body = el('div', {});
-  const tabs = tabStrip([['list', 'List'], ['matrix', 'Matrix']], {
-    active: txTab,
-    ariaLabel: 'Transaction tests',
-    onPick: (k) => { txTab = k; draw(); },
-  });
-  const head = el('div', { class: 'section-head' }, el('h2', {}, 'Transaction tests'),
-    isAdmin() ? el('button', { class: 'primary', onclick: () => txMount(body, () => txForm(null, body)) }, '+ New test') : null);
-  function draw() {
-    tabs.setActive(txTab);
-    if (txTab === 'matrix') txMount(body, () => txMatrixView(body));
-    else txMount(body, () => txListView(body));
-  }
-  root.append(head, tabs, body);
-  draw();
-  return root;
-};
-
-async function txListView(host) {
-  const tests = await api('/api/transactions');
-  if (!tests.length) return el('div', { class: 'empty' }, 'No transaction tests yet. A transaction test runs http/tcp/dns/icmp from assigned agents on an interval.');
-  const rows = tests.map((t) => el('tr', { class: 'clickable', onclick: () => txMount(host, () => txDetailView(t.id, host)) },
-    el('td', {}, t.name),
-    el('td', {}, el('span', { class: 'chip' }, t.type)),
-    el('td', {}, t.target || '—'),
-    el('td', {}, String((t.agent_ids || []).length)),
-    el('td', {}, `${t.interval_sec}s`),
-    el('td', {}, t.enabled ? 'Active' : 'Disabled'),
-    el('td', {}, isAdmin() ? el('span', {},
-      el('button', { class: 'ghost small', onclick: (e) => { e.stopPropagation(); txMount(host, () => txForm(t, host)); } }, 'Edit'),
-      el('button', { class: 'ghost small danger', onclick: (e) => { e.stopPropagation(); txDelete(t, host); } }, 'Delete')) : null)));
-  return el('table', { class: 'data-table' },
-    el('thead', {}, el('tr', {}, ...['Name', 'Type', 'Target', 'Agents', 'Interval', 'Status', ''].map((h) => el('th', {}, h)))),
-    el('tbody', {}, ...rows));
+// ---- Transaction tests (MIGRATED — see public/views/transactions.js) --------
+// A SHELL migration: the create/edit form, the matrix and the per-test detail
+// are ~350 lines with their own machinery and are passed in whole.
+let transactionsPage = null;
+const transactionsPageState = {};
+let txRenderList = null;
+function txListView(host) {
+  return txRenderList ? txRenderList(host) : el('div', { class: 'empty' }, t('tx.none'));
 }
+
+function getTransactionsPage() {
+  if (transactionsPage) return transactionsPage;
+  if (typeof window === 'undefined' || !window.TransactionsPage || !ui) return null;
+  transactionsPage = window.TransactionsPage.create({
+    el, t, ui,
+    state: transactionsPageState,
+    isAdmin,
+    tab: () => txTab,
+    setTab: (k) => { txTab = k; syncLocation(); },
+    help: () => {
+      const info = PAGE_INFO.transactions || {};
+      return { lead: info.hero || '', title: info.title || t('tx.title'), body: info.body || (() => []) };
+    },
+    fetchTests: async () => api('/api/transactions'),
+    // The unmigrated builders navigate back to the list, which is the view's
+    // now — so it hands it over and txListView() forwards to it.
+    exposeList: (fn) => { txRenderList = fn; },
+    mount: txMount,
+    form: txForm,
+    matrix: txMatrixView,
+    detail: txDetailView,
+    remove: txDelete,
+  });
+  return transactionsPage;
+}
+
+views.transactions = async () => {
+  const v = getTransactionsPage();
+  if (!v) return el('div', { class: 'empty error' }, t('tx.err.title'));
+  return v.view();
+};
 
 async function txDelete(test, host) {
   if (!confirm(`Delete transaction test "${test.name}"?`)) return;

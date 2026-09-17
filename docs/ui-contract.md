@@ -911,3 +911,23 @@ see rather than a borderless one that disappears when disabled.
 the document, and they are `public/guides.js`, which ships standalone — so
 `mode: 'embedded'` is opt-in there, the same arrangement Service Assurance
 uses. Without it the module still draws its own heading, banner and footer.
+
+
+**Locations** had **six** buttons in every row's last cell — Open, Traffic,
+History, AI status, Edit, Delete — with Delete sitting one mis-click from Edit.
+The row opens the location, because that is what a row does; Edit is the row's
+action on hover; Traffic, History and AI status are in the ⋯ menu, and Delete
+is last, behind a separator, marked destructive.
+
+AI status is offered only when the licence includes the assistant. It used to
+be, too — the difference is that a menu is where an entry can quietly not be
+there, while a sixth button leaving a row changes its shape.
+
+"No locations." was a grey sentence in a table. An empty estate is the first
+thing a new install sees, so it says what a location is for and offers the
+button that creates one. A failed load took the page down with it; it is an
+ErrorState naming `GET /locations`, with a Retry.
+
+**Not migrated, passed in whole:** the three panels the menu opens — live
+traffic (a 3 s poll with a rolling chart), the history range picker, and the AI
+summary. They are modals with their own machinery.

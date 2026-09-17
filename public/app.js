@@ -1350,6 +1350,7 @@ const CONTRACT_VIEWS = new Map([
   ['clusters', 'situations'],
   ['reporting', 'reporting'],
   ['guide', 'guides'],
+  ['locations', 'locations'],
 ]);
 
 function hero(viewKey) {
@@ -10142,27 +10143,37 @@ views.location = async () => {
   return root;
 };
 
+// ---- Locations (MIGRATED — see public/views/locations.js)
+let locationsPage = null;
+function getLocationsPage() {
+  if (locationsPage) return locationsPage;
+  if (typeof window === 'undefined' || !window.LocationsPage || !ui) return null;
+  locationsPage = window.LocationsPage.create({
+    el, t, ui,
+    canWrite, canDelete,
+    hasAssistant: () => featureEnabled('assistant'),
+    help: () => ({ title: t('loc.info.title'), body: () => [
+      el('p', {}, t('loc.info.p1')),
+      el('p', {}, t('loc.info.p2')),
+      el('p', { class: 'muted' }, t('loc.info.p3')),
+    ] }),
+    fetchAll: () => api('/locations'),
+    open: openLocation,
+    edit: editLocation,
+    remove: deleteLocation,
+    // Three modals with their own polling and charts, passed in whole.
+    traffic: showLocationTraffic,
+    history: showLocationHistory,
+    summary: showLocationSummary,
+    errText,
+  });
+  return locationsPage;
+}
+
 views.locations = async () => {
-  const locations = await api('/locations');
-  const root = el('div');
-  root.append(el('div', { class: 'section-head' }, el('h2', {}, 'Locations'),
-    canWrite() ? el('button', { class: 'small', onclick: () => editLocation() }, '+ New location') : null));
-  if (!locations.length) { root.append(el('div', { class: 'empty' }, 'No locations.')); return root; }
-  root.append(el('table', {},
-    el('thead', {}, el('tr', {}, ...['ID', 'Name', 'Description', ''].map((h) => el('th', {}, h)))),
-    el('tbody', {}, ...locations.map((l) => el('tr', {},
-      el('td', {}, String(l.id)),
-      el('td', {}, el('button', { class: 'linklike', title: 'Open the location page — agents, health & data flows', onclick: () => openLocation(l.id) }, esc(l.name))),
-      el('td', { class: 'muted' }, l.description || '–'),
-      el('td', {}, el('div', { class: 'row-actions' },
-        el('button', { class: 'small ghost', onclick: () => openLocation(l.id) }, 'Open'),
-        el('button', { class: 'small ghost', onclick: () => showLocationTraffic(l) }, 'Traffic'),
-        el('button', { class: 'small ghost', onclick: () => showLocationHistory(l) }, 'History'),
-        featureEnabled('assistant') ? el('button', { class: 'small ghost', onclick: () => showLocationSummary(l) }, 'AI status') : null,
-        canWrite() ? el('button', { class: 'small ghost', onclick: () => editLocation(l) }, 'Edit') : null,
-        canDelete() ? el('button', { class: 'small danger', onclick: () => deleteLocation(l) }, 'Delete') : null)),
-    )))));
-  return root;
+  const v = getLocationsPage();
+  if (!v) return el('div', { class: 'empty error' }, t('loc.err.title'));
+  return v.view();
 };
 
 // AI status: a brief, plain-language "what's going on at this location?" summary

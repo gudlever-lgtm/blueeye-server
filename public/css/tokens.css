@@ -328,6 +328,17 @@
      light theme dims rather than blacks out. */
   --scrim: color-mix(in srgb, var(--bg) 62%, transparent);
 
+  /* Chart series. Six, because a legend with more than six entries is a table
+     nobody reads; a chart that needs more needs splitting. Derived from the
+     palette's own semantic colours plus two neutral hues, so every theme gets a
+     set that holds together rather than a fixed brand ramp. */
+  --series-0: var(--accent);
+  --series-1: var(--ok);
+  --series-2: var(--warn);
+  --series-3: var(--bad);
+  --series-4: color-mix(in srgb, var(--accent) 55%, var(--ok));
+  --series-5: color-mix(in srgb, var(--bad) 55%, var(--accent));
+
   /* DataTable row heights. Compact is the density toggle, not a second table. */
   --row-h: 44px;
   --row-h-compact: 36px;

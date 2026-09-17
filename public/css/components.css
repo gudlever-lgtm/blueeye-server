@@ -269,3 +269,46 @@
   .ui .form-grid-ui { grid-template-columns: minmax(0, 1fr); }
   .ui-drawer { width: 100%; }
 }
+
+/* ---- Panel grid (template B) ---------------------------------------------
+   A DashboardPage lays its charts and cards out on this. Columns are content
+   driven: a panel asks for the width it needs by carrying `wide`. */
+.ui .panel-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(380px, 1fr)); gap: var(--s-4); }
+.ui .panel-grid > .wide { grid-column: 1 / -1; }
+
+/* A single-column FormSection, for a field whose value is long (a URL, a query). */
+.ui .form-grid-ui.single { grid-template-columns: minmax(0, 1fr); }
+
+.ui .skel-rows { display: flex; flex-direction: column; }
+.ui .table-wrap-ui.dense table.dt tbody tr { height: var(--row-h-compact); }
+
+.ui-drawer .drawer-head-text { min-width: 0; flex: 1 1 auto; }
+.ui-drawer .drawer-x { margin-left: auto; flex: 0 0 auto; }
+
+/* ---- Chart ---------------------------------------------------------------
+   The wrapper, not the maths (that is ui.js). The legend is a row under the
+   plot and is always drawn: a series you cannot name is a line you cannot read. */
+.ui .ui-chart { display: flex; flex-direction: column; gap: var(--s-3); }
+.ui .ui-chart-plot { width: 100%; overflow-x: auto; }
+.ui .ui-chart-svg { display: block; width: 100%; height: auto; min-width: 420px; }
+.ui .ui-chart-grid { stroke: var(--hairline); stroke-width: 1; }
+.ui .ui-chart-axis { fill: var(--text-muted); font-size: var(--fs-xs); font-variant-numeric: tabular-nums; }
+.ui .ui-chart-line { fill: none; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.ui .ui-chart-bar { stroke: none; }
+.ui .ui-chart-legend { display: flex; flex-wrap: wrap; gap: var(--s-2) var(--s-4);
+  font-size: var(--fs-xs); color: var(--text-muted); }
+.ui .ui-legend-item { display: inline-flex; align-items: center; gap: var(--s-2); }
+.ui .ui-legend-dot { width: 10px; height: 10px; border-radius: var(--r-badge); flex: 0 0 auto; }
+
+.ui .ui-series-0 { stroke: var(--series-0); }
+.ui .ui-series-1 { stroke: var(--series-1); }
+.ui .ui-series-2 { stroke: var(--series-2); }
+.ui .ui-series-3 { stroke: var(--series-3); }
+.ui .ui-series-4 { stroke: var(--series-4); }
+.ui .ui-series-5 { stroke: var(--series-5); }
+.ui rect.ui-series-0, .ui .ui-legend-dot.ui-series-0 { fill: var(--series-0); background: var(--series-0); }
+.ui rect.ui-series-1, .ui .ui-legend-dot.ui-series-1 { fill: var(--series-1); background: var(--series-1); }
+.ui rect.ui-series-2, .ui .ui-legend-dot.ui-series-2 { fill: var(--series-2); background: var(--series-2); }
+.ui rect.ui-series-3, .ui .ui-legend-dot.ui-series-3 { fill: var(--series-3); background: var(--series-3); }
+.ui rect.ui-series-4, .ui .ui-legend-dot.ui-series-4 { fill: var(--series-4); background: var(--series-4); }
+.ui rect.ui-series-5, .ui .ui-legend-dot.ui-series-5 { fill: var(--series-5); background: var(--series-5); }

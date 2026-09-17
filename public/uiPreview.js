@@ -20,276 +20,27 @@
     var el = deps.el;
     var api = deps.api;
     var t = deps.t;
-    var toast = deps.toast;
-    var errText = deps.errText;
-    var fmtDate = deps.fmtDate;
-    // Two timestamps, on purpose: a table column has ~110px and a full locale
-    // string does not fit in it, so the row gets the short form and the Drawer
-    // — which has the room and is where somebody reads it carefully — the full
-    // one. Both come from app.js; neither is formatted here.
-    var fmtTimeShort = deps.fmtTimeShort;
-    var shortTime = function (iso) {
-      var ms = Date.parse(iso);
-      return isFinite(ms) ? fmtTimeShort(ms) : fmtDate(iso);
-    };
-    var openAgent = deps.openAgent;
-    // The one tab-strip builder (app.js). It owns the keyboard and the ARIA;
-    // components.css gives it the contract's underline look.
-    var tabStrip = deps.tabStrip;
     var plural = deps.plural;
-
-    // ---- shared components -------------------------------------------------
-
-    // PageHeader. Title, one line of description, help behind (?), actions
-    // right — at most one primary, which the contract enforces by convention
-    // and ui:check enforces by counting.
-    function pageHeader(opts) {
-      var head = el('header', { class: 'page-head' });
-      var title = el('h1', {}, opts.title);
-      if (opts.help) title.append(helpButton(opts.help));
-      head.append(el('div', {}, title, el('p', {}, opts.lead)));
-      var actions = (opts.actions || []).filter(Boolean);
-      if (actions.length) head.append(el('div', { class: 'page-head-actions' }, actions));
-      return head;
-    }
-
-    // The (?) popover that replaced the info banner. One open at a time; Escape
-    // and an outside click close it.
-    var openPopover = null;
-    function closePopover() {
-      if (!openPopover) return;
-      document.removeEventListener('keydown', onPopoverKey);
-      document.removeEventListener('click', onPopoverClick, true);
-      openPopover.remove();
-      openPopover = null;
-    }
-    function onPopoverKey(e) { if (e.key === 'Escape') closePopover(); }
-    function onPopoverClick(e) {
-      if (openPopover && !openPopover.contains(e.target) && !e.target.closest('.help-btn')) closePopover();
-    }
-    function helpButton(help) {
-      var btn = el('button', {
-        class: 'help-btn', type: 'button', 'aria-label': help.title,
-        onclick: function (e) {
-          e.stopPropagation();
-          if (openPopover) { closePopover(); return; }
-          var pop = el('div', { class: 'ui ui-popover', role: 'dialog', 'aria-label': help.title },
-            el('button', {
-              class: 'btn btn-ghost btn-icon btn-xs pop-close', type: 'button',
-              'aria-label': t('common.cancel'), onclick: closePopover,
-            }, '✕'),
-            el('h3', {}, help.title),
-            help.body());
-          document.body.append(pop);
-          var r = btn.getBoundingClientRect();
-          pop.style.top = (r.bottom + 8) + 'px';
-          pop.style.left = Math.max(8, r.left - 8) + 'px';
-          openPopover = pop;
-          document.addEventListener('keydown', onPopoverKey);
-          document.addEventListener('click', onPopoverClick, true);
-        },
-      }, '?');
-      return btn;
-    }
-
-    function statStrip(cards) {
-      return el('div', { class: 'statstrip' }, cards.map(function (c) {
-        return el('button', {
-          class: 'stat-card' + (c.tone ? ' ' + c.tone : ''), type: 'button',
-          'aria-pressed': String(!!c.active), onclick: c.onclick,
-        }, el('span', { class: 'stat-n' }, String(c.value)), el('span', { class: 'stat-l' }, c.label));
-      }));
-    }
-
-    function panel(opts) {
-      var p = el('section', { class: 'panel-ui' });
-      if (opts.title) {
-        var head = el('div', { class: 'panel-head' }, el('h2', {}, opts.title));
-        if (opts.note) head.append(el('span', { class: 'meta-xs' }, opts.note));
-        var acts = (opts.actions || []).filter(Boolean);
-        if (acts.length) head.append(el('div', { class: 'panel-actions' }, acts));
-        p.append(head);
-      }
-      p.append.apply(p, (opts.children || []).filter(Boolean));
-      return p;
-    }
-
-    function badge(tone, text) { return el('span', { class: 'badge-ui ' + tone }, text); }
-
-    function emptyState(o) {
-      return el('div', { class: 'state' },
-        el('div', { class: 'state-ico' }, o.icon || '✓'),
-        el('h3', {}, o.title),
-        el('p', {}, o.body),
-        o.action || null);
-    }
-    function errorState(o) {
-      return el('div', { class: 'state is-error' },
-        el('div', { class: 'state-ico' }, '⚠'),
-        el('h3', {}, o.title),
-        el('p', {}, o.body, o.detail ? [' ', el('code', {}, o.detail)] : null),
-        el('button', { class: 'btn btn-primary', type: 'button', onclick: o.onRetry }, t('common.retry')));
-    }
-    function loadingState(rows) {
-      var host = el('div', {});
-      for (var i = 0; i < (rows || 6); i++) {
-        host.append(el('div', { class: 'skel-row' },
-          el('div', { class: 'skel skel-a' }), el('div', { class: 'skel skel-b' }),
-          el('div', { class: 'skel skel-c' }), el('div', { class: 'skel skel-d' }),
-          el('div', { class: 'skel skel-e' }), el('div', { class: 'skel skel-f' })));
-      }
-      return host;
-    }
-
-    // Drawer: right side, 480px, title + status + close. One open at a time.
-    var drawerEls = null;
-    function closeDrawer() {
-      if (!drawerEls) return;
-      document.removeEventListener('keydown', onDrawerKey);
-      drawerEls.scrim.remove();
-      drawerEls.panel.remove();
-      if (drawerEls.row) drawerEls.row.setAttribute('aria-selected', 'false');
-      drawerEls = null;
-    }
-    function onDrawerKey(e) { if (e.key === 'Escape') closeDrawer(); }
-    function openDrawer(o) {
-      closeDrawer();
-      var scrim = el('div', { class: 'ui ui-scrim', onclick: closeDrawer });
-      var panelEl = el('aside', { class: 'ui ui-drawer', role: 'dialog', 'aria-modal': 'true', 'aria-label': o.title },
-        el('div', { class: 'drawer-head' },
-          el('div', { style: 'min-width:0' },
-            el('h2', {}, o.title),
-            el('div', { class: 'drawer-meta' }, o.status || null, o.meta ? el('span', { class: 'meta-xs' }, o.meta) : null)),
-          el('button', {
-            class: 'btn btn-ghost btn-icon', type: 'button',
-            'aria-label': t('common.cancel'), style: 'margin-left:auto', onclick: closeDrawer,
-          }, '✕')),
-        el('div', { class: 'drawer-body' }, o.sections),
-        o.footer || null);
-      document.body.append(scrim, panelEl);
-      if (o.row) o.row.setAttribute('aria-selected', 'true');
-      drawerEls = { scrim: scrim, panel: panelEl, row: o.row || null };
-    }
-    function dsec(title, body) { return el('section', { class: 'dsec' }, el('h3', {}, title), body); }
-
-    // Row overflow menu. One primary action stays visible on hover; the rest
-    // live here, so a row never grows a stack of buttons.
-    var rowMenu = null;
-    function closeRowMenu() {
-      if (!rowMenu) return;
-      document.removeEventListener('click', onMenuClick, true);
-      rowMenu.remove();
-      rowMenu = null;
-    }
-    function onMenuClick(e) { if (rowMenu && !rowMenu.contains(e.target)) closeRowMenu(); }
-    function openRowMenu(anchor, items) {
-      closeRowMenu();
-      var menu = el('div', { class: 'ui ui-rowmenu', role: 'menu' }, items.map(function (it) {
-        if (it === '-') return el('hr', {});
-        return el('button', {
-          type: 'button', role: 'menuitem', class: it.danger ? 'danger' : null,
-          onclick: function () { closeRowMenu(); it.onclick(); },
-        }, it.label);
-      }));
-      document.body.append(menu);
-      var r = anchor.getBoundingClientRect();
-      menu.style.top = (r.bottom + 4) + 'px';
-      menu.style.left = Math.max(8, r.right - menu.offsetWidth) + 'px';
-      rowMenu = menu;
-      setTimeout(function () { document.addEventListener('click', onMenuClick, true); }, 0);
-    }
-
-    // DataTable. A real <table>: fixed columns, sticky header, sorting in the
-    // header, the row opens the Drawer.
-    function dataTable(opts) {
-      var sort = opts.sort;
-      var table = el('table', { class: 'dt' });
-      table.append(el('colgroup', {}, opts.columns.map(function (c) {
-        return el('col', c.width ? { style: 'width:' + c.width } : {});
-      })));
-      table.append(el('thead', {}, el('tr', {}, opts.columns.map(function (c) {
-        var attrs = { class: c.num ? 'col-num' : null, scope: 'col' };
-        if (!c.sortable) return el('th', attrs, c.label || '');
-        if (sort && sort.key === c.key) attrs['aria-sort'] = sort.dir === 'asc' ? 'ascending' : 'descending';
-        attrs.onclick = function () { opts.onSort(c.key); };
-        attrs.title = opts.sortHint;
-        return el('th', attrs, c.label, el('span', { class: 'sort' },
-          sort && sort.key === c.key ? (sort.dir === 'asc' ? '↑' : '↓') : '↕'));
-      }))));
-      var body = el('tbody', {});
-      opts.rows.forEach(function (row) {
-        var tr = el('tr', { 'aria-selected': 'false', tabindex: '0' });
-        if (row.dimmed) tr.classList.add('is-dimmed');
-        opts.columns.forEach(function (c) {
-          tr.append(el('td', { class: c.num ? 'col-num' : (c.time ? 'col-time' : null) }, row.cells[c.key]));
-        });
-        if (!row.dimmed && opts.onOpen) {
-          var open = function (e) {
-            if (e.target.closest('button') || e.target.closest('a')) return;
-            opts.onOpen(row, tr);
-          };
-          tr.addEventListener('click', open);
-          tr.addEventListener('keydown', function (e) {
-            if (e.key !== 'Enter' && e.key !== ' ') return;
-            e.preventDefault();
-            open(e);
-          });
-        }
-        body.append(tr);
-      });
-      table.append(body);
-      return el('div', { class: 'table-wrap-ui' }, table);
-    }
-
-    function rowActions(primary, menuItems) {
-      return el('div', { class: 'row-act' },
-        primary ? el('button', {
-          class: 'btn btn-secondary btn-xs on-hover', type: 'button',
-          onclick: function (e) { e.stopPropagation(); primary.onclick(); },
-        }, primary.label) : null,
-        el('button', {
-          class: 'btn btn-ghost btn-xs btn-icon', type: 'button', 'aria-haspopup': 'menu',
-          'aria-label': t('uip.rowMenu'),
-          onclick: function (e) { e.stopPropagation(); openRowMenu(e.currentTarget, menuItems); },
-        }, '⋯'));
-    }
-
-    // Toasts: top right, stacked, 5 s — an error stays until it is dismissed.
-    function toastHost() {
-      var host = document.getElementById('ui-toasts');
-      if (!host) {
-        host = el('div', { class: 'ui ui-toasts', id: 'ui-toasts', role: 'status', 'aria-live': 'polite' });
-        document.body.append(host);
-      }
-      return host;
-    }
-    function uiToast(title, detail, bad) {
-      var node = el('div', { class: 'ui-toast ' + (bad ? 'err' : 'ok') },
-        el('div', { class: 'toast-tx' },
-          el('div', { class: 'toast-title' }, title),
-          detail ? el('div', { class: 'toast-detail' }, detail) : null),
-        el('button', {
-          class: 'btn btn-ghost btn-icon btn-xs', type: 'button',
-          'aria-label': t('common.cancel'), onclick: function () { node.remove(); },
-        }, '✕'));
-      toastHost().append(node);
-      if (!bad) setTimeout(function () { node.remove(); }, 5000);
-      return node;
-    }
-
+    var errText = deps.errText;
+    var openAgent = deps.openAgent;
+    // Every component comes from public/ui.js — this module is two PAGES, not a
+    // second component library. That is the point of the exercise: a screen is
+    // a composition, and anything it needs that ui.js has not got is a gap in
+    // the contract rather than something to hand-roll here.
+    var ui = deps.ui;
     var SEV_TONE = { CRIT: 'crit', WARN: 'warn', INFO: 'info' };
+    var SEV_ORDER = { CRIT: 3, WARN: 2, INFO: 1 };
     // A key built from data is resolved through a variable, never concatenated
     // inside the translate call: the gate sweeps the source for literal keys,
     // and a concatenation reads to it as a truncated key it cannot verify.
     function severityLabel(sev) { var k = 'changes.group.' + sev; var v = t(k); return v === k ? String(sev) : v; }
     function kindLabel(kind) { var k = 'changes.kind.' + kind; var v = t(k); return v === k ? String(kind || '\u2014') : v; }
     function tabLabel(key) { var k = 'route.tab.probes.' + key; var v = t(k); return v === k ? key : v; }
-    var SEV_ORDER = { CRIT: 3, WARN: 2, INFO: 1 };
 
     // ---- Example 1 · Changes as a ListPage (template A) ---------------------
 
     function changesView() {
-      var root = el('div', { class: 'ui ui-page' });
+      var root = ui.page();
       var state = {
         window: '7d',
         severity: '',
@@ -301,18 +52,17 @@
       var body = el('div', {});
       var stripHost = el('div', {});
 
-      var markSeen = el('button', {
-        class: 'btn btn-primary', type: 'button',
+      var markSeen = ui.button('primary', t('changes.markSeen'), {
         onclick: function () {
           markSeen.disabled = true;
           api('/api/changes/seen', { method: 'POST', body: {} })
-            .then(function () { uiToast(t('changes.marked'), t('uip.markedDetail')); return load(); })
-            .catch(function (e) { uiToast(t('changes.title'), errText(e), true); })
+            .then(function () { ui.toast(t('changes.marked'), t('uip.markedDetail')); return load(); })
+            .catch(function (e) { ui.toast(t('changes.title'), errText(e), { bad: true }); })
             .then(function () { markSeen.disabled = false; });
         },
-      }, t('changes.markSeen'));
+      });
 
-      root.append(pageHeader({
+      root.append(ui.pageHeader({
         title: t('changes.title'),
         lead: t('changes.subtitle'),
         help: {
@@ -327,42 +77,36 @@
         },
         // One primary. "Fleet grid" is a way out of the page, so it is secondary.
         actions: [
-          el('button', {
-            class: 'btn btn-secondary', type: 'button',
-            onclick: function () { deps.gotoView('fleet'); },
-          }, t('changes.fleetLink')),
+          ui.button('secondary', t('changes.fleetLink'), { onclick: function () { deps.gotoView('fleet'); } }),
           markSeen,
         ],
       }), stripHost, body);
 
       function toolbar(onChange) {
-        var win = el('select', {
-          'aria-label': t('changes.window'),
-          onchange: function (e) { state.window = e.target.value; load(); },
-        }, ['24h', '7d', '30d'].map(function (w) {
-          return el('option', Object.assign({ value: w }, w === state.window ? { selected: 'selected' } : {}), w);
-        }));
-        var sev = el('select', {
-          'aria-label': t('uip.filter.severity'),
-          onchange: function (e) { state.severity = e.target.value; onChange(); },
-        }, [['', t('uip.filter.all')], ['CRIT', t('changes.group.CRIT')], ['WARN', t('changes.group.WARN')], ['INFO', t('changes.group.INFO')]]
-          .map(function (o) {
-            return el('option', Object.assign({ value: o[0] }, o[0] === state.severity ? { selected: 'selected' } : {}), o[1]);
-          }));
-        var host = el('input', {
-          type: 'search', value: state.host, placeholder: t('uip.filter.hostPlaceholder'),
-          'aria-label': t('uip.filter.host'), size: '16',
-          oninput: function (e) { state.host = e.target.value; onChange(); },
+        return ui.toolbar({
+          filters: [
+            ui.filter(t('changes.window'), ui.select({
+              label: t('changes.window'), value: state.window, options: ['24h', '7d', '30d'],
+              onchange: function (e) { state.window = e.target.value; load(); },
+            })),
+            ui.filter(t('uip.filter.severity'), ui.select({
+              label: t('uip.filter.severity'), value: state.severity,
+              options: [['', t('uip.filter.all')], ['CRIT', t('changes.group.CRIT')],
+                ['WARN', t('changes.group.WARN')], ['INFO', t('changes.group.INFO')]],
+              onchange: function (e) { state.severity = e.target.value; onChange(); },
+            })),
+            ui.filter(t('uip.filter.host'), el('input', {
+              type: 'search', value: state.host, placeholder: t('uip.filter.hostPlaceholder'),
+              'aria-label': t('uip.filter.host'), size: '16',
+              oninput: function (e) { state.host = e.target.value; onChange(); },
+            })),
+          ],
+          actions: [
+            ui.button('secondary', t('uip.export'), {
+              onclick: function () { ui.toast(t('uip.exportQueued'), t('uip.exportDetail')); },
+            }),
+          ],
         });
-        return el('div', { class: 'toolbar-ui' },
-          el('label', { class: 'field-inline' }, t('changes.window'), win),
-          el('label', { class: 'field-inline' }, t('uip.filter.severity'), sev),
-          el('label', { class: 'field-inline' }, t('uip.filter.host'), host),
-          el('div', { class: 'toolbar-right' },
-            el('button', {
-              class: 'btn btn-secondary', type: 'button',
-              onclick: function () { uiToast(t('uip.exportQueued'), t('uip.exportDetail')); },
-            }, t('uip.export'))));
       }
 
       function hostName(id) { return names[id] || (t('uip.agentN', { id: id })); }
@@ -372,31 +116,32 @@
         var indicationKey = 'changes.indicates.' + ev.family;
         var indication = ev.family ? t(indicationKey) : '';
         var sections = [
-          dsec(t('uip.drawer.what'), el('p', {}, ev.summary)),
+          ui.drawerSection(t('uip.drawer.what'), el('p', {}, ev.summary)),
           indication && indication !== indicationKey
-            ? dsec(t('uip.drawer.why'), el('p', {}, indication)) : null,
-          dsec(t('uip.drawer.detail'), el('dl', { class: 'kv-ui' },
-            el('dt', {}, t('uip.drawer.source')), el('dd', {}, ev.source || '—'),
-            el('dt', {}, t('uip.drawer.type')), el('dd', {}, ev.type || '—'),
-            el('dt', {}, t('uip.drawer.metric')), el('dd', {}, ev.metric || '—'),
-            el('dt', {}, t('uip.drawer.host')), el('dd', {}, ev.agentId == null ? '—' : hostName(ev.agentId)))),
-          dsec(t('uip.drawer.history'), el('ul', { class: 'hist' },
-            el('li', {}, el('time', {}, shortTime(ev.firstAt || ev.timestamp)), el('span', {}, t('uip.drawer.first'))),
-            el('li', {}, el('time', {}, shortTime(ev.timestamp)), el('span', {}, t('uip.drawer.last'))),
-            el('li', {}, el('span', {}, t('uip.drawer.seen', { count: Number(ev.count) || 1 }))))),
+            ? ui.drawerSection(t('uip.drawer.why'), el('p', {}, indication)) : null,
+          ui.drawerSection(t('uip.drawer.detail'), ui.keyValues([
+            [t('uip.drawer.source'), ev.source || '—'],
+            [t('uip.drawer.type'), ev.type || '—'],
+            [t('uip.drawer.metric'), ev.metric || '—'],
+            [t('uip.drawer.host'), ev.agentId == null ? '—' : hostName(ev.agentId)],
+          ])),
+          ui.drawerSection(t('uip.drawer.history'), ui.history([
+            [ui.fmt.short(ev.firstAt || ev.timestamp), t('uip.drawer.first')],
+            [ui.fmt.short(ev.timestamp), t('uip.drawer.last')],
+            [null, t('uip.drawer.seen', { count: Number(ev.count) || 1 })],
+          ])),
         ];
-        openDrawer({
+        ui.openDrawer({
           title: ev.summary,
-          status: badge(tone, severityLabel(ev.severity)),
-          meta: fmtDate(ev.timestamp),
+          status: ui.badge(tone, severityLabel(ev.severity)),
+          meta: ui.fmt.abs(ev.timestamp),
           row: tr,
           sections: sections.filter(Boolean),
-          footer: ev.agentId == null ? null : el('div', { class: 'drawer-foot' },
-            el('div', { class: 'foot-right' },
-              el('button', {
-                class: 'btn btn-primary', type: 'button',
-                onclick: function () { closeDrawer(); openAgent(Number(ev.agentId)); },
-              }, t('uip.drawer.openHost')))),
+          footer: ev.agentId == null ? null : ui.drawerFooter([], [
+            ui.button('primary', t('uip.drawer.openHost'), {
+              onclick: function () { ui.closeDrawer(); openAgent(Number(ev.agentId)); },
+            }),
+          ]),
         });
       }
 
@@ -406,31 +151,27 @@
           return {
             ev: ev,
             cells: {
-              time: shortTime(ev.timestamp),
-              severity: badge(SEV_TONE[ev.severity] || 'info', String(ev.severity || '')),
-              type: el('span', { class: 'meta' }, kindLabel(ev.kind)),
+              time: ui.fmt.short(ev.timestamp),
+              severity: ui.badge(SEV_TONE[ev.severity] || 'info', String(ev.severity || '')),
+              type: ui.meta(kindLabel(ev.kind)),
               title: ev.summary,
               // Host is a link in its own column, never a chip on the title.
-              host: ev.agentId == null ? el('span', { class: 'meta' }, '—')
-                : el('a', {
-                  class: 'hostlink', href: '#',
-                  onclick: function (e) { e.preventDefault(); e.stopPropagation(); openAgent(Number(ev.agentId)); },
-                }, hostName(ev.agentId)),
+              host: ev.agentId == null ? ui.meta('—')
+                : ui.hostLink(hostName(ev.agentId), function () { openAgent(Number(ev.agentId)); }),
               // Metadata as muted text, not a chip.
-              count: el('span', { class: 'meta' }, count > 1 ? count + '×' : '—'),
-              actions: rowActions(
-                { label: t('uip.act.ack'), onclick: function () { uiToast(t('uip.act.acked'), ev.summary); } },
+              count: ui.meta(count > 1 ? count + '×' : '—'),
+              actions: ui.rowActions(
+                { label: t('uip.act.ack'), onclick: function () { ui.toast(t('uip.act.acked'), ev.summary); } },
                 [
                   { label: t('uip.act.open'), onclick: function () { openRowDrawer(ev, null); } },
                   ev.agentId == null ? null : { label: t('uip.act.host'), onclick: function () { openAgent(Number(ev.agentId)); } },
                   '-',
-                  { label: t('uip.act.mute'), danger: true, onclick: function () { uiToast(t('uip.act.muted'), ev.summary); } },
+                  { label: t('uip.act.mute'), danger: true, onclick: function () { ui.toast(t('uip.act.muted'), ev.summary); } },
                 ].filter(Boolean)),
             },
           };
         });
-        return dataTable({
-          sortHint: t('uip.sortHint'),
+        return ui.dataTable({
           columns: [
             { key: 'time', label: t('uip.col.time'), width: '136px', sortable: true, time: true },
             { key: 'severity', label: t('uip.col.severity'), width: '108px', sortable: true },
@@ -485,7 +226,7 @@
         var pick = function (sev) {
           return function () { state.severity = state.severity === sev ? '' : sev; draw(); };
         };
-        stripHost.replaceChildren(statStrip([
+        stripHost.replaceChildren(ui.statStrip([
           { value: counts.CRIT, label: t('changes.group.CRIT'), tone: 'crit', active: state.severity === 'CRIT', onclick: pick('CRIT') },
           { value: counts.WARN, label: t('changes.group.WARN'), tone: 'warn', active: state.severity === 'WARN', onclick: pick('WARN') },
           { value: counts.INFO, label: t('changes.group.INFO'), tone: 'info', active: state.severity === 'INFO', onclick: pick('INFO') },
@@ -494,38 +235,40 @@
 
         var rows = visible();
         var kids = [toolbar(draw)];
-        kids.push(el('p', { class: 'inline-note' }, t('changes.since', { when: fmtDate(data.since) })
+        kids.push(ui.inlineNote(t('changes.since', { when: ui.fmt.abs(data.since) })
           + (data.correlated > 0 ? ' · ' + t('changes.correlated', { rows: data.total, raw: data.rawTotal }) : '')));
         // A partial result is a fact about the DATA, so it sits above the table
         // as an inline note — never a banner, never hidden behind the (?).
         if (data.partial && (data.failedSources || []).length) {
-          kids.push(el('p', { class: 'inline-note is-warn' }, '⚠ ' + t('changes.partial', { sources: data.failedSources.join(', ') })));
+          kids.push(ui.inlineNote('⚠ ' + t('changes.partial', { sources: data.failedSources.join(', ') }), 'warn'));
         }
-        kids.push(panel({
+        kids.push(ui.panel({
           title: t('uip.panel.changes'),
           note: t('uip.rowCount', { n: rows.length }),
           children: [
-            rows.length ? table(rows) : emptyState({
-              title: t('changes.empty', { when: fmtDate(data.since) }),
+            rows.length ? table(rows) : ui.emptyState({
+              title: t('changes.empty', { when: ui.fmt.abs(data.since) }),
               body: t('changes.emptyHint'),
-              action: state.severity || state.host ? el('button', {
-                class: 'btn btn-secondary', type: 'button',
-                onclick: function () { state.severity = ''; state.host = ''; draw(); },
-              }, t('uip.clearFilters')) : null,
+              action: state.severity || state.host
+                ? ui.button('secondary', t('uip.clearFilters'), {
+                  onclick: function () { state.severity = ''; state.host = ''; draw(); },
+                })
+                : null,
             }),
-            rows.length ? el('div', { class: 'panel-foot' },
-              el('span', {}, t('uip.showing', { shown: rows.length, total: (data.events || []).length })),
-              el('div', { class: 'foot-right' },
-                el('button', { class: 'btn btn-secondary', type: 'button', disabled: 'disabled' }, '‹ ' + t('uip.prev')),
-                el('button', { class: 'btn btn-secondary', type: 'button', disabled: 'disabled' }, t('uip.next') + ' ›'))) : null,
           ],
+          foot: rows.length ? [
+            el('span', {}, t('uip.showing', { shown: rows.length, total: (data.events || []).length })),
+            el('div', { class: 'foot-right' },
+              ui.button('secondary', '‹ ' + t('uip.prev'), { disabled: true }),
+              ui.button('secondary', t('uip.next') + ' ›', { disabled: true })),
+          ] : null,
         }));
         body.replaceChildren.apply(body, kids);
       }
 
       function load() {
-        closeDrawer();
-        body.replaceChildren(panel({ title: t('uip.panel.changes'), children: [loadingState(6)] }));
+        ui.closeDrawer();
+        body.replaceChildren(ui.panel({ title: t('uip.panel.changes'), children: [ui.loadingState(6)] }));
         stripHost.replaceChildren();
         // The two states a live server rarely produces on demand. Reachable as
         // ?state=empty / ?state=error so both can be reviewed without waiting
@@ -536,9 +279,9 @@
           return Promise.resolve();
         }
         if (state.forced === 'error') {
-          body.replaceChildren(panel({
+          body.replaceChildren(ui.panel({
             title: t('uip.panel.changes'),
-            children: [errorState({
+            children: [ui.errorState({
               title: t('uip.err.title'),
               body: t('uip.err.body'),
               detail: 'GET /api/changes?window=' + state.window,
@@ -550,9 +293,9 @@
         return api('/api/changes?window=' + encodeURIComponent(state.window))
           .then(function (d) { data = d; draw(); })
           .catch(function (e) {
-            body.replaceChildren(panel({
+            body.replaceChildren(ui.panel({
               title: t('uip.panel.changes'),
-              children: [errorState({
+              children: [ui.errorState({
                 title: t('uip.err.title'),
                 body: errText(e),
                 detail: 'GET /api/changes?window=' + state.window,
@@ -574,11 +317,11 @@
     // ---- Example 2 · Probes & Tests as a FormPage (template C) --------------
 
     function probesView() {
-      var root = el('div', { class: 'ui ui-page' });
+      var root = ui.page();
       var tab = new URLSearchParams(window.location.search).get('tab') || 'connection';
       var body = el('div', {});
 
-      root.append(pageHeader({
+      root.append(ui.pageHeader({
         title: t('uip.probes.title'),
         lead: t('uip.probes.lead'),
         help: {
@@ -592,7 +335,7 @@
           },
         },
       }));
-      root.append(tabStrip(
+      root.append(ui.tabs(
         [['run', tabLabel('run')], ['connection', tabLabel('connection')], ['packages', tabLabel('packages')]],
         {
           active: tab,
@@ -607,9 +350,9 @@
       root.append(body);
 
       function notInPreview() {
-        return panel({
+        return ui.panel({
           title: tabLabel(tab),
-          children: [emptyState({
+          children: [ui.emptyState({
             icon: '⚑',
             title: t('uip.probes.notInPreview'),
             body: t('uip.probes.notInPreviewBody'),
@@ -626,7 +369,7 @@
 
       function render() {
         if (tab !== 'connection') { body.replaceChildren(notInPreview()); return Promise.resolve(); }
-        body.replaceChildren(panel({ title: t('ct.title'), children: [loadingState(4)] }));
+        body.replaceChildren(ui.panel({ title: t('ct.title'), children: [ui.loadingState(4)] }));
         return Promise.all([
           api('/agents').catch(function () { return []; }),
           api('/api/connection-test/checks').catch(function () { return null; }),
@@ -634,9 +377,9 @@
           var agents = res[0] || [];
           var cat = res[1];
           if (!cat) {
-            body.replaceChildren(panel({
+            body.replaceChildren(ui.panel({
               title: t('ct.title'),
-              children: [errorState({
+              children: [ui.errorState({
                 title: t('uip.err.title'),
                 body: t('uip.err.body'),
                 detail: 'GET /api/connection-test/checks',
@@ -646,9 +389,9 @@
             return;
           }
           if (!agents.length) {
-            body.replaceChildren(panel({
+            body.replaceChildren(ui.panel({
               title: t('ct.title'),
-              children: [emptyState({ icon: '◎', title: t('ct.noAgents'), body: t('uip.probes.enrolFirst') })],
+              children: [ui.emptyState({ icon: '◎', title: t('ct.noAgents'), body: t('uip.probes.enrolFirst') })],
             }));
             return;
           }
@@ -671,9 +414,8 @@
             },
           });
 
-          var stopBtn = el('button', { class: 'btn btn-secondary', type: 'button', disabled: 'disabled' }, t('ct.stop'));
-          var runBtn = el('button', {
-            class: 'btn btn-primary', type: 'button',
+          var stopBtn = ui.button('secondary', t('ct.stop'), { disabled: true });
+          var runBtn = ui.button('primary', t('ct.run.prefix') + ' ' + rounds + ' ' + plural('ct.run.suffix', rounds), {
             onclick: function () {
               var target = targetInput.value.trim();
               if (!target) {
@@ -685,31 +427,36 @@
               targetInput.removeAttribute('aria-invalid');
               targetErr.textContent = '';
               var n = Number(countInput.value) || 1;
-              uiToast(t('uip.probes.queued'), t('uip.probes.queuedDetail', {
+              ui.toast(t('uip.probes.queued'), t('uip.probes.queuedDetail', {
                 target: target, n: n, agent: agentSel.options[agentSel.selectedIndex].text,
               }));
-              uiToast(t('uip.probes.previewOnly'), t('uip.probes.previewOnlyDetail'), true);
+              ui.toast(t('uip.probes.previewOnly'), t('uip.probes.previewOnlyDetail'), { bad: true });
             },
-          }, t('ct.run.prefix') + ' ' + rounds + ' ' + plural('ct.run.suffix', rounds));
+          });
 
-          var form = panel({
+          var form = ui.panel({
             title: t('ct.title'),
             children: [el('div', { class: 'panel-body' },
-              el('div', { class: 'form-sec' },
-                el('h3', {}, t('uip.probes.sec.where')),
-                el('p', { class: 'sec-hint' }, t('uip.probes.sec.whereHint')),
-                el('div', { class: 'form-grid-ui' },
-                  el('div', { class: 'f' }, el('label', { for: 'uip-agent' }, t('ct.agent')), agentSel,
-                    el('span', { class: 'hint' }, t('uip.probes.agentHint'))),
-                  el('div', { class: 'f' }, el('label', { for: 'uip-target' }, t('ct.target')), targetInput,
-                    el('span', { class: 'hint' }, t('uip.probes.targetHint')), targetErr))),
-              el('div', { class: 'form-actions-ui' },
-                el('span', { class: 'meta' }, t('ct.defaultOn')),
-                el('div', { class: 'actions-right' },
-                  el('label', { class: 'count-field', for: 'uip-count' }, t('uip.probes.rounds'), countInput),
-                  el('button', { class: 'btn btn-secondary', type: 'button' }, t('ct.repeat')),
-                  stopBtn,
-                  runBtn)))],
+              ui.formSection({
+                title: t('uip.probes.sec.where'),
+                hint: t('uip.probes.sec.whereHint'),
+                fields: [
+                  ui.field({
+                    id: 'uip-agent', label: t('ct.agent'), control: agentSel,
+                    hint: t('uip.probes.agentHint'),
+                  }),
+                  ui.field({
+                    id: 'uip-target', label: t('ct.target'), control: targetInput,
+                    hint: t('uip.probes.targetHint'), errorNode: targetErr,
+                  }),
+                ],
+              }),
+              ui.formActions([ui.meta(t('ct.defaultOn'))], [
+                el('label', { class: 'count-field', for: 'uip-count' }, t('uip.probes.rounds'), countInput),
+                ui.button('secondary', t('ct.repeat')),
+                stopBtn,
+                runBtn,
+              ]))],
           });
 
           // The catalogue as the server serves it: a check the agent cannot run
@@ -729,20 +476,19 @@
               dimmed: !(supported && applies),
               cells: {
                 check: checkLabel(c),
-                status: badge(tone, label.toUpperCase()),
-                result: el('span', { class: 'meta' }, reason),
-                duration: el('span', { class: 'meta' }, '—'),
+                status: ui.badge(tone, label.toUpperCase()),
+                result: ui.meta(reason),
+                duration: ui.meta('—'),
               },
             };
           });
 
           var runnable = rows.filter(function (r) { return !r.dimmed; }).length;
-          var results = panel({
+          var results = ui.panel({
             title: t('uip.probes.resultTitle'),
             note: t('ct.resultsNote'),
             children: [
-              dataTable({
-                sortHint: t('uip.sortHint'),
+              ui.dataTable({
                 columns: [
                   { key: 'check', label: t('uip.probes.col.check'), width: '210px', sortable: true },
                   { key: 'status', label: t('uip.probes.col.status'), width: '150px', sortable: true },
@@ -750,12 +496,14 @@
                   { key: 'duration', label: t('uip.probes.col.duration'), width: '120px', num: true, sortable: true },
                 ],
                 rows: rows,
+                // The catalogue has one honest order — the server's — so the
+                // header does not offer a sort it would have to invent.
                 sort: null,
-                onSort: function () { /* the catalogue has one honest order: the server's */ },
               }),
-              el('div', { class: 'panel-foot' },
-                el('span', {}, t('uip.probes.summary', { total: rows.length, runnable: runnable, blocked: rows.length - runnable }))),
             ],
+            foot: [el('span', {}, t('uip.probes.summary', {
+              total: rows.length, runnable: runnable, blocked: rows.length - runnable,
+            }))],
           });
 
           body.replaceChildren(form, results);
@@ -768,7 +516,7 @@
     return {
       changes: changesView,
       probes: probesView,
-      closeOverlays: function () { closeDrawer(); closePopover(); closeRowMenu(); },
+      closeOverlays: ui.closeOverlays,
     };
   }
 

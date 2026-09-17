@@ -17838,10 +17838,18 @@ views.forbidden = async () => el('div', { class: 'ui ui-page' },
 // Two example screens built from the contract's components, on their own routes
 // so nothing live changes while the direction is reviewed. Deleted once Changes
 // and Probes & Tests are migrated onto their real routes.
-const uiPreview = (typeof window !== 'undefined' && window.UiPreview)
-  ? window.UiPreview.create({
-    el, api, t, plural, toast, errText, fmtDate, fmtTimeShort, openAgent, gotoView, tabStrip,
+// The contract's components, built once and handed to every screen that has been
+// migrated. See public/ui.js and docs/ui-contract.md.
+const ui = (typeof window !== 'undefined' && window.Ui)
+  ? window.Ui.create({
+    el, t, plural, tabStrip,
+    getLocale: () => (window.I18n ? window.I18n.getLocale() : 'en'),
+    relativeTime: (v) => (window.I18n ? window.I18n.relativeTime(v) : String(v)),
   })
+  : null;
+
+const uiPreview = (typeof window !== 'undefined' && window.UiPreview && ui)
+  ? window.UiPreview.create({ el, api, t, plural, errText, openAgent, gotoView, ui })
   : null;
 views.uiPreviewChanges = async () => (uiPreview
   ? uiPreview.changes()

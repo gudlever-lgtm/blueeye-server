@@ -32,6 +32,15 @@
   // falls back to the English string rather than breaking the view.
   var STRINGS = {
     en: {
+      // ---- UI contract components (public/ui.js) ---------------------------
+      'ui.close': 'Close',
+      'ui.loading': 'Loading',
+      'ui.sortBy': 'Sort by this column',
+      'ui.moreActions': 'More actions',
+      'ui.error.title': 'Could not load this',
+      'ui.error.body': 'The rest of the page still works — it is only this panel that is missing.',
+      'ui.chart.empty': 'No data in this period',
+      'ui.chart.label': 'Chart',
       // ---- Role-gated address ---------------------------------------------
       'route.forbidden.crumb': 'Not allowed',
       'route.forbidden.title': 'Not your screen',
@@ -2195,6 +2204,15 @@
     },
 
     da: {
+      // ---- UI-kontraktens komponenter (public/ui.js) ------------------------
+      'ui.close': 'Luk',
+      'ui.loading': 'Indlæser',
+      'ui.sortBy': 'Sortér efter denne kolonne',
+      'ui.moreActions': 'Flere handlinger',
+      'ui.error.title': 'Kunne ikke hentes',
+      'ui.error.body': 'Resten af siden virker — det er kun dette panel der mangler.',
+      'ui.chart.empty': 'Ingen data i denne periode',
+      'ui.chart.label': 'Graf',
       // ---- Rolle-spærret adresse -------------------------------------------
       'route.forbidden.crumb': 'Ingen adgang',
       'route.forbidden.title': 'Ikke din skærm',

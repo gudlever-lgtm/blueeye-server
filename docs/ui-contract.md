@@ -150,13 +150,34 @@ Every screen uses exactly one.
 
 ## Components
 
-One implementation each, in
-[`public/css/components.css`](../public/css/components.css). Everything is scoped
-under `.ui`, which a migrated view puts on its root — deliberately and
-temporarily, so a contract component can share a name with a legacy rule in
-`styles.css` (`.badge`, `.panel`, `.toolbar` all exist there) while pages migrate
-one at a time. When the last page is migrated the scope moves to the shell and
-the legacy rules go.
+Two files, one implementation each:
+
+- [`public/ui.js`](../public/ui.js) — the builders. `createUi(deps)` returns
+  every component a screen composes itself from. A screen imports nothing else;
+  anything it needs that `ui.js` has not got is a gap in the contract rather
+  than something to hand-roll on the page.
+- [`public/css/components.css`](../public/css/components.css) — the look.
+
+Everything is scoped under `ui`, which is a **marker class, not a layout**: it
+carries no styles of its own. The page root is `ui ui-page`; every body-level
+overlay (Drawer, popover, row menu, toast host) is `ui ui-<thing>`, because they
+are appended to `<body>` outside the page root — without the marker, a button in
+the Drawer falls back to the legacy `button` rule and renders as a filled accent
+button.
+
+The scope is deliberate and temporary: it lets a contract component share a name
+with a legacy rule in `styles.css` (`.badge`, `.panel`, `.toolbar` all exist
+there) while pages migrate one at a time. When the last page is migrated the
+marker moves to the shell and the legacy rules go.
+
+```js
+const view = ui.page(
+  ui.pageHeader({ title, lead, help, actions: [secondary, primary] }),
+  ui.statStrip(cards),
+  ui.toolbar({ filters: [ui.filter(label, ui.select({…}))], actions: [export] }),
+  ui.panel({ title, note, children: [ui.dataTable({ columns, rows, sort, onSort, onOpen })] }),
+);
+```
 
 ### PageHeader
 
@@ -247,9 +268,23 @@ bottom right, separated by a hairline.
 
 ### Chart wrapper
 
-Title in the Panel, legend under the chart and always visible. Integer y-axis
-when the data is integers (`stepSize` 1 when max ≤ 10). Few data points → bars by
-default. *(Phase 2 — not built yet.)*
+`ui.chart({ title, series, labels, form, height })`. Hand-written SVG — the repo
+takes no chart library.
+
+Three rules live in the component rather than on each screen:
+
+- the **legend sits under the plot and is always drawn** (a series you cannot
+  name is a line you cannot read);
+- the **y-axis is whole numbers when the data is whole**, stepping by 1 while the
+  maximum is 10 or less, and by a round number above that — never two ticks with
+  the same label;
+- **few data points render as bars** (8 or fewer per series), because four dots
+  joined by a line invent a trend the data does not have. `form: 'line'` or
+  `form: 'bars'` overrides it.
+
+Series colours are `--series-0…5` in `tokens.css`, derived from the palette's own
+semantic colours so every theme gets a set that holds together. Six, because a
+legend longer than that is a table nobody reads.
 
 ### States
 
@@ -264,7 +299,19 @@ Top right, stacked, auto-close after 5s. **Errors stay** until dismissed.
 
 ### Time
 
-One formatter, the same everywhere. *(Phase 2 — six formatters exist today.)*
+`ui.fmt` — one source, four shapes:
+
+| | For | Example |
+|---|---|---|
+| `abs(v)` | Drawers, detail panels — anywhere the reader is reading | `12/09/2026, 14:02:33` |
+| `short(v)` | A table column | `12/09, 14:02` |
+| `clock(v)` | A series of readings inside one day | `14:02:33` |
+| `rel(v)` | "how old is this" | `4 min ago` |
+| `duration(ms)` | A span | `740 ms`, `1.4 s`, `2 min` |
+
+Every shape renders `—` for a missing or unparseable value; none of them can
+produce `Invalid Date`. The locale follows the user's, so the same timestamp
+reads as a Dane expects it to without a second formatter.
 
 ---
 
@@ -285,7 +332,7 @@ One formatter, the same everywhere. *(Phase 2 — six formatters exist today.)*
 |---|---|---|
 | 0 | Audit | done |
 | 1 | `tokens.css`, the components the examples need, two example screens on `/ui-preview/*`, routing | **done — awaiting approval** |
-| 2 | Finish `tokens.css` + `base.css`, remaining components, `/ui-kitchen-sink`, `scripts/ui-check.js` | not started |
+| 2 | Finish `tokens.css` + `base.css`, remaining components, `/ui-kitchen-sink`, `scripts/ui-check.js` | **in progress** — base.css and `ui.js` done |
 | 3 | Migration, one screen per commit | not started |
 | 4 | Verification: `ui:check` clean, before/after grep report | not started |
 

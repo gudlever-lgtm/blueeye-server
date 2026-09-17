@@ -445,6 +445,7 @@ Administration → login and error screens.
 | Topology delta | `/topology-delta` | A · ListPage | [`public/views/topologyDelta.js`](../public/views/topologyDelta.js) |
 | Investigate | `/investigate` | C · FormPage | [`public/views/investigate.js`](../public/views/investigate.js) |
 | Diagnose | `/diagnose` | C · FormPage | [`public/views/diagnose.js`](../public/views/diagnose.js) |
+| Troubleshooting | `/troubleshooting` | B · DashboardPage | [`public/views/troubleshooting.js`](../public/views/troubleshooting.js) |
 
 **What Changes kept:** the window vocabulary the server accepts (`30m`, `6h`,
 `24h`, `7d` — not the preview's three), the marker rule (it moves only on an
@@ -649,3 +650,31 @@ is what makes a verdict arguable rather than asserted.
 This migration also fixed a defect in `el()` itself: `class: cond ? 'x' : null`
 set the element's class to the literal string `"null"`. Every caller in the
 codebase that uses that shape was affected; the DataTable's own cells were.
+
+
+**Troubleshooting** is a DashboardPage with four zones. The four KPI cards
+become a StatStrip, and "Active faults" becomes the doorway to the raw list
+rather than carrying a link inside a card — the figure is free (it comes off the
+cluster rows), the rows behind it are not, so opening them is a decision.
+
+A root cause carried three buttons — Show path, What changed?, Open situation —
+which stacked into a three-line block on any screen narrower than a desk. Show
+path is the row's one action and the other two are behind the ⋯ menu: the same
+fix Analysis got, for the same shape. A cause with no anchor to walk the
+topology from simply does not offer the path.
+
+"Partial data — unavailable: …" was grey text in a control bar, next to the
+Refresh button and nowhere near the panels it was about. It is an inline note
+in warn, above the data.
+
+The fault list stays **opt-in and paged**, which is the one thing about this
+screen that must not regress: a fleet can carry tens of thousands of raw alarms
+behind its root causes, and fetching them to paint the page is what made this
+tab slow. Changing the window drops the held pages — they belong to the rollup
+that was just replaced — and refetches page 1 of the new set rather than showing
+the old one under a new heading.
+
+**Not migrated, passed in whole:** the topology SVG (`tshootTopologySvg`), the
+timeline rows (`TimelineView.renderRow`) and the brush geometry, which moved to
+`tshootBrushSvg` in app.js as an object the view paints into. Two of the three
+are shared with other screens.

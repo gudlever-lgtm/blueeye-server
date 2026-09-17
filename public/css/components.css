@@ -435,3 +435,28 @@
 .ui .diag-run-status { display: flex; align-items: center; flex-wrap: wrap; gap: var(--s-3);
   margin-top: var(--s-2); }
 .ui .run-count { width: 64px; text-align: right; }
+
+
+/* ---- Troubleshooting (public/views/troubleshooting.js) --------------------
+   The graph, the brush and the timeline rows are app.js's own components and
+   keep their rules in styles.css; these are the parts the view builds. */
+.ui .ts-node-detail { margin-top: var(--s-3); padding: var(--s-3); border: 1px solid var(--border);
+  border-radius: var(--r-btn); display: flex; flex-direction: column; gap: var(--s-2);
+  align-items: flex-start; }
+.ui .ts-node-head { display: flex; align-items: center; gap: var(--s-2); }
+/* One cause per block, separated rather than boxed: the severity is a badge on
+   the row, so a coloured left border would say it twice. */
+.ui .ts-cause { padding: var(--s-4) 0; border-top: 1px solid var(--hairline); }
+.ui .ts-cause:first-child { border-top: 0; padding-top: 0; }
+.ui .ts-cause-head { display: flex; align-items: center; gap: var(--s-2); flex-wrap: wrap; }
+.ui .ts-cause-head .row-act { margin-left: auto; }
+.ui .ts-cause-meta { display: flex; flex-wrap: wrap; gap: var(--s-3); margin-top: var(--s-2); }
+.ui .ts-cause-slot { margin-top: var(--s-2); }
+.ui .ts-cause-slot:empty { display: none; }
+/* Two Panels in one page slot (the causes and the deviations under them) still
+   sit a page gap apart. */
+.ui .panel-stack { display: flex; flex-direction: column; gap: var(--s-5); }
+/* Two padded blocks in a row would double the gutter between them. */
+.ui .panel-body + .panel-body { padding-top: 0; }
+.ui .ts-events { margin-top: var(--s-3); }
+.ui .ts-events-head { display: flex; align-items: center; gap: var(--s-3); margin-bottom: var(--s-2); }

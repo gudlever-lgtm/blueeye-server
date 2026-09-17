@@ -1673,17 +1673,11 @@ li.guide-step.done .guide-step-title { text-decoration: line-through; opacity: 0
    derives: green = ok, red = down, grey = unreachable downstream (we cannot
    hear it — NOT a claim that it is broken). Every colour is paired with a text
    label or a title, so state never rides on hue alone. */
-.tshoot .topo-action-bar .spacer { flex: 1; }
-.tshoot .warn { color: var(--warn); }
-.ts-split { display: grid; grid-template-columns: minmax(0, 1fr) 420px; gap: 14px; align-items: start; }
-@media (max-width: 1100px) { .ts-split { grid-template-columns: 1fr; } }
-.tshoot .card { width: auto; margin: 0 0 14px; padding: 14px 16px; box-shadow: var(--shadow); }
-.ts-panel-head { display: flex; align-items: baseline; gap: 10px; margin: 0 0 10px; }
-.ts-panel-head h3 { margin: 0; font-size: 15px; }
-.ts-panel-head .spacer { flex: 1; }
 
 /* Topology graph */
-.ts-topo svg { width: 100%; height: auto; display: block; }
+/* Inside a contract Panel the graph has the panel's full width, so a tall
+   viewBox would push everything below it off the screen. */
+.ts-topo svg { width: 100%; height: auto; max-height: 56vh; display: block; }
 .ts-link { stroke: var(--border); stroke-width: 2; }
 .ts-link.layer-l3 { stroke-dasharray: 4 3; }
 .ts-link.ts-down { stroke: var(--bad); }
@@ -1697,45 +1691,6 @@ li.guide-step.done .guide-step-title { text-decoration: line-through; opacity: 0
 .ts-node.on-path circle { stroke: var(--accent); stroke-width: 5; }
 .ts-node:focus { outline: none; }
 .ts-node:focus circle { stroke: var(--accent); }
-.ts-legend { display: flex; flex-wrap: wrap; gap: 14px; margin: 10px 0 0; font-size: 12px; color: var(--muted); }
-.ts-legend .lg { display: inline-flex; align-items: center; gap: 6px; }
-.ts-dot { width: 10px; height: 10px; border-radius: 50%; border: 2px solid var(--border); display: inline-block; }
-.ts-dot.ts-ok { border-color: var(--ok); }
-.ts-dot.ts-down { border-color: var(--bad); background: var(--bad-weak); }
-.ts-dot.ts-unreachable_downstream { border-color: var(--muted); background: var(--muted-weak); }
-.ts-node-detail { margin: 10px 0 0; padding: 10px; border: 1px solid var(--border); border-radius: var(--radius-sm); }
-.ts-node-head { display: flex; align-items: center; gap: 8px; margin: 0 0 6px; }
-
-/* Root causes — severity rides on the left border, mirroring .kpi */
-.ts-cause { border: 1px solid var(--border); border-left: 3px solid var(--muted); border-radius: var(--radius-sm);
-  padding: 10px 12px; margin: 0 0 10px; }
-.ts-cause.sev-CRIT { border-left-color: var(--bad); }
-.ts-cause.sev-WARN { border-left-color: var(--warn); }
-.ts-cause.sev-INFO { border-left-color: var(--accent); }
-.ts-cause-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 0 0 6px; }
-.ts-cause-meta { display: flex; flex-wrap: wrap; gap: 12px; font-size: 12px; }
-.ts-cause-meta .ts-blast { color: var(--bad); font-weight: 600; }
-.ts-cause-actions { display: flex; gap: 6px; flex-wrap: wrap; margin: 10px 0 0; }
-.ts-changes { margin: 10px 0 0; padding: 10px; border-top: 1px dashed var(--border); }
-.ts-anoms { width: 100%; }
-
-/* Raw fault list — opt-in, paged. The link lives inside the Active faults KPI
-   because the figure is the doorway: cheap to show, expensive to expand. */
-.ts-faults-link { margin-top: 8px; }
-.kpi .ts-faults-link { width: 100%; }
-.ts-faults-card .ts-panel-head .muted { font-size: 12px; }
-.ts-faults { width: 100%; }
-.ts-faults td, .ts-faults th { vertical-align: top; }
-.ts-faults .badge { white-space: nowrap; }
-/* A member whose finding retention already purged: still counted by its
-   cluster, so still a row — dimmed, never invented. */
-.ts-faults tr.ts-fault-missing td { opacity: .6; font-style: italic; }
-/* The counter. `is-loading` pulses so a long page read reads as progress rather
-   than a frozen number. */
-.ts-fault-counter { font-size: 12px; margin: 0 0 8px; }
-.ts-fault-counter.is-loading { animation: ts-fault-pulse 1.2s ease-in-out infinite; }
-@keyframes ts-fault-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .45; } }
-@media (prefers-reduced-motion: reduce) { .ts-fault-counter.is-loading { animation: none; } }
 
 /* Timeline brush */
 .ts-brush { width: 100%; height: 60px; display: block; cursor: crosshair; touch-action: none; }
@@ -1745,7 +1700,6 @@ li.guide-step.done .guide-step-title { text-decoration: line-through; opacity: 0
 .ts-marker.sev-WARN { stroke: var(--warn); }
 .ts-marker.sev-CRIT { stroke: var(--bad); }
 .ts-marker.is-change { stroke-dasharray: 2 2; stroke-width: 3; }
-.ts-events { margin: 10px 0 0; }
 
 /* --- Language picker (Settings -> Appearance) ------------------------------- */
 .lang-picker { margin-top: 22px; padding-top: 18px; border-top: 1px solid var(--border); }

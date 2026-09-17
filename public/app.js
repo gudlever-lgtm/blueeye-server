@@ -1341,6 +1341,7 @@ const CONTRACT_VIEWS = new Map([
   ['delta', 'topologyDelta'],
   ['investigation', 'investigate'],
   ['diagnose', 'diagnose'],
+  ['troubleshooting', 'troubleshooting'],
 ]);
 
 function hero(viewKey) {
@@ -7149,427 +7150,105 @@ function tshootTopologySvg(topology, { onSelect, layerFilter } = {}) {
   return wrap;
 }
 
+// ---- Troubleshooting (MIGRATED — see public/views/troubleshooting.js) -------
+// The topology SVG, the timeline rows and the brush geometry stay here: they
+// are their own components, and two of them are shared with other screens.
+let troubleshootingView = null;
+const troubleshootingState = {};
+
+// The event timeline's drag-to-brush, as an object the view can paint into: one
+// marker per event, a selection rectangle, and pointer coords mapped through the
+// viewBox so the selection lines up regardless of the rendered width.
+function tshootBrushSvg(events, bounds, { onBrush }) {
+  const W = 900;
+  const H = 60;
+  const ns = 'http://www.w3.org/2000/svg';
+  const mk = (tag, attrs = {}, ...kids) => {
+    const e = document.createElementNS(ns, tag);
+    for (const [a, v] of Object.entries(attrs)) if (v != null) e.setAttribute(a, v);
+    for (const kid of kids) if (kid != null) e.append(kid.nodeType ? kid : document.createTextNode(String(kid)));
+    return e;
+  };
+  const span = Math.max(1, bounds.toMs - bounds.fromMs);
+  const xOf = (ms) => ((ms - bounds.fromMs) / span) * W;
+
+  const svg = mk('svg', {
+    viewBox: `0 0 ${W} ${H}`, class: 'ts-brush', role: 'img',
+    'aria-label': t('tshoot.timeline.label'),
+  });
+  svg.append(mk('line', { class: 'ts-axis', x1: 0, y1: H - 14, x2: W, y2: H - 14 }));
+  const sel = mk('rect', { class: 'ts-brush-sel', x: 0, y: 0, width: 0, height: H - 14 });
+  svg.append(sel);
+  for (const e of events) {
+    const ms = Date.parse(e.timestamp);
+    if (Number.isNaN(ms)) continue;
+    svg.append(mk('line', {
+      class: `ts-marker sev-${window.TimelineView.severityClass(e.severity)}${window.TroubleshootingView.isChangeEvent(e) ? ' is-change' : ''}`,
+      x1: xOf(ms), y1: 8, x2: xOf(ms), y2: H - 14,
+    }, mk('title', {}, `${fmtDate(e.timestamp)} — ${e.summary}`)));
+  }
+
+  let dragFrom = null;
+  const msAt = (ev) => {
+    const rect = svg.getBoundingClientRect();
+    const ratio = rect.width ? (ev.clientX - rect.left) / rect.width : 0;
+    return bounds.fromMs + Math.max(0, Math.min(1, ratio)) * span;
+  };
+  svg.addEventListener('pointerdown', (ev) => { dragFrom = msAt(ev); svg.setPointerCapture(ev.pointerId); });
+  svg.addEventListener('pointermove', (ev) => {
+    if (dragFrom == null) return;
+    onBrush({ fromMs: dragFrom, toMs: msAt(ev) });
+  });
+  svg.addEventListener('pointerup', (ev) => {
+    if (dragFrom == null) return;
+    const to = msAt(ev);
+    // A click (not a drag) clears rather than selecting a zero-width window.
+    const next = Math.abs(to - dragFrom) < span / 200 ? null : { fromMs: dragFrom, toMs: to };
+    dragFrom = null;
+    onBrush(next);
+  });
+
+  return {
+    svg,
+    setSelection: (b) => {
+      if (!b) { sel.setAttribute('width', '0'); return; }
+      sel.setAttribute('x', String(Math.min(xOf(b.fromMs), xOf(b.toMs))));
+      sel.setAttribute('width', String(Math.abs(xOf(b.toMs) - xOf(b.fromMs))));
+    },
+  };
+}
+
+function getTroubleshootingView() {
+  if (troubleshootingView) return troubleshootingView;
+  if (typeof window === 'undefined' || !window.TroubleshootingPage || !ui) return null;
+  troubleshootingView = window.TroubleshootingPage.create({
+    el, t, ui, errText, openAgent, openCluster, gotoView,
+    state: troubleshootingState,
+    TV: window.TroubleshootingView,
+    topologySvg: tshootTopologySvg,
+    brushSvg: tshootBrushSvg,
+    timelineRow: (e) => window.TimelineView.renderRow(document, e, { formatTime: fmtDate }),
+    help: () => {
+      const info = PAGE_INFO.troubleshooting || {};
+      return { lead: info.hero || '', title: info.title || t('tshoot.title'), body: info.body || (() => []) };
+    },
+    fetchOverview: async (minutes) => api(`/api/troubleshooting/overview?minutes=${encodeURIComponent(minutes)}`),
+    fetchFaults: async (limit, offset) => api(`/api/troubleshooting/faults?limit=${limit}&offset=${offset}`),
+    blastRadius: async (anchorId) => {
+      const radius = await api(`/api/topology/blast-radius/${encodeURIComponent(anchorId)}`);
+      return window.TroubleshootingView.pathNodeIds([
+        ...(radius.directly_isolated || []),
+        ...(radius.dependency_affected || []),
+      ]);
+    },
+  });
+  return troubleshootingView;
+}
+
 views.troubleshooting = async () => {
-  const TV = window.TroubleshootingView;
-  const root = el('div', { class: 'tshoot' });
-
-  const winSel = el('select', { class: 'small' },
-    el('option', { value: '60' }, 'Last 1h'),
-    el('option', { value: '360' }, 'Last 6h'),
-    el('option', { value: '1440' }, 'Last 24h'),
-    el('option', { value: '10080' }, 'Last 7d'));
-  winSel.value = '1440';
-  const refreshBtn = el('button', { class: 'small ghost' }, 'Refresh');
-  const statusEl = el('span', { class: 'muted' });
-
-  root.append(el('div', { class: 'section-head' },
-    el('h2', {}, 'Troubleshooting'),
-    el('span', { class: 'muted' }, 'What is failing, what it affects, and when it started')));
-  root.append(el('div', { class: 'topo-action-bar' },
-    el('label', { class: 'inline muted' }, 'Window ', winSel),
-    refreshBtn, el('span', { class: 'spacer' }), statusEl));
-
-  const kpiHost = el('div', { class: 'kpi-grid' });
-  const topoHost = el('div', { class: 'card ts-topo-card' });
-  const causeHost = el('div', { class: 'card ts-cause-card' });
-  const faultsHost = el('div', { class: 'card ts-faults-card', hidden: 'hidden' });
-  const timelineHost = el('div', { class: 'card ts-timeline-card' });
-  root.append(kpiHost, el('div', { class: 'ts-split' }, topoHost, causeHost), faultsHost, timelineHost);
-
-  let data = null;
-  let graphEl = null;
-  let brush = null; // { fromMs, toMs } or null
-
-  // --- the raw fault list: opt-in, paged, never part of the page load -------
-  // A fleet can carry tens of thousands of raw alarms behind its root causes.
-  // Fetching them to paint the screen is what made this tab slow, so the
-  // overview read no longer touches them: the Active faults figure links here,
-  // and GET /api/troubleshooting/faults pages them in only once asked.
-  const FAULT_PAGE = 100;
-  const faults = { open: false, rows: [], total: 0, loading: false, error: null, loaded: false };
-
-  // --- zone 1: key figures -------------------------------------------------
-  // The Active faults card carries the doorway to the list: the figure is free
-  // (it comes off the cluster rows), the rows behind it are not, so the card
-  // says how many there are and lets the operator decide to pay for them.
-  function faultsAction() {
-    const total = Number(data && data.summary && data.summary.activeFaults) || 0;
-    if (!total) return null;
-    if (faults.open) {
-      return el('button', { class: 'small ghost ts-faults-link', onclick: closeFaults }, t('tshoot.faults.hide'));
-    }
-    const label = faults.loading
-      ? t('tshoot.faults.loading', { loaded: faults.rows.length, total })
-      : (total === 1 ? t('tshoot.faults.linkOne') : t('tshoot.faults.link', { count: total }));
-    return el('button', {
-      class: 'small ghost ts-faults-link',
-      disabled: faults.loading ? 'disabled' : null,
-      onclick: openFaults,
-    }, label);
-  }
-
-  function renderKpis() {
-    const cards = TV.kpiCards(data.summary);
-    const status = (key, value) => {
-      if (!value) return 'ok';
-      return key === 'rootCauses' || key === 'activeFaults' ? 'bad' : 'warn';
-    };
-    kpiHost.replaceChildren(...cards.map((c) => kpiCard(
-      c.label, String(c.value), c.hint, status(c.key, c.value),
-      c.key === 'activeFaults' ? faultsAction() : null,
-    )));
-  }
-
-  // --- zone 2: topology ----------------------------------------------------
-  function renderTopology() {
-    const t = data.topology || { nodes: [], links: [], counts: {}, layers: {} };
-    const layerSel = el('select', { class: 'small' },
-      el('option', { value: 'all' }, `Both layers (${t.layers.l2 || 0} L2 · ${t.layers.l3 || 0} L3)`),
-      el('option', { value: 'l2' }, `L2 links (${t.layers.l2 || 0})`),
-      el('option', { value: 'l3' }, `L3 dependencies (${t.layers.l3 || 0})`));
-
-    const detail = el('div', { class: 'ts-node-detail muted' }, 'Select a node for its details.');
-    const legend = el('div', { class: 'ts-legend' },
-      el('span', { class: 'lg' }, el('span', { class: 'ts-dot ts-ok' }), `OK (${t.counts.ok || 0})`),
-      el('span', { class: 'lg' }, el('span', { class: 'ts-dot ts-down' }), `Down (${t.counts.down || 0})`),
-      el('span', { class: 'lg' }, el('span', { class: 'ts-dot ts-unreachable_downstream' }), `Unreachable downstream (${t.counts.unreachable_downstream || 0})`));
-
-    const graphSlot = el('div', {});
-    const draw = () => {
-      graphEl = tshootTopologySvg(t, {
-        layerFilter: layerSel.value,
-        onSelect: (n) => {
-          detail.classList.remove('muted');
-          detail.replaceChildren(
-            el('div', { class: 'ts-node-head' },
-              el('strong', {}, n.label),
-              el('span', { class: `badge ${n.state === 'down' ? 'down' : n.state === 'ok' ? 'ok' : 'neutral'}` }, TV.stateLabel(n.state))),
-            el('div', { class: 'muted' }, n.lastSeen ? `Last seen ${fmtDate(n.lastSeen)}` : 'Never reported'),
-            el('button', { class: 'small', onclick: () => openAgent(n.id) }, 'Open agent'));
-        },
-      });
-      graphSlot.replaceChildren(graphEl);
-    };
-    layerSel.addEventListener('change', draw);
-    draw();
-
-    const discovered = (t.discovered || []).length;
-    topoHost.replaceChildren(...[
-      el('div', { class: 'ts-panel-head' }, el('h3', {}, 'Topology'), el('span', { class: 'spacer' }), layerSel),
-      graphSlot, legend, detail,
-      discovered
-        ? el('p', { class: 'muted' }, `${discovered} address${discovered === 1 ? '' : 'es'} seen by active discovery but not yet monitored — promote them under Discovery to place them on this graph.`)
-        : null,
-    ].filter(Boolean));
-  }
-
-  // --- zone 3: root causes -------------------------------------------------
-  async function showPath(model, row) {
-    if (model.pathAnchorId == null) return;
-    const note = el('div', { class: 'muted' }, 'Loading path…');
-    row.append(note);
-    try {
-      const radius = await api(`/api/topology/blast-radius/${encodeURIComponent(model.pathAnchorId)}`);
-      const ids = TV.pathNodeIds([...(radius.directly_isolated || []), ...(radius.dependency_affected || [])]);
-      // The anchor itself is the start of every path.
-      if (graphEl && graphEl.highlightPath) graphEl.highlightPath([Number(model.pathAnchorId), ...ids]);
-      note.replaceChildren(
-        el('span', {}, ids.length ? `Highlighted ${ids.length} host(s) on the path.` : 'No downstream path from this node.'),
-        el('button', { class: 'small ghost', onclick: () => { if (graphEl && graphEl.clearPath) graphEl.clearPath(); note.remove(); } }, 'Clear'));
-    } catch (err) {
-      note.textContent = `Could not load the path: ${err.message}`;
-    }
-  }
-
-  function showChanges(model, row) {
-    const changes = TV.changesBefore(data.timeline, model.firstSeen, 30 * 60 * 1000);
-    const box = el('div', { class: 'ts-changes' });
-    if (!changes.length) {
-      box.append(el('div', { class: 'muted' }, 'No recorded change in the 30 minutes before this fault started.'));
-    } else {
-      const ul = el('ul', { class: 'timeline' });
-      changes.forEach((e) => ul.append(window.TimelineView.renderRow(document, e, { formatTime: fmtDate })));
-      box.append(el('div', { class: 'muted' }, `${changes.length} change(s) in the 30 minutes before this fault started:`), ul);
-    }
-    const existing = row.querySelector('.ts-changes');
-    if (existing) existing.replaceWith(box); else row.append(box);
-  }
-
-  function renderRootCauses() {
-    const causes = (data.rootCauses || []).map(TV.rootCauseModel);
-    const head = el('div', { class: 'ts-panel-head' }, el('h3', {}, 'Root causes'),
-      el('span', { class: 'muted' }, causes.length ? `${data.summary.activeFaults} alarm(s) → ${causes.length} cause(s)` : ''));
-
-    if (!causes.length) {
-      causeHost.replaceChildren(head, el('div', { class: 'empty' }, 'No correlated root causes in this window.'));
-      return;
-    }
-
-    const rows = causes.map((m) => {
-      const row = el('div', { class: `ts-cause sev-${m.severity}` });
-      const actions = el('div', { class: 'ts-cause-actions' },
-        el('button', { class: 'small', onclick: () => showPath(m, row), disabled: m.pathAnchorId == null ? 'disabled' : null }, 'Show path'),
-        el('button', { class: 'small ghost', onclick: () => showChanges(m, row) }, 'What changed?'),
-        el('button', { class: 'small ghost', onclick: () => openCluster(m.id) }, 'Open situation'));
-      row.append(
-        el('div', { class: 'ts-cause-head' },
-          el('span', { class: `badge ${m.severity}` }, m.severity),
-          el('strong', {}, m.cause),
-          m.confidence ? el('span', { class: 'badge neutral' }, `${m.confidence} confidence`) : null),
-        el('div', { class: 'ts-cause-meta muted' },
-          el('span', {}, m.affectedText),
-          m.blastText ? el('span', { class: 'ts-blast' }, m.blastText) : null,
-          m.firstSeen ? el('span', {}, `since ${fmtDate(m.firstSeen)}`) : null),
-        actions);
-      return row;
-    });
-    causeHost.replaceChildren(head, ...rows);
-  }
-
-  // --- zone 4: timeline + brush -------------------------------------------
-  function renderTimeline() {
-    const all = data.timeline || [];
-    const bounds = TV.timelineBounds(all);
-    const head = el('div', { class: 'ts-panel-head' }, el('h3', {}, 'Timeline'),
-      el('span', { class: 'muted' }, 'Config pushes, port flaps and new routes — drag to select a window'));
-
-    if (!bounds) {
-      timelineHost.replaceChildren(head, el('div', { class: 'empty' }, 'No recorded events in this window.'));
-      return;
-    }
-
-    const W = 900;
-    const H = 60;
-    const ns = 'http://www.w3.org/2000/svg';
-    const mk = (tag, attrs = {}, ...kids) => {
-      const e = document.createElementNS(ns, tag);
-      for (const [a, v] of Object.entries(attrs)) if (v != null) e.setAttribute(a, v);
-      for (const kid of kids) if (kid != null) e.append(kid.nodeType ? kid : document.createTextNode(String(kid)));
-      return e;
-    };
-    const span = Math.max(1, bounds.toMs - bounds.fromMs);
-    const xOf = (ms) => ((ms - bounds.fromMs) / span) * W;
-
-    const svg = mk('svg', { viewBox: `0 0 ${W} ${H}`, class: 'ts-brush', role: 'img', 'aria-label': 'Event timeline' });
-    svg.append(mk('line', { class: 'ts-axis', x1: 0, y1: H - 14, x2: W, y2: H - 14 }));
-    const sel = mk('rect', { class: 'ts-brush-sel', x: 0, y: 0, width: 0, height: H - 14 });
-    svg.append(sel);
-    for (const e of all) {
-      const ms = Date.parse(e.timestamp);
-      if (isNaN(ms)) continue;
-      svg.append(mk('line', {
-        class: `ts-marker sev-${window.TimelineView.severityClass(e.severity)}${TV.isChangeEvent(e) ? ' is-change' : ''}`,
-        x1: xOf(ms), y1: 8, x2: xOf(ms), y2: H - 14,
-      }, mk('title', {}, `${fmtDate(e.timestamp)} — ${e.summary}`)));
-    }
-
-    const list = el('div', { class: 'ts-events' });
-    const paint = () => {
-      const shown = brush ? TV.eventsInWindow(all, brush.fromMs, brush.toMs) : all;
-      if (brush) {
-        sel.setAttribute('x', String(Math.min(xOf(brush.fromMs), xOf(brush.toMs))));
-        sel.setAttribute('width', String(Math.abs(xOf(brush.toMs) - xOf(brush.fromMs))));
-      } else {
-        sel.setAttribute('width', '0');
-      }
-      const ul = el('ul', { class: 'timeline' });
-      shown.forEach((e) => ul.append(window.TimelineView.renderRow(document, e, { formatTime: fmtDate })));
-      list.replaceChildren(
-        el('div', { class: 'muted' },
-          brush ? `${shown.length} of ${all.length} event(s) in the selected window` : `${all.length} event(s)`,
-          brush ? el('button', { class: 'small ghost', onclick: () => { brush = null; paint(); } }, 'Clear selection') : null),
-        shown.length ? ul : el('div', { class: 'empty' }, 'No events in the selected window.'));
-    };
-
-    // Drag-to-brush. Pointer coords are mapped through the viewBox so the
-    // selection lines up regardless of the rendered width.
-    let dragFrom = null;
-    const msAt = (ev) => {
-      const rect = svg.getBoundingClientRect();
-      const ratio = rect.width ? (ev.clientX - rect.left) / rect.width : 0;
-      return bounds.fromMs + Math.max(0, Math.min(1, ratio)) * span;
-    };
-    svg.addEventListener('pointerdown', (ev) => { dragFrom = msAt(ev); svg.setPointerCapture(ev.pointerId); });
-    svg.addEventListener('pointermove', (ev) => {
-      if (dragFrom == null) return;
-      brush = { fromMs: dragFrom, toMs: msAt(ev) };
-      paint();
-    });
-    svg.addEventListener('pointerup', (ev) => {
-      if (dragFrom == null) return;
-      const to = msAt(ev);
-      // A click (not a drag) clears rather than selecting a zero-width window.
-      brush = Math.abs(to - dragFrom) < span / 200 ? null : { fromMs: dragFrom, toMs: to };
-      dragFrom = null;
-      paint();
-    });
-
-    timelineHost.replaceChildren(head, svg, list);
-    paint();
-  }
-
-  // --- anomalies ride under the root causes -------------------------------
-  function renderAnomalies() {
-    const list = data.anomalies || [];
-    if (!list.length) return;
-    const rows = list.slice(0, 25).map((a) => el('tr', {},
-      el('td', { class: 'mono' }, a.linkId),
-      el('td', { class: 'num' }, a.currentVsBaselinePct == null ? '—' : `${a.currentVsBaselinePct > 0 ? '+' : ''}${a.currentVsBaselinePct}%`),
-      el('td', {}, a.since ? fmtDate(a.since) : '—')));
-    causeHost.append(
-      el('div', { class: 'ts-panel-head' }, el('h3', {}, 'Baseline deviations'),
-        el('span', { class: 'muted' }, 'vs. this weekday/hour')),
-      el('table', { class: 'ts-anoms' },
-        el('thead', {}, el('tr', {}, el('th', {}, 'Flow pair'), el('th', { class: 'num' }, 'vs. baseline'), el('th', {}, 'Since'))),
-        el('tbody', {}, ...rows)));
-  }
-
-  // --- the raw fault list (opt-in) -----------------------------------------
-  // agent id -> device label, so a row reads "sw-acc-a" and not "agent 3". The
-  // topology panel already carries the names; no second lookup.
-  function deviceLabels() {
-    const byId = {};
-    for (const n of ((data && data.topology && data.topology.nodes) || [])) byId[String(n.id)] = n.label;
-    return byId;
-  }
-
-  function faultTable() {
-    const labels = deviceLabels();
-    const rows = faults.rows.map((f) => {
-      const m = TV.faultRowModel(f, labels);
-      return el('tr', { class: m.missing ? 'ts-fault-missing' : null },
-        el('td', {}, el('span', { class: `badge ${m.severity}` }, m.missing ? '—' : m.severity)),
-        el('td', {}, m.deviceLabel),
-        el('td', { class: 'mono' }, m.metric),
-        el('td', {}, m.createdAt ? fmtDate(m.createdAt) : (m.missing ? t('tshoot.faults.purged') : '—')),
-        el('td', { class: 'muted' },
-          m.cause || '—',
-          m.acked ? el('span', { class: 'badge neutral' }, t('tshoot.faults.acked')) : null));
-    });
-    return el('table', { class: 'ts-faults' },
-      el('thead', {}, el('tr', {},
-        el('th', {}, t('tshoot.faults.colSeverity')),
-        el('th', {}, t('tshoot.faults.colHost')),
-        el('th', {}, t('tshoot.faults.colMetric')),
-        el('th', {}, t('tshoot.faults.colWhen')),
-        el('th', {}, t('tshoot.faults.colCause')))),
-      el('tbody', {}, ...rows));
-  }
-
-  function renderFaults() {
-    faultsHost.hidden = !faults.open;
-    if (!faults.open) { faultsHost.replaceChildren(); return; }
-
-    const head = el('div', { class: 'ts-panel-head' },
-      el('h3', {}, t('tshoot.faults.title')),
-      el('span', { class: 'muted' }, t('tshoot.faults.hint')),
-      el('span', { class: 'spacer' }),
-      el('button', { class: 'small ghost', onclick: closeFaults }, t('tshoot.faults.hide')));
-
-    if (faults.error) {
-      faultsHost.replaceChildren(head,
-        el('div', { class: 'error' }, t('tshoot.faults.error', { message: faults.error })),
-        el('button', { class: 'small', onclick: loadFaultPage }, t('tshoot.faults.retry')));
-      return;
-    }
-
-    // The counter is the whole point of the opt-in: a long read has to say how
-    // far it has got, not spin.
-    const progress = TV.faultProgress({ loaded: faults.rows.length, total: faults.total, loading: faults.loading });
-    const counter = el('div', { class: `ts-fault-counter muted${faults.loading ? ' is-loading' : ''}` }, t(progress.key, progress.params));
-
-    const next = TV.faultsRemaining({ loaded: faults.rows.length, total: faults.total }, FAULT_PAGE);
-    const more = next > 0
-      ? el('button', { class: 'small', disabled: faults.loading ? 'disabled' : null, onclick: loadFaultPage }, t('tshoot.faults.loadMore', { count: next }))
-      : null;
-
-    // `el()` skips null kids but a bare replaceChildren(…, null) stringifies it
-    // to the text "null", so filter (same guard as the traceroute panel).
-    if (!faults.rows.length) {
-      faultsHost.replaceChildren(...[head, counter,
-        faults.loading ? null : el('div', { class: 'empty' }, t('tshoot.faults.empty'))].filter(Boolean));
-      return;
-    }
-    faultsHost.replaceChildren(...[head, counter, faultTable(), more].filter(Boolean));
-  }
-
-  // One page at a time, appended. `offset` is the number of rows already held,
-  // and the backend keeps a stable order, so paging never re-reads or skips.
-  async function loadFaultPage() {
-    if (faults.loading) return;
-    faults.loading = true;
-    faults.error = null;
-    renderFaults();
-    renderKpis();
-    try {
-      const page = await api(`/api/troubleshooting/faults?limit=${FAULT_PAGE}&offset=${faults.rows.length}`);
-      faults.total = Number(page.total) || 0;
-      faults.rows = faults.rows.concat(page.faults || []);
-      faults.loaded = true;
-    } catch (err) {
-      faults.error = err.message;
-    } finally {
-      faults.loading = false;
-      renderFaults();
-      renderKpis();
-    }
-  }
-
-  function openFaults() {
-    faults.open = true;
-    renderKpis();
-    renderFaults();
-    if (!faults.loaded) loadFaultPage();
-  }
-
-  function closeFaults() {
-    faults.open = false;
-    renderFaults();
-    renderKpis();
-  }
-
-  async function load() {
-    statusEl.textContent = 'Loading…';
-    refreshBtn.disabled = true;
-    try {
-      data = await api(`/api/troubleshooting/overview?minutes=${encodeURIComponent(winSel.value)}`);
-      brush = null;
-      // The fault set belongs to the rollup we just replaced, so the held pages
-      // are stale. Drop them; if the operator had the list open, page 1 of the
-      // NEW set is fetched rather than silently showing the old one.
-      faults.rows = [];
-      faults.total = 0;
-      faults.loaded = false;
-      faults.error = null;
-      renderKpis();
-      renderTopology();
-      renderRootCauses();
-      renderAnomalies();
-      renderTimeline();
-      renderFaults();
-      if (faults.open) loadFaultPage();
-      // A domain that is down costs its own panel, not the screen — say which.
-      statusEl.textContent = data.partial
-        ? `Partial data — unavailable: ${data.failedSources.join(', ')}`
-        : '';
-      statusEl.classList.toggle('warn', !!data.partial);
-    } catch (err) {
-      kpiHost.replaceChildren();
-      topoHost.replaceChildren(el('div', { class: 'empty' }, `Could not load: ${err.message}`));
-      causeHost.replaceChildren();
-      timelineHost.replaceChildren();
-      faults.open = false;
-      renderFaults();
-      statusEl.textContent = '';
-    } finally {
-      refreshBtn.disabled = false;
-    }
-  }
-
-  winSel.addEventListener('change', load);
-  refreshBtn.addEventListener('click', load);
-  await load();
-  return root;
+  const v = getTroubleshootingView();
+  if (!v) return el('div', { class: 'empty error' }, t('tshoot.err.title'));
+  return v.view();
 };
 
 // Interface health per agent (utilisation, errors, discards, link state/speed)

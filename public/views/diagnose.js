@@ -273,14 +273,17 @@
           // looking for what a result is worth.
           note: plan.usedAi ? t('diag.matched.llm') : t('diag.matched.keywords'),
           children: [
-            ev ? ui.inlineNote(t('diag.counts', ev.counts), 'info') : null,
-            ev && ev.summary && ev.summary.text
-              ? el('div', { class: 'diag-summary' },
-                el('h4', {}, t('diag.summary')),
-                el('p', {}, ev.summary.text),
-                ui.metaXs(t('diag.summary.ai')))
+            ev || (ev && ev.summary)
+              ? el('div', { class: 'panel-body diag-verdicts' },
+                ui.inlineNote(t('diag.counts', ev.counts), 'info'),
+                ev.summary && ev.summary.text
+                  ? el('div', { class: 'diag-summary' },
+                    el('h4', {}, t('diag.summary')),
+                    el('p', {}, ev.summary.text),
+                    ui.metaXs(t('diag.summary.ai')))
+                  : null)
               : null,
-            el('div', {}, ordered.map(function (o) { return causeBlock(o.cause, o.verdict); })),
+            el('div', { class: 'panel-body' }, ordered.map(function (o) { return causeBlock(o.cause, o.verdict); })),
           ].filter(Boolean),
         });
         outHost.replaceChildren(causesPanel, testsPanel(plan));

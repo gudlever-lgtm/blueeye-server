@@ -81,6 +81,8 @@ const MIGRATED = [
   'views/situation.js',
   'views/agent.js',
   'views/location.js',
+  // Reached from the account menu rather than the rail, but a page all the same.
+  'views/about.js',
 ];
 
 // Classes the contract replaced. A migrated file may not use them.

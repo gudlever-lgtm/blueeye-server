@@ -1363,6 +1363,7 @@ const CONTRACT_VIEWS = new Map([
   ['cluster', 'situation'],
   ['agent', 'agent'],
   ['location', 'location'],
+  ['about', 'about'],
 ]);
 
 function hero(viewKey) {
@@ -15024,23 +15025,32 @@ views.guide = async () => {
 PAGE_INFO.about = {
   get hero() { return t('about.info.hero'); },
   get title() { return t('about.info.title'); },
+  // `about.lead` used to be a paragraph on the page. It is background about
+  // the product rather than the page's own subject, which is what the (?)
+  // popover is for.
   body: () => [
+    el('p', {}, t('about.lead')),
     el('p', {}, t('about.info.p1')),
     el('p', {}, t('about.info.p2')),
     el('p', { class: 'muted' }, t('about.info.p3')),
   ],
 };
 
+// The history is data (public/about.js); the screen that draws it is
+// public/views/about.js, on the contract like every other page.
 views.about = async () => {
-  if (!window.About) return el('div', { class: 'empty' }, t('about.unavailable'));
+  if (!window.AboutPage || !window.About || !ui) return el('div', { class: 'empty' }, t('about.unavailable'));
   const ver = await api('/system/version').catch(() => null);
-  return window.About.create({
+  return window.AboutPage.create({
     el,
     t,
+    ui,
+    data: window.About,
     plural: (key, n, params) => (window.I18n && window.I18n.plural ? window.I18n.plural(key, n, params) : t(key, { count: String(n), ...(params || {}) })),
     locale: window.I18n ? window.I18n.getLocale() : 'en',
     version: ver && ver.server ? ver.server : null,
     releaseDate: ver && ver.releaseDate ? ver.releaseDate : null,
+    help: () => ({ title: PAGE_INFO.about.title, body: PAGE_INFO.about.body }),
   });
 };
 

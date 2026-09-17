@@ -1404,3 +1404,35 @@ so it is an EmptyState that offers the enrollment screen.
 **Not migrated:** the traffic map and the data-flow list. The map carries the
 reader's pan and zoom across a re-render, and the flow rows use the traffic-type
 colour ramp; both are passed in whole and sit side by side in a panel grid.
+
+
+**About** is the first screen reached from the account menu rather than the
+rail, and it splits in two: `public/about.js` is the history — 81 dated entries
+in two languages — and `public/views/about.js` is the ListPage that draws it. A
+hundred data rows in the middle of a view module is how a view module stops
+being readable.
+
+Three stacked blocks of chrome became one PageHeader. The `.section-head`, the
+accent-bordered `.about-build` box and a lead paragraph each said something
+about the page before the page started; the header says it once, with the build
+this host runs as the lead — product, version, release date. `about.subtitle`
+went: "This build, and what the product grew into" is what the title and the
+lead already say. `about.lead` moved into the (?) popover, which is where page
+background belongs.
+
+The area filters were seven `.chip`s carrying a count each. **A count you click
+to filter by is a StatStrip** — that is what the contract has for it, and it is
+the same move Discovery, Events and Situations made. The "Everything" chip went
+with them: clicking the active card clears the filter, which is the gesture
+every other strip already uses.
+
+`.about-month` was a hand-rolled section heading with its own rule, its own
+letter-spacing and a `:first-of-type` margin override. A month is a Panel, and
+the number of entries in it is the panel note — so `.about-count`, a loose line
+of grey text under the filters, went too.
+
+The version was a `.badge`. A version is metadata, not a state.
+
+One layout note: six areas in the shared auto-fit strip lay out 5 + 1 at a desk
+width, and a card alone on its own row reads as a mistake. The About strip is
+three columns, so it fills two rows evenly, and one column on a phone.

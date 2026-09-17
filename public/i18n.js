@@ -2436,11 +2436,9 @@
       // itself is { en, da } data in public/about.js, because a hundred history
       // entries would drown this catalogue and nothing else names them.
       'about.title': 'About BlueEyes',
-      'about.subtitle': 'This build, and what the product grew into',
       'about.lead': 'BlueEyes runs on your own infrastructure: no cloud, no telemetry, no payload inspection. Below is what has been built, newest first, with the version it shipped in and the month it landed.',
       'about.build.released': 'released {date}',
       'about.build.unknownDate': 'release date unavailable',
-      'about.filter.all': 'Everything',
       'about.area.monitoring': 'Monitoring',
       'about.area.fleet': 'Fleet',
       'about.area.diagnostics': 'Diagnostics',
@@ -2449,6 +2447,8 @@
       'about.area.platform': 'Platform',
       'about.count.one': '{count} release',
       'about.count.other': '{count} releases',
+      'about.none': 'Nothing in this area yet',
+      'about.noneHint': 'Pick another area, or clear the filter to read the whole history.',
       'about.foot': 'Only the changes that moved what the product can do are listed; the full commit-by-commit history lives in CHANGELOG.md in the repository.',
       'about.unavailable': 'The About page could not be loaded.',
       'about.info.hero': 'What this server build is, and the features that got it here — newest first, grouped by month, each with the version it shipped in.',
@@ -5876,11 +5876,9 @@
       // Om-siden (kontomenu → Om BlueEyes). Kun sidens ramme: selve
       // funktionshistorikken er { en, da }-data i public/about.js.
       'about.title': 'Om BlueEyes',
-      'about.subtitle': 'Denne version, og det produktet er vokset til',
       'about.lead': 'BlueEyes kører på jeres egen infrastruktur: ingen sky, ingen telemetri, ingen indholdsinspektion. Herunder står det, der er bygget, nyeste først, med den version det kom i, og den måned det landede.',
       'about.build.released': 'udgivet {date}',
       'about.build.unknownDate': 'udgivelsesdato ikke tilgængelig',
-      'about.filter.all': 'Alt',
       'about.area.monitoring': 'Overvågning',
       'about.area.fleet': 'Flåde',
       'about.area.diagnostics': 'Diagnostik',
@@ -5889,6 +5887,8 @@
       'about.area.platform': 'Platform',
       'about.count.one': '{count} udgivelse',
       'about.count.other': '{count} udgivelser',
+      'about.none': 'Endnu intet p\u00e5 dette omr\u00e5de',
+      'about.noneHint': 'V\u00e6lg et andet omr\u00e5de, eller ryd filteret for at l\u00e6se hele historikken.',
       'about.foot': 'Kun de ændringer, der flyttede på, hvad produktet kan, står her; den fulde historik commit for commit ligger i CHANGELOG.md i repositoriet.',
       'about.unavailable': 'Om-siden kunne ikke indlæses.',
       'about.info.hero': 'Hvad denne serverversion er, og de funktioner der førte hertil — nyeste først, grupperet efter måned, hver med den version de kom i.',

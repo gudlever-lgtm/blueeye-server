@@ -2052,11 +2052,52 @@ async function updateAgent(a, target) {
   if (!confirm(`Update ${name} ${verText}?\n\nThe agent will rebuild from the server's source bundle and restart, briefly interrupting monitoring on that host.`)) return;
   try {
     const r = await api(`/agents/${a.id}/update`, { method: 'POST' });
-    if (r.accepted) { toast(`${name}: update sent — rebuilding and restarting.`); return; }
+    if (r.accepted) {
+      // An UNSIGNED push is the one an agent pinned to a release key refuses,
+      // and it refuses it after accepting the command — so say it here, while
+      // the operator is still looking, not only in the audit trail.
+      if (r.signed === false) {
+        toast(`${name}: update sent UNSIGNED (this server has no release signing key). `
+          + 'An agent pinned to a release key will refuse it — generate a key under Settings → License.', true);
+      } else {
+        toast(`${name}: update sent — rebuilding and restarting.`);
+      }
+      // "Update sent" is not "update done". The agent rebuilds, restarts and
+      // echoes the outcome back into its action-audit row; until now that
+      // outcome only existed behind the connection modal, which is how a failed
+      // rebuild looked exactly like a successful one. Follow the row.
+      if (r.auditId) followAgentAction(a, r.auditId);
+      return;
+    }
     if (r.reason === 'docker-managed') { toast(`${name} runs under Docker — update it by re-running the host installer.`, true); return; }
     if (r.reason === 'unmanaged') { toast(`${name} isn't service-managed — update it manually (re-run the installer).`, true); return; }
     toast(`${name}: the agent did not accept the update.`, true);
   } catch (err) { toast(`${name}: ${err.message}`, true); }
+}
+
+// Polls one agent-action audit row until it goes terminal, then says what
+// happened. A rebuild takes a minute or two on a small host, so this watches for
+// three, backing off; past that it stops rather than polling forever and points
+// at the trail, which keeps the answer whether or not this tab is still open.
+const ACTION_POLL_MS = [5000, 5000, 10000, 10000, 15000, 15000, 20000, 20000, 30000, 30000, 30000];
+async function followAgentAction(a, auditId) {
+  const name = a.display_name || a.hostname;
+  for (const wait of ACTION_POLL_MS) {
+    await new Promise((r) => setTimeout(r, wait));
+    let rows;
+    try { rows = await api(`/agents/${a.id}/audit`); } catch { return; } // not admin, or gone — the trail still has it
+    const row = (rows || []).find((x) => String(x.id) === String(auditId));
+    if (!row || row.state === 'requested') continue;
+    if (row.state === 'completed') {
+      toast(`${name}: updated${row.target_version ? ` to v${row.target_version}` : ''}.`);
+    } else {
+      toast(`${name}: the update FAILED — ${row.result_detail || 'the agent gave no reason'}.`, true);
+    }
+    render();
+    return;
+  }
+  toast(`${name}: the update has not reported back yet. Click the agent's status badge → `
+    + '"Update / delete history" for the outcome.', true);
 }
 
 // A Windows agent can't be upgraded from the server (it runs under a scheduled
@@ -9895,10 +9936,21 @@ function getDestinationsView() {
       const qs = `agentId=${encodeURIComponent(agentId)}&target=${encodeURIComponent(target)}&probeType=${encodeURIComponent(probeType)}`;
       let data = await api(`/api/probes/path?${qs}`);
       if (!(data.nodes && data.nodes.length)) {
-        // Nothing stored yet: ask for a run, then poll a few times.
-        await api(`/agents/${agentId}/probe`, { method: 'POST', body: { type: 'traceroute', host: target } });
-        data = await pollForPath(qs);
-        if (!data) return null;
+        // Nothing stored yet: ask for a run, then poll.
+        //
+        // The run used to be hard-coded to 'traceroute' while the QUERY filtered
+        // on probeType. For a target last traced with tcptraceroute that stored
+        // a traceroute result the poll was not looking for, so it never found
+        // anything and the path never appeared. Run what we are asking for.
+        await api(`/agents/${agentId}/probe`, { method: 'POST', body: { type: probeType, host: target } });
+        // Poll for a path OR for a recorded failure, whichever lands first. A
+        // probe that cannot run (no traceroute binary, -T without root) reports
+        // back within seconds; waiting out the full path timeout before looking
+        // meant the operator stared at nothing for a minute and a half to be
+        // told something the agent had already said.
+        const out = await pollForPath(qs, () => pathFailureReason(agentId, target, probeType));
+        if (out && out.nodes) data = out;
+        else return { empty: true, target, probeType, reason: (out && out.reason) || null };
       }
       return drawGeoPath(data);
     },
@@ -9907,20 +9959,49 @@ function getDestinationsView() {
   return destinationsView;
 }
 
-function pollForPath(qs) {
+// Waits for a freshly-requested trace to land. A traceroute that walks 30 hops
+// with a timeout on several of them routinely takes longer than a minute — the
+// old 4 attempts at 4 s gave up after SIXTEEN SECONDS and reported no path for
+// a probe that was still perfectly healthy and running.
+const PATH_POLL_MS = 5000;
+const PATH_POLL_ATTEMPTS = 18; // ~90 s
+function pollForPath(qs, checkFailure) {
   return new Promise((resolve) => {
     let attempts = 0;
+    const done = (v) => { clearInterval(poll); resolve(v); };
     const poll = setInterval(async () => {
       attempts += 1;
       try {
         const d = await api(`/api/probes/path?${qs}`);
-        if ((d.nodes && d.nodes.length) || attempts >= 4) {
-          clearInterval(poll);
-          resolve(d.nodes && d.nodes.length ? d : null);
+        if (d.nodes && d.nodes.length) return done(d);
+        // The agent may have reported a FAILURE instead of hops. That is an
+        // answer, and waiting out the rest of the window cannot improve it.
+        if (checkFailure) {
+          const reason = await checkFailure();
+          if (reason) return done({ reason });
         }
-      } catch { clearInterval(poll); resolve(null); }
-    }, 4000);
+        if (attempts >= PATH_POLL_ATTEMPTS) done(null);
+      } catch { done(null); }
+    }, PATH_POLL_MS);
   });
+}
+
+// Why a requested trace produced no path. The agent stores its own failure text
+// on the probe result, and ctFailureReason already turns that into a sentence
+// (missing tool, needs root, name not found, timed out...). Without this the UI
+// showed the same empty panel whether traceroute was not installed, needed root
+// for -T, or was simply still running.
+async function pathFailureReason(agentId, target, probeType) {
+  try {
+    const latest = await api(`/api/probes/latest?agentId=${encodeURIComponent(agentId)}`);
+    const rows = (latest && latest.results) || [];
+    const match = rows.filter((r) => r.target === target && r.type === probeType).pop()
+      || rows.filter((r) => r.target === target).pop();
+    if (!match) return null;            // never landed: still running, or never dispatched
+    if (match.ok) return null;          // it succeeded but placed no hops — a geo problem, not a probe one
+    const why = ctFailureReason(match);
+    return (why && (why.full || why.short)) || match.detail || null;
+  } catch { return null; }
 }
 
 // Overlays a traceroute path graph (from /api/probes/path) onto the map in a

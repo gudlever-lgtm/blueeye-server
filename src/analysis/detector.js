@@ -2,7 +2,7 @@
 
 const crypto = require('crypto');
 const { Severity, FindingKind } = require('./constants');
-const { MAD_TO_SIGMA } = require('./baselines');
+const { sigmaFromMad } = require('./baselines');
 const { loadConfig } = require('./config');
 
 const DEFAULT_INTERVAL_MS = 60000; // window width when none is supplied
@@ -34,10 +34,15 @@ function createDetector({ baselines, config = loadConfig(), intervalMs = DEFAULT
       return null;
     }
 
-    // 2) Robust z-score (sigmas) from the baseline. The 1e-9 floor avoids a
-    //    divide-by-zero when MAD is 0 (very stable metric).
-    const sigma = baseline.mad * MAD_TO_SIGMA || 1e-9;
-    const dev = (sample.value - baseline.median) / sigma;
+    // 2) Robust z-score (sigmas) from the baseline. `sigma` is null when the
+    //    window holds no scale at all — every sample identical. That is NOT a
+    //    tiny spread, and the old `|| 1e-9` floor turned it into one: an
+    //    ordinary change against a flat window scored ~1e9 sigmas and cleared
+    //    every threshold. A metric with no scale is handled by the flatline
+    //    branch below (that is exactly what a constant metric is); anything
+    //    reaching step 4 without a sigma has nothing quantifiable to report.
+    const sigma = baseline.sigma !== undefined ? baseline.sigma : sigmaFromMad(baseline.mad);
+    const dev = sigma == null ? null : (sample.value - baseline.median) / sigma;
 
     const window = [new Date(ts.getTime() - intervalMs), ts];
     const base = {
@@ -67,6 +72,10 @@ function createDetector({ baselines, config = loadConfig(), intervalMs = DEFAULT
     }
 
     // 4) Severity from the deviation. Below warnSigma it's normal: learn + null.
+    //    No sigma means no deviation can be stated, so there is nothing to
+    //    classify — the constant series it describes was already answered by
+    //    the flatline branch.
+    if (dev == null) { baselines.update(sample); return null; }
     const absDev = Math.abs(dev);
     let severity = null;
     if (absDev >= critSigma) severity = Severity.CRIT;

@@ -315,9 +315,29 @@
         }, it.label);
       }));
       document.body.append(menu);
+      // Clamp to the VIEWPORT on both axes, and flip above the trigger when
+      // there is no room below. Only the left edge was clamped, so a menu on a
+      // right-hand column ran off the window (its labels cut in half) and one on
+      // the last row opened below the fold.
       var r = anchor.getBoundingClientRect();
-      menu.style.top = (r.bottom + 4) + 'px';
-      menu.style.left = Math.max(8, r.right - menu.offsetWidth) + 'px';
+      // `document.defaultView`, not the bare `window` global: this module is
+      // driven from a document the caller supplies, and a free `window` is a
+      // ReferenceError there — which threw AFTER the menu was in the DOM but
+      // before it was tracked, leaving a menu nothing could close.
+      var vp = document.defaultView || {};
+      var docEl = document.documentElement || {};
+      var vw = vp.innerWidth || docEl.clientWidth || 0;
+      var vh = vp.innerHeight || docEl.clientHeight || 0;
+      var w = menu.offsetWidth;
+      var h = menu.offsetHeight;
+      var left = vw ? Math.min(Math.max(8, r.right - w), Math.max(8, vw - w - 8)) : Math.max(8, r.right - w);
+      var below = r.bottom + 4;
+      var top = below;
+      if (vh) {
+        top = (below + h > vh - 8 && r.top - h - 4 >= 8) ? (r.top - h - 4) : Math.min(below, Math.max(8, vh - h - 8));
+      }
+      menu.style.left = left + 'px';
+      menu.style.top = top + 'px';
       rowMenu = menu;
       setTimeout(function () {
         document.addEventListener('click', onMenuClick, true);

@@ -1331,7 +1331,34 @@ function makeAuditRepo(overrides = {}) {
   let seq = 0;
   return {
     rows,
-    record: overrides.record || (async (r) => { const id = (seq += 1); rows.push({ id, state: 'requested', requested_at: new Date().toISOString(), completed_at: null, result_detail: null, ...r }); return id; }),
+    // `SELECT *` on agent_action_audit, so the ROW SHAPE is the table's — snake
+    // case. The fake used to store the caller's camelCase keys verbatim, which
+    // meant `target_version` was undefined in every test that read a row back,
+    // and the dashboard's "updated to vX" (which reads target_version) could
+    // not be tested at all. A fake that answers in a shape the real repository
+    // never returns hides exactly the bugs it exists to catch.
+    record: overrides.record || (async (r) => {
+      const id = (seq += 1);
+      rows.push({
+        id,
+        state: 'requested',
+        requested_at: new Date().toISOString(),
+        completed_at: null,
+        result_detail: null,
+        agent_id: r.agentId ?? null,
+        agent_hostname: r.agentHostname ?? null,
+        location_id: r.locationId ?? null,
+        actor_user_id: r.actorUserId ?? null,
+        actor_email: r.actorEmail ?? null,
+        actor_role: r.actorRole ?? null,
+        action: r.action,
+        target_version: r.targetVersion ?? null,
+        // The camelCase keys stay alongside for the specs that already filter on
+        // them (agentId, actorUserId) — the table's shape is added, not swapped.
+        ...r,
+      });
+      return id;
+    }),
     complete: overrides.complete || (async (id, { state, resultDetail = null }) => {
       const row = rows.find((x) => x.id === id && x.state === 'requested');
       if (!row) return false;

@@ -9936,10 +9936,21 @@ function getDestinationsView() {
       const qs = `agentId=${encodeURIComponent(agentId)}&target=${encodeURIComponent(target)}&probeType=${encodeURIComponent(probeType)}`;
       let data = await api(`/api/probes/path?${qs}`);
       if (!(data.nodes && data.nodes.length)) {
-        // Nothing stored yet: ask for a run, then poll a few times.
-        await api(`/agents/${agentId}/probe`, { method: 'POST', body: { type: 'traceroute', host: target } });
-        data = await pollForPath(qs);
-        if (!data) return null;
+        // Nothing stored yet: ask for a run, then poll.
+        //
+        // The run used to be hard-coded to 'traceroute' while the QUERY filtered
+        // on probeType. For a target last traced with tcptraceroute that stored
+        // a traceroute result the poll was not looking for, so it never found
+        // anything and the path never appeared. Run what we are asking for.
+        await api(`/agents/${agentId}/probe`, { method: 'POST', body: { type: probeType, host: target } });
+        // Poll for a path OR for a recorded failure, whichever lands first. A
+        // probe that cannot run (no traceroute binary, -T without root) reports
+        // back within seconds; waiting out the full path timeout before looking
+        // meant the operator stared at nothing for a minute and a half to be
+        // told something the agent had already said.
+        const out = await pollForPath(qs, () => pathFailureReason(agentId, target, probeType));
+        if (out && out.nodes) data = out;
+        else return { empty: true, target, probeType, reason: (out && out.reason) || null };
       }
       return drawGeoPath(data);
     },
@@ -9948,20 +9959,49 @@ function getDestinationsView() {
   return destinationsView;
 }
 
-function pollForPath(qs) {
+// Waits for a freshly-requested trace to land. A traceroute that walks 30 hops
+// with a timeout on several of them routinely takes longer than a minute — the
+// old 4 attempts at 4 s gave up after SIXTEEN SECONDS and reported no path for
+// a probe that was still perfectly healthy and running.
+const PATH_POLL_MS = 5000;
+const PATH_POLL_ATTEMPTS = 18; // ~90 s
+function pollForPath(qs, checkFailure) {
   return new Promise((resolve) => {
     let attempts = 0;
+    const done = (v) => { clearInterval(poll); resolve(v); };
     const poll = setInterval(async () => {
       attempts += 1;
       try {
         const d = await api(`/api/probes/path?${qs}`);
-        if ((d.nodes && d.nodes.length) || attempts >= 4) {
-          clearInterval(poll);
-          resolve(d.nodes && d.nodes.length ? d : null);
+        if (d.nodes && d.nodes.length) return done(d);
+        // The agent may have reported a FAILURE instead of hops. That is an
+        // answer, and waiting out the rest of the window cannot improve it.
+        if (checkFailure) {
+          const reason = await checkFailure();
+          if (reason) return done({ reason });
         }
-      } catch { clearInterval(poll); resolve(null); }
-    }, 4000);
+        if (attempts >= PATH_POLL_ATTEMPTS) done(null);
+      } catch { done(null); }
+    }, PATH_POLL_MS);
   });
+}
+
+// Why a requested trace produced no path. The agent stores its own failure text
+// on the probe result, and ctFailureReason already turns that into a sentence
+// (missing tool, needs root, name not found, timed out...). Without this the UI
+// showed the same empty panel whether traceroute was not installed, needed root
+// for -T, or was simply still running.
+async function pathFailureReason(agentId, target, probeType) {
+  try {
+    const latest = await api(`/api/probes/latest?agentId=${encodeURIComponent(agentId)}`);
+    const rows = (latest && latest.results) || [];
+    const match = rows.filter((r) => r.target === target && r.type === probeType).pop()
+      || rows.filter((r) => r.target === target).pop();
+    if (!match) return null;            // never landed: still running, or never dispatched
+    if (match.ok) return null;          // it succeeded but placed no hops — a geo problem, not a probe one
+    const why = ctFailureReason(match);
+    return (why && (why.full || why.short)) || match.detail || null;
+  } catch { return null; }
 }
 
 // Overlays a traceroute path graph (from /api/probes/path) onto the map in a

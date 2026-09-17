@@ -164,7 +164,12 @@
         showPathBtn.textContent = t('dest.path.running');
         deps.showPath(agentId, target)
           .then(function (graph) {
-            if (graph) drawPath(graph);
+            // A run that produced no path still gets a PANEL. It used to get a
+            // toast and nothing else, so "Show path" looked like it had done
+            // nothing at all — and the reason, which the agent had reported all
+            // along, was never shown anywhere.
+            if (graph && graph.empty) drawNoPath(graph);
+            else if (graph) drawPath(graph);
             else ui.toast(t('dest.path.none'), null, { bad: true });
           })
           .catch(function (e) { ui.toast(t('dest.err.path'), deps.errText(e), { bad: true }); })
@@ -173,6 +178,27 @@
             showPathBtn.textContent = t('dest.path.show');
           });
       }
+      // No path came back. Say which of the two things happened — the probe
+      // failed (with the agent's own reason), or it has not reported yet.
+      function drawNoPath(res) {
+        pathHost.replaceChildren(ui.panel({
+          title: t('dest.path.panel'),
+          note: t('dest.path.note', { target: res.target || '—', runs: 0, stops: 0 }),
+          actions: [ui.button('ghost', t('dest.path.clear'), { onclick: clearPath })],
+          children: [
+            ui.inlineNote(t('dest.path.what')),
+            res.reason
+              ? ui.inlineNote(t('dest.path.failed', { why: res.reason }), 'crit')
+              : ui.inlineNote(t('dest.path.pending', { target: res.target || '—' }), 'warn'),
+            ui.emptyState({
+              kind: 'nodata',
+              title: t('dest.path.noStops'),
+              body: res.reason ? t('dest.path.noStopsFailed') : t('dest.path.noStopsPending'),
+            }),
+          ],
+        }));
+      }
+
       function clearPath() {
         deps.clearPath();
         pathHost.replaceChildren();

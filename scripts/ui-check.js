@@ -48,6 +48,7 @@ const MIGRATED = [
   'kitchenSink.js',
   // Phase 3, in the order docs/ui-contract.md sets out.
   'views/changes.js',
+  'views/probes.js',
 ];
 
 // Classes the contract replaced. A migrated file may not use them.
@@ -77,6 +78,12 @@ const LEGACY_CLASSES = {
 // reached yet. That is the phase 4 target; the default is what must stay green
 // on every commit while the migration is in flight.
 const ALL = process.argv.includes('--all');
+
+// `ui-check | head` closes the pipe while the report is still being written,
+// and an unhandled EPIPE on stdout crashes node with a stack trace instead of
+// the findings. Piping a long report into head is exactly how somebody reads
+// one, so it has to survive it.
+process.stdout.on('error', (err) => { if (err && err.code === 'EPIPE') process.exit(0); });
 
 const findings = [];
 function report(file, line, rule, message) {

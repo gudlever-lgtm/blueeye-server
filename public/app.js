@@ -1325,7 +1325,7 @@ const PAGE_INFO = {
 // one above them — two copies of the same paragraph, one of which the contract
 // deleted. The gate reads this set too: a migrated view is allowed to have no
 // PAGE_INFO entry precisely because its module carries the help instead.
-const CONTRACT_VIEWS = new Set(['changes']);
+const CONTRACT_VIEWS = new Set(['changes', 'probes']);
 
 function hero(viewKey) {
   if (CONTRACT_VIEWS.has(viewKey)) return null;
@@ -8423,19 +8423,45 @@ views.interfaces = async () => {
 // persists the active sub-tab across re-renders; gotoView('tests') deep-links here
 // onto the packages tab (the old standalone Tests page).
 let probesTab = 'run'; // 'run' | 'connection' | 'packages'
+// ---- Probes & Tests (page shell MIGRATED — see public/views/probes.js) ------
+// The shell is on the UI contract; the three tab bodies below are not yet, and
+// they migrate in their own commits. Built lazily: `ui` is declared far down
+// this file and is in the temporal dead zone up here.
+let probesView = null;
+function getProbesView() {
+  if (probesView) return probesView;
+  if (typeof window === 'undefined' || !window.ProbesView || !ui) return null;
+  probesView = window.ProbesView.create({
+    el, t, ui, errText,
+    getTab: () => probesTab,
+    setTab: (key) => {
+      if (probesTab === key) return;
+      // Run-a-probe owns the poller; every other tab must not leave it running.
+      if (key !== 'run') stopProbes();
+      probesTab = key;
+      render();
+    },
+    rerender: () => render(),
+    // Each tab answers a different question, so each brings its own lead line
+    // and its own help — the three PAGE_INFO entries that used to feed three
+    // different hero banners now feed one (?) popover.
+    helpFor: (tab) => {
+      const info = (tab === 'packages' ? PAGE_INFO.tests
+        : (tab === 'connection' ? PAGE_INFO.connectionTest : PAGE_INFO.probes)) || {};
+      return { lead: info.hero || '', title: info.title || t('probes.title'), body: info.body || (() => []) };
+    },
+    tabBody: (tab) => (tab === 'packages' ? testPackagesView()
+      : (tab === 'connection' ? connectionTestView() : probeRunnerView())),
+  });
+  return probesView;
+}
+
 views.probes = async () => {
+  const v = getProbesView();
+  if (v) return v.view();
+  // The module did not load: the tab bodies still work, so serve them rather
+  // than a blank page.
   const root = el('div');
-  root.append(el('div', { class: 'section-head' }, el('h2', {}, 'Probes & Tests'),
-    tabStrip([['run', 'Run a probe'], ['connection', t('ct.tab')], ['packages', 'Test packages']], {
-      active: probesTab,
-      ariaLabel: 'Probes & Tests',
-      onPick: (key) => {
-        if (probesTab === key) return;
-        if (key !== 'run') stopProbes();
-        probesTab = key;
-        render();
-      },
-    })));
   const sub = probesTab === 'packages' ? testPackagesView
     : (probesTab === 'connection' ? connectionTestView : probeRunnerView);
   root.append(await sub());

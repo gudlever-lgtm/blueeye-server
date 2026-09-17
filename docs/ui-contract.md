@@ -436,6 +436,7 @@ Administration → login and error screens.
 | Screen | Route | Template | Module |
 |---|---|---|---|
 | Changes | `/changes` | A · ListPage | [`public/views/changes.js`](../public/views/changes.js) |
+| Probes & Tests | `/probes/:tab` | C · FormPage (shell) | [`public/views/probes.js`](../public/views/probes.js) |
 
 **What Changes kept:** the window vocabulary the server accepts (`30m`, `6h`,
 `24h`, `7d` — not the preview's three), the marker rule (it moves only on an
@@ -445,3 +446,20 @@ into the record a row is about.
 **What changed:** severity grouping became a StatStrip filter plus a column; each
 row's explanation moved into the Drawer; the info banner became the (?) popover;
 the partial-result warning stayed on screen as an inline note.
+
+
+**Probes & Tests is a shell migration.** The PageHeader, the (?) popover and the
+SubTabs are on the contract; the three tab bodies — Run a probe, Connection test,
+Test packages — are ~1,700 lines between them and each carries live machinery
+(dispatch, polling, a schedule dialog) that a shell migration has no business
+touching. They are passed in and migrate in their own commits.
+
+That split is the point of the per-file module: `ui:check` holds
+`views/probes.js` to the contract while the bodies it renders are still on the
+old chrome. A screen does not have to be migrated all at once — it has to be
+migrated honestly, with the part that is done actually done.
+
+Three PAGE_INFO entries (`probes`, `connectionTest`, `tests`) used to feed three
+different hero banners. They now feed one (?) popover, which shows the **active
+tab's** help — the page title alone cannot say whether you are about to run one
+check or forty.

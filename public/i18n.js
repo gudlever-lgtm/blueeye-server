@@ -33,6 +33,7 @@
   var STRINGS = {
     en: {
       // ---- Changes, migrated onto the UI contract --------------------------
+      'probes.title': 'Probes & Tests',
       'changes.markedDetail': 'The reference time moved. Next visit shows what is new after this moment.',
       'changes.export': 'Export CSV',
       'changes.exported': 'Exported',
@@ -2350,6 +2351,8 @@
 
     da: {
       // ---- Changes, migreret til UI-kontrakten -------------------------------
+      'probes.title': 'Probes & Tests',
+      'probes.title': 'Probes & Tests',
       'changes.markedDetail': 'Referencetidspunktet er flyttet. Næste besøg viser hvad der er nyt efter nu.',
       'changes.export': 'Eksportér CSV',
       'changes.exported': 'Eksporteret',

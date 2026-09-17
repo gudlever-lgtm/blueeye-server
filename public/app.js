@@ -1335,6 +1335,7 @@ const CONTRACT_VIEWS = new Map([
   ['fleet', 'fleet'],
   ['map', 'sites'],
   ['overview', 'traffic'],
+  ['geo', 'destinations'],
 ]);
 
 function hero(viewKey) {
@@ -11022,23 +11023,30 @@ views.map = async () => {
 };
 
 // ---- Destinations map (internal sites + external destinations + selection) ----
-const geoState = { map: null, ext: null, hosts: null, rect: null, dests: [], sinceIso: '', panel: null, selecting: false, rectStart: null, healthByHost: null, pathLayer: null };
+const geoState = { map: null, ext: null, hosts: null, rect: null, dests: [], internalHosts: [], sinceIso: '',
+  selecting: false, rectStart: null, healthByHost: null, pathLayer: null, config: null, mapOpts: null };
 
-function stopGeo() {
+// Drops the Leaflet objects, keeping the data they were drawn from: mounting a
+// new map has to tear the old one down WITHOUT throwing away the overview it is
+// about to draw.
+function teardownGeoMap() {
   if (geoState.map) { try { geoState.map.remove(); } catch { /* ignore */ } }
   geoState.map = null; geoState.ext = null; geoState.hosts = null; geoState.rect = null;
-  geoState.dests = []; geoState.selecting = false; geoState.rectStart = null; geoState.healthByHost = null; geoState.pathLayer = null;
+  geoState.selecting = false; geoState.rectStart = null; geoState.pathLayer = null;
+}
+function stopGeo() {
+  teardownGeoMap();
+  geoState.dests = []; geoState.internalHosts = [];
+  // mapOpts closes over the view that is going away; a redraw through a stale
+  // one would draw into a layer that no longer exists.
+  geoState.mapOpts = null;
 }
 
-function devColor(dev) {
-  const d = Number(dev) || 0;
-  if (d >= 0.75) return '#ef4444';
-  if (d >= 0.2) return '#f59e0b';
-  return '#38bdf8';
-}
-function devLabel(dev) { const d = Number(dev) || 0; return `${d > 0 ? '+' : ''}${Math.round(d * 100)}%`; }
+// ---- Destinations (MIGRATED — see public/views/destinations.js) -------------
+// The Leaflet instance, the two marker layers, the region rectangle and the
+// traceroute path layer stay here: they are live objects carrying the reader's
+// pan, zoom and selection. The view asks for a canvas and app.js mounts into it.
 function radiusForBytes(b) { return Math.max(6, Math.min(28, 6 + Math.log10((Number(b) || 0) + 1) * 3)); }
-function destTitle(d) { return `${d.country || '??'}${d.asn ? ` · AS${d.asn}` : ''}${d.asnName ? ` ${d.asnName}` : ''}`; }
 function destQuery(d) {
   const qs = new URLSearchParams();
   if (d.country) qs.set('country', d.country);
@@ -11047,269 +11055,227 @@ function destQuery(d) {
   return qs.toString();
 }
 
-function geoSpinner(text) { return el('div', { class: 'geo-loading' }, el('span', { class: 'spinner' }), text || 'Loading…'); }
+let destinationsView = null;
+const destinationsViewState = {};
 
-function miniTable(title, rows) {
-  if (!rows || !rows.length) return null;
-  return el('div', { class: 'mini' }, el('h4', {}, title),
-    el('table', {}, el('tbody', {}, ...rows.map((r) => el('tr', {}, el('td', {}, r[0]), el('td', { class: 'num' }, r[1]))))));
-}
-function findingMini(f) {
-  return el('div', { class: 'finding-mini' },
-    el('span', { class: `badge ${esc(f.severity || 'INFO')}` }, f.severity || 'INFO'),
-    el('span', {}, ` ${esc(f.metric || '')} `),
-    el('span', { class: 'muted' }, esc(f.explanation || '')));
-}
-
-views.geo = async () => {
-  if (typeof L === 'undefined') {
-    return el('div', { class: 'empty' }, 'Map library (Leaflet) could not be loaded — geo map is unavailable offline.');
-  }
-  const [config, overview, fleet, agents] = await Promise.all([
-    api('/api/geo/config'), api('/api/geo/overview'),
-    api('/api/fleet/health').catch(() => ({ agents: [] })),
-    api('/agents').catch(() => []),
-  ]);
-  // hostId → health verdict, so internal site pins can be coloured by health.
-  geoState.healthByHost = new Map((fleet.agents || []).map((a) => [a.agentId, a.health && a.health.status]));
-
-  const root = el('div', { class: 'geo' });
-  const periodSel = el('select', {},
-    el('option', { value: '24h' }, 'Last 24 h'),
-    el('option', { value: '7d' }, 'Last 7 days'),
-    el('option', { value: '30d' }, 'Last 30 days'));
-  const regionBtn = el('button', { class: 'small ghost' }, 'Select region');
-  const clearBtn = el('button', { class: 'small ghost' }, 'Clear selection');
-  root.append(el('div', { class: 'section-head' },
-    el('h2', {}, 'Destinations'),
-    el('span', { class: 'spacer' }),
-    exportButtons('geo', () => (geoState.sinceIso ? { since: geoState.sinceIso } : {})),
-    el('label', { class: 'muted inline' }, 'Period ', periodSel),
-    regionBtn, clearBtn));
-
-  // Path picker: overlay an agent's traceroute path onto this map. Target options
-  // are the agent's recent traceroute destinations (run them in the Probes tab).
-  const pathAgentSel = el('select', { class: 'small' }, el('option', { value: '' }, 'Agent…'),
-    ...agents.map((a) => el('option', { value: String(a.id) }, a.display_name || a.hostname)));
-  const pathTargetDl = el('datalist', { id: 'geo-path-targets' });
-  const pathTargetInput = el('input', { type: 'text', class: 'small', list: 'geo-path-targets', placeholder: 'Traceroute target…' });
-  const pathTargetTypes = new Map(); // target -> 'traceroute' | 'tcptraceroute'
-  const showPathBtn = el('button', { class: 'small' }, 'Show path');
-  const clearPathBtn = el('button', { class: 'small ghost' }, 'Clear path');
-  async function loadPathTargets() {
-    pathTargetDl.replaceChildren();
-    const id = pathAgentSel.value;
-    pathTargetInput.value = '';
-    if (!id) return;
-    try {
-      const data = await api(`/api/probes/latest?agentId=${encodeURIComponent(id)}`);
-      // Remember which probe produced each target: a TCP trace is stored as
-      // host:port and is only found by asking the graph for that type.
-      pathTargetTypes.clear();
-      for (const r of (data.results || [])) {
-        if (r.type !== 'traceroute' && r.type !== 'tcptraceroute') continue;
-        if (!pathTargetTypes.has(r.target)) pathTargetTypes.set(r.target, r.type);
-      }
-      for (const target of pathTargetTypes.keys()) pathTargetDl.append(el('option', { value: target }));
-    } catch { /* leave empty */ }
-  }
-  async function showPath() {
-    if (!geoState.map) return;
-    const id = pathAgentSel.value;
-    if (!id) { toast('Pick an agent first.', true); return; }
-    const target = pathTargetInput.value.trim();
-    if (!target) { toast('Enter a traceroute target.', true); return; }
-    showPathBtn.disabled = true;
-    let polling = false;
-    try {
-      const probeType = pathTargetTypes.get(target) || 'traceroute';
-      const qs = `agentId=${encodeURIComponent(id)}&target=${encodeURIComponent(target)}&probeType=${encodeURIComponent(probeType)}`;
-      const data = await api(`/api/probes/path?${qs}`);
-      if (data.nodes && data.nodes.length) {
-        drawGeoPath(data);
-      } else {
-        // No existing data — trigger a fresh traceroute and poll for results.
-        await api(`/agents/${id}/probe`, { method: 'POST', body: { type: 'traceroute', host: target } });
-        polling = true;
-        showPathBtn.textContent = 'Running…';
-        let attempts = 0;
-        const poll = setInterval(async () => {
-          attempts++;
-          try {
-            const d = await api(`/api/probes/path?${qs}`);
-            if ((d.nodes && d.nodes.length) || attempts >= 4) {
-              clearInterval(poll);
-              showPathBtn.textContent = 'Show path';
-              showPathBtn.disabled = false;
-              if (d.nodes && d.nodes.length) { drawGeoPath(d); loadPathTargets(); }
-              else toast('Traceroute sent — no path yet, try Show path again in a moment.', true);
-            }
-          } catch { clearInterval(poll); showPathBtn.textContent = 'Show path'; showPathBtn.disabled = false; }
-        }, 4000);
-      }
-    } catch (e) {
-      toast(e.status === 409 ? 'Agent not connected — run the traceroute from the Probes tab first.' : errText(e), true);
-    } finally { if (!polling) showPathBtn.disabled = false; }
-  }
-  pathAgentSel.addEventListener('change', loadPathTargets);
-  showPathBtn.addEventListener('click', showPath);
-  clearPathBtn.addEventListener('click', () => { if (geoState.pathLayer) geoState.pathLayer.clearLayers(); showOverviewSummary(); });
-  root.append(el('div', { class: 'geo-pathpick' },
-    el('span', { class: 'muted' }, 'Traceroute path:'),
-    pathAgentSel, pathTargetDl, pathTargetInput, showPathBtn, clearPathBtn));
-
-  // No GeoIP database ⇒ public IPs can't be placed by country, so the map shows
-  // only site pins and traceroute paths collapse to the origin. Say so up front
-  // rather than letting the map look broken; point admins at where to fix it.
-  geoState.geoip = config.geoip || null;
-  if (config.geoip && config.geoip.configured === false) {
-    root.append(el('div', { class: 'alert-banner sev-WARN' },
-      el('span', { class: 'alert-ic' }, '⚠'),
-      el('span', {},
-        el('strong', {}, 'GeoIP database not configured. '),
-        'External destinations and traceroute hops can’t be placed by country until an offline GeoIP/ASN range database is loaded. ',
-        role === 'admin'
-          ? settingsLink('map', 'Configure it in Settings → Map')
-          : 'Ask an administrator to configure it in Settings → Map',
-        '.')));
-  }
-
-  const mapEl = el('div', { class: 'map' });
-  const panel = el('div', { class: 'geo-panel' });
-  geoState.panel = panel;
-  geoState.mapEl = mapEl;
-  root.append(el('div', { class: 'geo-grid' }, mapEl, panel));
-  // Two colour scales: internal SITES are ringed dots coloured by agent health;
-  // external DESTINATIONS are circles coloured by traffic deviation (size = volume).
-  root.append(el('div', { class: 'legend geo-legend' },
-    el('span', { class: 'muted' }, 'Sites:'),
-    el('span', {}, el('span', { class: 'dot ring', style: `background:${HEALTH_COLOR.ok}` }), ' healthy'),
-    el('span', {}, el('span', { class: 'dot ring', style: `background:${HEALTH_COLOR.warn}` }), ' warning'),
-    el('span', {}, el('span', { class: 'dot ring', style: `background:${HEALTH_COLOR.bad}` }), ' critical'),
-    el('span', { class: 'muted' }, '· Destinations:'),
-    el('span', {}, el('span', { class: 'dot', style: 'background:#38bdf8' }), ' normal'),
-    el('span', {}, el('span', { class: 'dot', style: 'background:#f59e0b' }), ' elevated'),
-    el('span', {}, el('span', { class: 'dot', style: 'background:#ef4444' }), ' strong deviation'),
-    el('span', { class: 'muted' }, '· size = volume')));
-
-  periodSel.addEventListener('change', () => {
-    const v = periodSel.value;
-    const ms = v === '7d' ? 7 * 864e5 : v === '30d' ? 30 * 864e5 : 864e5;
-    geoState.sinceIso = new Date(Date.now() - ms).toISOString();
-    reloadOverview();
-  });
-  regionBtn.addEventListener('click', () => beginRegionSelect(regionBtn));
-  clearBtn.addEventListener('click', () => { clearRegion(); showOverviewSummary(); });
-
-  setTimeout(() => initGeoMap(config, overview), 0);
-  return root;
-};
-
-function initGeoMap(config, overview) {
-  if (!geoState.mapEl || !geoState.mapEl.isConnected) return; // view was left already
-  const center = pickGeoCenter(overview);
-  const map = createLeafletMap(geoState.mapEl, config, { center, zoom: 3 });
-  if (!map) return;
-  geoState.map = map;
-
-  geoState.ext = (typeof L.markerClusterGroup === 'function') ? L.markerClusterGroup({ maxClusterRadius: 50 }) : L.layerGroup();
-  geoState.hosts = L.layerGroup();
-  geoState.ext.addTo(map); geoState.hosts.addTo(map);
-
-  // Region drawing handlers (active only while selecting).
-  map.on('mousedown', (e) => { if (geoState.selecting) { geoState.rectStart = e.latlng; } });
-  map.on('mousemove', (e) => {
-    if (!geoState.selecting || !geoState.rectStart) return;
-    const b = L.latLngBounds(geoState.rectStart, e.latlng);
-    if (geoState.rect) geoState.rect.setBounds(b);
-    else geoState.rect = L.rectangle(b, { color: '#38bdf8', weight: 1, fillOpacity: 0.08 }).addTo(map);
-  });
-  map.on('mouseup', (e) => {
-    if (!geoState.selecting || !geoState.rectStart) return;
-    const b = L.latLngBounds(geoState.rectStart, e.latlng);
-    geoState.rectStart = null; geoState.selecting = false;
-    map.dragging.enable(); map.boxZoom.enable();
-    aggregateRegion(b);
-  });
-
-  drawOverview(overview);
-  showOverviewSummary();
-}
-
-function pickGeoCenter(overview) {
-  const h = (overview.internalHosts || []).find((x) => x.lat != null && x.lng != null);
-  if (h) return [h.lat, h.lng];
-  const d = (overview.externalDestinations || []).find((x) => x.lat != null && x.lng != null);
-  return d ? [d.lat, d.lng] : [20, 0];
-}
-
-function drawOverview(overview) {
-  geoState.dests = (overview.externalDestinations || []).filter((d) => d.lat != null && d.lng != null);
-  geoState.ext.clearLayers(); geoState.hosts.clearLayers();
-
-  for (const h of overview.internalHosts || []) {
+// Draws both marker sets from the last overview. Called on mount and on every
+// period change; the map itself is never rebuilt, so the reader keeps their view.
+function drawGeoMarkers(opts) {
+  if (!geoState.ext || !geoState.hosts) return;
+  geoState.ext.clearLayers();
+  geoState.hosts.clearLayers();
+  for (const h of geoState.internalHosts || []) {
     if (h.lat == null || h.lng == null) continue;
-    const status = (geoState.healthByHost && geoState.healthByHost.get(h.hostId)) || (h.status === 'online' ? 'unknown' : 'down');
-    const m = L.circleMarker([h.lat, h.lng], { radius: 8, color: '#fff', weight: 2, fillColor: healthColor(status), fillOpacity: 0.95 });
-    m.bindTooltip(`${esc(h.siteName || `host ${h.hostId}`)} (${esc(h.status || '?')})`);
-    m.on('click', () => selectHost(h));
+    const status = (geoState.healthByHost && geoState.healthByHost.get(h.hostId))
+      || (h.status === 'online' ? 'unknown' : 'down');
+    const m = L.circleMarker([h.lat, h.lng], {
+      radius: 8, color: opts.ringColor, weight: 2,
+      fillColor: opts.healthColor(status), fillOpacity: 0.95,
+    });
+    m.bindTooltip(`${h.siteName || `host ${h.hostId}`} (${h.status || '?'})`);
+    m.on('click', () => opts.onHost(h));
     geoState.hosts.addLayer(m);
   }
   for (const d of geoState.dests) {
+    const colour = opts.devColor(d.deviation);
     const c = L.circleMarker([d.lat, d.lng], {
-      radius: radiusForBytes(d.bytes), color: devColor(d.deviation),
-      fillColor: devColor(d.deviation), fillOpacity: 0.5, weight: 1,
+      radius: radiusForBytes(d.bytes), color: colour,
+      fillColor: colour, fillOpacity: 0.5, weight: 1,
     });
-    c.bindTooltip(`${esc(destTitle(d))} — ${fmtBytes(d.bytes)} (${devLabel(d.deviation)})`);
-    c.on('click', () => selectDestination(d));
+    c.bindTooltip(`${destTitleOf(d)} — ${fmtBytes(d.bytes)}`);
+    c.on('click', () => opts.onDestination(d));
     geoState.ext.addLayer(c);
   }
 }
-
-async function reloadOverview() {
-  if (!geoState.map) return;
-  const panel = geoState.panel;
-  panel.replaceChildren(geoSpinner('Updating…'));
-  try {
-    const qs = geoState.sinceIso ? `?since=${encodeURIComponent(geoState.sinceIso)}` : '';
-    const overview = await api(`/api/geo/overview${qs}`);
-    drawOverview(overview);
-    showOverviewSummary();
-  } catch (err) {
-    panel.replaceChildren(el('div', { class: 'empty error' }, err.message));
-  }
+function destTitleOf(d) {
+  return `${d.country || '??'}${d.asn ? ` · AS${d.asn}` : ''}${d.asnName ? ` ${d.asnName}` : ''}`;
+}
+function pickGeoCenter() {
+  const h = (geoState.internalHosts || []).find((x) => x.lat != null && x.lng != null);
+  if (h) return [h.lat, h.lng];
+  const d = geoState.dests.find((x) => x.lat != null && x.lng != null);
+  return d ? [d.lat, d.lng] : [20, 0];
 }
 
-function showOverviewSummary() {
-  const panel = geoState.panel;
-  if (!panel) return;
-  const dests = geoState.dests;
-  const totBytes = dests.reduce((s, d) => s + (Number(d.bytes) || 0), 0);
-  const top = dests.slice().sort((a, b) => (Number(b.bytes) || 0) - (Number(a.bytes) || 0)).slice(0, 12);
-  const topTable = top.length
-    ? el('table', { class: 'geo-top' }, el('tbody', {}, ...top.map((d) => el('tr', {
-      class: 'geo-top-row', tabindex: '0', title: 'Show destination details',
-      onclick: () => selectDestination(d),
-      onkeydown: (e) => { if (e.key === 'Enter') selectDestination(d); },
+function mountGeoMap(canvas, opts) {
+  teardownGeoMap();
+  geoState.mapOpts = opts;
+  // Deferred: the canvas is not in the document until the view is returned, and
+  // Leaflet measures it on init.
+  setTimeout(() => {
+    if (!canvas.isConnected) return;
+    const map = createLeafletMap(canvas, geoState.config || {}, { center: pickGeoCenter(), zoom: 3 });
+    if (!map) return;
+    geoState.map = map;
+    geoState.ext = (typeof L.markerClusterGroup === 'function')
+      ? L.markerClusterGroup({ maxClusterRadius: 50 })
+      : L.layerGroup();
+    geoState.hosts = L.layerGroup();
+    geoState.ext.addTo(map);
+    geoState.hosts.addTo(map);
+
+    // Region drawing, active only while selecting.
+    map.on('mousedown', (e) => { if (geoState.selecting) { geoState.rectStart = e.latlng; } });
+    map.on('mousemove', (e) => {
+      if (!geoState.selecting || !geoState.rectStart) return;
+      const b = L.latLngBounds(geoState.rectStart, e.latlng);
+      if (geoState.rect) geoState.rect.setBounds(b);
+      else geoState.rect = L.rectangle(b, { color: opts.selectColor, weight: 1, fillOpacity: 0.08 }).addTo(map);
+    });
+    map.on('mouseup', (e) => {
+      if (!geoState.selecting || !geoState.rectStart) return;
+      const b = L.latLngBounds(geoState.rectStart, e.latlng);
+      geoState.rectStart = null;
+      geoState.selecting = false;
+      map.dragging.enable();
+      map.boxZoom.enable();
+      opts.onRegion(geoState.dests.filter((d) => b.contains([d.lat, d.lng])));
+      clearGeoRegion();
+    });
+
+    drawGeoMarkers(opts);
+  }, 0);
+}
+
+function beginRegionSelect() {
+  if (!geoState.map) return;
+  geoState.selecting = true;
+  geoState.map.dragging.disable();
+  geoState.map.boxZoom.disable();
+  ui.toast(t('dest.regionPrompt'));
+}
+function clearGeoRegion() {
+  if (geoState.rect && geoState.map) { geoState.map.removeLayer(geoState.rect); }
+  geoState.rect = null;
+}
+
+function getDestinationsView() {
+  if (destinationsView) return destinationsView;
+  if (typeof window === 'undefined' || !window.DestinationsView || !ui) return null;
+  // target -> 'traceroute' | 'tcptraceroute': a TCP trace is stored as host:port
+  // and is only found by asking the graph for that type.
+  const pathTargetTypes = new Map();
+
+  // geoState.dests is what the MAP can draw; the view gets every destination.
+  // A destination with no coordinates is still traffic leaving the network —
+  // it belongs in the table even when it cannot be put on the map.
+  const takeOverview = (overview) => {
+    const all = overview.externalDestinations || [];
+    geoState.internalHosts = overview.internalHosts || [];
+    geoState.dests = all.filter((d) => d.lat != null && d.lng != null);
+    return { destinations: all };
+  };
+
+  destinationsView = window.DestinationsView.create({
+    el, t, ui, errText, fmtBytes, gotoView,
+    state: destinationsViewState,
+    isAdmin: () => role === 'admin',
+    hasMapLibrary: () => typeof L !== 'undefined',
+    help: () => {
+      const info = PAGE_INFO.geo || {};
+      return { lead: info.hero || '', title: info.title || t('dest.title'), body: info.body || (() => []) };
     },
-    el('td', {}, el('span', { class: 'dot', style: `background:${devColor(d.deviation)}` }), ' ', esc(destTitle(d))),
-    el('td', { class: 'num' }, fmtBytes(d.bytes)),
-    el('td', { class: 'num muted' }, devLabel(d.deviation))))))
-    : el('div', { class: 'muted' }, 'No external destinations in this period.');
-  panel.replaceChildren(
-    el('div', { class: 'section-head' }, el('h3', {}, 'Overview')),
-    el('p', { class: 'muted' }, `${dests.length} external destinations · ${fmtBytes(totBytes)} in the period`),
-    el('h4', {}, 'Top destinations'),
-    topTable,
-    el('p', { class: 'muted small' }, 'Click a row, a circle (destination) or a site pin for details, or select a region.'));
+    fetchFirst: async () => {
+      const [config, overview, fleet, agents] = await Promise.all([
+        api('/api/geo/config').catch(() => ({})),
+        api('/api/geo/overview'),
+        api('/api/fleet/health').catch(() => ({ agents: [] })),
+        api('/agents').catch(() => []),
+      ]);
+      geoState.config = config;
+      geoState.healthByHost = new Map((fleet.agents || []).map((a) => [a.agentId, a.health && a.health.status]));
+      return Object.assign({ config, agents }, takeOverview(overview));
+    },
+    fetchOverview: async () => {
+      const qs = geoState.sinceIso ? `?since=${encodeURIComponent(geoState.sinceIso)}` : '';
+      return takeOverview(await api(`/api/geo/overview${qs}`));
+    },
+    setPeriod: (period) => {
+      const ms = period === '7d' ? 7 * 864e5 : period === '30d' ? 30 * 864e5 : 864e5;
+      geoState.sinceIso = new Date(Date.now() - ms).toISOString();
+    },
+    redraw: () => { if (geoState.mapOpts) drawGeoMarkers(geoState.mapOpts); },
+    mountMap: mountGeoMap,
+    beginRegionSelect,
+    exportAs: (fmt) => downloadExport('geo', fmt, geoState.sinceIso ? { since: geoState.sinceIso } : {}),
+    // A destination with no flows in the period is a 404, which is an answer
+    // rather than a failure.
+    fetchDestination: async (d) => {
+      const qs = destQuery(d);
+      const flows = await api(`/api/geo/select/flows?${qs}`).catch((e) => { if (e.status === 404) return null; throw e; });
+      if (!flows) return null;
+      const res = await api(`/api/geo/select/findings?${qs}`).catch((e) => { if (e.status === 404) return { findings: [] }; throw e; });
+      return { flows, findings: res.findings || [] };
+    },
+    fetchHost: async (h) => api(`/api/findings?hostId=${encodeURIComponent(h.hostId)}`),
+    // Findings across the distinct countries in the box, bounded to eight.
+    fetchRegionFindings: async (inBox) => {
+      const countries = [...new Set(inBox.map((d) => d.country).filter(Boolean))].slice(0, 8);
+      const seen = new Set();
+      const out = [];
+      for (const country of countries) {
+        const qs = new URLSearchParams({ country });
+        if (geoState.sinceIso) qs.set('since', geoState.sinceIso);
+        // eslint-disable-next-line no-await-in-loop
+        const res = await api(`/api/geo/select/findings?${qs}`).catch((e) => (e.status === 404 ? { findings: [] } : Promise.reject(e)));
+        for (const f of res.findings || []) { if (!seen.has(f.id)) { seen.add(f.id); out.push(f); } }
+      }
+      return out;
+    },
+    loadPathTargets: async (agentId, list) => {
+      list.replaceChildren();
+      pathTargetTypes.clear();
+      if (!agentId) return;
+      try {
+        const data = await api(`/api/probes/latest?agentId=${encodeURIComponent(agentId)}`);
+        for (const r of (data.results || [])) {
+          if (r.type !== 'traceroute' && r.type !== 'tcptraceroute') continue;
+          if (!pathTargetTypes.has(r.target)) pathTargetTypes.set(r.target, r.type);
+        }
+        for (const target of pathTargetTypes.keys()) list.append(el('option', { value: target }));
+      } catch { /* leave the list empty */ }
+    },
+    // Draws the path and resolves with the graph (plus its geolocated stops),
+    // or null when a fresh traceroute had to be sent and produced nothing yet.
+    showPath: async (agentId, target) => {
+      if (!geoState.map) return null;
+      const probeType = pathTargetTypes.get(target) || 'traceroute';
+      const qs = `agentId=${encodeURIComponent(agentId)}&target=${encodeURIComponent(target)}&probeType=${encodeURIComponent(probeType)}`;
+      let data = await api(`/api/probes/path?${qs}`);
+      if (!(data.nodes && data.nodes.length)) {
+        // Nothing stored yet: ask for a run, then poll a few times.
+        await api(`/agents/${agentId}/probe`, { method: 'POST', body: { type: 'traceroute', host: target } });
+        data = await pollForPath(qs);
+        if (!data) return null;
+      }
+      return drawGeoPath(data);
+    },
+    clearPath: () => { if (geoState.pathLayer) geoState.pathLayer.clearLayers(); },
+  });
+  return destinationsView;
 }
 
-// Overlays a traceroute path graph (from /api/probes/path) onto the Destinations
-// map in a dedicated layer that "Clear path" wipes — same pgColor/pathGeoStops/
-// renderPathStops used by the Probes traceroute map — and summarises it in the
-// side panel.
+function pollForPath(qs) {
+  return new Promise((resolve) => {
+    let attempts = 0;
+    const poll = setInterval(async () => {
+      attempts += 1;
+      try {
+        const d = await api(`/api/probes/path?${qs}`);
+        if ((d.nodes && d.nodes.length) || attempts >= 4) {
+          clearInterval(poll);
+          resolve(d.nodes && d.nodes.length ? d : null);
+        }
+      } catch { clearInterval(poll); resolve(null); }
+    }, 4000);
+  });
+}
+
+// Overlays a traceroute path graph (from /api/probes/path) onto the map in a
+// dedicated layer that "Clear path" wipes — the same pathGeoStops/
+// renderPathStops the Probes traceroute map uses.
 function drawGeoPath(graph) {
-  if (!geoState.map) return;
+  if (!geoState.map) return null;
   const stops = pathGeoStops(graph.nodes || []);
   if (!geoState.pathLayer) geoState.pathLayer = L.layerGroup().addTo(geoState.map);
   geoState.pathLayer.clearLayers();
@@ -11317,146 +11283,14 @@ function drawGeoPath(graph) {
     const latlngs = renderPathStops(geoState.pathLayer, stops);
     try { geoState.map.fitBounds(latlngs, { padding: [40, 40], maxZoom: 7 }); } catch { /* single point */ }
   }
-  geoPathSummary(graph, stops);
+  return Object.assign({}, graph, { stops });
 }
 
-function geoPathSummary(graph, stops) {
-  const panel = geoState.panel;
-  if (!panel) return;
-  const rank = { bad: 3, warn: 2, muted: 1, ok: 0 };
-  const hops = (graph.nodes || []).filter((n) => n.kind !== 'source');
-  const worst = hops.reduce((w, n) => ((rank[n.severity] || 0) > (rank[(w && w.severity)] || 0) ? n : w), null);
-  const list = stops.length
-    ? el('ul', { class: 'geo-path-stops' }, ...stops.map((s) => {
-      const isSrc = s.nodes.some((n) => n.kind === 'source');
-      const place = isSrc ? (s.nodes[0].label || 'Agent') : (s.nodes[0].country || '—');
-      const hopLabel = isSrc ? 'origin'
-        : s.nodes.length > 1 ? `hops ${s.nodes[0].hop}–${s.nodes[s.nodes.length - 1].hop}` : `hop ${s.nodes[0].hop}`;
-      return el('li', {}, el('span', { class: 'dot', style: `background:${pgColor(s.severity)}` }), ' ',
-        esc(String(place)), ' ', el('span', { class: 'muted' }, hopLabel));
-    }))
-    : el('div', { class: 'empty' }, 'No geolocated stops — country-level geo needs the agent site and at least one public hop.');
-  // When a run exists but the map stays (almost) empty, say why instead of leaving
-  // a blank panel: either no hops came back at all (the agent's traceroute/tracert
-  // is missing or blocked), or hops came back but can't be placed (private hops, or
-  // no GeoIP country). The full per-hop topology is always on the Probes view.
-  let note = null;
-  if (graph.samples > 0 && stops.length < 2) {
-    if (!hops.length) {
-      const why = graph.detail
-        ? `The agent couldn't run traceroute: ${esc(graph.detail)}.`
-        : 'The traceroute returned no hops — the agent is likely missing the traceroute/tracert command or has it blocked.';
-      note = el('p', { class: 'muted small' }, `${why} Open Probes to see the raw result.`);
-    } else {
-      const silent = hops.every((h) => h.unresponsive);
-      note = el('p', { class: 'muted small' }, `${hops.length} hop${hops.length === 1 ? '' : 's'} captured${silent ? ' (all silent — no ICMP replies)' : ''}, but none could be placed on the map (private hops or no GeoIP country). Open Probes for the per-hop topology.`);
-    }
-  }
-  // worst-hop line and `note` can be null; `el()` skips null kids but a bare
-  // `replaceChildren(…, null, …)` would stringify it to the text "null", so filter.
-  const worstLine = worst && (rank[worst.severity] || 0) > 0
-    ? el('p', { class: worst.severity === 'bad' ? 'bad-text' : 'warn-text' }, `Worst hop: #${worst.hop} — ${esc(worst.explain)}`)
-    : null;
-  panel.replaceChildren(...[
-    el('div', { class: 'section-head' }, el('h3', {}, 'Traceroute path')),
-    el('p', {}, esc(graph.target || '(latest)')),
-    el('p', { class: 'muted' }, `${graph.samples} run${graph.samples === 1 ? '' : 's'} aggregated · ${stops.length} geolocated stop${stops.length === 1 ? '' : 's'}`),
-    worstLine,
-    note,
-    list,
-    el('p', { class: 'muted small' }, 'Open Probes to inspect the per-hop topology, or “Clear path” to return to the overview.'),
-  ].filter(Boolean));
-}
-
-async function selectDestination(d) {
-  const panel = geoState.panel;
-  panel.replaceChildren(geoSpinner('Loading destination…'));
-  const qs = destQuery(d);
-  try {
-    const flows = await api(`/api/geo/select/flows?${qs}`).catch((e) => { if (e.status === 404) return null; throw e; });
-    if (!flows) { panel.replaceChildren(el('div', { class: 'empty' }, 'No data for this destination in the period.')); return; }
-    const findings = await api(`/api/geo/select/findings?${qs}`).catch((e) => { if (e.status === 404) return { findings: [] }; throw e; });
-    renderDestPanel(d, flows, findings);
-  } catch (err) {
-    panel.replaceChildren(el('div', { class: 'empty error' }, err.message));
-  }
-}
-
-function renderDestPanel(d, flows, findingsRes) {
-  const fs = (findingsRes && findingsRes.findings) || [];
-  geoState.panel.replaceChildren(
-    el('div', { class: 'section-head' }, el('h3', {}, destTitle(d)),
-      el('span', { class: 'spacer' }), el('button', { class: 'small ghost', onclick: () => { clearRegion(); showOverviewSummary(); } }, 'Clear selection')),
-    el('p', { class: 'muted' }, `${fmtBytes(flows.totals.bytes)} · ${flows.totals.flowCount} flows · deviation ${devLabel(d.deviation)}`),
-    miniTable('Direction', flows.byDirection.map((x) => [x.direction === 'in' ? 'inbound' : 'outbound', fmtBytes(x.bytes)])),
-    miniTable('Protocol', flows.byProto.map((x) => [esc(x.proto || '–'), fmtBytes(x.bytes)])),
-    miniTable('ASN', flows.byAsn.map((x) => [esc(x.asnName || (x.asn ? `AS${x.asn}` : '–')), fmtBytes(x.bytes)])),
-    el('h4', {}, `Findings (${fs.length})`),
-    fs.length ? el('div', {}, ...fs.slice(0, 50).map(findingMini)) : el('div', { class: 'muted' }, 'No findings for the hosts communicating with this destination.'));
-}
-
-async function selectHost(h) {
-  const panel = geoState.panel;
-  panel.replaceChildren(geoSpinner('Loading host…'));
-  try {
-    const findings = await api(`/api/findings?hostId=${encodeURIComponent(h.hostId)}`);
-    panel.replaceChildren(
-      el('div', { class: 'section-head' }, el('h3', {}, esc(h.siteName || `host ${h.hostId}`)),
-        el('span', { class: 'spacer' }), el('button', { class: 'small ghost', onclick: showOverviewSummary }, 'Clear selection')),
-      el('p', {}, el('span', { class: `badge ${h.status === 'online' ? 'online' : 'offline'}` }, h.status || '?'), ` host ${h.hostId}`),
-      el('h4', {}, `Findings (${findings.length})`),
-      findings.length ? el('div', {}, ...findings.slice(0, 50).map(findingMini)) : el('div', { class: 'muted' }, 'No findings for this host.'));
-  } catch (err) {
-    panel.replaceChildren(el('div', { class: 'empty error' }, err.message));
-  }
-}
-
-function beginRegionSelect(btn) {
-  if (!geoState.map) return;
-  geoState.selecting = true;
-  geoState.map.dragging.disable();
-  geoState.map.boxZoom.disable();
-  toast('Draw a box on the map to select a region');
-  if (btn) { btn.classList.add('active-btn'); setTimeout(() => btn.classList.remove('active-btn'), 1500); }
-}
-
-function clearRegion() {
-  if (geoState.rect && geoState.map) { geoState.map.removeLayer(geoState.rect); }
-  geoState.rect = null;
-}
-
-async function aggregateRegion(bounds) {
-  const panel = geoState.panel;
-  const inBox = geoState.dests.filter((d) => bounds.contains([d.lat, d.lng]));
-  if (!inBox.length) { panel.replaceChildren(el('div', { class: 'empty' }, 'No destinations in the selected region.')); return; }
-  const totBytes = inBox.reduce((s, d) => s + (Number(d.bytes) || 0), 0);
-  const totFlows = inBox.reduce((s, d) => s + (Number(d.flowCount) || 0), 0);
-  panel.replaceChildren(
-    el('div', { class: 'section-head' }, el('h3', {}, 'Region'),
-      el('span', { class: 'spacer' }), el('button', { class: 'small ghost', onclick: () => { clearRegion(); showOverviewSummary(); } }, 'Clear selection')),
-    el('p', { class: 'muted' }, `${inBox.length} destinations · ${fmtBytes(totBytes)} · ${totFlows} flows`),
-    miniTable('Destinations', inBox.slice().sort((a, b) => b.bytes - a.bytes).slice(0, 30).map((d) => [esc(destTitle(d)), fmtBytes(d.bytes)])),
-    el('div', { class: 'geo-region-findings' }, geoSpinner('Loading findings for the region…')));
-
-  // Aggregate findings across the distinct countries in the box (bounded).
-  const countries = [...new Set(inBox.map((d) => d.country).filter(Boolean))].slice(0, 8);
-  const seen = new Set();
-  const findings = [];
-  try {
-    for (const country of countries) {
-      const qs = new URLSearchParams({ country });
-      if (geoState.sinceIso) qs.set('since', geoState.sinceIso);
-      // eslint-disable-next-line no-await-in-loop
-      const res = await api(`/api/geo/select/findings?${qs}`).catch((e) => (e.status === 404 ? { findings: [] } : Promise.reject(e)));
-      for (const f of res.findings || []) { if (!seen.has(f.id)) { seen.add(f.id); findings.push(f); } }
-    }
-  } catch { /* best-effort */ }
-  const slot = panel.querySelector('.geo-region-findings');
-  if (slot) {
-    slot.replaceChildren(el('h4', {}, `Findings (${findings.length})`),
-      findings.length ? el('div', {}, ...findings.slice(0, 50).map(findingMini)) : el('div', { class: 'muted' }, 'No findings in the region.'));
-  }
-}
+views.geo = async () => {
+  const v = getDestinationsView();
+  if (!v) return el('div', { class: 'empty error' }, t('dest.err.title'));
+  return v.view();
+};
 
 // Maps an hsflowd exporter state to a badge colour class.
 function hsflowdBadgeClass(state) {

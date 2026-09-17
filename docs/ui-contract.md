@@ -441,6 +441,7 @@ Administration → login and error screens.
 | Fleet | `/fleet` | A · ListPage | [`public/views/fleet.js`](../public/views/fleet.js) |
 | Sites | `/sites` | A · ListPage | [`public/views/sites.js`](../public/views/sites.js) |
 | Traffic | `/traffic` | B · DashboardPage | [`public/views/traffic.js`](../public/views/traffic.js) |
+| Destinations | `/destinations` | A · ListPage | [`public/views/destinations.js`](../public/views/destinations.js) |
 
 **What Changes kept:** the window vocabulary the server accepts (`30m`, `6h`,
 `24h`, `7d` — not the preview's three), the marker rule (it moves only on an
@@ -556,3 +557,29 @@ they stay in `app.js` until they migrate on their own. The one accommodation is
 a single rule in `styles.css` — `.ui .overview-chart` drops its own card
 background — so the unmigrated plotter does not draw a second panel inside the
 contract's.
+
+
+**Destinations** kept a 340px panel beside the map at all times. A destination
+circle, a site pin and a dragged region all wrote into it, with nothing to say
+which of the three you were reading and no way to put it away. That panel is the
+**Drawer**: one place for detail whatever was clicked, with a title, Escape, a
+close and a focus return — and the map gets the full width back when it is shut.
+
+"Top destinations" became a DataTable, sortable by volume, flows or deviation,
+with the deviation as a badge. A destination the GeoIP database cannot place now
+appears in that table: it is still traffic leaving the network, and the old page
+dropped it entirely because the map could not draw it.
+
+Both colour scales — health for sites, deviation for destinations — come from
+the palette through `ui.token()`. The legend names both, because two scales on
+one map that nobody explains is two scales nobody reads.
+
+The map is mounted **once**. A period change refetches, redraws the markers and
+retitles the panel; rebuilding the map would throw away the reader's pan and
+zoom, which is the one thing a map is for. `teardownGeoMap()` exists for exactly
+that reason: a remount has to drop the Leaflet objects without dropping the
+overview it is about to draw.
+
+**Not migrated, passed in whole:** the Leaflet instance, the two marker layers,
+the region rectangle and the traceroute path layer, plus `pathGeoStops` /
+`renderPathStops`, which the Probes traceroute map shares.

@@ -376,6 +376,23 @@
 .ui .ui-legend-dot.health-bad { background: var(--sev-crit); }
 .ui .ui-legend-dot.health-unknown { background: var(--text-muted); }
 
+/* Destinations carries a second scale beside health: how far a destination's
+   volume is from what is normal for it. Same three steps as the badge. */
+.ui .ui-legend-dot.dev-info { background: var(--sev-info); }
+.ui .ui-legend-dot.dev-warn { background: var(--sev-warn); }
+.ui .ui-legend-dot.dev-crit { background: var(--sev-crit); }
+/* …and a third for a traceroute hop's verdict, which the server names. */
+.ui .ui-legend-dot.sev-ok { background: var(--sev-ok); }
+.ui .ui-legend-dot.sev-warn { background: var(--sev-warn); }
+.ui .ui-legend-dot.sev-bad { background: var(--sev-crit); }
+.ui .ui-legend-dot.sev-muted { background: var(--text-muted); }
+
+/* The stops of a traceroute path, in order. */
+.ui .path-stops { list-style: none; margin: 0; padding: 0; }
+.ui .path-stops li { display: flex; align-items: center; gap: var(--s-2);
+  padding: var(--s-2) 0; border-bottom: 1px solid var(--hairline); font-size: var(--fs-sm); }
+.ui .path-stops li:last-child { border-bottom: 0; }
+
 /* The popup sits inside Leaflet's own white card (see --popup-* in tokens.css),
    so it opts out of the theme's text colours rather than inheriting them. */
 .ui.map-pop { color: var(--popup-text); font-size: var(--fs-sm); }

@@ -254,12 +254,38 @@
         ['schedules', t('sa.tab.schedules')],
         ['monitors', t('sa.tab.monitors')],
       ];
-      return el('div', { class: 'sa-tabs' }, ...tabs.map(function (pair) {
-        return el('button', {
-          class: 'sa-tab' + (state.tab === pair[0] ? ' active' : ''),
+      // Same strip, same keyboard behaviour as the rest of the dashboard: the
+      // bar is ONE stop in the tab order and the arrows move inside it. Written
+      // here rather than imported because this module ships standalone.
+      var strip = el('div', { class: 'sa-tabs', role: 'tablist', 'aria-label': t('sa.title') });
+      var buttons = [];
+      tabs.forEach(function (pair, i) {
+        var on = state.tab === pair[0];
+        var btn = el('button', {
+          type: 'button',
+          class: 'sa-tab' + (on ? ' active' : ''),
+          role: 'tab',
+          'aria-selected': on ? 'true' : 'false',
+          tabindex: on ? '0' : '-1',
+          'data-tab': pair[0],
           onclick: function () { state.tab = pair[0]; state.applicationId = null; state.testId = null; state.monitorId = null; draw(); },
+          onkeydown: function (e) {
+            var step = { ArrowRight: 1, ArrowLeft: -1, ArrowDown: 1, ArrowUp: -1 }[e.key];
+            var to = null;
+            if (step) to = (i + step + buttons.length) % buttons.length;
+            else if (e.key === 'Home') to = 0;
+            else if (e.key === 'End') to = buttons.length - 1;
+            if (to === null) return;
+            e.preventDefault();
+            buttons[to].focus();
+          },
         }, pair[1]);
-      }));
+        buttons.push(btn);
+        strip.appendChild(btn);
+      });
+      // Nothing selected would leave the strip unreachable by keyboard.
+      if (!buttons.some(function (b) { return b.tabIndex === 0; }) && buttons[0]) buttons[0].tabIndex = 0;
+      return strip;
     }
 
     function draw() {

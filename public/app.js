@@ -772,6 +772,77 @@ function gotoView(viewKey) {
   currentView = viewKey;
   render();
 }
+// ---- Tabs -----------------------------------------------------------------
+// A tab is not a button, and until this existed the dashboard drew it as one:
+// a row of `small ghost` buttons where the selected one had a slightly
+// different background. Next to a form's Save/Cancel — often on the same screen
+// — nothing said which row switched a view and which row did something.
+//
+// So a tab strip looks like a tab strip: no button chrome, muted labels, and
+// the selected one carrying the accent underline on the strip's own rule. It
+// also BEHAVES like one, which is the half a stylesheet cannot do: the strip is
+// one stop in the tab order (arrow keys move between the tabs, Home/End jump to
+// the ends) and it announces itself as a tablist, so a screen reader says "tab
+// 2 of 3, selected" instead of reading out three unrelated buttons.
+//
+//   tabStrip([['run', 'Run a probe'], ['packages', 'Test packages']], {
+//     active: probesTab,
+//     onPick: (key) => { probesTab = key; render(); },
+//   })
+//
+// Returns the strip, with `setActive(key)` for the callers that switch tabs
+// without re-rendering the whole screen.
+function tabStrip(items, { active = null, onPick = null, className = '', ariaLabel = null } = {}) {
+  const list = items.filter(Boolean);
+  const strip = el('div', {
+    class: `subtabs${className ? ` ${className}` : ''}`,
+    role: 'tablist',
+    ...(ariaLabel ? { 'aria-label': ariaLabel } : {}),
+  });
+  const buttons = [];
+
+  const focusAt = (i) => {
+    const next = buttons[(i + buttons.length) % buttons.length];
+    if (next) next.focus();
+  };
+
+  function setActive(key) {
+    for (const b of buttons) {
+      const on = b.dataset.tab === String(key);
+      b.classList.toggle('active', on);
+      b.setAttribute('aria-selected', on ? 'true' : 'false');
+      // One stop in the tab order: Tab enters the strip at the selected tab and
+      // leaves it, arrows move within. This is what the pattern is for.
+      b.tabIndex = on ? 0 : -1;
+    }
+    // Nothing selected (a view whose tab key is not in this strip) would trap
+    // the keyboard with no way in, so the first tab stays reachable.
+    if (!buttons.some((b) => b.tabIndex === 0) && buttons[0]) buttons[0].tabIndex = 0;
+  }
+
+  list.forEach(([key, label], i) => {
+    const btn = el('button', {
+      type: 'button',
+      class: 'subtab',
+      role: 'tab',
+      'data-tab': String(key),
+      onclick: () => { setActive(key); if (onPick) onPick(key); },
+      onkeydown: (e) => {
+        const step = { ArrowRight: 1, ArrowLeft: -1, ArrowDown: 1, ArrowUp: -1 }[e.key];
+        if (step) { e.preventDefault(); focusAt(i + step); return; }
+        if (e.key === 'Home') { e.preventDefault(); focusAt(0); return; }
+        if (e.key === 'End') { e.preventDefault(); focusAt(buttons.length - 1); }
+      },
+    }, label);
+    buttons.push(btn);
+    strip.append(btn);
+  });
+
+  setActive(active);
+  strip.setActive = setActive;
+  return strip;
+}
+
 // Why a nav entry cannot be opened: 'role' (above the user's role), 'licence'
 // (not in this licence) or null (it can). One reading of the nav, used by the
 // help drawers' viewLink and by the guides, so a link is never offered where
@@ -4953,6 +5024,23 @@ function probeMeasured(r) {
       const worst = hops.reduce((w, h) => (h.lossPct != null && (w == null || h.lossPct > w) ? h.lossPct : w), null);
       return `${hops.length} hops${worst ? ` · ${worst}% worst hop loss` : ''}`;
     }
+    case 'tls': {
+      // The expiry is the number people come for; the faults are named next to
+      // it because a certificate with 300 days left and an untrusted chain is
+      // not a healthy certificate.
+      const c = r.tls || {};
+      const parts = [];
+      if (c.expiryDays != null) parts.push(c.expiryDays <= 0 ? `expired ${Math.abs(Math.round(c.expiryDays))}d ago` : `${Math.round(c.expiryDays)}d left`);
+      if (c.authorized === false) parts.push('untrusted');
+      if (c.hostnameMatches === false) parts.push('name mismatch');
+      if (c.protocol) parts.push(c.protocol);
+      return parts.length ? parts.join(' · ') : null;
+    }
+    case 'rdns': {
+      const d = r.rdns || {};
+      if (!d.ptrNames || !d.ptrNames.length) return r.ok ? null : 'no PTR';
+      return `${d.ptrNames[0]}${d.forwardConfirmed ? '' : ' · unconfirmed'}`;
+    }
     case 'pageload':
       return r.rttMs == null ? null
         : `${ms(r.rttMs)} load${r.bytes != null ? ` · ${fmtBytes(r.bytes)}` : ''}`;
@@ -5818,8 +5906,83 @@ function mtuDetail(r) {
     verdict, clamp, stats, table);
 }
 
+
+// The certificate a port presented, read back in the order an operator needs
+// it: what is wrong first, what it is second, and the identifying detail last.
+// The four faults are kept apart here exactly as they are stored, because they
+// have four different fixes — renew, reissue, install the intermediate, or
+// point the client at the right name.
+function tlsDetail(r) {
+  // `c` rather than `t`: the translation function is called `t` in this file,
+  // and shadowing it here would break every label in the table.
+  const c = r.tls || {};
+  const rows = [];
+  const kv = (label, value, cls = null) => rows.push(el('tr', {},
+    el('td', { class: 'muted' }, label),
+    el('td', cls ? { class: cls } : {}, value)));
+
+  const days = c.expiryDays;
+  if (days != null) {
+    kv(t('probe.tls.expires'),
+      days <= 0 ? t('probe.tls.expiredAgo', { days: String(Math.abs(Math.round(days))) })
+        : `${t('probe.tls.expiresIn', { days: String(Math.round(days)) })}${c.validTo ? ` · ${fmtDate(c.validTo)}` : ''}`,
+      days <= 0 ? 'error' : (days <= 30 ? 'warn' : null));
+  }
+  kv(t('probe.tls.chain'),
+    c.authorized ? t('probe.tls.chainOk')
+      : t('probe.tls.chainBad', { reason: c.selfSigned ? t('probe.tls.selfSigned') : (c.authorizationError || '—') }),
+    c.authorized ? null : 'error');
+  kv(t('probe.tls.name'),
+    c.hostnameMatches === true ? t('probe.tls.nameOk')
+      : c.hostnameMatches === false ? t('probe.tls.nameBad') : t('probe.tls.nameUnchecked'),
+    c.hostnameMatches === false ? 'error' : null);
+  if (c.subject) kv(t('probe.tls.subject'), c.subject);
+  if (c.issuer) kv(t('probe.tls.issuer'), c.issuer);
+  if (c.protocol) kv(t('probe.tls.protocol'), c.protocol);
+  if (c.cipher) kv(t('probe.tls.cipher'), c.cipher);
+  if (c.chainLength != null) kv(t('probe.tls.links'), String(c.chainLength));
+  if (c.altNames && c.altNames.length) {
+    kv(t('probe.tls.altNames'), el('span', { class: 'mono small' }, c.altNames.join(', ')));
+  }
+  if (c.serialNumber) kv(t('probe.tls.serial'), el('span', { class: 'mono small' }, c.serialNumber));
+  if (c.fingerprint256) kv(t('probe.tls.fingerprint'), el('span', { class: 'mono small' }, c.fingerprint256));
+
+  return el('details', { class: 'sec', open: true },
+    el('summary', {}, t('probe.tls.title', { target: esc(r.target) })),
+    el('table', { class: 'kv tls-detail' }, el('tbody', {}, ...rows)));
+}
+
+// The reverse lookup, and the confirmation that is the actual question.
+function rdnsDetail(r) {
+  const d = r.rdns || {};
+  const names = d.ptrNames || [];
+  const rows = [];
+  const kv = (label, value, cls = null) => rows.push(el('tr', {},
+    el('td', { class: 'muted' }, label),
+    el('td', cls ? { class: cls } : {}, value)));
+
+  if (d.address) kv(t('probe.rdns.address'), el('span', { class: 'mono' }, d.address));
+  kv(t('probe.rdns.ptr'),
+    names.length ? el('span', { class: 'mono' }, names.join(', ')) : t('probe.rdns.none'),
+    names.length ? null : 'error');
+  if (names.length) {
+    kv(t('probe.rdns.confirmed'),
+      d.forwardConfirmed ? t('probe.rdns.confirmedYes') : t('probe.rdns.confirmedNo'),
+      d.forwardConfirmed ? null : 'error');
+  }
+  return el('details', { class: 'sec', open: true },
+    el('summary', {}, t('probe.rdns.title', { target: esc(r.target) })),
+    el('table', { class: 'kv' }, el('tbody', {}, ...rows)),
+    el('p', { class: 'muted small' }, t('probe.rdns.why')));
+}
+
 async function probeDetail(r, agentId) {
   if (r.type === 'path_mtu') return mtuDetail(r);
+  // Both of these ARE their result — there is no history worth charting for a
+  // certificate's subject or a PTR name, and the numbers that do move (days to
+  // expiry) are read in the row itself.
+  if (r.type === 'tls') return tlsDetail(r);
+  if (r.type === 'rdns') return rdnsDetail(r);
   if (r.type === 'traceroute' || r.type === 'tcptraceroute') {
     const hops = r.hops || [];
     const hopRow = (h) => el('tr', {},
@@ -8254,10 +8417,17 @@ views.interfaces = async () => {
 let probesTab = 'run'; // 'run' | 'connection' | 'packages'
 views.probes = async () => {
   const root = el('div');
-  const tab = (key, label) => el('button', { class: `small ghost${probesTab === key ? ' active' : ''}`,
-    onclick: () => { if (probesTab === key) return; if (key !== 'run') stopProbes(); probesTab = key; render(); } }, label);
   root.append(el('div', { class: 'section-head' }, el('h2', {}, 'Probes & Tests'),
-    el('div', { class: 'subtabs' }, tab('run', 'Run a probe'), tab('connection', t('ct.tab')), tab('packages', 'Test packages'))));
+    tabStrip([['run', 'Run a probe'], ['connection', t('ct.tab')], ['packages', 'Test packages']], {
+      active: probesTab,
+      ariaLabel: 'Probes & Tests',
+      onPick: (key) => {
+        if (probesTab === key) return;
+        if (key !== 'run') stopProbes();
+        probesTab = key;
+        render();
+      },
+    })));
   const sub = probesTab === 'packages' ? testPackagesView
     : (probesTab === 'connection' ? connectionTestView : probeRunnerView);
   root.append(await sub());
@@ -8864,7 +9034,7 @@ async function probeRunnerView() {
   if (!agents.length) { root.append(el('div', { class: 'empty' }, 'No agents yet — enrol an agent first.')); return root; }
 
   const agentSel = el('select', {}, ...agents.map((a) => el('option', { value: String(a.id) }, a.display_name || a.hostname)));
-  const typeSel = el('select', {}, ...[['ping', 'Ping (ICMP)'], ['tcp', 'TCP-connect'], ['dns', 'DNS'], ['traceroute', 'Traceroute'], ['tcptraceroute', t('probe.tcptraceroute')], ['path_mtu', t('probe.pathMtu')], ['curl', 'cURL (content check)'], ['pageload', 'Page load'], ['transaction', 'Transaction (multi-step)']].map(([v, l]) => el('option', { value: v }, l)));
+  const typeSel = el('select', {}, ...[['ping', 'Ping (ICMP)'], ['tcp', 'TCP-connect'], ['dns', 'DNS'], ['traceroute', 'Traceroute'], ['tcptraceroute', t('probe.tcptraceroute')], ['path_mtu', t('probe.pathMtu')], ['tls', t('probe.tls')], ['rdns', t('probe.rdns')], ['curl', 'cURL (content check)'], ['pageload', 'Page load'], ['transaction', 'Transaction (multi-step)']].map(([v, l]) => el('option', { value: v }, l)));
   const target = el('input', { type: 'text', placeholder: 'e.g. 1.1.1.1 or example.com' });
   const targetWrap = el('label', { class: 'inline muted' }, 'Target ', target);
   const portInput = el('input', { type: 'number', min: '1', max: '65535', value: '443' });
@@ -13404,7 +13574,7 @@ views.docs = async () => {
   const nav = el('div', { class: 'settings-nav docs-nav' }, ...sections.map((s) =>
     el('div', { class: 'settings-nav-group' },
       el('span', { class: 'settings-nav-label' }, s.section),
-      el('div', { class: 'subtabs docs-subtabs' }, ...s.articles.map((a) =>
+      el('div', { class: 'navlist docs-navlist' }, ...s.articles.map((a) =>
         el('button', { class: `small ghost${a.id === docsTopic ? ' active' : ''}`, onclick: () => { docsTopic = a.id; render(); } }, a.title))))));
 
   root.append(el('div', { class: 'section-head' },
@@ -13434,7 +13604,7 @@ views.settings = async () => {
   const nav = el('div', { class: 'settings-nav' }, ...groups.map(([label, tabs]) =>
     el('div', { class: 'settings-nav-group' },
       el('span', { class: 'settings-nav-label' }, label),
-      el('div', { class: 'subtabs' }, ...tabs.map(([k, lbl]) =>
+      el('div', { class: 'navlist' }, ...tabs.map(([k, lbl]) =>
         el('button', { class: `small ghost${k === settingsTab ? ' active' : ''}`, onclick: () => { settingsTab = k; render(); } }, lbl))))));
   root.append(el('div', { class: 'section-head' }, el('h2', {}, 'Settings')), nav);
   // Per-section licence pill (green = included in this licence, red = not).
@@ -16202,11 +16372,12 @@ views.reporting = async () => {
   if (role === 'admin') sections.push(['audit', 'Audit']);
   // Guard against a stale section the current user may no longer access.
   if (!sections.some(([k]) => k === reportingState.section)) reportingState.section = 'nis2';
-  const bar = el('div', { class: 'subtabs nis2-subtabs' },
-    ...sections.map(([key, label]) => el('button', {
-      class: `small ghost${reportingState.section === key ? ' active' : ''}`,
-      onclick: () => { reportingState.section = key; render(); },
-    }, label)));
+  const bar = tabStrip(sections, {
+    active: reportingState.section,
+    className: 'nis2-subtabs',
+    ariaLabel: 'Reporting',
+    onPick: (key) => { reportingState.section = key; render(); },
+  });
   root.append(el('div', { class: 'section-head' }, el('h2', {}, 'Reporting'), bar));
 
   const body = el('div', { class: 'nis2-body' }, el('div', { class: 'empty' }, 'Loading…'));
@@ -16230,11 +16401,12 @@ async function nis2Module() {
     ['incidents', 'Incidents'], ['reports', 'Reports'],
   ];
   if (role === 'admin') tabs.push(['audit', 'Audit Trail']);
-  wrap.append(el('div', { class: 'subtabs nis2-subtabs nis2-inner-tabs' },
-    ...tabs.map(([key, label]) => el('button', {
-      class: `small ghost${nis2State.tab === key ? ' active' : ''}`,
-      onclick: () => { nis2State.tab = key; render(); },
-    }, label))));
+  wrap.append(tabStrip(tabs, {
+    active: nis2State.tab,
+    className: 'nis2-subtabs nis2-inner-tabs',
+    ariaLabel: 'NIS2',
+    onPick: (key) => { nis2State.tab = key; render(); },
+  }));
 
   const body = el('div', { class: 'nis2-body' }, el('div', { class: 'empty' }, 'Loading…'));
   wrap.append(body);
@@ -16679,7 +16851,7 @@ async function auditModule() {
     return `/api/audit/export.csv${p.toString() ? `?${p}` : ''}`;
   };
   const exportBtn = el('button', { class: 'small ghost', onclick: () => nis2Download(csvHref(), 'audit.csv') }, '⤓ CSV');
-  wrap.append(el('div', { class: 'subtabs', style: 'gap:8px;align-items:center' },
+  wrap.append(el('div', { class: 'history-controls' },
     actorSel, actionSel, el('button', { class: 'small ghost', onclick: () => load() }, '↻ Refresh'), exportBtn));
 
   const body = el('div', { class: 'nis2-body' }, el('div', { class: 'empty' }, 'Loading…'));
@@ -17097,15 +17269,51 @@ views.guide = async () => {
   });
 };
 
+// About (account menu → About).
+//
+// What this build is, and what the product grew into: the version this host
+// runs, and a dated feature history grouped by month. The history itself lives
+// in public/about.js — one line per thing that changed what the product can do,
+// with the version it shipped in and the date that version landed.
+//
+// The build line is read from GET /system/version (viewer+, the same call that
+// stamps the sidebar foot). A 403/404/500 there costs the version line, never
+// the page: the history is the point and the live build is the garnish.
+PAGE_INFO.about = {
+  get hero() { return t('about.info.hero'); },
+  get title() { return t('about.info.title'); },
+  body: () => [
+    el('p', {}, t('about.info.p1')),
+    el('p', {}, t('about.info.p2')),
+    el('p', { class: 'muted' }, t('about.info.p3')),
+  ],
+};
+
+views.about = async () => {
+  if (!window.About) return el('div', { class: 'empty' }, t('about.unavailable'));
+  const ver = await api('/system/version').catch(() => null);
+  return window.About.create({
+    el,
+    t,
+    plural: (key, n, params) => (window.I18n && window.I18n.plural ? window.I18n.plural(key, n, params) : t(key, { count: String(n), ...(params || {}) })),
+    locale: window.I18n ? window.I18n.getLocale() : 'en',
+    version: ver && ver.server ? ver.server : null,
+    releaseDate: ver && ver.releaseDate ? ver.releaseDate : null,
+  });
+};
+
 views.transactions = async () => {
   const root = el('div', { class: 'transactions' });
   const body = el('div', {});
-  const tabs = el('div', { class: 'subtabs' }, ...[['list', 'List'], ['matrix', 'Matrix']].map(([k, label]) =>
-    el('button', { class: `subtab${txTab === k ? ' active' : ''}`, onclick: () => { txTab = k; draw(); } }, label)));
+  const tabs = tabStrip([['list', 'List'], ['matrix', 'Matrix']], {
+    active: txTab,
+    ariaLabel: 'Transaction tests',
+    onPick: (k) => { txTab = k; draw(); },
+  });
   const head = el('div', { class: 'section-head' }, el('h2', {}, 'Transaction tests'),
     isAdmin() ? el('button', { class: 'primary', onclick: () => txMount(body, () => txForm(null, body)) }, '+ New test') : null);
   function draw() {
-    tabs.querySelectorAll('.subtab').forEach((b, i) => b.classList.toggle('active', ['list', 'matrix'][i] === txTab));
+    tabs.setActive(txTab);
     if (txTab === 'matrix') txMount(body, () => txMatrixView(body));
     else txMount(body, () => txListView(body));
   }
@@ -17427,6 +17635,7 @@ function txTrendSvg(rows) {
 // is still the right screen for bulk operations, so it keeps its own route.
 let currentView = 'changes';
 
+
 // ---- Routing ---------------------------------------------------------------
 // Every screen has an address (see public/routes.js). Two rules keep the URL and
 // `currentView` honest without rewriting the ~25 places that assign it directly:
@@ -17550,10 +17759,10 @@ function syncCrumb() {
   }
   const marks = PREVIEW_OF[currentView] || currentView;
   const tab = routeTabFor(currentView);
-  const btn = [...document.querySelectorAll('.tabs button[data-view]')].find((b) => b.dataset.view === marks
+  const btn = [...document.querySelectorAll(NAV_BUTTONS)].find((b) => b.dataset.view === marks
     && (!b.dataset.saTab || b.dataset.saTab === tab)
     && (!b.dataset.guide || b.dataset.guide === tab))
-    || document.querySelector(`.tabs button[data-view="${marks}"]`);
+    || document.querySelector(`[data-view="${marks}"]`);
   const group = btn && btn.closest('.nav-group');
   const groupLabel = group && group.querySelector('.nav-group-label');
   const parts = [];
@@ -17631,7 +17840,7 @@ views.forbidden = async () => el('div', { class: 'ui ui-page' },
 // and Probes & Tests are migrated onto their real routes.
 const uiPreview = (typeof window !== 'undefined' && window.UiPreview)
   ? window.UiPreview.create({
-    el, api, t, plural, toast, errText, fmtDate, fmtTimeShort, openAgent, gotoView,
+    el, api, t, plural, toast, errText, fmtDate, fmtTimeShort, openAgent, gotoView, tabStrip,
   })
   : null;
 views.uiPreviewChanges = async () => (uiPreview
@@ -17640,6 +17849,11 @@ views.uiPreviewChanges = async () => (uiPreview
 views.uiPreviewProbes = async () => (uiPreview
   ? uiPreview.probes()
   : el('div', { class: 'empty' }, t('uip.unavailable')));
+
+// Every control that navigates: the sidebar rail, the rail's foot (Documentation)
+// and the account menu (About). One selector, so a new home for a nav entry is
+// wired for both the click and the active-state pass.
+const NAV_BUTTONS = '.tabs button[data-view], #sidebar-foot button[data-view], #user-menu-panel button[data-view]';
 
 const modalOpen = () => !$('#modal').classList.contains('hidden');
 
@@ -17727,7 +17941,7 @@ async function render({ silent = false } = {}) {
     b.classList.toggle('hidden', role !== 'admin');
   }
   if (currentView === 'users' && role !== 'admin') currentView = 'overview';
-  for (const b of document.querySelectorAll('.tabs button[data-view], #sidebar-foot button[data-view]')) {
+  for (const b of document.querySelectorAll(NAV_BUTTONS)) {
     // Several entries can share one data-view when they deep-link to different
     // sub-tabs; the sub-tab is what tells them apart.
     const marks = PREVIEW_OF[currentView] || currentView;
@@ -17886,6 +18100,16 @@ function renderLangSwitch() {
 // Escape. Item clicks that reload/navigate (refresh, auto toggle, log out) tear
 // the panel down on their own; theme and language toggles intentionally leave it
 // open.
+// Closing the account menu is also the nav handler's job: the menu holds a
+// data-view entry (About), and a panel left hanging over the page it just
+// opened is the bug this avoids.
+function closeUserMenu() {
+  const panel = $('#user-menu-panel');
+  const trigger = $('#user-menu-trigger');
+  if (!panel || panel.classList.contains('hidden')) return;
+  panel.classList.add('hidden');
+  if (trigger) trigger.setAttribute('aria-expanded', 'false');
+}
 {
   const menu = $('#user-menu');
   const trigger = $('#user-menu-trigger');
@@ -17893,17 +18117,16 @@ function renderLangSwitch() {
   if (menu && trigger && panel) {
     const isOpen = () => !panel.classList.contains('hidden');
     const open = () => { panel.classList.remove('hidden'); trigger.setAttribute('aria-expanded', 'true'); };
-    const close = () => { panel.classList.add('hidden'); trigger.setAttribute('aria-expanded', 'false'); };
-    trigger.addEventListener('click', (e) => { e.stopPropagation(); isOpen() ? close() : open(); });
-    document.addEventListener('click', (e) => { if (isOpen() && !menu.contains(e.target)) close(); });
-    document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && isOpen()) { close(); trigger.focus(); } });
+    trigger.addEventListener('click', (e) => { e.stopPropagation(); isOpen() ? closeUserMenu() : open(); });
+    document.addEventListener('click', (e) => { if (isOpen() && !menu.contains(e.target)) closeUserMenu(); });
+    document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && isOpen()) { closeUserMenu(); trigger.focus(); } });
     renderLangSwitch();
   }
 }
 function closeNav() { $('#app').classList.remove('nav-open'); }
-for (const b of document.querySelectorAll('.tabs button[data-view], #sidebar-foot button[data-view]')) {
+for (const b of document.querySelectorAll(NAV_BUTTONS)) {
   b.addEventListener('click', () => {
-    closeDrawer(); closeNav();
+    closeDrawer(); closeNav(); closeUserMenu();
     // Locked (licence-excluded) items don't open — they nudge to the licence page.
     if (b.classList.contains('locked')) {
       toast(`${lockedHint((b.textContent || 'This module').trim(), b.dataset.feature)} — see License.`);

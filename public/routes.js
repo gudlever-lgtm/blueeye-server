@@ -83,6 +83,7 @@
       tabKey: 'settingsTab',
     },
     docs: { path: '/docs' },
+    about: { path: '/about' },
 
     // UI-contract preview (admin only, removed once Changes and Probes are migrated).
     uiPreviewChanges: { path: '/ui-preview/changes' },

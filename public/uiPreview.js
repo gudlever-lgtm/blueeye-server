@@ -33,6 +33,9 @@
       return isFinite(ms) ? fmtTimeShort(ms) : fmtDate(iso);
     };
     var openAgent = deps.openAgent;
+    // The one tab-strip builder (app.js). It owns the keyboard and the ARIA;
+    // components.css gives it the contract's underline look.
+    var tabStrip = deps.tabStrip;
     var plural = deps.plural;
 
     // ---- shared components -------------------------------------------------
@@ -87,16 +90,6 @@
         },
       }, '?');
       return btn;
-    }
-
-    function subTabs(tabs, active, onPick) {
-      return el('div', { class: 'subtabs-ui', role: 'tablist' }, tabs.map(function (tab) {
-        return el('button', {
-          class: 'subtab', role: 'tab', type: 'button',
-          'aria-selected': String(tab.key === active),
-          onclick: function () { if (tab.key !== active) onPick(tab.key); },
-        }, tab.label);
-      }));
     }
 
     function statStrip(cards) {
@@ -599,16 +592,18 @@
           },
         },
       }));
-      root.append(subTabs([
-        { key: 'run', label: t('route.tab.probes.run') },
-        { key: 'connection', label: t('route.tab.probes.connection') },
-        { key: 'packages', label: t('route.tab.probes.packages') },
-      ], tab, function (key) {
-        tab = key;
-        var qs = key === 'connection' ? '' : ('?tab=' + key);
-        try { window.history.replaceState(null, '', window.location.pathname + qs); } catch (e) { /* URL API off */ }
-        render();
-      }));
+      root.append(tabStrip(
+        [['run', tabLabel('run')], ['connection', tabLabel('connection')], ['packages', tabLabel('packages')]],
+        {
+          active: tab,
+          ariaLabel: t('uip.probes.title'),
+          onPick: function (key) {
+            tab = key;
+            var qs = key === 'connection' ? '' : ('?tab=' + key);
+            try { window.history.replaceState(null, '', window.location.pathname + qs); } catch (e) { /* URL API off */ }
+            render();
+          },
+        }));
       root.append(body);
 
       function notInPreview() {

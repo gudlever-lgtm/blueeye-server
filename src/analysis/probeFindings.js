@@ -93,13 +93,59 @@ function explain(ev, health) {
   return health.reason || 'Probe health degraded.';
 }
 
-// Certificate-expiry findings from the newest http row per target that carries a
-// certExpiryDays reading.
+// Certificate findings from the newest row per target that carries a reading.
+//
+// Two probes produce one: `http` reads an expiry as a side effect of fetching a
+// URL, and `tls` (agent 0.27+) asks the port directly — which is the only one
+// that reaches a certificate on 465, 993 or 636. They are read together and
+// deduplicated per target, so a host checked both ways raises one finding.
+//
+// Expiry is a COUNTDOWN and the other faults are already true, so they are
+// separate findings rather than one "bad certificate": a chain that does not
+// validate or a name that does not match is wrong now, at any expiry date.
 function certFindings(hostId, rows, at) {
   const out = [];
   const seen = new Set();
+  const seenState = new Set();
   for (const r of rows) { // newest-first
-    if (r.type !== 'http' || seen.has(r.target)) continue;
+    if (r.type === 'tls' && r.tls && !seenState.has(r.target)) {
+      seenState.add(r.target);
+      const t = r.tls;
+      // What is WRONG with it, as opposed to how long it has left. Each reason
+      // is named, because the three have different fixes: reissue for the name,
+      // install the intermediate for the chain, renew for the expiry.
+      const reasons = [];
+      if (t.expired) reasons.push('it has expired');
+      if (t.notYetValid) reasons.push('it is not valid yet');
+      if (t.hostnameMatches === false) reasons.push(`it is not valid for ${r.target}`);
+      if (t.authorized === false && !t.expired) {
+        reasons.push(t.selfSigned ? 'the chain is self-signed' : `the chain does not validate (${t.authorizationError || 'unknown reason'})`);
+      }
+      if (reasons.length) {
+        out.push({
+          id: crypto.randomUUID(),
+          hostId,
+          metric: 'probe.tls',
+          severity: Severity.CRIT,
+          kind: FindingKind.THRESHOLD,
+          observed: null,
+          baseline: null,
+          deviation: null,
+          window: [new Date(at.getTime() - 60000), at],
+          explanation: `TLS certificate on ${r.target} cannot be trusted: ${reasons.join('; ')}.`,
+          evidence: [{
+            metric: 'cert', type: 'tls', target: r.target,
+            authorized: t.authorized, hostnameMatches: t.hostnameMatches,
+            expired: t.expired, issuer: t.issuer, subject: t.subject,
+            ts: at.toISOString(),
+          }],
+          correlatedWith: [],
+          createdAt: at,
+          acked: false,
+        });
+      }
+    }
+    if ((r.type !== 'http' && r.type !== 'tls') || seen.has(r.target)) continue;
     seen.add(r.target);
     const days = r.certExpiryDays;
     if (days == null || !Number.isFinite(days)) continue;
@@ -118,7 +164,7 @@ function certFindings(hostId, rows, at) {
       explanation: days <= 0
         ? `TLS certificate for ${r.target} has expired.`
         : `TLS certificate for ${r.target} expires in ${days} day(s).`,
-      evidence: [{ metric: 'cert', type: 'http', target: r.target, certExpiryDays: days, ts: at.toISOString() }],
+      evidence: [{ metric: 'cert', type: r.type, target: r.target, certExpiryDays: days, ts: at.toISOString() }],
       correlatedWith: [],
       createdAt: at,
       acked: false,

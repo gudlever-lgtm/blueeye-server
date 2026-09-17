@@ -37,9 +37,12 @@ test('GET /checks serves the catalogue (viewer+) and says what does not apply', 
   assert.equal(byId.dns.available, true);
   assert.equal(byId.dns.applies, false);
   assert.equal(byId.ping.applies, true);
-  // The two agent-side checks that do not exist yet are listed, never runnable.
-  assert.equal(byId.rdns.available, false);
-  assert.equal(byId.tls.available, false);
+  // Both landed in blueeye-agent 0.27; an older agent in the field answers
+  // "unknown probe type", which the screen reports as the failure reason.
+  assert.equal(byId.rdns.available, true);
+  assert.equal(byId.tls.available, true);
+  // Reverse DNS is asked OF an address, so an IP literal is exactly its case.
+  assert.equal(byId.rdns.applies, true);
   // Against a name, the DNS check applies again.
   const named = await request(app()).get('/api/connection-test/checks?host=example.com').set('Authorization', viewer());
   assert.equal(named.body.checks.find((c) => c.id === 'dns').applies, true);
@@ -74,19 +77,22 @@ test('POST /run dispatches one probe per selected check -> 202', async () => {
 });
 
 test('POST /run skips a check that cannot answer for this target', async () => {
+  // A DNS lookup of an IP literal resolves nothing. Reverse DNS and TLS both
+  // apply to an address, so they go out — the skip is about the QUESTION, not
+  // about which checks exist.
   const res = await request(app()).post('/api/connection-test/run').set('Authorization', operator())
-    .send({ agentId: 1, host: '1.1.1.1', checks: ['dns', 'ping', 'tls'] });
+    .send({ agentId: 1, host: '1.1.1.1', checks: ['dns', 'ping', 'tls', 'rdns'] });
   assert.equal(res.status, 202);
-  assert.deepEqual(res.body.dispatched.map((d) => d.id), ['ping']);
-  assert.deepEqual(res.body.skipped, [{ id: 'dns', reason: 'not_applicable' }, { id: 'tls', reason: 'not_supported' }]);
+  assert.deepEqual(res.body.dispatched.map((d) => d.id), ['rdns', 'ping', 'tls']);
+  assert.deepEqual(res.body.skipped, [{ id: 'dns', reason: 'not_applicable' }]);
 });
 
 test('POST /run with nothing runnable is 400, not an empty success', async () => {
   const res = await request(app()).post('/api/connection-test/run').set('Authorization', operator())
-    .send({ agentId: 1, host: '1.1.1.1', checks: ['dns', 'tls'] });
+    .send({ agentId: 1, host: '1.1.1.1', checks: ['dns'] });
   assert.equal(res.status, 400);
   assert.equal(res.body.error, 'Validation failed');
-  assert.deepEqual(res.body.skipped.map((s) => s.id), ['dns', 'tls']);
+  assert.deepEqual(res.body.skipped.map((s) => s.id), ['dns']);
 });
 
 test('POST /run validates the body -> 400 with field-level details', async () => {

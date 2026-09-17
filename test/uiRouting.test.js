@@ -328,9 +328,11 @@ test('boot: /ui-preview/probes renders the FormPage, with the checks the agent c
   const ui = doc.querySelector('#view .ui');
   assert.ok(ui.querySelector('.page-head h1'), 'no PageHeader');
   // Template C: SubTabs → Panel with FormSection → FormActions bottom right.
-  const tabs = [...ui.querySelectorAll('.subtabs-ui .subtab')];
+  const tabs = [...ui.querySelectorAll('.subtabs[role="tablist"] .subtab')];
   assert.deepEqual(tabs.map((b) => b.textContent), ['Run a probe', 'Connection test', 'Test packages']);
   assert.equal(tabs.filter((b) => b.getAttribute('aria-selected') === 'true').length, 1);
+  // tabStrip()'s roving tabindex: one stop in the tab order, arrows move within.
+  assert.equal(tabs.filter((b) => b.tabIndex === 0).length, 1, 'the strip has one tab stop');
   assert.ok(ui.querySelector('.form-sec .form-grid-ui .f label[for="uip-agent"]'), 'no Agent field');
   assert.ok(ui.querySelector('.form-sec .form-grid-ui .f label[for="uip-target"]'), 'no Target field');
   const actions = ui.querySelector('.form-actions-ui .actions-right');

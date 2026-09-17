@@ -17,10 +17,12 @@
 // understands. Nothing new is stored.
 //
 // `available: false` marks a check the catalogue KNOWS about but the agent
-// cannot run yet (reverse DNS and the TLS certificate check are agent-side work
-// in blueeye-agent). They are listed rather than hidden so the screen says what
-// a connection test will eventually cover, and the server refuses to dispatch
-// them — a greyed-out row is a promise, not a silent no-op.
+// cannot run yet. It is listed rather than hidden so the screen says what a
+// connection test covers, and the server refuses to dispatch it — a greyed-out
+// row is a promise, not a silent no-op. Nothing is marked so today: reverse DNS
+// and the TLS certificate check landed in blueeye-agent 0.27. An agent older
+// than that answers `unknown probe type`, which the screen reports as the
+// failure reason it is.
 
 const net = require('net');
 
@@ -29,11 +31,11 @@ const net = require('net');
 // question nobody asked.
 const CHECKS = [
   { id: 'dns', type: 'dns', available: true, appliesTo: 'hostname', spec: (host) => ({ type: 'dns', host }) },
-  { id: 'rdns', type: 'dns', available: false, appliesTo: 'any', spec: null },
+  { id: 'rdns', type: 'rdns', available: true, appliesTo: 'any', spec: (host) => ({ type: 'rdns', host }) },
   { id: 'ping', type: 'ping', available: true, appliesTo: 'any', spec: (host) => ({ type: 'ping', host, count: 4 }) },
   { id: 'tcp80', type: 'tcp', available: true, appliesTo: 'any', port: 80, spec: (host) => ({ type: 'tcp', host, port: 80, count: 1 }) },
   { id: 'tcp443', type: 'tcp', available: true, appliesTo: 'any', port: 443, spec: (host) => ({ type: 'tcp', host, port: 443, count: 1 }) },
-  { id: 'tls', type: 'tcp', available: false, appliesTo: 'any', port: 443, spec: null },
+  { id: 'tls', type: 'tls', available: true, appliesTo: 'any', port: 443, spec: (host) => ({ type: 'tls', host, port: 443 }) },
   { id: 'traceroute', type: 'traceroute', available: true, appliesTo: 'any', spec: (host) => ({ type: 'traceroute', host, queries: 3 }) },
   { id: 'tcptraceroute', type: 'tcptraceroute', available: true, appliesTo: 'any', port: 443, spec: (host) => ({ type: 'tcptraceroute', host, port: 443, queries: 3 }) },
   { id: 'path_mtu', type: 'path_mtu', available: true, appliesTo: 'any', spec: (host) => ({ type: 'path_mtu', host, per_hop: true }) },

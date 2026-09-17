@@ -181,9 +181,14 @@ screen for the same reason.
 
 ### SubTabs
 
-Underline tabs. **The only tab pattern.** Buttons-as-tabs, `.seg`, `sa-segmented`
-and the settings side-nav all collapse into this one. The active tab is in the
-URL.
+Underline tabs. **The only tab pattern.** `.seg`, `sa-segmented` and the settings
+side-nav all collapse into this one. The active tab is in the URL.
+
+The markup comes from `tabStrip()` in `app.js` — the one place allowed to build a
+strip, because it carries the roving tabindex, the arrow keys and the
+`role="tablist"` a hand-rolled row of buttons silently drops (a gate rule
+enforces it). `components.css` supplies only the look: inside `.ui` the strip is
+an underline row rather than the legacy row of filled buttons.
 
 ### StatStrip
 

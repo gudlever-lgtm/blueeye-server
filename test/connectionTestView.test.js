@@ -122,10 +122,10 @@ test('the arrow discloses the check list: everything runnable is on by default',
   assert.ok(boxes.length >= 9, `only ${boxes.length} checks listed`);
   const runnable = boxes.filter((b) => !b.disabled);
   assert.ok(runnable.every((b) => b.checked), 'a runnable check was not selected by default');
-  // The two the agent cannot run yet are shown, disabled, with the reason.
-  const blocked = [...doc.querySelectorAll('.ct-row.blocked')];
-  assert.ok(blocked.length >= 2, 'the not-yet-supported checks are hidden rather than shown');
-  assert.ok(blocked.every((r) => /Not available yet|Nothing to look up/.test(r.textContent)));
+  // Everything in the catalogue can run against a hostname now that the agent
+  // has the TLS and reverse-DNS probes (0.27), so nothing is blocked here — the
+  // blocked case is the target-specific one, covered by the IP test below.
+  assert.deepEqual([...doc.querySelectorAll('.ct-row.blocked')], []);
   assert.match(doc.querySelector('.ct-toggle-row .muted').textContent, /of \d+ selected$/);
 });
 
@@ -275,10 +275,11 @@ test('a skipped check says which kind of skipped it is', async (t) => {
   await setTarget(doc, '1.1.1.1');
 
   const row = (re) => [...doc.querySelectorAll('.ct-row')].find((r) => re.test(r.textContent));
-  // Before anything runs: the two the agent cannot run, and the one this target
-  // cannot answer, already say so.
-  assert.match(row(/Reverse DNS/).querySelector('.ct-state').textContent, /not supported/);
+  // Before anything runs: the check this target cannot answer already says so.
   assert.match(row(/DNS lookup/).querySelector('.ct-state').textContent, /n\/a/);
+  assert.match(row(/DNS lookup/).querySelector('.ct-reason').textContent, /Nothing to look up/);
+  // Reverse DNS is the opposite case — an address is exactly what it wants.
+  assert.equal(row(/Reverse DNS/).classList.contains('blocked'), false);
 
   // A check cleared by hand is a different kind of skipped.
   const mtu = row(/Path MTU/);

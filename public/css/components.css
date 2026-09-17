@@ -45,14 +45,18 @@
 .ui-popover p:last-of-type { margin-bottom: 0; }
 .ui-popover .pop-close { position: absolute; top: var(--s-3); right: var(--s-3); }
 
-/* ---- SubTabs — the only tab pattern ------------------------------------- */
-.ui .subtabs-ui { display: flex; gap: var(--s-5); border-bottom: 1px solid var(--border); flex-wrap: wrap; }
+/* ---- SubTabs — the only tab pattern -------------------------------------
+   The markup comes from tabStrip() in app.js (roving tabindex, arrow keys,
+   role="tablist"); this is only the look. Inside `.ui` the strip is an
+   underline row rather than the legacy row of filled buttons. */
+.ui .subtabs { display: flex; gap: var(--s-5); border-bottom: 1px solid var(--border); flex-wrap: wrap; }
 .ui .subtab { background: none; border: 0; border-radius: 0;
   border-bottom: 2px solid transparent; margin-bottom: -1px;
   padding: 0 0 var(--s-3); font: inherit; font-size: var(--fs-sm); font-weight: 500;
   color: var(--text-muted); cursor: pointer; }
 .ui .subtab:hover { color: var(--text); background: none; }
-.ui .subtab[aria-selected="true"] { color: var(--accent); border-bottom-color: var(--accent); font-weight: 600; }
+.ui .subtab[aria-selected="true"], .ui .subtab.active {
+  background: none; color: var(--accent); border-bottom-color: var(--accent); font-weight: 600; }
 
 /* ---- StatStrip — clickable filter cards ---------------------------------- */
 .ui .statstrip { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: var(--s-3); }

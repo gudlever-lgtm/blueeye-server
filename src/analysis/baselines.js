@@ -30,6 +30,54 @@ function mad(arr, med) {
 // normally distributed data. Exposed for the detector's z-score.
 const MAD_TO_SIGMA = 1.4826;
 
+// Mean absolute deviation around the median. A coarser scale than MAD, used
+// only when MAD is 0: MAD is a median of absolute deviations, so it reads 0 the
+// moment more than half the samples are identical — [5,5,5,5,9] has MAD 0 even
+// though the series plainly varies. The mean keeps a usable scale there.
+function meanAbsDev(arr, med) {
+  if (!arr.length) return NaN;
+  const m = med === undefined ? median(arr) : med;
+  return arr.reduce((sum, v) => sum + Math.abs(v - m), 0) / arr.length;
+}
+
+// The robust scale a z-score divides by, or NULL when the samples carry no
+// scale at all (every one of them identical).
+//
+// This used to be `mad * MAD_TO_SIGMA || 1e-9`, in both detectors. The floor
+// was meant to avoid a divide-by-zero, and it does — by fabricating a sigma a
+// billion times smaller than a byte. A flow pair whose baseline slot happened
+// to be flat then scored its ordinary hourly change as
+//
+//   (0 - 92845056) / 1e-9  =  -92845056000000000 σ
+//
+// which the dashboard printed verbatim and which cleared any crit threshold by
+// sixteen orders of magnitude. Every constant pair that changed AT ALL became a
+// CRIT, and the number in it was the byte difference times 10^9 — an artifact of
+// the floor constant, not a measurement.
+//
+// A zero MAD does not mean "an infinitesimally small spread". It means the
+// robust scale is UNDEFINED, and nothing true can be said in sigmas. So: fall
+// back to the mean absolute deviation, which recovers a scale whenever the
+// samples are not all identical, and return null when they are — a caller that
+// cannot get a scale must say so rather than divide by a constant.
+function robustSigma(values, med) {
+  if (!Array.isArray(values) || !values.length) return null;
+  const m = med === undefined ? median(values) : med;
+  const byMad = mad(values, m) * MAD_TO_SIGMA;
+  if (Number.isFinite(byMad) && byMad > 0) return byMad;
+  const byMean = meanAbsDev(values, m) * MAD_TO_SIGMA;
+  if (Number.isFinite(byMean) && byMean > 0) return byMean;
+  return null; // every sample identical: no scale exists
+}
+
+// The same decision for a baseline that stored only its median and MAD (the
+// per-pair baselines persist a summary, not the window). Without the samples
+// there is no mean-absolute-deviation fallback, so a zero MAD is terminal.
+function sigmaFromMad(madValue) {
+  const sigma = (Number(madValue) || 0) * MAD_TO_SIGMA;
+  return Number.isFinite(sigma) && sigma > 0 ? sigma : null;
+}
+
 const DEFAULT_WINDOW = 200;
 const DEFAULT_MIN_SAMPLES = 200;
 const FLAT_RUN = 10; // identical trailing values that count as "flat"
@@ -116,12 +164,15 @@ function createBaselineStore({
     else persist();
   }
 
-  // Returns { n, median, mad } for a key, or null until minSamples is reached.
+  // Returns { n, median, mad, sigma } for a key, or null until minSamples is
+  // reached. `sigma` is the scale a z-score divides by — null when the window
+  // carries no scale at all, which a caller must handle rather than falling back
+  // to a constant (see robustSigma).
   function get(hostId, metric, b) {
     const win = windows.get(keyOf(hostId, metric, b));
     if (!win || win.length < minSamples) return null;
     const med = median(win);
-    return { n: win.length, median: med, mad: mad(win, med) };
+    return { n: win.length, median: med, mad: mad(win, med), sigma: robustSigma(win, med) };
   }
 
   // True when the most recent FLAT_RUN values are identical for any of a
@@ -146,6 +197,9 @@ module.exports = {
   createBaselineStore,
   median,
   mad,
+  meanAbsDev,
+  robustSigma,
+  sigmaFromMad,
   MAD_TO_SIGMA,
   FLAT_RUN,
   DEFAULT_WINDOW,

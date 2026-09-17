@@ -414,3 +414,34 @@ test('every body-level overlay carries the `ui` marker, or it loses its styling'
   assert.equal(doc.querySelector('.ui-drawer'), null, 'closeOverlays left the drawer behind');
   assert.equal(doc.querySelector('.ui-popover'), null, 'closeOverlays left the popover behind');
 });
+
+// ------------------------------------------------------- Row menu placement
+test('the row menu stays inside the window instead of running off the right edge', () => {
+  const { ui, doc } = mount();
+  const win = doc.defaultView;
+  Object.defineProperty(win, 'innerWidth', { value: 1200, configurable: true });
+  Object.defineProperty(win, 'innerHeight', { value: 800, configurable: true });
+  // jsdom lays nothing out, so the menu would measure 0x0 and every clamp would
+  // trivially pass. Give every element the size the stylesheet gives this one.
+  Object.defineProperty(win.HTMLElement.prototype, 'offsetWidth', { value: 260, configurable: true });
+  Object.defineProperty(win.HTMLElement.prototype, 'offsetHeight', { value: 180, configurable: true });
+
+  // A ⋯ button hard against the right edge and near the bottom, which is where
+  // it sits in the last column of the last row.
+  const cell = ui.rowActions(null, [{ label: 'Acknowledge', onclick: () => {} }]);
+  doc.body.append(cell);
+  const trigger = cell.querySelector('[aria-haspopup="menu"]');
+  assert.ok(trigger, 'the ⋯ trigger is missing');
+  trigger.getBoundingClientRect = () => ({ top: 760, bottom: 780, left: 1170, right: 1190, width: 20, height: 20 });
+  trigger.dispatchEvent(new doc.defaultView.Event('click', { bubbles: true }));
+
+  const menu = doc.querySelector('.ui-rowmenu');
+  assert.ok(menu, 'no menu opened');
+  const left = parseInt(menu.style.left, 10);
+  const top = parseInt(menu.style.top, 10);
+  assert.ok(left >= 8, `the menu starts off-screen at ${left}px`);
+  assert.ok(left + 260 <= 1200, `the menu runs off the right edge (left ${left})`);
+  assert.ok(top >= 8, `the menu is above the window (top ${top})`);
+  assert.ok(top + 180 <= 800, `the menu runs past the bottom (top ${top})`);
+  assert.ok(top < 760, 'with no room below, the menu must flip above the trigger');
+});

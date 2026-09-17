@@ -1,7 +1,7 @@
 'use strict';
 
 const crypto = require('crypto');
-const { buildPairBaselines, zScore, classify, slotOf, pairKey, DEFAULT_MIN_OBSERVATIONS } = require('./flowPairBaseline');
+const { buildPairBaselines, scoreDeviation, slotOf, pairKey, DEFAULT_MIN_OBSERVATIONS } = require('./flowPairBaseline');
 const { FindingKind } = require('./constants');
 const { loadConfig } = require('./config');
 const { buildHostResolver } = require('../topology/hostResolver');
@@ -58,7 +58,7 @@ function createFlowPairBaselineJob({ flowPairBaselinesRepo, flowsRepo, agentsRep
   let timer = null;
   let running = false;
 
-  function emitFinding({ row, baseline, z, severity, bucketStart, bucketEnd }) {
+  function emitFinding({ row, baseline, z, ratio, basis, severity, bucketStart, bucketEnd }) {
     if (!findingStore || typeof findingStore.save !== 'function') return null;
     const src = row.srcHostId;
     const dst = row.dstHostId;
@@ -73,7 +73,12 @@ function createFlowPairBaselineJob({ flowPairBaselinesRepo, flowsRepo, agentsRep
       baseline: baseline.medianBytes,
       deviation: z,
       window: [bucketStart, bucketEnd],
-      explanation: `Flow ${src}->${dst}:${port} volume ${row.bytes}B deviated ${z.toFixed(1)}σ from its ${baseline.medianBytes}B baseline for this weekday/hour`,
+      explanation: basis === 'sigma'
+        ? `Flow ${src}->${dst}:${port} volume ${row.bytes}B deviated ${z.toFixed(1)}σ from its ${baseline.medianBytes}B baseline for this weekday/hour`
+        // No sigma exists for this slot, so the change is stated as what it is:
+        // a multiple of a baseline that had never varied. Saying so is the
+        // point — the reader needs to know the comparison is coarser here.
+        : `Flow ${src}->${dst}:${port} volume ${row.bytes}B is ${ratio === Infinity ? 'new traffic on' : `${ratio.toFixed(1)}× `}its ${baseline.medianBytes}B baseline for this weekday/hour, which had no variation to measure against (every prior sample identical) — reported as a ratio, not σ`,
       evidence: [{ hostId: String(src), metric: 'flow.volume', value: row.bytes, ts: bucketEnd, labels: { src: String(src), dst: String(dst), dstPort: port } }],
       correlatedWith: [],
       createdAt: bucketEnd,
@@ -113,10 +118,11 @@ function createFlowPairBaselineJob({ flowPairBaselinesRepo, flowsRepo, agentsRep
         const b = bmap.get(pairKey(row));
         if (!b || b.observationCount < config.minObservations) continue; // gate
         scored += 1;
-        const z = zScore(b, row.bytes);
-        const severity = classify(z, { warnSigma: config.warnSigma, critSigma: config.critSigma });
+        const { severity, z, ratio, basis } = scoreDeviation(b, row.bytes, {
+          warnSigma: config.warnSigma, critSigma: config.critSigma,
+        });
         if (!severity) continue;
-        await emitFinding({ row, baseline: b, z, severity, bucketStart, bucketEnd }); // eslint-disable-line no-await-in-loop
+        await emitFinding({ row, baseline: b, z, ratio, basis, severity, bucketStart, bucketEnd }); // eslint-disable-line no-await-in-loop
         flagged += 1;
       }
 

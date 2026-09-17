@@ -87,7 +87,9 @@ function boot({ t, routes = {}, url = 'http://server.test/destinations', role = 
   const log = [];
   window.fetch = async (u, opts = {}) => {
     const p = String(u).split('?')[0];
-    log.push({ key: `${(opts.method || 'GET').toUpperCase()} ${p}`, url: String(u) });
+    // The BODY matters: "Show path" dispatching the wrong probe type was
+    // invisible while the harness recorded only the method and the path.
+    log.push({ key: `${(opts.method || 'GET').toUpperCase()} ${p}`, url: String(u), body: opts.body ? JSON.parse(opts.body) : null });
     const hit = routes[`${(opts.method || 'GET').toUpperCase()} ${p}`];
     const status = hit === undefined ? 404 : (hit.status || 200);
     const body = hit === undefined ? { error: 'Not Found' } : (hit.body !== undefined ? hit.body : hit);
@@ -282,4 +284,72 @@ test('the period picker refetches with a since, and the map is not rebuilt', asy
   assert.equal(window.__map, before, 'the map was rebuilt under the reader');
   // The panel still says what is on it, though.
   assert.match(doc.querySelector('#view .panel-ui .panel-head .meta-xs').textContent, /4 external destinations/);
+});
+
+// ---------------------------------------------------------------- Show path
+//
+// "Show path" could report no path for three different reasons and showed the
+// same nothing for all of them: the run it dispatched did not match the query
+// it then polled, the poll gave up after sixteen seconds, and a probe that
+// FAILED produced a toast rather than the agent's own reason.
+
+const pathFor = (log) => log.filter((c) => c.key === 'GET /api/probes/path');
+const runFor = (log) => log.filter((c) => c.key.startsWith('POST /agents/'));
+
+async function showPath(t, routes, { target = '8.8.8.8' } = {}) {
+  const { doc, window, log, errors } = boot({ t, routes: SESSION(routes) });
+  await settle();
+  const sel = [...doc.querySelectorAll('#view select')]
+    .find((s) => [...s.options].some((o) => o.value === '7'));
+  assert.ok(sel, 'the path agent picker is missing');
+  sel.value = '7';
+  sel.dispatchEvent(new window.Event('change', { bubbles: true }));
+  await settle();
+  const input = [...doc.querySelectorAll('#view input[type="text"]')].pop();
+  assert.ok(input, 'the path target field is missing');
+  input.value = target;
+  const btn = [...doc.querySelectorAll('#view button')].find((b) => /path/i.test(b.textContent) && !/clear/i.test(b.textContent));
+  assert.ok(btn, 'the Show path button is missing');
+  btn.dispatchEvent(new window.Event('click', { bubbles: true }));
+  await settle();
+  return { doc, window, log, errors };
+}
+
+test('Show path dispatches the SAME probe type it then polls for', async (t) => {
+  // The stored history says this target was last traced with tcptraceroute, so
+  // the query filters on tcptraceroute. Dispatching a plain traceroute stored a
+  // result the poll was never looking for, and the path never arrived.
+  const { log } = await showPath(t, {
+    'GET /api/probes/latest': { agentId: 7, results: [{ type: 'tcptraceroute', target: '8.8.8.8', ok: true }] },
+    'GET /api/probes/path': { nodes: [], stops: [] },
+    'POST /agents/7/probe': { delivered: 1 },
+  });
+
+  const asked = pathFor(log)[0];
+  assert.ok(asked, 'no path query was made');
+  const queried = new URL(asked.url, 'http://server.test').searchParams.get('probeType');
+  const run = runFor(log)[0];
+  assert.ok(run, 'no probe run was dispatched');
+  assert.equal(queried, 'tcptraceroute', 'the query should follow the target history');
+  assert.equal(run.body && run.body.type, queried,
+    `dispatched ${run.body && run.body.type} but polled for ${queried} — the path can never arrive`);
+  assert.equal(run.body && run.body.host, '8.8.8.8');
+});
+
+test('a probe that FAILED shows the agent\'s own reason, not an empty panel', async (t) => {
+  const { doc } = await showPath(t, {
+    // traceroute -T needs root on most hosts; the agent says so on the result.
+    'GET /api/probes/latest': {
+      agentId: 7,
+      results: [{ type: 'traceroute', target: '8.8.8.8', ok: false, detail: 'traceroute: you must be root to use -T' }],
+    },
+    'GET /api/probes/path': { nodes: [], stops: [] },
+    'POST /agents/7/probe': { delivered: 1 },
+  });
+  // One poll tick (5 s) is enough: the failure is spotted on the first pass.
+  await new Promise((r) => setTimeout(r, 6000));
+
+  const view = doc.querySelector('#view').textContent;
+  assert.match(view, /root/i, "the agent's own reason is not shown anywhere");
+  assert.match(view, /geolocated stops|stops/i, '"Show path" produced no result panel at all — only a toast');
 });

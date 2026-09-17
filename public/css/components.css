@@ -172,7 +172,13 @@
 .ui table.dt tbody tr.is-dimmed:hover { background: none; }
 
 /* Row actions: one primary on hover, everything else behind ⋯ */
-.ui .row-act { display: flex; align-items: center; gap: var(--s-1); justify-content: flex-end; }
+.ui .row-act { display: flex; align-items: center; gap: var(--s-1); justify-content: flex-end;
+  /* The primary is hidden until hover but still occupies its width, so the ⋯
+     lands in the same place on every row. It must never WRAP, though: a label
+     wider than the column used to break onto a second line and spill over the
+     neighbour, which is how "Acknowledge" appeared clipped across the Repeats
+     column. The column is sized for its widest label instead. */
+  white-space: nowrap; }
 .ui .row-act .on-hover { opacity: 0; pointer-events: none; }
 .ui table.dt tbody tr:hover .row-act .on-hover,
 .ui .row-act .on-hover:focus-visible { opacity: 1; pointer-events: auto; }

@@ -3,7 +3,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 
-const { buildPairBaselines, zScore, classify, slotOf } = require('../src/analysis/flowPairBaseline');
+const { buildPairBaselines, zScore, scoreDeviation, classify, slotOf } = require('../src/analysis/flowPairBaseline');
 
 const HOUR = 3600 * 1000;
 const pair = { srcHostId: 1, dstHostId: 2, dstPort: 443 };
@@ -42,9 +42,23 @@ test('day-of-week + hour-of-day bucketing across a month of data', () => {
   assert.equal(loud.medianBytes, 9000);
 
   // Scoring a Tuesday-14:00 value of 9000 against the QUIET baseline is a large
-  // deviation (compared to prior Tuesdays 14:00, not the flat mean).
-  const z = zScore(quiet, 9000);
-  assert.ok(Math.abs(z) > 4, `expected big z, got ${z}`);
+  // deviation (compared to prior Tuesdays 14:00, not the flat mean). That slot's
+  // four samples are all 100, so it has no SPREAD — and therefore no sigma. This
+  // used to be answered by dividing by a 1e-9 floor, which reported the change
+  // as 8.9e12 σ; the detection is right, the sigma was an artifact. It is now
+  // stated as a ratio, and the basis says so.
+  assert.equal(quiet.madBytes, 0, 'the quiet slot really is flat');
+  assert.equal(zScore(quiet, 9000), null, 'a flat slot supports no sigma');
+
+  const hit = scoreDeviation(quiet, 9000);
+  assert.equal(hit.severity, 'CRIT', 'a 90x jump on a quiet slot must still be a CRIT');
+  assert.equal(hit.basis, 'ratio');
+  assert.equal(hit.z, null, 'no sigma may be invented for it');
+  assert.ok(hit.ratio > 80 && hit.ratio < 100, `8900/100 is ~89x, got ${hit.ratio}`);
+
+  // A loud slot varies, so it keeps a real sigma.
+  const loudSlot = baselines.find((b) => b.dow === ((targetDow + 1) % 7) && b.hour === targetHour);
+  assert.equal(scoreDeviation(loudSlot, 9000).severity, null, 'its own normal value is not an anomaly');
 });
 
 test('known-deviation synthetic series produces a score; flat series does not', () => {

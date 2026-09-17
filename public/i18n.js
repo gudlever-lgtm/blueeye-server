@@ -954,6 +954,12 @@
       'agentUpdate.repin.fingerprint': 'It will pin this key (sha256 of the PEM):',
       'agentUpdate.repin.cannotSign': 'Note: this server cannot sign releases yet, so re-pinning alone will not fix the update. Generate a signing key under Settings \u2192 Agent key first.',
       'agentUpdate.repin.keepsIdentity': 'The agent keeps its token and its identity here \u2014 this never installs a second agent.',
+      'agentUpdate.repin.send': 'Re-pin this agent now',
+      'agentUpdate.repin.sending': 'Sending the new key to the agent\u2026',
+      'agentUpdate.repin.done': '{name}: re-pinned to this server\u2019s key.',
+      'agentUpdate.repin.declined': 'The agent declined the re-pin: {reason}',
+      'agentUpdate.repin.fallback': 'Agent offline? Host command',
+      'agentUpdate.repin.fallbackIntro': 'A re-pin travels over the agent\u2019s own connection, so an agent that is offline cannot receive it. Where that is the case, run this on the host instead \u2014 it does the same thing:',
       'agentUpdate.repin.error': 'Could not build the re-pin command: {message}',
 
       // Windows install/update: the command downloads the script to a file and
@@ -4096,6 +4102,12 @@
       'agentUpdate.repin.fingerprint': 'Den fastl\u00e5ser denne n\u00f8gle (sha256 af PEM):',
       'agentUpdate.repin.cannotSign': 'Bem\u00e6rk: serveren kan endnu ikke signere releases, s\u00e5 en ny fastl\u00e5sning alene l\u00f8ser ikke opdateringen. Opret f\u00f8rst en signeringsn\u00f8gle under Indstillinger \u2192 Agent-n\u00f8gle.',
       'agentUpdate.repin.keepsIdentity': 'Agenten beholder sit token og sin identitet her \u2014 dette installerer aldrig en ekstra agent.',
+      'agentUpdate.repin.send': 'Fastl\u00e5s agenten nu',
+      'agentUpdate.repin.sending': 'Sender den nye n\u00f8gle til agenten\u2026',
+      'agentUpdate.repin.done': '{name}: fastl\u00e5st p\u00e5 denne servers n\u00f8gle.',
+      'agentUpdate.repin.declined': 'Agenten afviste fastl\u00e5sningen: {reason}',
+      'agentUpdate.repin.fallback': 'Agent offline? Kommando p\u00e5 v\u00e6rten',
+      'agentUpdate.repin.fallbackIntro': 'En fastl\u00e5sning sendes over agentens egen forbindelse, s\u00e5 en offline agent kan ikke modtage den. Er det tilf\u00e6ldet, k\u00f8r denne p\u00e5 v\u00e6rten i stedet \u2014 den g\u00f8r det samme:',
       'agentUpdate.repin.error': 'Kunne ikke danne fastl\u00e5sningskommandoen: {message}',
 
       'enroll.win.note': 'Kommandoen gemmer installationsscriptet i en fil og kører derefter filen. Intet sendes direkte videre til PowerShell, så antivirus og netværksovervågning kan nå at kigge scriptet igennem i stedet for at blokere det som en PowerShell-stager.',

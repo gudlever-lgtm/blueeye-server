@@ -41,6 +41,9 @@
   // The history, newest first. v = the version it shipped in, d = the date that
   // version landed (YYYY-MM-DD, the page groups by month).
   var RELEASES = [
+    { v: '0.167.0', d: '2026-09-17', area: 'fleet',
+      en: { t: 'Re-pinning an agent is done from the server', s: 'An agent that refuses updates because it trusts an older signing key is re-pinned over its own connection — one click, no shell on the host, no re-enrollment, and the refused update is retried straight after.' },
+      da: { t: 'Fastlåsning af en agent sker fra serveren', s: 'En agent, der afviser opdateringer, fordi den stoler på en ældre signeringsnøgle, fastlåses på ny over sin egen forbindelse — ét klik, ingen kommandoer på værten, ingen ny tilmelding, og den afviste opdatering forsøges igen med det samme.' } },
     { v: '0.166.0', d: '2026-09-17', area: 'fleet',
       en: { t: 'An agent that refuses an update can be re-pinned', s: 'When an agent rejects a one-click update because the release key it trusts is no longer the one this server signs with, the dashboard says exactly why and hands over the one-liner that re-anchors that host — no re-install, no second agent.' },
       da: { t: 'En agent, der afviser en opdatering, kan fastlåses på ny', s: 'Når en agent afviser en et-kliks-opdatering, fordi den nøgle den stoler på, ikke længere er den, serveren signerer med, siger dashboardet præcis hvorfor og giver kommandoen, der fastlåser værten på ny — uden geninstallation og uden en ekstra agent.' } },

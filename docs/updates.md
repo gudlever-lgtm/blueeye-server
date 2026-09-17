@@ -126,21 +126,29 @@ Two things have to be true for a one-click update to land on a pinned agent:
    with the reason, so the cause outlives the toast.
 
 2. **The agent pins the key this server signs with.** After generating a new
-   key, existing agents still trust the old one. Re-pin them:
+   key, existing agents still trust the old one. Re-pin them **from the server** —
+   an installed agent is managed from here, and nothing assumes a shell on the
+   host:
 
-   ```
-   curl -fsSL https://<server>/enroll/repin.sh | sudo sh
-   ```
-
-   `GET /enroll/repin.sh` rewrites `10-release-key.conf` with the key the server
-   serves now and restarts the unit. It carries **no enrollment code**: it cannot
-   enroll, cannot change the agent's identity or token, and cannot create a
-   second agent for the host. It is trust-on-first-use again, exactly as the
-   install was, so it prints the key's fingerprint for comparison with Settings →
-   Agent key, and it refuses to run when the server publishes no key.
-
-   The dashboard offers the command where the failure appears: on a refused
-   update, and in Settings → Updates when one-click updates are blocked.
+   * `POST /agents/:id/rekey` (admin) sends this server's current release key to
+     that agent over the same channel that carries `update` and `delete`. The
+     agent validates it is an Ed25519 public key, stores it beside its token
+     (`release-key.pem`, which outranks the installer's
+     `BLUEEYE_RELEASE_PUBLIC_KEY` from then on), mirrors it into its systemd
+     drop-in best-effort, and applies it **in memory** — so the retried update
+     verifies immediately and monitoring is not interrupted.
+   * When this server can still sign, the rekey command itself is signed with the
+     key being **replaced**: a proper rotation, and the only form an agent running
+     `BLUEEYE_REQUIRE_SIGNED_COMMANDS=1` accepts. When it cannot, the rekey is
+     unsigned — accepted exactly where an unsigned `delete` already is, which is
+     what lets a fleet recover after a signing key is lost.
+   * The dashboard offers it where the failure appears: a refused update shows
+     **Re-pin this agent now** and retries the update straight after, and
+     Settings → Updates has **Re-pin agents** for the whole set that is behind.
+   * The agent must be connected — a command cannot reach one that is offline.
+     For that case only, `GET /enroll/repin.sh` does the same thing from the host
+     (no enrollment code, so it can never create a second agent), and the modal
+     keeps it behind "Agent offline? Host command".
 
 ## When the update installs but nothing changes
 

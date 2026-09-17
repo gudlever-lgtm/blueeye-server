@@ -65,6 +65,7 @@ const RESOURCE = {
 // Sub-action segments on /agents/:id/<sub> that name what was done.
 const AGENT_SUBACTIONS = new Set([
   'run-test', 'probe', 'run-speedtest', 'update', 'upgrade', 'delete', 'diagnose', 'ping', 'install-tool', 'reconnect',
+  'rekey',
   'cmdb-link',
 ]);
 

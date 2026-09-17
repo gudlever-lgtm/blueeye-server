@@ -378,6 +378,75 @@ function createAgentsRouter({ agentsRepo, locationsRepo, resultsRepo, agentComma
     })
   );
 
+  // POST /agents/:id/rekey — replace the release trust anchor this agent pins,
+  // with the key THIS server signs with now. admin only.
+  //
+  // An agent verifies every self-update against the key it pinned at install
+  // time. When the server's signing key changes — rotated, regenerated after a
+  // delete, or one whose private half no longer decrypts — that agent refuses
+  // everything this server can produce ("refusing unsigned update", "release
+  // signature did not verify") and nothing on the host can clear it: an installed
+  // agent is managed FROM the server, with no shell on the machine. So the new
+  // anchor goes out over the same authenticated channel that already carries
+  // `update` and `delete`, signed with the key being replaced whenever this
+  // server can still sign (a proper rotation, which a strict agent requires).
+  //
+  // 409 when the agent is not connected, 503 when this server publishes no key
+  // to pin — re-keying a host onto nothing would only trade one deadlock for
+  // another.
+  router.post(
+    '/:id/rekey',
+    requireAuth,
+    requireRole(ROLES.ADMIN),
+    asyncHandler(async (req, res) => {
+      const id = parseId(req.params.id);
+      if (id === null) return invalidId(res);
+      const agent = await agentsRepo.findById(id);
+      if (!agent) return notFound(res);
+
+      const publicKey = (typeof releasePublicKey === 'function' ? releasePublicKey() : releasePublicKey) || '';
+      if (!publicKey) {
+        await recordSystemError(req, {
+          action: 'agent.rekey-blocked',
+          targetType: 'agent',
+          targetId: id,
+          targetLabel: agent.hostname || null,
+          detail: { reason: 'no-key' },
+        });
+        return res.status(503).json({
+          error: 'This server publishes no agent release key, so there is nothing to pin. Generate one under Settings → Agent key first.',
+          code: 'NO_RELEASE_KEY',
+        });
+      }
+      if (!agentCommander || typeof agentCommander.sendCommandAndWait !== 'function') {
+        return res.status(503).json({ error: 'Agent channel not available' });
+      }
+      const fingerprint = crypto.createHash('sha256').update(publicKey).digest('hex');
+      const auditId = await recordRequested('rekey', agent, req, fingerprint.slice(0, 32));
+      const command = { name: 'rekey', publicKey };
+      if (auditId) command.auditId = auditId;
+      const out = await agentCommander.sendCommandAndWait(id, signCommand(id, command), { timeoutMs: 8000 });
+      if (out.delivered === 0) {
+        await markFailed(auditId, 'agent not connected');
+        return res.status(409).json({ error: 'Agent not connected', connected: false });
+      }
+      const reply = out.reply || {};
+      if (reply.accepted === false) await markFailed(auditId, reply.reason || 'declined');
+      res.status(202).json({
+        connected: true,
+        acked: !!out.acked,
+        accepted: !!reply.accepted,
+        reason: reply.reason || null,
+        fingerprint,
+        // Whether the command itself was signed with the key being replaced. An
+        // agent that requires signed commands accepts nothing else, so the
+        // dashboard has to be able to say why a rekey was refused.
+        signed: !!(commandSigner && typeof commandSigner.canSign === 'function' && commandSigner.canSign()),
+        auditId: auditId || null,
+      });
+    })
+  );
+
   // POST /agents/:id/delete — ask a connected agent to STOP its service, remove
   // its own files and securely wipe its token, then report back. admin only. The
   // action is audited (requested -> completed/failed). The server agent row is

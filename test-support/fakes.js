@@ -11,6 +11,7 @@ const { createLogRing } = require('../src/logger');
 const { issueToken } = require('../src/auth/jwt');
 const { createSettingsService } = require('../src/services/settings');
 const { createSecretBox } = require('../src/lib/secretBox');
+const { createCommandSigner } = require('../src/services/commandSigner');
 const { makeServiceTests } = require('./serviceTestsFakes');
 const { createConnectorRegistry } = require('../src/integrations/connectors');
 const { createCmdbConnectorRegistry } = require('../src/cmdb/connectors');
@@ -2647,6 +2648,10 @@ function makeApp(overrides = {}) {
     // service says a key exists.
     releasePublicKey: overrides.releasePublicKey || (() => releaseKeyService.getPublicKey()),
     releaseKeyService,
+    // The real server signs privileged commands with the release key whenever it
+    // can, so the fake app does too — a test that asserts on what reaches the
+    // agent should see the command the agent would actually receive.
+    commandSigner: overrides.commandSigner || createCommandSigner({ releaseKeyService }),
     // Only wired when a test supplies one: with no update command configured the
     // real server passes an inert service, which is what null models here.
     serverUpdateService: overrides.serverUpdateService || null,

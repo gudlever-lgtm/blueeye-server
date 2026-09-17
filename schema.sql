@@ -352,7 +352,7 @@ CREATE TABLE IF NOT EXISTS `agent_action_audit` (
   `actor_user_id` INT UNSIGNED NULL DEFAULT NULL,
   `actor_email` VARCHAR(255) NULL DEFAULT NULL,
   `actor_role` VARCHAR(32) NULL DEFAULT NULL,
-  `action` ENUM('upgrade', 'delete', 'install-tool') NOT NULL,
+  `action` ENUM('upgrade', 'delete', 'install-tool', 'rekey') NOT NULL,
   `target_version` VARCHAR(64) NULL DEFAULT NULL,
   `state` ENUM('requested', 'completed', 'failed') NOT NULL DEFAULT 'requested',
   `result_detail` VARCHAR(512) NULL DEFAULT NULL,

@@ -2065,10 +2065,14 @@ function isPinnedKeyRefusal(detail) {
   return /unsigned update|signature downgrade|signature did not verify|release public key/i.test(String(detail || ''));
 }
 
-// The way out of a pinned-key deadlock: a one-liner that re-anchors THIS host to
-// the key the server serves now. No enrollment code, so it cannot create a second
-// agent — it only rewrites the release-key drop-in and restarts the service.
-async function showRepinCommand(a, detail) {
+// The way out of a pinned-key deadlock, done FROM HERE: the server sends the
+// agent its current release key over the same channel it sends updates on, and
+// the agent replaces its own trust anchor. No shell on the host, no re-install,
+// no second agent — and the update can be retried immediately afterwards.
+//
+// The one-liner is kept as a fallback for an agent that is not connected (a
+// command cannot reach it), not as the way this is normally done.
+async function showRepinCommand(a, detail, { retryUpdate = false } = {}) {
   const name = a.display_name || a.hostname;
   let data;
   try {
@@ -2079,30 +2083,70 @@ async function showRepinCommand(a, detail) {
   }
   const card = $('#modal-card');
   card.classList.add('wide');
+
+  const status = el('div', { class: 'muted small' });
+  const fallback = el('div', { class: 'enroll-manual hidden' },
+    el('p', { class: 'muted small' }, t('agentUpdate.repin.fallbackIntro')),
+    el('div', { class: 'enroll-cmd-row' },
+      el('pre', { class: 'enroll-cmd' }, data.oneLiner),
+      el('button', { class: 'small', onclick: () => { copyText(data.oneLiner); } }, t('agentUpdate.repin.copy'))),
+    el('p', { class: 'muted small' }, t('agentUpdate.repin.run', { host: a.hostname })));
+
+  const go = el('button', {}, t('agentUpdate.repin.send'));
+  go.addEventListener('click', async () => {
+    go.disabled = true;
+    status.textContent = t('agentUpdate.repin.sending');
+    try {
+      const r = await api(`/agents/${a.id}/rekey`, { method: 'POST' });
+      if (!r.accepted) {
+        status.className = 'error small';
+        status.textContent = t('agentUpdate.repin.declined', { reason: r.reason || '—' });
+        fallback.classList.remove('hidden');
+        go.disabled = false;
+        return;
+      }
+      toast(t('agentUpdate.repin.done', { name }));
+      closeModal();
+      // The whole point of re-keying is the update that was refused, so offer to
+      // run it again rather than making the operator find the button twice.
+      if (retryUpdate) updateAgent(a, null, { confirmed: true });
+      else render();
+    } catch (err) {
+      status.className = 'error small';
+      status.textContent = errText(err);
+      // An agent that is offline cannot be re-keyed over the channel; that is
+      // exactly when the host-side fallback is worth showing.
+      fallback.classList.remove('hidden');
+      go.disabled = false;
+    }
+  });
+
   card.replaceChildren(
     el('h3', {}, t('agentUpdate.repin.title', { name })),
     detail ? el('p', { class: 'muted small' }, t('agentUpdate.repin.refused', { detail })) : null,
     el('p', {}, t('agentUpdate.repin.intro')),
-    el('div', { class: 'enroll-cmd-row' },
-      el('pre', { class: 'enroll-cmd' }, data.oneLiner),
-      el('button', { class: 'small', onclick: () => { copyText(data.oneLiner); } }, t('agentUpdate.repin.copy'))),
-    el('p', { class: 'muted small' }, t('agentUpdate.repin.run', { host: a.hostname })),
     data.fingerprint
       ? el('p', { class: 'muted small' }, t('agentUpdate.repin.fingerprint'), ' ', el('code', {}, data.fingerprint))
       : null,
     data.canSign ? null : el('p', { class: 'muted small' }, t('agentUpdate.repin.cannotSign')),
     el('p', { class: 'muted small' }, t('agentUpdate.repin.keepsIdentity')),
     el('div', { class: 'form-actions' },
-      el('button', { class: 'ghost', onclick: closeModal }, t('agentUpdate.close'))));
+      go,
+      el('button', { class: 'small ghost', onclick: () => fallback.classList.toggle('hidden') }, t('agentUpdate.repin.fallback')),
+      el('button', { class: 'ghost', onclick: closeModal }, t('agentUpdate.close'))),
+    status,
+    fallback);
   $('#modal').classList.remove('hidden');
 }
 
 // Asks a systemd-managed agent to rebuild from the server's source and restart.
 // Docker/unmanaged agents decline (their host rebuilds them) — surface why.
-async function updateAgent(a, target) {
+async function updateAgent(a, target, { confirmed = false } = {}) {
   const name = a.display_name || a.hostname;
   const verText = target ? `to v${target}` : 'from the server source';
-  if (!confirm(`Update ${name} ${verText}?\n\nThe agent will rebuild from the server's source bundle and restart, briefly interrupting monitoring on that host.`)) return;
+  // `confirmed` is the retry straight after a re-pin: the operator already said
+  // yes to this update once, and asking again for the same action is friction.
+  if (!confirmed && !confirm(`Update ${name} ${verText}?\n\nThe agent will rebuild from the server's source bundle and restart, briefly interrupting monitoring on that host.`)) return;
   try {
     const r = await api(`/agents/${a.id}/update`, { method: 'POST' });
     if (r.accepted) {
@@ -2149,7 +2193,7 @@ async function followAgentAction(a, auditId) {
       toast(`${name}: the update FAILED — ${detail}.`, true);
       // A refusal over the release key is the one failure with a known fix, so
       // hand it over instead of leaving the operator to read the audit trail.
-      if (isPinnedKeyRefusal(detail)) showRepinCommand(a, detail);
+      if (isPinnedKeyRefusal(detail)) showRepinCommand(a, detail, { retryUpdate: true });
     }
     render();
     return;
@@ -2197,6 +2241,33 @@ async function showWindowsUpdateCommand(a, target) {
       el('button', { class: 'ghost', onclick: closeModal }, t('agentUpdate.close'))),
     manual);
   $('#modal').classList.remove('hidden');
+}
+
+// Re-pins a set of agents in one go: each is sent this server's current release
+// key over its own connection. Sequential rather than parallel — a rekey is a
+// trust change, and a per-agent outcome an operator can read beats a single
+// "done". An agent that is offline cannot be reached; it is reported, not
+// retried, and it picks the key up the next time it is re-pinned.
+async function bulkRepinAgents(list) {
+  if (!list || !list.length) { toast('No systemd agent is behind, so there is nothing to re-pin.', true); return; }
+  const n = list.length;
+  if (!confirm(`Re-pin ${n} agent${n > 1 ? 's' : ''} to this server's current signing key?\n\nEach agent replaces the key it verifies updates against. It keeps its token and identity, and monitoring is not interrupted.`)) return;
+  let done = 0;
+  let offline = 0;
+  let failed = 0;
+  for (const a of list) {
+    try {
+      const r = await api(`/agents/${a.id}/rekey`, { method: 'POST' });
+      if (r.accepted) done += 1; else failed += 1;
+    } catch (err) {
+      if (err.status === 409) offline += 1; else failed += 1;
+    }
+  }
+  const bits = [`${done} re-pinned`];
+  if (offline) bits.push(`${offline} offline`);
+  if (failed) bits.push(`${failed} failed`);
+  toast(`Re-pin — ${bits.join(' · ')}.`, offline > 0 || failed > 0);
+  render();
 }
 
 // Bulk "update all outdated": rebuild every behind agent from the server's
@@ -11492,7 +11563,7 @@ async function settingsAgentKeyView() {
       box.append(el('p', { class: 'muted' }, status.keyError
         || 'Only the public half is available here, so the server can verify releases but not produce one. One-click updates go out unsigned, and an agent that pinned a release key refuses them.'));
       box.append(el('p', { class: 'muted' },
-        'Fix: delete this key, generate a new one, then re-pin the agents to it (Updates panel → “Show the re-pin command”). Re-pinning keeps each agent, its token and its identity.'));
+        'Fix: delete this key, generate a new one, then re-pin the agents to it (Updates panel → “Re-pin agents”, or the button on an agent that refused its update). Re-pinning is sent to each agent over its own connection — nothing to do on the host — and keeps the agent, its token and its identity.'));
       root.append(box);
     }
     if (status.source === 'managed') {
@@ -11506,7 +11577,7 @@ async function settingsAgentKeyView() {
       root.append(el('div', { class: 'form-actions' },
         el('button', { onclick: () => genKey() }, 'Generate a managed signing key')));
       root.append(el('p', { class: 'muted small' },
-        'Generating stores a key pair on this server and uses it in place of the environment key. Agents pinned to the environment key must be re-pinned afterwards (Updates panel → “Show the re-pin command”), or they will refuse the releases it signs.'));
+        'Generating stores a key pair on this server and uses it in place of the environment key. Agents pinned to the environment key must be re-pinned afterwards (Updates panel → “Re-pin agents”), or they will refuse the releases it signs.'));
     }
   } else {
     root.append(el('div', { class: 'section-head' }, el('h3', {}, 'Agent signing key'), el('span', { class: 'badge offline' }, 'Not set')));
@@ -11855,13 +11926,9 @@ async function settingsUpdatesView() {
       // unsigned push. Re-pinning is the other half, and it does not mean
       // re-installing — so say so, and hand over the command.
       box.append(el('p', { class: 'muted' },
-        'Agents pinned a release key when they were installed. After generating a key here, re-pin each behind agent to it — that keeps the agent, its token and its identity; it only replaces the key it trusts:'));
-      const repinBtn = el('button', { class: 'small ghost' }, 'Show the re-pin command');
-      repinBtn.addEventListener('click', () => {
-        const target = selfUpdatableBehind[0];
-        if (target) showRepinCommand(target, null);
-        else toast('No systemd agent is behind, so there is nothing to re-pin.', true);
-      });
+        'Agents pinned a release key when they were installed. After generating a key here, re-pin them to it — the new key is sent to each agent over its own connection, so there is nothing to run on the hosts, and each agent keeps its token and its identity:'));
+      const repinBtn = el('button', { class: 'small' }, `Re-pin agents (${selfUpdatableBehind.length})`);
+      repinBtn.addEventListener('click', () => bulkRepinAgents(selfUpdatableBehind));
       box.append(el('div', { class: 'row-actions' }, repinBtn));
     }
     root.append(box);

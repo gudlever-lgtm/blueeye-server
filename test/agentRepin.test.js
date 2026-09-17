@@ -118,6 +118,56 @@ test('GET /api/enroll/repin-command is 409 when there is no key, 401 anonymous, 
   assert.equal((await request(withKey).get('/api/enroll/repin-command').set('Authorization', authHeader('viewer'))).status, 403);
 });
 
+test('POST /agents/:id/rekey sends the server\'s current key over the agent channel', async () => {
+  const sent = [];
+  const app = makeApp({
+    agentsRepo: makeAgentsRepo({
+      findAll: async () => [AGENT],
+      findById: async (id) => (Number(id) === AGENT.id ? AGENT : null),
+    }),
+    auditRepo: makeAuditRepo(),
+    agentCommander: {
+      sendCommand: () => 1,
+      sendCommandAndWait: async (id, command) => { sent.push({ id, command }); return { delivered: 1, acked: true, reply: { accepted: true } }; },
+    },
+    releaseKeyService: makeReleaseKeyService(),
+  });
+  const res = await request(app).post(`/agents/${AGENT.id}/rekey`).set('Authorization', authHeader('admin'));
+  assert.equal(res.status, 202);
+  assert.equal(res.body.accepted, true);
+  assert.match(res.body.fingerprint, /^[0-9a-f]{64}$/);
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].command.name, 'rekey');
+  assert.match(sent[0].command.publicKey, /BEGIN PUBLIC KEY/);
+  // Signed with the key being replaced when this server still can: a strict
+  // agent accepts nothing else.
+  assert.ok(sent[0].command.commandSignature, 'a signable server must sign a rekey');
+  assert.equal(sent[0].command.agentId, AGENT.id);
+});
+
+test('rekey is 503 with no key to pin, 409 when the agent is offline, 403 for an operator', async () => {
+  const noKey = appWith({ keyService: makeReleaseKeyService({ configured: false }), auditEventsRepo: makeAuditEventsRepo() });
+  const blocked = await request(noKey).post(`/agents/${AGENT.id}/rekey`).set('Authorization', authHeader('admin'));
+  assert.equal(blocked.status, 503);
+  assert.equal(blocked.body.code, 'NO_RELEASE_KEY');
+
+  const offline = makeApp({
+    agentsRepo: makeAgentsRepo({ findAll: async () => [AGENT], findById: async () => AGENT }),
+    auditRepo: makeAuditRepo(),
+    agentCommander: { sendCommand: () => 0, sendCommandAndWait: async () => ({ delivered: 0, acked: false, reply: null }) },
+    releaseKeyService: makeReleaseKeyService(),
+  });
+  const gone = await request(offline).post(`/agents/${AGENT.id}/rekey`).set('Authorization', authHeader('admin'));
+  assert.equal(gone.status, 409);
+  assert.equal(gone.body.connected, false);
+
+  const app = appWith({ keyService: makeReleaseKeyService() });
+  assert.equal((await request(app).post(`/agents/${AGENT.id}/rekey`)).status, 401);
+  assert.equal((await request(app).post(`/agents/${AGENT.id}/rekey`).set('Authorization', authHeader('operator'))).status, 403);
+  assert.equal((await request(app).post('/agents/9999/rekey').set('Authorization', authHeader('admin'))).status, 404);
+  assert.equal((await request(app).post('/agents/abc/rekey').set('Authorization', authHeader('admin'))).status, 400);
+});
+
 test('a verify-only server still says re-pinning alone will not fix it', async () => {
   const app = appWith({ keyService: makeReleaseKeyService({ verifyOnly: true }) });
   const res = await request(app).get('/api/enroll/repin-command').set('Authorization', authHeader('admin'));

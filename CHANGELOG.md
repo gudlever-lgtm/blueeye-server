@@ -1,5 +1,39 @@
 # Changelog
 
+## 0.167.0 — Re-pinning an agent is something the server does
+
+[#199](https://github.com/gudlever-lgtm/blueeye-server/pull/199) fixed this for a
+server that can sign: one-click Update mints a signed release from the current
+source on demand, so the button self-heals. What it left was the case where the
+server *cannot* — and its own note said what the way out was: "agents enrolled
+against a different key must be re-enrolled". On a host with no shell, that is
+not a way out.
+
+`POST /agents/:id/rekey` (admin) sends this server's current release key to the
+agent over the same channel that already carries `update` and `delete`. The agent
+(v0.28.0) validates it is an Ed25519 public key, stores it beside its token —
+where it outranks the `BLUEEYE_RELEASE_PUBLIC_KEY` the installer baked in —
+mirrors it into its systemd drop-in, and applies it **in memory**, so the retried
+update verifies at once and monitoring never stops.
+
+Authenticity is the same gate as the other privileged commands. When this server
+can still sign, the rekey is signed with the key being **replaced**: a proper
+rotation, and the only form an agent running
+`BLUEEYE_REQUIRE_SIGNED_COMMANDS=1` accepts. When it cannot, the rekey goes
+unsigned — accepted exactly where an unsigned `delete` already is. Refusing a key
+change on a channel that already accepts "remove yourself from this host" would
+protect nothing, and it is what lets a fleet recover from a signing key that is
+gone.
+
+The dashboard offers it where the failure appears: an update a pinned agent
+refuses shows **Re-pin this agent now** and retries the update straight after,
+and Settings → Updates re-pins every agent that is behind. `GET /enroll/repin.sh`
+stays as the fallback for an agent that is offline — a command cannot reach one
+that is not connected — behind "Agent offline? Host command".
+
+Migration 102 adds `rekey` to the agent action audit, so the trail records who
+re-keyed what, and to which key.
+
 ## 0.166.0 — The update an agent refuses, and what to do about it
 
 A one-click Update went out, the agent accepted it, and its version never moved.

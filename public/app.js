@@ -91,7 +91,9 @@ initLocale();
 const el = (tag, attrs = {}, ...kids) => {
   const node = document.createElement(tag);
   for (const [k, v] of Object.entries(attrs)) {
-    if (k === 'class') node.className = v;
+    // `class: cond ? 'x' : null` is a common shape; without the guard the
+    // element ends up with the literal class "null".
+    if (k === 'class') { if (v != null) node.className = v; }
     else if (k === 'html') node.innerHTML = v;
     else if (k.startsWith('on')) node.addEventListener(k.slice(2), v);
     else if (v !== null && v !== undefined) node.setAttribute(k, v);
@@ -1338,6 +1340,7 @@ const CONTRACT_VIEWS = new Map([
   ['geo', 'destinations'],
   ['delta', 'topologyDelta'],
   ['investigation', 'investigate'],
+  ['diagnose', 'diagnose'],
 ]);
 
 function hero(viewKey) {
@@ -6913,363 +6916,86 @@ PAGE_INFO.diagnose = {
 // mid-outage must never show two halves of two different answers.
 let diagnoseState = null;
 
-function diagVerdictClass(verdict) {
-  return verdict === 'confirmed' ? 'bad' : verdict === 'ruled_out' ? 'ok' : 'warn';
+// ---- Diagnose (MIGRATED — see public/views/diagnose.js) ---------------------
+let diagnoseView = null;
+
+function getDiagnoseView() {
+  if (diagnoseView) return diagnoseView;
+  if (typeof window === 'undefined' || !window.DiagnoseView || !ui) return null;
+  // The plan, the scope and the selection survive a view switch, which is what
+  // diagnoseState has always been for.
+  if (!diagnoseState) diagnoseState = {};
+  diagnoseView = window.DiagnoseView.create({
+    el, t, ui, errText, plural,
+    state: diagnoseState,
+    navigate: diagnoseNavigate,
+    isViewer: () => role === 'viewer',
+    help: () => {
+      const info = PAGE_INFO.diagnose || {};
+      return { lead: info.hero || '', title: info.title || t('diag.title'), body: info.body || (() => []) };
+    },
+    fetchAgents: async () => api('/agents').catch(() => []),
+    // The examples are the catalogue's own symptoms, so they can never drift
+    // from what the matcher actually knows.
+    fetchExamples: async () => {
+      const r = await api(`/api/playbooks?locale=${encodeURIComponent(window.I18n.getLocale())}`);
+      return (r.playbooks || []).slice(0, 4).map((p) => (p.symptoms || [])[0]).filter(Boolean);
+    },
+    ask: async ({ description, agentId, peerAgentId, target }) => {
+      const body = { description, locale: window.I18n.getLocale() };
+      if (agentId != null) body.agentId = agentId;
+      if (peerAgentId != null) body.peerAgentId = peerAgentId;
+      if (target) body.target = target;
+      return api('/api/diagnose', { method: 'POST', body });
+    },
+    fetchSession: async (sessionId) => {
+      const d = await api(`/api/diagnose/${sessionId}`);
+      return (d.session && d.session.tests) || [];
+    },
+    runTests: async (sessionId, body) => api(`/api/diagnose/${sessionId}/run`, { method: 'POST', body }),
+    evaluate: async (sessionId) => api(`/api/diagnose/${sessionId}/evaluate`, { method: 'POST', body: {} }),
+    // One package per agent: a test package pushes every item to every target,
+    // so a single package would run each reverse test from the wrong end.
+    repeat: (rows, st, chipEl) => {
+      const byAgent = new Map();
+      for (const r of rows) {
+        if (!byAgent.has(r.agentId)) byAgent.set(r.agentId, []);
+        byAgent.get(r.agentId).push({ type: 'probe', probe: { type: r.probeType, host: r.target, ...(r.params || {}) } });
+      }
+      openRepeatModal({
+        what: t('repeat.what.diagnose'),
+        onSave: async (spec, runs) => {
+          const made = [];
+          for (const [agentId, items] of byAgent) {
+            const repeated = [];
+            for (let i = 0; i < runs; i += 1) repeated.push(...items);
+            // eslint-disable-next-line no-await-in-loop
+            made.push(await api('/api/test-packages', {
+              method: 'POST',
+              body: {
+                name: `Diagnosis #${st.plan.sessionId} — ${st.target || st.plan.target}`.slice(0, 120),
+                enabled: true,
+                schedule_spec: spec,
+                targets: { mode: 'agents', agentIds: [Number(agentId)] },
+                items: repeated,
+              },
+            }));
+          }
+          return { name: made.map((m) => m.name).join(', '), packages: made };
+        },
+        onSaved: (pkg, summary) => repeatChip(chipEl, pkg, summary),
+      });
+    },
+  });
+  return diagnoseView;
 }
 
 views.diagnose = async () => {
-  const root = el('div', { class: 'diagnose' });
-  const agents = await api('/agents').catch(() => []);
-
-  root.append(el('div', { class: 'section-head' },
-    el('h2', {}, t('diag.title')),
-    el('span', { class: 'muted' }, t('diag.lead'))));
-
-  // --- the question ---------------------------------------------------------
-  const desc = el('textarea', {
-    id: 'diag-description', rows: '3', maxlength: '1000',
-    placeholder: t('diag.field.placeholder'),
-    'aria-label': t('diag.field.label'),
-  });
-  if (diagnoseState && diagnoseState.description) desc.value = diagnoseState.description;
-
-  const agentSel = el('select', { class: 'small', 'aria-label': t('diag.agent') },
-    el('option', { value: '' }, t('diag.agent.none')),
-    ...agents.map((a) => el('option', { value: String(a.id) }, a.display_name || a.hostname || `#${a.id}`)));
-  const peerSel = el('select', { class: 'small', 'aria-label': t('diag.peer') },
-    el('option', { value: '' }, t('diag.peer.none')),
-    ...agents.map((a) => el('option', { value: String(a.id) }, a.display_name || a.hostname || `#${a.id}`)));
-  const targetIn = el('input', { class: 'small', placeholder: t('diag.target.placeholder'), 'aria-label': t('diag.target') });
-  if (diagnoseState) {
-    if (diagnoseState.agentId) agentSel.value = String(diagnoseState.agentId);
-    if (diagnoseState.peerAgentId) peerSel.value = String(diagnoseState.peerAgentId);
-    if (diagnoseState.target) targetIn.value = diagnoseState.target;
-  }
-
-  const submit = el('button', { class: 'primary' }, t('diag.submit'));
-  const status = el('div', { class: 'muted diag-status' });
-  const out = el('div', { class: 'diag-out' });
-
-  // The examples are the catalogue's own symptoms, so they can never drift from
-  // what the matcher actually knows — and clicking one is the fastest way to see
-  // the thing work.
-  const examples = el('div', { class: 'diag-examples muted' });
-  api(`/api/playbooks?locale=${encodeURIComponent(window.I18n.getLocale())}`).then((r) => {
-    const picks = (r.playbooks || []).slice(0, 4).map((p) => (p.symptoms || [])[0]).filter(Boolean);
-    if (!picks.length) return;
-    examples.append(el('span', {}, `${t('diag.examples')} `));
-    picks.forEach((sym, i) => {
-      if (i) examples.append(document.createTextNode(' · '));
-      examples.append(el('button', {
-        class: 'small ghost', type: 'button',
-        onclick: () => { desc.value = sym; desc.focus(); },
-      }, sym));
-    });
-  }).catch(() => {});
-
-  root.append(el('div', { class: 'card diag-ask' },
-    el('label', { class: 'field' }, el('span', {}, t('diag.field.label')), desc),
-    el('div', { class: 'muted small' }, t('diag.field.hint', { max: 1000 })),
-    examples,
-    el('div', { class: 'diag-scope' },
-      el('label', { class: 'inline muted' }, `${t('diag.agent')} `, agentSel),
-      el('label', { class: 'inline muted' }, `${t('diag.target')} `, targetIn),
-      el('label', { class: 'inline muted' }, `${t('diag.peer')} `, peerSel)),
-    el('div', { class: 'muted small' }, t('diag.peer.hint')),
-    el('div', { class: 'diag-actions' }, submit, status)));
-  root.append(out);
-
-  async function ask() {
-    const description = desc.value.trim();
-    if (!description) { desc.focus(); return; }
-    submit.disabled = true;
-    status.textContent = t('diag.working');
-    status.className = 'muted diag-status';
-    try {
-      const body = { description, locale: window.I18n.getLocale() };
-      if (agentSel.value) body.agentId = Number(agentSel.value);
-      if (peerSel.value && peerSel.value !== agentSel.value) body.peerAgentId = Number(peerSel.value);
-      if (targetIn.value.trim()) body.target = targetIn.value.trim();
-      const plan = await api('/api/diagnose', { method: 'POST', body });
-      diagnoseState = {
-        description, agentId: body.agentId || null, peerAgentId: body.peerAgentId || null,
-        target: body.target || null, plan, evaluation: null,
-      };
-      status.textContent = '';
-      renderPlan();
-    } catch (err) {
-      status.textContent = err.message;
-      status.className = 'error diag-status';
-    } finally {
-      submit.disabled = false;
-    }
-  }
-  submit.addEventListener('click', ask);
-  // Ctrl/Cmd+Enter submits — the field is a textarea, so Enter is a newline.
-  desc.addEventListener('keydown', (e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); ask(); } });
-
-  function renderPlan() {
-    out.replaceChildren();
-    const st = diagnoseState;
-    if (!st || !st.plan) return;
-    const plan = st.plan;
-    if (!plan.causes || plan.causes.length === 0) {
-      out.append(el('div', { class: 'card empty' }, plan.message || t('diag.empty')));
-      return;
-    }
-
-    // Which matcher produced this, said plainly. A plan is worth a different
-    // amount depending on the answer, and the reader should not have to guess.
-    out.append(el('div', { class: `diag-matched ${plan.usedAi ? 'ai' : 'local'}` },
-      plan.usedAi ? t('diag.matched.llm') : t('diag.matched.keywords')));
-
-    const ev = st.evaluation;
-    if (ev) {
-      out.append(el('div', { class: 'diag-counts' }, t('diag.counts', ev.counts)));
-      if (ev.summary && ev.summary.text) {
-        out.append(el('div', { class: 'card diag-summary' },
-          el('h3', {}, t('diag.summary')),
-          el('p', {}, ev.summary.text),
-          el('p', { class: 'muted small' }, t('diag.summary.ai'))));
-      }
-    }
-
-    // --- the causes ---------------------------------------------------------
-    const causesCard = el('div', { class: 'card diag-causes' }, el('h3', {}, t('diag.causes')));
-    // After an evaluation the server has already ordered them confirmed →
-    // open → eliminated; before one, the matcher's ranking stands.
-    const ordered = ev
-      ? ev.causes.map((c) => ({ cause: plan.causes.find((p) => p.id === c.playbookId), verdict: c })).filter((x) => x.cause)
-      : plan.causes.map((cause) => ({ cause, verdict: null }));
-
-    for (const { cause, verdict } of ordered) {
-      const head = el('div', { class: 'diag-cause-head' }, el('strong', {}, cause.title));
-      if (verdict) {
-        head.append(el('span', { class: `pill ${diagVerdictClass(verdict.verdict)}` }, t(`diag.verdict.${verdict.verdict}`)));
-        if (verdict.reason) {
-          head.append(el('span', { class: 'muted small' }, verdict.reason === 'missing_data'
-            ? t('diag.reason.missing_data', { facts: verdict.missingFacts.join(', ') })
-            : t(`diag.reason.${verdict.reason}`)));
-        }
-      } else if (cause.confidence != null) {
-        head.append(el('span', { class: 'muted small' }, `${Math.round(cause.confidence * 100)}%`));
-      }
-
-      const body = el('div', { class: 'diag-cause-body' }, el('p', {}, cause.explanation));
-      if (cause.reason) body.append(el('p', { class: 'muted small' }, cause.reason));
-
-      // How to read the answer — the views, with what to look for in each.
-      const reading = el('div', { class: 'diag-reading' }, el('h4', {}, t('diag.reading')));
-      for (const v of cause.views) {
-        reading.append(el('div', { class: 'diag-view-row' },
-          el('button', {
-            class: 'small ghost', type: 'button',
-            onclick: () => diagnoseNavigate(v, st),
-          }, t('diag.reading.open', { view: v.view })),
-          el('span', { class: 'muted' }, v.look_for)));
-      }
-      body.append(reading);
-
-      // The evidence, once there is any: every rule, whether it matched, and the
-      // sentence behind it. This is what makes a verdict arguable instead of
-      // asserted.
-      if (verdict) {
-        const evid = el('div', { class: 'diag-evidence' }, el('h4', {}, t('diag.evidence')));
-        for (const e of verdict.evidence) {
-          const state = e.result === true ? 'fired' : e.result === false ? 'notFired' : 'unknown';
-          evid.append(el('div', { class: `diag-rule ${state}` },
-            el('code', {}, e.when),
-            el('span', { class: 'muted' }, ` — ${t(`diag.evidence.${state}`)}`),
-            el('div', { class: 'muted small' }, e.because)));
-        }
-        body.append(evid);
-      }
-
-      // The fix. Never shown for a cause that has been eliminated — the server
-      // already dropped them, and this is the belt to that braces.
-      const fixes = verdict ? verdict.fixes : cause.fixes.map((text) => ({ text, complete: true }));
-      if (fixes && fixes.length) {
-        const fixEl = el('div', { class: 'diag-fixes' }, el('h4', {}, t('diag.fixes')));
-        for (const f of fixes) {
-          const text = typeof f === 'string' ? f : f.text;
-          const complete = typeof f === 'string' ? true : f.complete;
-          fixEl.append(el('div', { class: complete ? 'diag-fix' : 'diag-fix partial muted' }, text));
-        }
-        body.append(fixEl);
-      }
-
-      causesCard.append(el('div', { class: 'diag-cause' }, head, body));
-    }
-    out.append(causesCard);
-
-    // --- the tests ----------------------------------------------------------
-    const testsCard = el('div', { class: 'card diag-tests' }, el('h3', {}, t('diag.tests')));
-    if (!plan.tests.length || !plan.target) {
-      testsCard.append(el('p', { class: 'muted' }, t('diag.tests.none')));
-    } else {
-      // Which of the plan's tests to actually dispatch. A plan proposes what is
-      // worth measuring; the technician often already knows one of them is
-      // pointless here, and running it anyway costs an agent, a round trip and
-      // a line of noise in the evidence. Everything starts selected — the plan
-      // is the recommendation, not a menu.
-      //
-      // The checkboxes carry the STORED row ids, which the screen learns from
-      // GET /api/diagnose/:id. Those rows are inserted in plan order and read
-      // back ordered by id, so index pairing is exact; without the ids the
-      // server would have to be told "the third one", which is not something it
-      // could verify.
-      const rowIds = st.testRows ? st.testRows.map((r) => r.id) : [];
-      if (!st.testRows && role !== 'viewer') {
-        api(`/api/diagnose/${st.plan.sessionId}`)
-          .then((d) => { st.testRows = (d.session && d.session.tests) || []; renderPlan(); })
-          .catch(() => { st.testRows = []; });
-      }
-      // The selection is seeded the first time the ids actually arrive — the
-      // first render happens before the fetch lands, and seeding an empty set
-      // then would leave the plan permanently unselected.
-      if (!st.selectedTests || (!st.selectionSeeded && rowIds.length)) {
-        st.selectedTests = new Set(rowIds);
-        st.selectionSeeded = rowIds.length > 0;
-      }
-      const selectedTests = st.selectedTests;
-      const counter = el('span', { class: 'muted small' });
-      const syncCount = () => {
-        counter.textContent = t('diag.tests.selected', { n: String(selectedTests.size), total: String(rowIds.length || plan.tests.length) });
-      };
-
-      plan.tests.forEach((tst, i) => {
-        const params = Object.entries(tst.params || {}).map(([k, v]) => `${k}=${JSON.stringify(v)}`).join(' ');
-        const rowId = rowIds[i];
-        const cb = rowId !== undefined && role !== 'viewer'
-          ? el('input', { type: 'checkbox', ...(selectedTests.has(rowId) ? { checked: 'checked' } : {}) })
-          : null;
-        if (cb) {
-          cb.addEventListener('change', () => {
-            if (cb.checked) selectedTests.add(rowId); else selectedTests.delete(rowId);
-            syncCount();
-          });
-        }
-        testsCard.append(el('div', { class: 'diag-test' },
-          cb,
-          el('code', {}, `${tst.probeType} ${tst.target}${params ? ` ${params}` : ''}`),
-          tst.direction === 'reverse' ? el('span', { class: 'pill' }, '←') : null,
-          el('div', { class: 'muted small' }, tst.why || ''),
-          el('div', { class: 'muted small' }, t('diag.tests.askedBy', { causes: tst.askedBy.join(', ') }))));
-      });
-      if (role !== 'viewer') {
-        syncCount();
-        testsCard.append(el('div', { class: 'muted small diag-select' }, t('diag.tests.select'), ' ', counter));
-
-        // Rounds + Stop, for the fault that is not there while you are looking
-        // at it: the same plan dispatched again and again until it reproduces.
-        const roundsInput = el('input', { type: 'number', min: '1', max: '20', value: '1', class: 'run-count' });
-        const runBtn = el('button', { class: 'primary run-btn' });
-        const stopBtn = el('button', { class: 'small ghost', disabled: 'disabled' }, t('probe.stop'));
-        const repeatBtn = el('button', { class: 'small ghost' }, t('diag.tests.repeat'));
-        const repeatChipEl = el('span', { class: 'ct-chip', hidden: true });
-        const evalBtn = el('button', { class: 'small' }, t('diag.evaluate'));
-        const runStatus = el('span', { class: 'muted' });
-        const syncRunLabel = () => {
-          const n = Math.max(1, Math.min(20, Number(roundsInput.value) || 1));
-          runBtn.replaceChildren(t('diag.tests.runSelected'), ' ', roundsInput, ' ', plural('probe.rounds', n, { n: String(n) }));
-        };
-        roundsInput.addEventListener('input', syncRunLabel);
-        roundsInput.addEventListener('click', (e) => e.stopPropagation());
-        syncRunLabel();
-
-        const ROUND_GAP_MS = 4000;
-        let stopRequested = false;
-        const selectedIds = () => [...selectedTests];
-        runBtn.addEventListener('click', async () => {
-          const ids = selectedIds();
-          if (rowIds.length && !ids.length) { runStatus.textContent = t('diag.tests.noneSelected'); return; }
-          const rounds = Math.max(1, Math.min(20, Number(roundsInput.value) || 1));
-          stopRequested = false;
-          runBtn.disabled = true; stopBtn.disabled = false;
-          for (let round = 1; round <= rounds && !stopRequested; round += 1) {
-            runStatus.textContent = rounds === 1
-              ? t('diag.tests.running')
-              : t('diag.tests.round', { round: String(round), rounds: String(rounds) });
-            try {
-              // No ids yet (the fetch has not landed) means the whole plan,
-              // which is exactly what the button did before it could select.
-              const body = ids.length && rowIds.length ? { testIds: ids } : {};
-              // eslint-disable-next-line no-await-in-loop
-              const r = await api(`/api/diagnose/${st.plan.sessionId}/run`, { method: 'POST', body });
-              runStatus.textContent = t('diag.tests.dispatched', { n: r.dispatched, total: r.total });
-            } catch (err) { runStatus.textContent = err.message; break; }
-            if (round < rounds && !stopRequested) {
-              // eslint-disable-next-line no-await-in-loop
-              await new Promise((r) => setTimeout(r, ROUND_GAP_MS));
-            }
-          }
-          if (stopRequested) runStatus.textContent = t('diag.tests.stopped');
-          stopBtn.disabled = true; runBtn.disabled = false;
-        });
-        stopBtn.addEventListener('click', () => {
-          stopRequested = true;
-          stopBtn.disabled = true;
-          runStatus.textContent = t('diag.tests.stopped');
-        });
-
-        // Repeat: the selected tests on a schedule. A plan can span two agents
-        // (a reverse test runs from the far end), and a test package pushes
-        // every item to every target — so this writes ONE PACKAGE PER AGENT
-        // rather than one package that would run each test from the wrong end.
-        repeatBtn.addEventListener('click', () => {
-          const rows = (st.testRows || []).filter((r) => selectedTests.has(r.id) && r.agentId != null);
-          if (!rows.length) { runStatus.textContent = t('diag.tests.noneSelected'); return; }
-          const byAgent = new Map();
-          for (const r of rows) {
-            if (!byAgent.has(r.agentId)) byAgent.set(r.agentId, []);
-            byAgent.get(r.agentId).push({ type: 'probe', probe: { type: r.probeType, host: r.target, ...(r.params || {}) } });
-          }
-          openRepeatModal({
-            what: t('repeat.what.diagnose'),
-            onSave: async (spec, runs) => {
-              const made = [];
-              for (const [agentId, items] of byAgent) {
-                const repeated = [];
-                for (let i = 0; i < runs; i += 1) repeated.push(...items);
-                // eslint-disable-next-line no-await-in-loop
-                made.push(await api('/api/test-packages', {
-                  method: 'POST',
-                  body: {
-                    name: `Diagnosis #${st.plan.sessionId} — ${st.target || plan.target}`.slice(0, 120),
-                    enabled: true,
-                    schedule_spec: spec,
-                    targets: { mode: 'agents', agentIds: [Number(agentId)] },
-                    items: repeated,
-                  },
-                }));
-              }
-              return { name: made.map((m) => m.name).join(', '), packages: made };
-            },
-            onSaved: (pkg, summary) => repeatChip(repeatChipEl, pkg, summary),
-          });
-        });
-        evalBtn.addEventListener('click', async () => {
-          evalBtn.disabled = true; runStatus.textContent = t('diag.evaluating');
-          try {
-            st.evaluation = await api(`/api/diagnose/${st.plan.sessionId}/evaluate`, { method: 'POST', body: {} });
-            runStatus.textContent = '';
-            renderPlan();
-          } catch (err) { runStatus.textContent = err.message; } finally { evalBtn.disabled = false; }
-        });
-        testsCard.append(el('div', { class: 'diag-actions' }, runBtn, stopBtn, repeatBtn, evalBtn, repeatChipEl, runStatus));
-      }
-    }
-    out.append(testsCard);
-  }
-
-  if (diagnoseState && diagnoseState.plan) renderPlan();
-  return root;
+  const v = getDiagnoseView();
+  if (!v) return el('div', { class: 'empty error' }, t('diag.err.ask'));
+  return v.view();
 };
 
-// Opens the screen a playbook's "how to read the answer" points at, carrying the
-// session's device and target so the reader lands on the data rather than on an
-// empty picker. Anything unrecognised falls back to the plain view rather than
-// doing nothing, because a dead button is worse than an imprecise one.
 function diagnoseNavigate(view, state) {
   const agentId = state && state.agentId != null ? Number(state.agentId) : null;
   switch (view.view) {

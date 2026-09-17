@@ -444,6 +444,7 @@ Administration → login and error screens.
 | Destinations | `/destinations` | A · ListPage | [`public/views/destinations.js`](../public/views/destinations.js) |
 | Topology delta | `/topology-delta` | A · ListPage | [`public/views/topologyDelta.js`](../public/views/topologyDelta.js) |
 | Investigate | `/investigate` | C · FormPage | [`public/views/investigate.js`](../public/views/investigate.js) |
+| Diagnose | `/diagnose` | C · FormPage | [`public/views/diagnose.js`](../public/views/diagnose.js) |
 
 **What Changes kept:** the window vocabulary the server accepts (`30m`, `6h`,
 `24h`, `7d` — not the preview's three), the marker rule (it moves only on an
@@ -625,3 +626,26 @@ different screen in the same section.
 draft block and the AI-narrative fold. Each of those migrates on its own terms;
 the card is drawn inside a contract Panel and inside the Drawer, so it lost the
 card background it used to paint for itself.
+
+
+**Diagnose** is the third FormPage, and the densest screen migrated so far. The
+question, the scope and the examples were a hand-built card; they are two
+FormSections with one primary action. The verdict and the direction were
+`pill`s — a chip carrying a state, which is what a Badge is for — and are badges
+now. The run controls were seven elements in a row with a bare `<span>` doing
+double duty as progress and failure; they are a form-actions row with an inline
+note, so a failure reads as a failure.
+
+"Which matcher produced this" moved from a coloured strip above the causes into
+the Panel head, where the reader is already looking for what a result is worth.
+
+What it keeps, deliberately: the per-test selection carrying the **stored row
+ids** (the server can verify an id; it cannot verify "the third one"), the
+rounds loop with Stop, the one-package-per-agent repeat — a plan can span two
+agents, and one package would run each reverse test from the wrong end — and the
+evidence list: every rule, whether it fired, and the sentence behind it, which
+is what makes a verdict arguable rather than asserted.
+
+This migration also fixed a defect in `el()` itself: `class: cond ? 'x' : null`
+set the element's class to the literal string `"null"`. Every caller in the
+codebase that uses that shape was affected; the DataTable's own cells were.

@@ -88,7 +88,13 @@
   height: var(--control-h); padding: 0 var(--s-3); border: 1px solid var(--border);
   border-radius: var(--r-btn); background: var(--surface); color: var(--text);
   font: inherit; font-size: var(--fs-sm); }
-.ui input::placeholder { color: var(--text-muted); }
+.ui input::placeholder, .ui textarea::placeholder { color: var(--text-muted); }
+/* A textarea is a control that grows, so it takes the control's border and
+   radius but not its height. */
+.ui textarea { width: 100%; box-sizing: border-box; padding: var(--s-2) var(--s-3);
+  border: 1px solid var(--border); border-radius: var(--r-btn);
+  background: var(--surface); color: var(--text); font: inherit; font-size: var(--fs-sm);
+  resize: vertical; }
 
 /* ---- Button -------------------------------------------------------------- */
 .ui .btn { display: inline-flex; align-items: center; justify-content: center; gap: var(--s-2);
@@ -402,3 +408,30 @@
 .ui.map-pop .map-pop-agent { justify-content: flex-start; gap: var(--s-2);
   width: 100%; color: var(--popup-text); }
 .ui.map-pop .map-pop-agent:hover { background: var(--popup-hover); }
+
+
+/* ---- Diagnose (public/views/diagnose.js) ---------------------------------
+   One cause per block, each with how to read the answer, the evidence behind
+   the verdict, and the fix. The verdict and the direction are badges, so the
+   only colour here is the divider between blocks. */
+.ui .diag-examples { display: flex; flex-wrap: wrap; gap: var(--s-2); align-items: center;
+  margin-top: var(--s-2); }
+.ui .diag-cause { padding: var(--s-4) 0; border-top: 1px solid var(--hairline); }
+.ui .diag-cause:first-child { border-top: 0; padding-top: 0; }
+.ui .diag-cause-head { display: flex; align-items: center; gap: var(--s-3); flex-wrap: wrap; }
+.ui .diag-cause-body > p { margin: var(--s-2) 0 var(--s-3); }
+.ui .diag-cause h4, .ui .diag-summary h4 { margin: var(--s-3) 0 var(--s-2); font-size: var(--fs-xs);
+  text-transform: uppercase; letter-spacing: .04em; color: var(--text-muted); }
+.ui .diag-view-row { display: flex; gap: var(--s-3); align-items: baseline; flex-wrap: wrap;
+  margin-bottom: var(--s-2); }
+.ui .diag-view-row .meta { flex: 1 1 300px; }
+/* One rule per row: what was asked, whether it matched, and why. */
+.ui .diag-rule { display: flex; align-items: baseline; flex-wrap: wrap; gap: var(--s-2);
+  padding: var(--s-2) 0; }
+.ui .diag-rule code { font-size: var(--fs-xs); }
+.ui .diag-fix { padding: var(--s-2) 0; }
+.ui .diag-summary p { margin: var(--s-2) 0; }
+.ui .diag-run { border-top: 1px solid var(--hairline); padding: var(--s-4) var(--s-5); }
+.ui .diag-run-status { display: flex; align-items: center; flex-wrap: wrap; gap: var(--s-3);
+  margin-top: var(--s-2); }
+.ui .run-count { width: 64px; text-align: right; }

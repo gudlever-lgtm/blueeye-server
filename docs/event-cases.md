@@ -164,6 +164,7 @@ that fallback **without** a provider call. Answers are cached per event+question
 | `GET /api/events/:id/config-context` | operator+ | the correlated config change + masked/classified diff + "suspected trigger N min before" |
 | `GET /api/events/:id/similar` | viewer+ | top-5 similar past events |
 | `PATCH /api/events/:id` | operator+ | status transition (state-machine-validated, audited) |
+| `POST /api/events/bulk-status` | operator+ | the same transition applied to many events (see below) |
 | `POST /api/events/:id/ask` | operator+ | AI question over masked context |
 | `GET /api/devices/:id/config-history` | operator+ | masked snapshots + risk-classified diffs |
 | `POST /api/devices/:id/config-snapshots` | operator+ | ingest a raw config capture |
@@ -193,3 +194,53 @@ Purging a snapshot only clears any stale `config_change_id` link (FK is
 - **Config secret-masking = mask-on-read** (raw stored, redacted on output).
 - **Similarity weights** and the `platform`-as-device-type proxy are in
   `similarity.js` for tuning on real data.
+
+
+## Acting on many at once
+
+Walking a queue one dialog at a time is how a backlog stops being read. But bulk
+is exactly where a state machine gets quietly bypassed and where an audit trail
+turns into one useless `bulk: 50 items` row, so the bulk endpoints are built to
+avoid both.
+
+`POST /api/events/bulk-status` takes `{ ids, status, comment? }` and applies the
+**same state machine** the single `PATCH` does, per event. It answers with a
+per-event outcome rather than a count:
+
+| outcome | meaning |
+| --- | --- |
+| `moved` | it transitioned |
+| `illegal` | that transition is not legal from where it is |
+| `needs_comment` | a reopen without the required comment |
+| `unchanged` | already in that status |
+| `not_found` | no such event |
+| `conflict` | somebody changed it between our read and write |
+
+**Partial success is a success.** Forty-eight events that moved are not rolled
+back because two were already resolved by a colleague — that is the normal state
+of a shared queue, not an error. The response names the ones that did not move,
+because "2 could not be resolved" is unactionable where "#41 and #52 are still
+open" tells you what to do next.
+
+Every event gets **its own audit row**, marked `(bulk)`. The audit log answers
+"what happened to event 52", and one batch row cannot.
+
+`POST /api/event-clusters/bulk-resolve` is the same shape for situations, taking
+`{ ids, note }`. Two differences worth knowing:
+
+- **The note stays required**, and it is one note for the whole batch — the
+  honest reading of the action is that somebody looked at these together and
+  reached one conclusion. If bulk could skip the note it would become the easy
+  path, and then most of the history would be resolved with no reason recorded.
+- **No resolution alerts are sent.** One notification per situation would mean an
+  operator clearing forty of them pages everybody forty times, which is how a
+  channel gets muted — and a muted channel is worse than a quiet one. The audit
+  log still has every row.
+
+### open → resolved is still not a legal step
+
+The state machine is `open → investigating → resolved → closed`. Bulk does not
+change that, so selecting a screen of **open** events and asking for `resolved`
+reports `illegal` for each one rather than inventing an `investigating` step
+nobody performed. In the UI the selection offers only the legal next status for
+what is selected, and says so when the selection is mixed.

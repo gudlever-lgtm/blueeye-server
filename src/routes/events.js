@@ -18,6 +18,10 @@ const { buildExplanation } = require('../eventCases/explanation');
 const { EVENT_INSUFFICIENT_ANSWER } = require('../analysis/assistant');
 
 const SEVERITIES = ['INFO', 'WARN', 'CRIT'];
+// How many events one bulk transition may carry. Each is a read, a guarded
+// write and an audit row, so this is a bound on the request's work, not a
+// guess at what an operator might select.
+const MAX_BULK_EVENTS = 500;
 const OPERATOR_ROLES = [ROLES.OPERATOR, ROLES.ADMIN]; // force_ai (costs a Mistral call) is operator+
 
 function parseEventId(raw) {
@@ -474,6 +478,83 @@ function createEventsRouter({
   }));
 
   // PATCH /api/events/:id — status transition. operator/admin only.
+  // POST /api/events/bulk-status — one transition applied to many events.
+  //
+  // Selecting fifty events and walking them one dialog at a time is how a
+  // backlog stops being read. But bulk is exactly where a state machine gets
+  // quietly bypassed, so this applies the SAME rules the single PATCH does,
+  // per event, and reports what happened to each one:
+  //
+  //   moved       it transitioned
+  //   illegal     that transition is not legal from where it is
+  //   not_found   no such event
+  //   conflict    somebody else changed it between our read and write
+  //
+  // PARTIAL SUCCESS IS A SUCCESS. Forty-eight events that moved must not be
+  // rolled back because two were already resolved by a colleague — that is the
+  // normal state of a shared queue, not an error.
+  router.post('/bulk-status', requireAuth, writer, asyncHandler(async (req, res) => {
+    const body = req.body || {};
+    if (!Array.isArray(body.ids) || !body.ids.length) {
+      return res.status(400).json({ error: 'ids must be a non-empty array' });
+    }
+    if (body.ids.length > MAX_BULK_EVENTS) {
+      return res.status(400).json({ error: `ids must hold at most ${MAX_BULK_EVENTS} events` });
+    }
+    const ids = [];
+    for (const raw of body.ids) {
+      const id = parseEventId(raw);
+      if (id === null) return res.status(400).json({ error: 'ids must be positive integers' });
+      if (!ids.includes(id)) ids.push(id);
+    }
+
+    const { value, errors } = validateStatusPatch(body);
+    if (errors) return res.status(400).json({ error: 'Validation failed', details: errors });
+
+    const results = [];
+    for (const id of ids) {
+      // eslint-disable-next-line no-await-in-loop
+      const existing = await eventCasesRepo.findById(id);
+      if (!existing) { results.push({ id, outcome: 'not_found' }); continue; }
+
+      const from = existing.status;
+      const to = value.status;
+      if (from === to) { results.push({ id, outcome: 'unchanged', from, to }); continue; }
+      if (!canTransition(from, to)) {
+        // Named, not just counted: "3 could not be resolved" is unactionable
+        // where "#41, #52 and #63 are still open" tells you what to do next.
+        results.push({ id, outcome: 'illegal', from, to });
+        continue;
+      }
+      if (requiresComment(from, to) && !value.comment) {
+        results.push({ id, outcome: 'needs_comment', from, to });
+        continue;
+      }
+
+      // eslint-disable-next-line no-await-in-loop
+      const ok = await eventCasesRepo.updateStatus(id, {
+        from,
+        to,
+        closedBy: to === 'closed' ? (req.user && req.user.id) || null : null,
+        at: to === 'resolved' ? new Date() : null,
+      });
+      if (!ok) { results.push({ id, outcome: 'conflict', from, to }); continue; }
+      results.push({ id, outcome: 'moved', from, to });
+
+      if (auditLogger) {
+        const detail = `${from}→${to}${value.comment ? `: ${value.comment}` : ''} (bulk)`;
+        // One row PER EVENT, not one for the batch: the audit log answers
+        // "what happened to event 52", and a single "bulk: 50 events" row
+        // cannot.
+        // eslint-disable-next-line no-await-in-loop
+        await auditLogger.record(req, { category: 'event', action: 'event_status_change', target: String(id), detail });
+      }
+    }
+
+    const moved = results.filter((r) => r.outcome === 'moved').length;
+    return res.status(200).json({ moved, requested: ids.length, status: value.status, results });
+  }));
+
   router.patch('/:id', requireAuth, writer, asyncHandler(async (req, res) => {
     const id = parseEventId(req.params.id);
     if (id === null) return res.status(400).json({ error: 'id must be a positive integer' });

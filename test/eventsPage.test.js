@@ -68,6 +68,22 @@ const cards = (doc) => [...doc.querySelectorAll('#view .statstrip .stat-card')];
 const control = (doc, label) => [...doc.querySelectorAll('#view .toolbar-ui select, #view .toolbar-ui input')]
   .find((c) => (c.getAttribute('aria-label') || '') === label);
 
+
+// Column lookup BY HEADER, not by position. These used to index children[2]
+// and cols[0], which meant adding a column anywhere to the left silently
+// re-pointed every assertion at the wrong data. The selection checkbox is
+// exactly such a column.
+function colIndex(doc, label) {
+  const ths = [...doc.querySelectorAll('#view table.dt thead th')];
+  const i = ths.findIndex((th) => new RegExp('^' + label).test(th.textContent.trim()));
+  if (i < 0) throw new Error(`no column headed "${label}" — headers: ${ths.map((x) => x.textContent.trim()).join(' | ')}`);
+  return i;
+}
+const cellIn = (row, doc, label) => row.children[colIndex(doc, label)];
+const colWidth = (doc, label) => parseInt(
+  [...doc.querySelectorAll('#view table.dt colgroup col')][colIndex(doc, label)].style.width, 10,
+);
+
 test('Events is a ListPage: PageHeader, StatStrip, Toolbar, DataTable', async (t) => {
   const { doc, errors } = boot({ t, routes: SESSION() });
   await settle();
@@ -149,14 +165,13 @@ test('the table sorts from its header, newest activity first by default', async 
   const sevs = rows(doc).map((r) => r.querySelector('.badge-ui').textContent);
   assert.deepEqual(sevs, ['CRIT', 'WARN', 'WARN', 'INFO']);
   // The severity column has to fit the longest badge; at 92px "WARN" clipped.
-  const cols = [...doc.querySelectorAll('#view table.dt colgroup col')];
-  assert.ok(parseInt(cols[0].style.width, 10) >= 104, `severity column is ${cols[0].style.width}`);
+  assert.ok(colWidth(doc, 'Severity') >= 104, `severity column is ${colWidth(doc, 'Severity')}px`);
 });
 
 test('the condition column drops what the other columns already say', async (t) => {
   const { doc } = boot({ t, routes: SESSION() });
   await settle();
-  const cell = rows(doc)[0].children[2];
+  const cell = cellIn(rows(doc)[0], doc, 'Condition');
   // The stored title repeats severity, device and site; those are columns.
   assert.ok(!/oslo-edge-01/.test(cell.textContent), `condition still repeats the device: ${cell.textContent}`);
   // …and the full title is still the tooltip.

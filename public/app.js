@@ -3732,6 +3732,10 @@ function getEventsPage() {
       const r = await api(`/api/events${qs.toString() ? `?${qs}` : ''}`);
       return r.events || [];
     },
+    // One transition, many events. The server applies the same state machine
+    // per event and answers with a per-event outcome, so the page can name the
+    // ones that did not move rather than just counting them.
+    bulkStatus: (ids, status) => api('/api/events/bulk-status', { method: 'POST', body: { ids, status } }),
   });
   return eventsPage;
 }
@@ -4259,7 +4263,7 @@ function getSituationsPage() {
   if (situationsPage) return situationsPage;
   if (typeof window === 'undefined' || !window.SituationsPage || !ui) return null;
   situationsPage = window.SituationsPage.create({
-    el, t, ui, errText, gotoView, openCluster,
+    el, t, ui, errText, gotoView, openCluster, canWrite,
     state: situationsPageState,
     help: () => {
       const info = PAGE_INFO.clusters || {};
@@ -4271,6 +4275,10 @@ function getSituationsPage() {
       const r = await api(`/api/event-clusters${qs.toString() ? `?${qs}` : ''}`);
       return r.clusters || [];
     },
+    // Many situations, ONE shared note — somebody looked at them together and
+    // reached one conclusion. The note stays required, as it is for a single
+    // resolve, so bulk never becomes the path that records no reason.
+    bulkResolve: (ids, note) => api('/api/event-clusters/bulk-resolve', { method: 'POST', body: { ids, note } }),
   });
   return situationsPage;
 }

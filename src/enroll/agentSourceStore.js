@@ -3,6 +3,7 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const zlib = require('zlib');
 const { spawnSync } = require('child_process');
 
 // Packages the agent source tree into a single gzipped tarball, served at
@@ -18,6 +19,38 @@ const { spawnSync } = require('child_process');
 // install script for integrity verification), mirroring the artifact store. Call
 // reload() after the source changes (e.g. an agent upgrade on the host).
 //
+// THE ARCHIVE IS REPRODUCIBLE, AND IT HAS TO BE. The checksum is embedded in the
+// install/update script when that script is GENERATED; the tarball is fetched in
+// a SEPARATE request afterwards. The two therefore only agree while the bytes in
+// between do not change — and a plain `tar` archive of identical source does not
+// hash the same twice, because tar records each file's mtime, its uid/gid, and
+// whatever order the directory walk returned.
+//
+// The mtimes are the one that bites. `git clone` and most deploy tooling write
+// them fresh, so the SAME COMMIT packaged on two machines, or on one machine
+// twice, produced different bytes. That made the checksum a property of WHEN the
+// server last packaged rather than of WHAT the source is, and it failed in three
+// ways:
+//
+//   * a restart or a reload() between the script and the download → mismatch,
+//     which an operator sees as "checksum mismatch - refusing to update" on a
+//     host that updated perfectly an hour earlier;
+//   * two server replicas → the script from one NEVER validates the bytes from
+//     the other, because each packaged its own tarball from its own checkout;
+//   * redeploying the same commit → new mtimes, new checksum, same source.
+//
+// Fixed by pinning everything that varies: `--sort=name` for the order,
+// `--mtime=@0` for the timestamps, `--owner/--group/--numeric-owner` for the
+// ownership.
+//
+// The gzip is done HERE rather than through tar's `-z` for the same reason one
+// step further out. GNU tar compressing a stream happens to write a zero MTIME
+// into the gzip header, so `-z` was not itself a source of drift — but that is
+// a property of one tar talking to one gzip, not a guarantee, and the `gzip`
+// binary writing now() into that field is the documented default. zlib.gzipSync
+// always writes zero. Same source in, same bytes out, whichever tar the host
+// happens to ship.
+//
 // DI-friendly: pass a fake `exec`/`fsImpl` in tests, or point `dir` at a fixture.
 
 // Directories/files never worth shipping. node_modules is reinstalled on the
@@ -28,6 +61,18 @@ const EXCLUDES = [
   './node_modules', './.git', './dist', './test', './test-support', './.github',
   './.env', './.env.local', './.blueeye-agent', './blueeye-agent.config.json',
   '*.token', '*.log',
+];
+
+// What makes two runs over identical source produce identical bytes. GNU tar
+// only — busybox tar (the one in a bare alpine image) rejects every one of
+// them, which is why the server image installs GNU tar and why the build below
+// falls back rather than serving nothing.
+const TAR_REPRODUCIBLE = [
+  '--sort=name',
+  '--mtime=@0',
+  '--owner=0',
+  '--group=0',
+  '--numeric-owner',
 ];
 
 function createAgentSourceStore({ dir, exec = spawnSync, fsImpl = fs, logger = console } = {}) {
@@ -75,15 +120,41 @@ function createAgentSourceStore({ dir, exec = spawnSync, fsImpl = fs, logger = c
       srcVersion = null;
     }
 
-    const args = ['-czf', '-', '-C', dir, ...EXCLUDES.map((e) => `--exclude=${e}`), '.'];
-    const res = exec('tar', args, { maxBuffer: 256 * 1024 * 1024 });
-    if (res.error || res.status !== 0 || !res.stdout || res.stdout.length === 0) {
-      const why = res.error ? res.error.message : res.stderr ? String(res.stderr).trim() : `exit ${res.status}`;
-      warn(`enroll: failed to package agent source from ${dir}: ${why}`);
+    // `-cf`, not `-czf`: the gzip happens below, in Node, where the header's
+    // MTIME field is always zero rather than up to the host's gzip.
+    const tarArgs = (reproducible) => [
+      '-cf', '-',
+      ...(reproducible ? TAR_REPRODUCIBLE : []),
+      '-C', dir,
+      ...EXCLUDES.map((e) => `--exclude=${e}`),
+      '.',
+    ];
+    const failed = (r) => r.error || r.status !== 0 || !r.stdout || r.stdout.length === 0;
+    const why = (r) => (r.error ? r.error.message : r.stderr ? String(r.stderr).trim() : `exit ${r.status}`);
+
+    let reproducible = true;
+    let res = exec('tar', tarArgs(true), { maxBuffer: 256 * 1024 * 1024 });
+    if (failed(res)) {
+      // A tar that does not understand the flags — busybox, or something very
+      // old. Serving an unstable checksum is bad; serving NO agent source is
+      // worse, because then nothing can enrol or update at all. So fall back,
+      // and say plainly what the consequence is.
+      reproducible = false;
+      warn(`enroll: this tar cannot build a reproducible archive (${why(res)}). `
+        + 'Falling back to a non-reproducible one: the source checksum will change on every '
+        + 'restart, so an update can fail with "checksum mismatch" when the script and the '
+        + 'download come from different builds. Install GNU tar (alpine: apk add tar).');
+      res = exec('tar', tarArgs(false), { maxBuffer: 256 * 1024 * 1024 });
+    }
+    if (failed(res)) {
+      warn(`enroll: failed to package agent source from ${dir}: ${why(res)}`);
       return;
     }
 
-    const buffer = Buffer.isBuffer(res.stdout) ? res.stdout : Buffer.from(res.stdout);
+    const tarBytes = Buffer.isBuffer(res.stdout) ? res.stdout : Buffer.from(res.stdout);
+    // level 9 fixed rather than left to the default, so the output depends only
+    // on the input. zlib.gzipSync writes MTIME=0, which the gzip binary does not.
+    const buffer = zlib.gzipSync(tarBytes, { level: 9 });
     const sha256 = crypto.createHash('sha256').update(buffer).digest('hex');
     cache = { buffer, sha256, size: buffer.length };
     if (logger && typeof logger.info === 'function') {
@@ -91,7 +162,9 @@ function createAgentSourceStore({ dir, exec = spawnSync, fsImpl = fs, logger = c
       // still offers the old agent" is answered by this one line —
       // `docker compose logs server | grep 'agent source packaged'` — with no
       // API token and no dashboard login.
-      logger.info(`enroll: agent source packaged v${srcVersion || '?'} from ${dir} (${buffer.length} bytes, sha256 ${sha256.slice(0, 12)}…).`);
+      logger.info(`enroll: agent source packaged v${srcVersion || '?'} from ${dir} `
+        + `(${buffer.length} bytes, sha256 ${sha256.slice(0, 12)}…`
+        + `${reproducible ? '' : ', NOT reproducible'}).`);
     }
   }
 

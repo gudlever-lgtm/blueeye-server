@@ -235,6 +235,49 @@ stops with a clear message (it won't half-install). `node_modules`, `.git`,
 `dist`, `test*` and `.github` are excluded from the bundle; the Docker build /
 Node path installs production deps on the target.
 
+### The bundle is reproducible, and why that matters
+
+The checksum is embedded in the install/update script **when that script is
+generated**; the tarball is fetched in a **separate request afterwards**. So the
+two only agree while the bytes in between do not change.
+
+A plain `tar` archive of identical source does not hash the same twice — it
+records each file's mtime, its uid/gid, and whatever order the directory walk
+returned. The mtimes are the one that bites: `git clone` and most deploy tooling
+write them fresh, so the same commit packaged twice produced different bytes.
+That is what an operator saw as:
+
+```
+[blueeye] ERROR: checksum mismatch (expected 9f93…, got 34d5…) - refusing to update
+```
+
+on a host that updated perfectly an hour earlier. The refusal is correct — the
+inputs were inconsistent.
+
+`agentSourceStore` now pins everything that varies (`--sort=name`, `--mtime=@0`,
+`--owner=0 --group=0 --numeric-owner`) and gzips in Node, where the header's
+MTIME field is always zero. Same source in, same bytes out. Three things stop
+being failure modes:
+
+| before | now |
+| --- | --- |
+| a restart or reload between the script and the download | the checksum still matches |
+| two server replicas, each packaging its own checkout | either one validates the other's script |
+| redeploying the same commit | same source, same checksum |
+
+**This needs GNU tar.** The server image installs it (`apk add --no-cache tar`)
+because busybox tar rejects every one of those flags. On a host where tar cannot
+do it, packaging falls back to a non-reproducible archive rather than serving
+nothing — an unstable checksum is bad, no agent source at all is worse — and the
+log says so at boot:
+
+```
+enroll: this tar cannot build a reproducible archive (…). Falling back …
+```
+
+If you hit a checksum mismatch, re-fetching the install script is the
+workaround: it embeds the checksum of whatever the server currently serves.
+
 ## Air-gapped networks
 
 `curl … | sh` only needs to reach **this** server, and the source is served by

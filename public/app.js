@@ -10798,7 +10798,7 @@ const SETTINGS_GROUPS = [
   ['Access & security', [['users', 'Users', true], ['auth', 'Authentication', true], ['apitokens', 'API tokens', true], ['agentkey', 'Agent key', true]]],
   ['Detection & alerts', [['analyse', 'Analysis', true], ['alerting', 'Alerting', true], ['severity', 'Severity rules', true], ['runbooks', 'Runbooks', true], ['integrations', 'ITSM', true], ['cmdb', 'CMDB', true], ['ai', 'AI', true], ['maintenance', 'Maintenance', true]]],
   ['Data', [['database', 'Database', true], ['retention', 'Retention', true], ['types', 'Traffic types', true], ['map', 'Map', true]]],
-  ['System', [['updates', 'Updates', true], ['agents', 'Agents', true], ['screening', 'Test Settings', true], ['assurance', 'Service Assurance', true]]],
+  ['System', [['updates', 'Updates', true], ['agents', 'Agents', true], ['snmp', 'SNMP devices', true], ['screening', 'Test Settings', true], ['assurance', 'Service Assurance', true]]],
   ['Personal', [['appearance', 'Appearance', false], ['license', 'License', false]]],
 ];
 // ---- Logs (admin-only operational + client-error view) ----------------------
@@ -11473,6 +11473,7 @@ const SETTINGS_SECTIONS = {
   updates: settingsUpdatesView,
   agentkey: settingsAgentKeyView,
   agents: settingsAgentsView,
+  snmp: settingsSnmpDevicesView,
   retention: settingsRetentionView,
   auth: settingsAuthView,
   apitokens: settingsApiTokensView,
@@ -12054,6 +12055,181 @@ async function settingsAiView() {
 // agent's health verdict like loss/latency. Admin, runtime-editable.
 // Settings → Agents: agent-management toggles. Currently the opt-in for the
 // server to auto-install a missing diagnostic tool when a probe reports it.
+// ---- Settings → SNMP devices -----------------------------------------------
+//
+// The switches the server polls, and through which agent. This is what broke
+// the old 1:1 binding: one agent covers a wiring closet instead of one switch.
+//
+// Two things the table says that a list of hosts would not:
+//
+//   * WHAT EACH DEVICE ACTUALLY ANSWERED. A switch that cannot serve the
+//     forwarding table shows "fdb not supported" rather than an empty column —
+//     the same rule the connection test follows with `available:false`. A
+//     device that CANNOT answer must never look like one that answered "none".
+//   * WHEN IT LAST ANSWERED, not just that it is failing. "Last answered 41
+//     minutes ago" is the difference between a switch that blipped and one that
+//     is gone.
+const SNMP_COLLECT_KINDS = ['if', 'fdb', 'lldp', 'vlan'];
+
+async function settingsSnmpDevicesView() {
+  const host = el('div', { class: 'settings-grid' });
+
+  async function refresh() {
+    let data;
+    let agents = [];
+    try {
+      [data, agents] = await Promise.all([
+        api('/api/snmp-devices'),
+        api('/agents').catch(() => []),
+      ]);
+    } catch (e) {
+      host.replaceChildren(el('div', { class: 'error' }, errText(e)));
+      return;
+    }
+    host.replaceChildren(addCard(agents), listCard(data.devices || []));
+  }
+
+  function agentOptions(agents) {
+    return [['', t('snmpdev.agent.none')]].concat(
+      agents.map((a) => [String(a.id), a.display_name || a.hostname || `#${a.id}`]),
+    );
+  }
+
+  // Hand-built rather than settingsFormCard: that helper PUTs a settings object
+  // and only knows checkbox/select/number fields. This creates a RESOURCE, and
+  // needs a text field and a write-only credential.
+  function addCard(agents) {
+    const hostIn = el('input', { type: 'text', id: 'snmpdev-host', placeholder: '10.14.0.11', maxlength: '255' });
+    const agentSel = el('select', { id: 'snmpdev-agent' },
+      ...agentOptions(agents).map(([v, l]) => el('option', { value: v }, l)));
+    // A community string is a password on the wire — the protocol's fault, and
+    // not something we make worse by echoing it into a plain text field.
+    const communityIn = el('input', { type: 'password', id: 'snmpdev-community', maxlength: '128', autocomplete: 'new-password' });
+    const versionSel = el('select', { id: 'snmpdev-version' },
+      el('option', { value: '2c' }, 'v2c'), el('option', { value: '1' }, 'v1'));
+    const intervalIn = el('input', { type: 'number', id: 'snmpdev-interval', value: '300', min: '60', max: '86400' });
+    const err = el('p', { class: 'error' });
+    const btn = el('button', { class: 'btn btn-primary' }, t('snmpdev.add.submit'));
+
+    btn.addEventListener('click', async () => {
+      err.textContent = '';
+      btn.disabled = true;
+      try {
+        await api('/api/snmp-devices', {
+          method: 'POST',
+          body: {
+            host: hostIn.value.trim(),
+            agentId: agentSel.value ? Number(agentSel.value) : null,
+            community: communityIn.value || null,
+            version: versionSel.value,
+            intervalSec: Number(intervalIn.value) || 300,
+          },
+        });
+        hostIn.value = '';
+        communityIn.value = '';
+        await refresh();
+      } catch (e) {
+        err.textContent = errText(e);
+      } finally {
+        btn.disabled = false;
+      }
+    });
+
+    const field = (label, control, hint) => el('label', { class: 'set-field' },
+      el('span', {}, label), control, hint ? el('span', { class: 'muted small' }, hint) : null);
+
+    return el('section', { class: 'card' },
+      el('h3', {}, t('snmpdev.add.title')),
+      el('p', { class: 'muted' }, t('snmpdev.add.lead')),
+      field(t('snmpdev.field.host'), hostIn, t('snmpdev.field.host.hint')),
+      field(t('snmpdev.field.agent'), agentSel, t('snmpdev.field.agent.hint')),
+      field(t('snmpdev.field.community'), communityIn, t('snmpdev.field.community.hint')),
+      field(t('snmpdev.field.version'), versionSel, t('snmpdev.field.version.hint')),
+      field(t('snmpdev.field.interval'), intervalIn, t('snmpdev.field.interval.hint')),
+      err, el('div', { class: 'actions' }, btn));
+  }
+
+  function supportedCell(d) {
+    // `supported` is NULL until the device has actually answered once. Null and
+    // [] mean different things and are shown differently: "not polled yet" vs
+    // "answered, and cannot do any of this".
+    if (d.supported == null) return el('span', { class: 'muted' }, t('snmpdev.supported.unknown'));
+    const parts = SNMP_COLLECT_KINDS
+      .filter((k) => (d.collect || SNMP_COLLECT_KINDS).includes(k))
+      .map((k) => (d.supported.includes(k)
+        ? el('span', {}, k)
+        : el('span', { class: 'muted', title: t('snmpdev.supported.no', { kind: k }) }, `${k} ✕`)));
+    if (!parts.length) return el('span', { class: 'muted' }, '—');
+    const out = el('span', {});
+    parts.forEach((p, i) => { if (i) out.append(' · '); out.append(p); });
+    return out;
+  }
+
+  function stateCell(d) {
+    if (!d.enabled) return el('span', { class: 'badge-ui neutral' }, t('snmpdev.state.disabled'));
+    if (d.lastError) {
+      return el('span', {},
+        el('span', { class: 'badge-ui crit' }, t('snmpdev.state.failing')),
+        el('span', { class: 'meta-xs' }, ` ${d.lastError}`),
+        // The LAST GOOD time, not just "failing" — the difference between a
+        // switch that blipped and one that is gone.
+        d.lastOkAt ? el('span', { class: 'meta-xs' }, ` · ${t('snmpdev.state.lastOk', { when: fmtTimeShort(new Date(d.lastOkAt).getTime()) })}`) : null);
+    }
+    if (!d.lastOkAt) return el('span', { class: 'badge-ui neutral' }, t('snmpdev.state.never'));
+    return el('span', {},
+      el('span', { class: 'badge-ui ok' }, t('snmpdev.state.ok')),
+      el('span', { class: 'meta-xs' }, ` ${fmtTimeShort(new Date(d.lastOkAt).getTime())}`));
+  }
+
+  function listCard(devices) {
+    const card = el('section', { class: 'card' },
+      el('h3', {}, t('snmpdev.list.title')),
+      el('p', { class: 'muted' }, t('snmpdev.list.lead')));
+    if (!devices.length) {
+      card.append(el('div', { class: 'empty' }, t('snmpdev.list.empty')));
+      return card;
+    }
+    const table = el('table', { class: 'dt' },
+      el('thead', {}, el('tr', {},
+        el('th', {}, t('snmpdev.col.device')),
+        el('th', {}, t('snmpdev.col.agent')),
+        el('th', {}, t('snmpdev.col.collects')),
+        el('th', {}, t('snmpdev.col.state')),
+        el('th', {}, ''))),
+      el('tbody', {}, devices.map((d) => el('tr', {},
+        el('td', {}, el('strong', {}, d.displayName || d.host),
+          d.displayName ? el('span', { class: 'meta-xs' }, ` ${d.host}`) : null),
+        el('td', {}, d.agentName || el('span', { class: 'muted' }, t('snmpdev.agent.none'))),
+        el('td', {}, supportedCell(d)),
+        el('td', {}, stateCell(d)),
+        el('td', {},
+          el('button', {
+            class: 'btn btn-secondary btn-xs',
+            onclick: async () => {
+              try {
+                await api(`/api/snmp-devices/${d.id}/poll`, { method: 'POST' });
+                toast(t('snmpdev.poll.queued'));
+              } catch (e) { toast(errText(e)); }
+            },
+          }, t('snmpdev.action.poll')),
+          isAdmin() ? el('button', {
+            class: 'btn btn-ghost btn-xs',
+            onclick: async () => {
+              if (!confirm(t('snmpdev.delete.confirm', { host: d.host }))) return;
+              try {
+                await api(`/api/snmp-devices/${d.id}`, { method: 'DELETE' });
+                refresh();
+              } catch (e) { toast(errText(e)); }
+            },
+          }, t('snmpdev.action.delete')) : null)))));
+    card.append(el('div', { class: 'table-wrap-ui' }, table));
+    return card;
+  }
+
+  await refresh();
+  return host;
+}
+
 async function settingsAgentsView() {
   const data = await api('/api/settings');
   return el('div', { class: 'settings-grid' },

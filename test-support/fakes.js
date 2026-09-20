@@ -20,6 +20,7 @@ const { createUsageService } = require('../src/services/usageService');
 const { createAuditLogger } = require('../src/services/complianceLogger');
 const { createInterfaceStateService } = require('../src/health/interfaceStateService');
 const { createDeviceEventIngest } = require('../src/devices/deviceEventIngest');
+const { createSnmpTopologyIngest } = require('../src/devices/snmpTopologyIngest');
 const { createSnapshotService } = require('../src/evidence/snapshotService');
 const { createBlastRadiusService } = require('../src/topology/blastRadiusService');
 const { createTopologyChangeService } = require('../src/topology/topologyChangeService');
@@ -438,6 +439,202 @@ function makeDeviceEventsRepo(overrides = {}) {
       }
       return before - rows.length;
     }),
+  };
+}
+
+// Fakes for the SNMP device inventory (104), its forwarding table (105) and
+// the switch-seen LLDP adjacencies beside it (106).
+//
+// The device fake implements the CREDENTIAL RULE for real: `list`/`findById`
+// never return a community, and only `listForAgentWithSecret` does. A fake that
+// leaked it everywhere would let a route accidentally return one and still pass
+// its test.
+function makeSnmpDevicesRepo(overrides = {}) {
+  const rows = [];
+  let seq = 0;
+  const iso = (v) => (v == null ? null : (v instanceof Date ? v.toISOString() : new Date(v).toISOString()));
+  const safe = (r) => ({
+    id: r.id,
+    agentId: r.agent_id,
+    host: r.host,
+    port: r.port,
+    version: r.version,
+    displayName: r.display_name,
+    locationId: r.location_id,
+    collect: r.collect,
+    intervalSec: r.interval_sec,
+    enabled: !!r.enabled,
+    lastPolledAt: iso(r.last_polled_at),
+    lastOkAt: iso(r.last_ok_at),
+    lastError: r.last_error,
+    supported: r.supported,
+    createdAt: iso(r.created_at),
+    updatedAt: iso(r.updated_at),
+  });
+
+  return {
+    rows,
+    list: overrides.list || (async ({ agentId = null, enabled = null } = {}) => rows
+      .filter((r) => (agentId == null || r.agent_id === Number(agentId))
+        && (enabled == null || !!r.enabled === !!enabled))
+      .map(safe)),
+    findById: overrides.findById || (async (id) => {
+      const r = rows.find((x) => x.id === Number(id));
+      return r ? safe(r) : null;
+    }),
+    findByHost: overrides.findByHost || (async (host, port = 161) => {
+      const r = rows.find((x) => x.host === host && x.port === Number(port));
+      return r ? safe(r) : null;
+    }),
+    // The ONE read that carries the credential, and only for the polling agent.
+    listForAgentWithSecret: overrides.listForAgentWithSecret || (async (agentId) => rows
+      .filter((r) => r.agent_id === Number(agentId) && r.enabled)
+      .map((r) => ({ ...safe(r), community: r.community ?? null }))),
+    create: overrides.create || (async (v) => {
+      const now = new Date();
+      const row = {
+        id: (seq += 1),
+        agent_id: v.agentId ?? null,
+        host: v.host,
+        port: v.port ?? 161,
+        version: v.version ?? '2c',
+        community: v.community ?? null,
+        display_name: v.displayName ?? null,
+        location_id: v.locationId ?? null,
+        collect: v.collect ?? ['if', 'fdb', 'lldp', 'vlan'],
+        interval_sec: v.intervalSec ?? 300,
+        enabled: v.enabled === undefined ? true : !!v.enabled,
+        last_polled_at: null, last_ok_at: null, last_error: null, supported: null,
+        created_at: now, updated_at: now,
+      };
+      rows.push(row);
+      return safe(row);
+    }),
+    update: overrides.update || (async (id, patch) => {
+      const r = rows.find((x) => x.id === Number(id));
+      if (!r) return null;
+      const map = {
+        agentId: 'agent_id', host: 'host', port: 'port', version: 'version',
+        displayName: 'display_name', locationId: 'location_id', collect: 'collect',
+        intervalSec: 'interval_sec', community: 'community',
+      };
+      for (const [k, col] of Object.entries(map)) {
+        if (patch[k] !== undefined) r[col] = patch[k];
+      }
+      if (patch.enabled !== undefined) r.enabled = !!patch.enabled;
+      r.updated_at = new Date();
+      return safe(r);
+    }),
+    remove: overrides.remove || (async (id) => {
+      const i = rows.findIndex((x) => x.id === Number(id));
+      if (i < 0) return false;
+      rows.splice(i, 1);
+      return true;
+    }),
+    recordPoll: overrides.recordPoll || (async (id, { ok, error = null, supported = null, at = new Date() } = {}) => {
+      const r = rows.find((x) => x.id === Number(id));
+      if (!r) return;
+      r.last_polled_at = at;
+      if (ok) {
+        r.last_ok_at = at;
+        r.last_error = null;
+        if (supported != null) r.supported = supported;
+      } else {
+        // The LAST GOOD time is kept, so the UI can say "last answered 41
+        // minutes ago" rather than just "failing".
+        r.last_error = error == null ? null : String(error).slice(0, 255);
+      }
+    }),
+  };
+}
+
+function makeFdbEntriesRepo(overrides = {}) {
+  const rows = [];
+  let seq = 0;
+  const iso = (v) => (v == null ? null : (v instanceof Date ? v.toISOString() : new Date(v).toISOString()));
+  const mapOut = (r) => ({
+    id: r.id, deviceId: r.device_id, mac: r.mac, vlan: r.vlan,
+    bridgePort: r.bridge_port, ifIndex: r.if_index, ifName: r.if_name,
+    status: r.status, portMacCount: r.port_mac_count,
+    firstSeen: iso(r.first_seen), lastSeen: iso(r.last_seen),
+  });
+
+  return {
+    rows,
+    // Implements the (device, vlan, mac) upsert for real: a MAC that MOVED
+    // rewrites its port in place rather than adding a row, which is the
+    // behaviour most likely to be got wrong.
+    upsertMany: overrides.upsertMany || (async (deviceId, entries, { at = new Date() } = {}) => {
+      let n = 0;
+      for (const e of entries || []) {
+        const existing = rows.find((r) => r.device_id === Number(deviceId)
+          && r.vlan === (e.vlan ?? 0) && r.mac === e.mac);
+        if (existing) {
+          existing.bridge_port = e.bridgePort;
+          existing.if_index = e.ifIndex ?? null;
+          existing.if_name = e.ifName ?? null;
+          existing.status = e.status || 'learned';
+          existing.port_mac_count = e.portMacCount ?? 1;
+          existing.last_seen = at;
+        } else {
+          rows.push({
+            id: (seq += 1), device_id: Number(deviceId), mac: e.mac, vlan: e.vlan ?? 0,
+            bridge_port: e.bridgePort, if_index: e.ifIndex ?? null, if_name: e.ifName ?? null,
+            status: e.status || 'learned', port_mac_count: e.portMacCount ?? 1,
+            first_seen: at, last_seen: at,
+          });
+        }
+        n += 1;
+      }
+      return n;
+    }),
+    findByMac: overrides.findByMac || (async (mac, { limit = 25 } = {}) => rows
+      .filter((r) => r.mac === mac)
+      .sort((a, b) => new Date(b.last_seen) - new Date(a.last_seen))
+      .slice(0, limit)
+      .map((r) => ({ ...mapOut(r), deviceName: r.device_name ?? null, deviceHost: r.device_host ?? null }))),
+    listForDevice: overrides.listForDevice || (async (deviceId, { limit = 500, ifName = null } = {}) => rows
+      .filter((r) => r.device_id === Number(deviceId) && (!ifName || r.if_name === ifName))
+      .sort((a, b) => a.port_mac_count - b.port_mac_count || a.bridge_port - b.bridge_port)
+      .slice(0, limit).map(mapOut)),
+    listForPort: overrides.listForPort || (async (deviceId, bridgePort, { limit = 200 } = {}) => rows
+      .filter((r) => r.device_id === Number(deviceId) && r.bridge_port === Number(bridgePort))
+      .slice(0, limit).map(mapOut)),
+    countForDevice: overrides.countForDevice || (async (deviceId) => rows
+      .filter((r) => r.device_id === Number(deviceId)).length),
+    purgeBefore: overrides.purgeBefore || (async (cutoff) => {
+      const before = rows.length;
+      for (let i = rows.length - 1; i >= 0; i -= 1) {
+        if (new Date(rows[i].last_seen) < cutoff) rows.splice(i, 1);
+      }
+      return before - rows.length;
+    }),
+  };
+}
+
+function makeSnmpNeighborsRepo(overrides = {}) {
+  const rows = [];
+  let seq = 0;
+  return {
+    rows,
+    upsertMany: overrides.upsertMany || (async (deviceId, neighbours, { at = new Date() } = {}) => {
+      let n = 0;
+      for (const nb of neighbours || []) {
+        const key = nb.remotePortId ?? '';
+        const existing = rows.find((r) => r.deviceId === Number(deviceId)
+          && r.remoteChassisId === nb.remoteChassisId && (r.remotePortId ?? '') === key);
+        if (existing) {
+          Object.assign(existing, { ...nb, remotePortId: key, lastSeen: at });
+        } else {
+          rows.push({ id: (seq += 1), deviceId: Number(deviceId), ...nb, remotePortId: key, firstSeen: at, lastSeen: at });
+        }
+        n += 1;
+      }
+      return n;
+    }),
+    listForDevice: overrides.listForDevice || (async (deviceId, { limit = 500 } = {}) => rows
+      .filter((r) => r.deviceId === Number(deviceId)).slice(0, limit)),
+    purgeBefore: overrides.purgeBefore || (async () => 0),
   };
 }
 
@@ -2688,6 +2885,15 @@ function makeApp(overrides = {}) {
   const hostConnectionsRepo = overrides.hostConnectionsRepo || makeHostConnectionsRepo();
   const arpEntriesRepo = overrides.arpEntriesRepo === undefined ? makeArpEntriesRepo() : overrides.arpEntriesRepo;
   const deviceEventsRepo = overrides.deviceEventsRepo === undefined ? makeDeviceEventsRepo() : overrides.deviceEventsRepo;
+  const snmpDevicesRepo = overrides.snmpDevicesRepo === undefined ? makeSnmpDevicesRepo() : overrides.snmpDevicesRepo;
+  const fdbEntriesRepo = overrides.fdbEntriesRepo === undefined ? makeFdbEntriesRepo() : overrides.fdbEntriesRepo;
+  const snmpNeighborsRepo = overrides.snmpNeighborsRepo === undefined ? makeSnmpNeighborsRepo() : overrides.snmpNeighborsRepo;
+  // The REAL ingest over the fakes, so the OWNERSHIP CHECK — an agent may only
+  // write the devices assigned to it — is exercised end-to-end rather than
+  // stubbed. It is the security property of this feature.
+  const snmpTopologyIngest = overrides.snmpTopologyIngest === undefined
+    ? (snmpDevicesRepo ? createSnmpTopologyIngest({ snmpDevicesRepo, fdbEntriesRepo, snmpNeighborsRepo }) : null)
+    : overrides.snmpTopologyIngest;
   // The REAL ingest over the fake repositories, so sender resolution and the
   // bucketed dedup key are exercised end-to-end rather than stubbed — they are
   // the two things in this feature most worth testing.
@@ -2763,6 +2969,10 @@ function makeApp(overrides = {}) {
     arpEntriesRepo,
     deviceEventsRepo,
     deviceEventIngest,
+    snmpDevicesRepo,
+    fdbEntriesRepo,
+    snmpNeighborsRepo,
+    snmpTopologyIngest,
     interfaceStatesRepo,
     interfaceStateService,
     serviceDependencyJob: overrides.serviceDependencyJob || null,
@@ -2920,6 +3130,9 @@ module.exports = {
   makeDiscoveredDevicesRepo,
   makeArpEntriesRepo,
   makeDeviceEventsRepo,
+  makeSnmpDevicesRepo,
+  makeFdbEntriesRepo,
+  makeSnmpNeighborsRepo,
   makeInterfaceStatesRepo,
   makeAlertDispatchLogRepo,
   makeEvidenceSnapshotsRepo,

@@ -71,6 +71,10 @@ const { createArpEntriesRepository } = require('./repositories/arpEntriesReposit
 const { createDeviceEventsRepository } = require('./repositories/deviceEventsRepository');
 const { createDeviceEventsTsdbRepository } = require('./repositories/deviceEventsTsdbRepository');
 const { createDeviceEventIngest } = require('./devices/deviceEventIngest');
+const { createSnmpDevicesRepository } = require('./repositories/snmpDevicesRepository');
+const { createFdbEntriesRepository } = require('./repositories/fdbEntriesRepository');
+const { createSnmpNeighborsRepository } = require('./repositories/snmpNeighborsRepository');
+const { createSnmpTopologyIngest } = require('./devices/snmpTopologyIngest');
 const { createInterfaceStatesRepository } = require('./repositories/interfaceStatesRepository');
 const { createInterfaceStateService } = require('./health/interfaceStateService');
 const { createServiceDependencyJob } = require('./topology/serviceDependencyJob');
@@ -606,6 +610,20 @@ function start() {
     arpEntriesRepo,
     logger,
   });
+
+  // The SNMP device inventory and what an agent reads off it. The community
+  // string is AES-256-GCM at rest, so the repository takes the same secretBox
+  // `cmdb_config` and `integrations` use; without one, a device simply has no
+  // stored credential rather than an unencrypted one.
+  const snmpDevicesRepo = createSnmpDevicesRepository(db, { secretBox });
+  const fdbEntriesRepo = createFdbEntriesRepository(db);
+  const snmpNeighborsRepo = createSnmpNeighborsRepository(db);
+  const snmpTopologyIngest = createSnmpTopologyIngest({
+    snmpDevicesRepo,
+    fdbEntriesRepo,
+    snmpNeighborsRepo,
+    logger,
+  });
   const interfaceStatesRepo = createInterfaceStatesRepository(db);
   // Interface transitions are recorded at the results-ingest seam — the one place
   // that sees every observation — not reconstructed by polling current state.
@@ -997,6 +1015,10 @@ function start() {
     arpEntriesRepo,
     deviceEventsRepo,
     deviceEventIngest,
+    snmpDevicesRepo,
+    fdbEntriesRepo,
+    snmpNeighborsRepo,
+    snmpTopologyIngest,
     interfaceStatesRepo,
     interfaceStateService,
     serviceDependencyJob,

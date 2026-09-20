@@ -23,6 +23,11 @@ function loadRetentionConfig(env = process.env) {
     // on the disk. Matches the TimescaleDB retention policy in
     // server/db/timescale/001_init.sql, so the two stores expire together.
     deviceEventRetentionDays: toInt(env.RETENTION_DEVICE_EVENT_DAYS, 30),
+    // Forwarding-table entries. SHORT, like the ARP window and for the same
+    // reason: a forwarding entry ages out of the SWITCH in minutes, so a
+    // three-week-old "this MAC is on Gi0/14" is worse than no answer. Long
+    // enough that a device switched off over a holiday is still findable.
+    fdbRetentionDays: toInt(env.RETENTION_FDB_DAYS, 30),
     rollupIntervalMinutes: toInt(env.RETENTION_ROLLUP_INTERVAL_MINUTES, 60), // bucket granularity
     intervalHours: toInt(env.RETENTION_JOB_INTERVAL_HOURS, 24), // how often the job runs
     batchSize: toInt(env.RETENTION_BATCH_SIZE, 5000), // rows fetched per rollup page

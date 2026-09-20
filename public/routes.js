@@ -84,7 +84,7 @@
       path: '/settings',
       tabs: ['users', 'auth', 'apitokens', 'agentkey', 'analyse', 'alerting', 'severity', 'runbooks',
         'integrations', 'cmdb', 'ai', 'maintenance', 'database', 'retention', 'types', 'map',
-        'updates', 'agents', 'screening', 'assurance', 'appearance', 'license'],
+        'updates', 'agents', 'snmp', 'screening', 'assurance', 'appearance', 'license'],
       tabKey: 'settingsTab',
     },
     docs: { path: '/docs' },

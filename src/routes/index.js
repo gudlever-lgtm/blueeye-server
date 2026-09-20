@@ -45,6 +45,7 @@ const { createAskCache } = require('../eventCases/askCache');
 const { createThresholdsRouter } = require('./thresholds');
 const { createInterfacesRouter } = require('./interfaces');
 const { createDeviceEventsRouter } = require('./deviceEvents');
+const { createSnmpDevicesRouter } = require('./snmpDevices');
 const { createFleetRouter } = require('./fleet');
 const { createDashboardRouter } = require('./dashboard');
 const { createForecastRouter } = require('./forecast');
@@ -145,6 +146,10 @@ function createApiRouter({
   arpEntriesRepo = null,
   deviceEventsRepo = null,
   deviceEventIngest = null,
+  snmpDevicesRepo = null,
+  snmpNeighborsRepo = null,
+  fdbEntriesRepo = null,
+  snmpTopologyIngest = null,
   interfaceStatesRepo = null,
   interfaceStateService = null,
   serviceDependenciesRepo,
@@ -405,6 +410,14 @@ function createApiRouter({
   // The device log — what the network equipment itself said (syslog now, SNMP
   // traps from stage 03). viewer+; owns no analysis, reads `device_events`.
   if (deviceEventsRepo) router.use('/api/device-events', createDeviceEventsRouter({ deviceEventsRepo, agentsRepo, logger }));
+  // The SNMP device inventory — which switches the server polls, through which
+  // agent. Read viewer+, write admin (it stores a credential and points the
+  // server's polling at an address); "poll now" is operator+.
+  if (snmpDevicesRepo) {
+    router.use('/api/snmp-devices', createSnmpDevicesRouter({
+      snmpDevicesRepo, fdbEntriesRepo, snmpNeighborsRepo, agentsRepo, agentCommander, auditLogger, logger,
+    }));
+  }
   // Capacity/trend forecasting (robust Theil–Sen projection + days-to-capacity).
   router.use('/api/forecast', createForecastRouter());
   // Read-only baseline context for the dashboard's shared metric component.
@@ -467,6 +480,8 @@ function createApiRouter({
       locationsRepo,
       flowsRepo,
       arpEntriesRepo,
+      // The second identity source: which switch PORT a MAC is on.
+      fdbEntriesRepo,
       lldpNeighborsRepo,
       discoveredDevicesRepo,
       cmdbSearch: makeCmdbSearch({ cmdbConfigRepo, registry: cmdbConnectorRegistry, secretBox }),
@@ -633,7 +648,7 @@ function createApiRouter({
   // Unified audit log (license feature `audit_log`) + API tokens (`api_access`).
   if (auditLogRepo) router.use('/api/audit-log', createAuditLogRouter({ auditLogRepo, featureGate, planService }));
   if (apiTokensRepo) router.use('/api/api-tokens', createApiTokensRouter({ apiTokensRepo, featureGate, planService, auditLogger }));
-  router.use('/agents', createAgentReportsRouter({ agentAuth, resultsRepo, resultsTsdbRepo, agentsRepo, auditEventsRepo, analysisPipeline, flowPipeline, probeResultsRepo, probePipeline, probeOutageService, installToolService, lldpNeighborsRepo, topologyChangeService, hostConnectionsRepo, arpEntriesRepo, deviceEventIngest, interfaceStateService, discoveredDevicesRepo, auditLogger, logger }));
+  router.use('/agents', createAgentReportsRouter({ agentAuth, resultsRepo, resultsTsdbRepo, agentsRepo, auditEventsRepo, analysisPipeline, flowPipeline, probeResultsRepo, probePipeline, probeOutageService, installToolService, lldpNeighborsRepo, topologyChangeService, hostConnectionsRepo, arpEntriesRepo, deviceEventIngest, snmpDevicesRepo, snmpTopologyIngest, interfaceStateService, discoveredDevicesRepo, auditLogger, logger }));
   router.use('/agents', createAgentEnrollRouter({ enrollmentStore, notifyDashboard, integrationTrigger: integrationsDispatcher, auditEventsRepo, settingsService, rateLimit: enrollRateLimiter }));
 
   return router;

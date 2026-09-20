@@ -118,6 +118,16 @@ function createRetentionRepo(db) {
     return deleteInBatches('DELETE FROM device_events WHERE received_at < ? ORDER BY received_at LIMIT ?', [ts]);
   }
 
+  // Forwarding-table entries and the switch-seen LLDP adjacencies beside them.
+  // Both age on last_seen and are re-learned on the next sweep.
+  async function purgeFdbEntriesBefore(ts) {
+    return deleteInBatches('DELETE FROM fdb_entries WHERE last_seen < ? ORDER BY last_seen LIMIT ?', [ts]);
+  }
+
+  async function purgeSnmpNeighborsBefore(ts) {
+    return deleteInBatches('DELETE FROM snmp_neighbors WHERE last_seen < ? ORDER BY last_seen LIMIT ?', [ts]);
+  }
+
   // Interface state transitions + the current-state snapshot rows of interfaces
   // that stopped being reported entirely. The snapshot cutoff is deliberately
   // longer-lived logic than the history: dropping a state row we still have
@@ -142,6 +152,8 @@ function createRetentionRepo(db) {
     purgeConfigSnapshotsBefore,
     purgeArpEntriesBefore,
     purgeDeviceEventsBefore,
+    purgeFdbEntriesBefore,
+    purgeSnmpNeighborsBefore,
     purgeInterfaceTransitionsBefore,
     purgeInterfaceStatesBefore,
   };

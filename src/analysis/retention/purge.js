@@ -36,6 +36,17 @@ function createPurge({ repo, config, now = () => new Date() }) {
       const cut = new Date(t - config.deviceEventRetentionDays * DAY_MS);
       deviceEvents = await repo.purgeDeviceEventsBefore(cut);
     }
+    // Forwarding-table entries + the switch-seen neighbours. Guarded like the
+    // dimensions above.
+    let fdbEntries = 0;
+    let snmpNeighbors = 0;
+    if (config.fdbRetentionDays && typeof repo.purgeFdbEntriesBefore === 'function') {
+      const cut = new Date(t - config.fdbRetentionDays * DAY_MS);
+      fdbEntries = await repo.purgeFdbEntriesBefore(cut);
+      if (typeof repo.purgeSnmpNeighborsBefore === 'function') {
+        snmpNeighbors = await repo.purgeSnmpNeighborsBefore(cut);
+      }
+    }
     // Interface state transitions (history) and the snapshot rows of interfaces
     // that stopped being reported. Guarded like the dimensions above.
     let interfaceTransitions = 0;
@@ -47,7 +58,7 @@ function createPurge({ repo, config, now = () => new Date() }) {
         interfaceStates = await repo.purgeInterfaceStatesBefore(cut);
       }
     }
-    return { flowRollups, metricRollups, findings, configSnapshots, arpEntries, deviceEvents, interfaceTransitions, interfaceStates };
+    return { flowRollups, metricRollups, findings, configSnapshots, arpEntries, deviceEvents, fdbEntries, snmpNeighbors, interfaceTransitions, interfaceStates };
   }
 
   return { purgeExpired };

@@ -27,6 +27,21 @@ const IFACES = [
   { iface: 'docker0', status: 'down', virtual: true, linkDown: true, speedMbps: null, operStatus: 'down', utilPct: null, rxBytesPerSec: 0, txBytesPerSec: 0, errPerSec: 0, dropPerSec: 0 },
 ];
 
+// What GET /api/forecast/interfaces answers: one entry per link, most urgent
+// first, each carrying its own explanation from the forecast engine.
+const FORECAST = {
+  agentId: 7,
+  windowDays: 14,
+  horizonDays: 30,
+  samples: 1200,
+  capacity: { metric: 'utilPct', ceiling: 100, basis: 'negotiated link speed' },
+  interfaces: [
+    { iface: 'eth0', ok: true, direction: 'rising', slopePerDay: 4.2, current: 82, projected: 100, horizonDays: 30, daysUntilCapacity: 4.3, explanation: 'Trend rising +4.2/day (robust Theil-Sen over 300 samples).', evidence: { method: 'theil-sen' } },
+    { iface: 'eth2', ok: true, direction: 'flat', slopePerDay: 0, current: 4, projected: 4, horizonDays: 30, daysUntilCapacity: null, explanation: 'No significant trend.', evidence: { method: 'theil-sen' } },
+    { iface: 'eth1', ok: false, reason: 'insufficient_data', samples: 2, explanation: 'Not enough data to forecast (need at least 4 points, have 2).' },
+  ],
+};
+
 function boot({ t, routes = {}, url = 'http://server.test/interfaces', role = 'admin' } = {}) {
   const errors = [];
   const vc = new VirtualConsole();
@@ -49,7 +64,7 @@ function boot({ t, routes = {}, url = 'http://server.test/interfaces', role = 'a
   if (t) t.after(() => window.close());
   window.localStorage.setItem('blueeye.server.token', 'T');
   window.localStorage.setItem('blueeye.server.role', role);
-  for (const s of [...window.document.querySelectorAll('script[src]')].map((x) => x.getAttribute('src')).filter((x) => x.startsWith('/'))) {
+  for (const s of [...window.document.querySelectorAll('script[src]')].map((x) => x.getAttribute('src')).filter((x) => x.startsWith('/') && !x.startsWith('/vendor/'))) {
     window.eval(fs.readFileSync(path.join(PUBLIC, s.split('?')[0]), 'utf8'));
   }
   return { window, doc: window.document, errors, log };
@@ -65,9 +80,17 @@ const SESSION = (over = {}) => Object.assign({
     { id: 8, display_name: 'cph-core-02', hostname: 'cph-core-02', status: 'online' },
   ],
   'GET /api/interfaces': { source: 'proc', ts: '2026-09-17T18:40:00.000Z', interfaces: IFACES },
+  'GET /api/forecast/interfaces': FORECAST,
 }, over);
 
-const rows = (doc) => [...doc.querySelectorAll('#view table.dt tbody tr')];
+// Scoped to the INTERFACES panel. The capacity-forecast panel below it is a
+// second .dt table, and an unscoped selector would splice the two together.
+const ifacePanel = (doc) => [...doc.querySelectorAll('#view .panel-ui')]
+  .find((p) => !/Capacity forecast|Kapacitetsprognose/i.test((p.querySelector('.panel-title, h2, h3') || {}).textContent || ''));
+const rows = (doc) => {
+  const panel = ifacePanel(doc);
+  return panel ? [...panel.querySelectorAll('table.dt tbody tr')] : [];
+};
 const names = (doc) => rows(doc).map((tr) => tr.querySelector('td').textContent.trim());
 
 test('Interfaces is a ListPage with a Toolbar', async (t) => {
@@ -212,4 +235,69 @@ test('the agent page draws the same table, from the same module', async (t) => {
   assert.doesNotMatch(src, /const IFACE_RANK/);
   assert.doesNotMatch(src, /function ifaceStatusBadge/);
   void t;
+});
+
+// ------------------------------------------------------- capacity forecast
+//
+// The forecast engine and POST /api/forecast both existed but nothing reached
+// them. This panel is the reachable end of it: "which of my links runs out
+// first", beside the table that only says where they are now.
+
+const fcPanel = (doc) => [...doc.querySelectorAll('#view .panel-ui')]
+  .find((p) => /Capacity forecast/i.test((p.querySelector('.panel-title, h2, h3') || {}).textContent || ''));
+
+test('the capacity forecast is its own panel under the interface table', async (t) => {
+  const { doc, errors } = boot({ t, routes: SESSION() });
+  await settle();
+  assert.deepEqual(errors, []);
+  const panel = fcPanel(doc);
+  assert.ok(panel, 'no capacity-forecast panel');
+  // It says where the numbers came from, including the window.
+  assert.match(panel.textContent, /last 14 day/i);
+  assert.match(panel.textContent, /negotiated speed|saturated/i);
+});
+
+test('only links with a usable projection are listed; the rest are left out rather than shown blank', async (t) => {
+  const { doc } = boot({ t, routes: SESSION() });
+  await settle();
+  const panel = fcPanel(doc);
+  const ifaces = [...panel.querySelectorAll('tbody tr')].map((tr) => tr.querySelector('td').textContent.trim());
+  assert.deepEqual(ifaces, ['eth0', 'eth2'], 'eth1 has no usable projection and must not appear as an empty row');
+});
+
+test('a link filling within a fortnight is called out, a flat one is not', async (t) => {
+  const { doc } = boot({ t, routes: SESSION() });
+  await settle();
+  const panel = fcPanel(doc);
+  const [rising, flat] = [...panel.querySelectorAll('tbody tr')];
+  assert.match(rising.textContent, /Rising/);
+  assert.match(rising.textContent, /4 day/, 'days-to-capacity is not shown');
+  assert.ok(rising.querySelector('.badge-ui.crit'), 'a link four days from full is not marked urgent');
+  assert.match(flat.textContent, /Flat/);
+  assert.match(flat.textContent, /Not at this rate/, 'a flat link must not claim a fill date');
+});
+
+test('the forecast is read once per agent, NOT on the five-second table poll', async (t) => {
+  const { log } = boot({ t, routes: SESSION() });
+  await settle(700); // long enough for the interface poll to have fired
+  const ifaceReads = log.filter((l) => l.key === 'GET /api/interfaces').length;
+  const fcReads = log.filter((l) => l.key === 'GET /api/forecast/interfaces').length;
+  assert.ok(ifaceReads >= 1, 'the interface table never loaded');
+  assert.equal(fcReads, 1, `the forecast was read ${fcReads} times — it reads two weeks of history and must not ride the poll`);
+});
+
+test('a failed forecast keeps the interface table on screen — the current state is the more urgent of the two', async (t) => {
+  const { doc } = boot({ t, routes: SESSION({ 'GET /api/forecast/interfaces': { status: 500, body: { error: 'boom' } } }) });
+  await settle();
+  assert.ok(rows(doc).length >= 4, 'the interface table went with the forecast');
+  const panel = fcPanel(doc);
+  assert.match(panel.textContent, /could not be loaded/i);
+  assert.match(panel.textContent, /GET \/api\/forecast\/interfaces/, 'the failed call is not named');
+});
+
+test('an agent whose links have no history yet gets an explanation, not an empty table', async (t) => {
+  const { doc } = boot({ t, routes: SESSION({ 'GET /api/forecast/interfaces': { ...FORECAST, interfaces: [] } }) });
+  await settle();
+  const panel = fcPanel(doc);
+  assert.match(panel.textContent, /enough history/i);
 });

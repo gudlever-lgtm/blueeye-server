@@ -46,7 +46,7 @@ function boot({ t, routes = {}, locale = null, token = null } = {}) {
     window.localStorage.setItem('blueeye.server.token', token);
     window.localStorage.setItem('blueeye.server.role', 'admin');
   }
-  for (const s of [...window.document.querySelectorAll('script[src]')].map((x) => x.getAttribute('src')).filter((x) => x.startsWith('/'))) {
+  for (const s of [...window.document.querySelectorAll('script[src]')].map((x) => x.getAttribute('src')).filter((x) => x.startsWith('/') && !x.startsWith('/vendor/'))) {
     window.eval(fs.readFileSync(path.join(PUBLIC, s.split('?')[0]), 'utf8'));
   }
   return { window, doc: window.document, errors, log };

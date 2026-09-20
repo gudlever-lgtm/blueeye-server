@@ -5,6 +5,7 @@ const { asyncHandler } = require('../middleware/asyncHandler');
 const { requireAuth, requireRole } = require('../auth/middleware');
 const { requirePlanFeature } = require('../license/features');
 const { ROLES } = require('../auth/roles');
+const { silentLogger } = require('../logger');
 const { hashPassword, checkPasswordPolicy } = require('../auth/password');
 const { generateTempPassword } = require('../auth/tempPassword');
 const {
@@ -36,6 +37,7 @@ function createUsersRouter({
   oidcAuth = null,
   samlAuth = null,
   publicUrl = '',
+  logger = silentLogger,
 }) {
   const router = express.Router();
 
@@ -45,12 +47,33 @@ function createUsersRouter({
   // True when any federated sign-in method (LDAP/AD, OIDC or SAML) is live for
   // this install. Local user creation is only offered when NONE is — customers
   // on SSO manage their users in the directory, so a local account with a
-  // password would be a bypass. Each check is defensive (never throws).
+  // password would be a bypass.
+  //
+  // Each check is defensive, but it must fail CLOSED. Swallowing the error and
+  // returning false said "no SSO here" whenever a configured provider's check
+  // threw — which re-enabled exactly the local-password bypass this guard
+  // exists to prevent, silently, on the one install where something was already
+  // wrong. An unanswerable check is treated as "possibly active" and the caller
+  // refuses with a reason the admin can act on.
+  //
+  // Note this cannot affect an install with no SSO wired: a null provider is
+  // skipped without calling anything, so nothing can throw.
   async function ssoOrLdapActive() {
-    try { if (ldapAuth && typeof ldapAuth.isEnabled === 'function' && (await ldapAuth.isEnabled())) return true; } catch { /* ignore */ }
-    try { if (oidcAuth && typeof oidcAuth.isEnabled === 'function' && oidcAuth.isEnabled()) return true; } catch { /* ignore */ }
-    try { if (samlAuth && typeof samlAuth.isEnabled === 'function' && samlAuth.isEnabled()) return true; } catch { /* ignore */ }
-    return false;
+    const checks = [
+      ['LDAP/AD', ldapAuth],
+      ['OIDC', oidcAuth],
+      ['SAML', samlAuth],
+    ];
+    for (const [name, provider] of checks) {
+      if (!provider || typeof provider.isEnabled !== 'function') continue;
+      try {
+        if (await provider.isEnabled()) return { active: true, method: name };
+      } catch (err) {
+        logger.error(`users: could not determine whether ${name} sign-in is active (${err.message}); refusing local user creation rather than risking an SSO bypass.`);
+        return { active: true, method: name, indeterminate: true };
+      }
+    }
+    return { active: false, method: null };
   }
 
   function loginUrlFor(req) {
@@ -108,9 +131,19 @@ function createUsersRouter({
   router.get(
     '/local-availability',
     asyncHandler(async (req, res) => {
-      const ssoActive = await ssoOrLdapActive();
+      const sso = await ssoOrLdapActive();
       const mailerReady = Boolean(userMailer && typeof userMailer.sendTempPassword === 'function');
-      res.json({ available: !ssoActive && mailerReady, ssoActive, mailerReady });
+      // `ssoActive` stays a boolean — the dashboard reads it to hide the button
+      // and predates this. `ssoMethod`/`ssoIndeterminate` are additive, so the
+      // UI can say WHICH method (or that we could not tell) instead of an
+      // unexplained disabled control.
+      res.json({
+        available: !sso.active && mailerReady,
+        ssoActive: sso.active,
+        ssoMethod: sso.method,
+        ssoIndeterminate: Boolean(sso.indeterminate),
+        mailerReady,
+      });
     })
   );
 
@@ -123,9 +156,17 @@ function createUsersRouter({
     '/local',
     rbacGate,
     asyncHandler(async (req, res) => {
-      if (await ssoOrLdapActive()) {
-        if (auditLogger) await auditLogger.record(req, { category: 'user', action: 'user_create_local', outcome: 'denied', detail: 'SSO/LDAP active' });
-        return res.status(403).json({ error: 'Local user creation is disabled while SSO/LDAP is active' });
+      const sso = await ssoOrLdapActive();
+      if (sso.active) {
+        const why = sso.indeterminate
+          ? `could not determine whether ${sso.method} sign-in is active`
+          : `${sso.method} active`;
+        if (auditLogger) await auditLogger.record(req, { category: 'user', action: 'user_create_local', outcome: 'denied', detail: why });
+        return res.status(403).json({
+          error: sso.indeterminate
+            ? `Local user creation is refused: ${why}. Fix the ${sso.method} configuration, or disable it, and try again.`
+            : 'Local user creation is disabled while SSO/LDAP is active',
+        });
       }
       if (!userMailer || typeof userMailer.sendTempPassword !== 'function') {
         return res.status(503).json({ error: 'Email is not configured; cannot send the one-time password' });
@@ -164,7 +205,15 @@ function createUsersRouter({
           expiresAt,
         });
       } catch (err) {
-        try { await usersRepo.remove(created.id); } catch { /* best-effort rollback */ }
+        logger.warn(`users: could not email the one-time password to ${value.email} (${err.message}); rolling the account back.`);
+        try {
+          await usersRepo.remove(created.id);
+        } catch (rollbackErr) {
+          // The response below tells the admin "user was not created". If the
+          // rollback ALSO failed that is now a lie, and the account exists with
+          // a password nobody has. Worth an error, not a shrug.
+          logger.error(`users: rollback of ${value.email} (id ${created.id}) FAILED after the email failed (${rollbackErr.message}); the account exists with a one-time password that was never delivered — delete it or resend.`);
+        }
         return res.status(500).json({ error: 'Failed to send the one-time password email; user was not created' });
       }
 
@@ -181,8 +230,13 @@ function createUsersRouter({
     '/:id/resend-temp-password',
     rbacGate,
     asyncHandler(async (req, res) => {
-      if (await ssoOrLdapActive()) {
-        return res.status(403).json({ error: 'Local user creation is disabled while SSO/LDAP is active' });
+      const sso = await ssoOrLdapActive();
+      if (sso.active) {
+        return res.status(403).json({
+          error: sso.indeterminate
+            ? `Local user creation is refused: could not determine whether ${sso.method} sign-in is active. Fix the ${sso.method} configuration, or disable it, and try again.`
+            : 'Local user creation is disabled while SSO/LDAP is active',
+        });
       }
       if (!userMailer || typeof userMailer.sendTempPassword !== 'function') {
         return res.status(503).json({ error: 'Email is not configured; cannot send the one-time password' });

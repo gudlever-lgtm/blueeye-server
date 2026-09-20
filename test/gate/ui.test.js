@@ -60,7 +60,17 @@ test('every public/*.js parses as a classic script and every *.css is balanced',
   }
 });
 
-test('index.html: local assets exist and are served; external assets are only the CSP-allowed Leaflet CDN; no inline scripts', async () => {
+// Every script and stylesheet the dashboard loads must come from this server.
+//
+// Leaflet used to be the one exception, loaded from unpkg.com, and this test
+// allowed it. It is vendored now (public/vendor/leaflet/), so the exception is
+// gone and the rule is absolute — which is what an on-prem, air-gapped,
+// no-US-vendors product actually needs. A third-party script also executes with
+// the dashboard's full authority, so "it's only a CDN" is not a small thing.
+//
+// If you are here because you added an external asset: vendor it instead. The
+// CSP has no third-party origin left to hang it on either.
+test('index.html: every script and stylesheet is served from this server, exists on disk, and no inline scripts', async () => {
   const doc = dom0.window.document;
   assert.ok(doc.querySelector('meta[name="viewport"]'));
   assert.ok(doc.title.includes('BlueEyes'));
@@ -69,10 +79,10 @@ test('index.html: local assets exist and are served; external assets are only th
     ...[...doc.querySelectorAll('link[rel="stylesheet"]')].map((l) => l.getAttribute('href')),
   ];
   for (const ref of refs) {
-    if (/^https?:/.test(ref)) {
-      assert.match(ref, /^https:\/\/unpkg\.com\/leaflet/, `${ref}: external asset outside the CSP allowlist`);
-      continue;
-    }
+    assert.ok(
+      !/^(https?:)?\/\//.test(ref),
+      `${ref}: external asset. Vendor it under public/vendor/ — the CSP allows no third-party script or style origin.`
+    );
     assert.ok(ref.startsWith('/'), `${ref}: relative asset`);
     const file = ref.split('?')[0];
     assert.ok(fs.existsSync(path.join(PUBLIC, file)), `${ref} missing on disk`);
@@ -272,7 +282,7 @@ async function boot({ routes = {}, token = null, role = null, t = null } = {}) {
   if (t) t.after(() => window.close());
   if (token) window.localStorage.setItem('blueeye.server.token', token);
   if (role) window.localStorage.setItem('blueeye.server.role', role);
-  const scripts = [...window.document.querySelectorAll('script[src]')].map((s) => s.getAttribute('src')).filter((s) => s.startsWith('/'));
+  const scripts = [...window.document.querySelectorAll('script[src]')].map((s) => s.getAttribute('src')).filter((s) => s.startsWith('/') && !s.startsWith('/vendor/'));
   for (const s of scripts) window.eval(fs.readFileSync(path.join(PUBLIC, s.split('?')[0]), 'utf8'));
   await new Promise((r) => setTimeout(r, 60));
   return { window, doc: window.document, errors, log };
@@ -352,4 +362,44 @@ test('boot: server-supplied strings are never parsed as HTML in the user menu / 
   const { window, doc } = await boot({ t, token: 'T', role: 'admin', routes: { 'GET /me': { id: 1, email: XSS, role: 'admin', name: XSS, preferences: {} }, 'GET /auth/sso': { methods: [] } } });
   assert.equal(window.__pwned, undefined);
   assert.equal(doc.querySelector('#app img[src="x"]'), null, 'payload was parsed as markup');
+});
+
+// Every screen that starts a timer must be in VIEW_RESOURCES.
+//
+// render() used to carry nine hand-written `if (currentView !== 'x') stopX();`
+// lines. A new screen with a poller had to remember to add one, and forgetting
+// leaks an interval that keeps fetching from a screen nobody is looking at —
+// invisible until somebody reads the request log. Nothing checked that the name
+// in the condition matched the stop() beside it, either.
+//
+// The table is now one place, and this is what makes it a contract: every
+// stopX() the file defines has to be reachable from it.
+test('every stopX() teardown in app.js is registered in VIEW_RESOURCES', () => {
+  const defined = [...appJs.matchAll(/^function (stop[A-Z][A-Za-z]*)\(/gm)].map((m) => m[1]);
+  assert.ok(defined.length >= 8, `only ${defined.length} teardown functions found — has the shape changed?`);
+
+  const table = (appJs.match(/const VIEW_RESOURCES = \[([\s\S]*?)\n\];/) || [, ''])[1];
+  assert.ok(table, 'VIEW_RESOURCES could not be read');
+
+  const unregistered = defined.filter((fn) => !table.includes(`${fn}()`));
+  assert.deepEqual(
+    unregistered, [],
+    'These teardowns are defined but never released by render().\n' +
+    'Add { view: <the screen allowed to keep it>, stop: () => ' + 'x()' + ' } to VIEW_RESOURCES.\n' +
+    'A poller nobody stops keeps fetching from a screen nobody is looking at.'
+  );
+});
+
+test('every view named in VIEW_RESOURCES is a real screen', () => {
+  const table = (appJs.match(/const VIEW_RESOURCES = \[([\s\S]*?)\n\];/) || [, ''])[1];
+  const named = [...table.matchAll(/view: '([A-Za-z]+)'/g)].map((m) => m[1]);
+  assert.ok(named.length > 0, 'no views named in VIEW_RESOURCES');
+
+  const unknown = named.filter((v) => !viewHandlers.includes(v));
+  assert.deepEqual(
+    unknown, [],
+    'VIEW_RESOURCES names screens that do not exist. A typo here does not fail —\n' +
+    'it silently tears the resource down on EVERY render, including the screen\n' +
+    'that was meant to keep it.'
+  );
 });

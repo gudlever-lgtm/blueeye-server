@@ -146,7 +146,7 @@ function bootAt(url, { role = 'admin', routes = {}, t } = {}) {
   window.localStorage.setItem('blueeye.server.token', 'T');
   window.localStorage.setItem('blueeye.server.role', role);
   const scripts = [...window.document.querySelectorAll('script[src]')]
-    .map((s) => s.getAttribute('src')).filter((s) => s.startsWith('/'));
+    .map((s) => s.getAttribute('src')).filter((s) => s.startsWith('/') && !s.startsWith('/vendor/'));
   for (const s of scripts) window.eval(fs.readFileSync(path.join(PUBLIC, s.split('?')[0]), 'utf8'));
   return { window, doc: window.document, errors, log };
 }

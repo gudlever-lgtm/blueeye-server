@@ -132,7 +132,7 @@ async function boot(t, routes = {}) {
   window.localStorage.setItem('blueeye.server.token', 'T');
   window.localStorage.setItem('blueeye.server.role', 'viewer');
   for (const s of [...window.document.querySelectorAll('script[src]')].map((x) => x.getAttribute('src'))) {
-    if (s.startsWith('/')) window.eval(fs.readFileSync(path.join(PUBLIC, s.split('?')[0]), 'utf8'));
+    if (s.startsWith('/') && !s.startsWith('/vendor/')) window.eval(fs.readFileSync(path.join(PUBLIC, s.split('?')[0]), 'utf8'));
   }
   await tick();
   return { window, doc: window.document, errors };

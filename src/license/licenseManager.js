@@ -89,6 +89,12 @@ function createLicenseManager({
   // is included in getStatus() to let the dashboard tell the two apart instead
   // of an admin silently staring at stale data after every "Re-validate now".
   keyTrust = { source: 'embedded', configured: true },
+  // The PUBLIC half of this server's agent-release key, as a resolver (it can be
+  // generated or replaced at runtime). It is presented on every validation so
+  // the VENDOR can authorise it into the proof the fleet verifies — the agents
+  // must not have to take this server's word for which key to trust. Public
+  // material only: the private half never leaves this machine.
+  getReleasePublicKey = () => '',
 }) {
   const graceMs = (config.graceDays ?? 14) * DAY_MS;
   // A freshly fetched proof is signed in direct response to THIS request, so its
@@ -152,6 +158,12 @@ function createLicenseManager({
       // The cached proof also carries the release info it was signed with, so an
       // offline server still knows about the last update it heard about.
       state.releases = normalizeReleases(cached.payload.releases);
+      // The cache stores the signature alongside the payload, so a server that
+      // has not re-validated since a restart can still relay the vendor's
+      // authorisation to its agents. Its own freshness is the agent's business:
+      // the agent checks valid_until against ITS clock, which is the only clock
+      // that matters for the decision it is making.
+      if (cached.signature) state.trustProof = { payload: cached.payload, signature: cached.signature };
       applyOfflineFallback();
     }
     return state;
@@ -166,7 +178,19 @@ function createLicenseManager({
     }
   }
 
-  async function fetchProof(agentCount, nonce) {
+  // The release key to present, or '' when there is none to present. Never
+  // throws: a broken resolver must not stop licence validation.
+  function currentReleaseKey() {
+    try {
+      const key = typeof getReleasePublicKey === 'function' ? getReleasePublicKey() : getReleasePublicKey;
+      const pem = String(key || '');
+      return pem.includes('BEGIN PUBLIC KEY') ? pem : '';
+    } catch {
+      return '';
+    }
+  }
+
+  async function fetchProof(agentCount, nonce, releaseKey) {
     const res = await fetchImpl(`${config.serverUrl}/validate`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -175,6 +199,9 @@ function createLicenseManager({
         serverId: config.serverId,
         agentCount,
         nonce,
+        // Omitted entirely when this server has no key yet, so the signer sees
+        // the same request an older server sends.
+        ...(releaseKey ? { releaseKey } : {}),
       }),
     });
     if (res.status !== 200) {
@@ -194,7 +221,7 @@ function createLicenseManager({
 
     let body;
     try {
-      body = await fetchProof(agentCount, nonce);
+      body = await fetchProof(agentCount, nonce, currentReleaseKey());
     } catch (err) {
       // Offline / unexpected status / unsigned response -> rely on cache + grace.
       // Surface the underlying network cause AND the URL we tried, so an admin
@@ -263,6 +290,17 @@ function createLicenseManager({
     const releases = normalizeReleases(payload.releases);
     if (releases) state.releases = releases;
 
+    // Keep the SIGNED DOCUMENT, not just what we read out of it. The agents
+    // verify the vendor signature themselves, so the server has to be able to
+    // hand over the exact bytes it received — a payload we re-serialised from
+    // our own state would not verify, and must not.
+    state.trustProof = { payload, signature };
+    // Operational feedback from the signer, OUTSIDE the signature: 'authorized',
+    // 'pending' (this server presented a key the vendor has not approved) or
+    // null. It never enters a trust decision; it is how the dashboard can say
+    // "waiting for vendor approval" instead of leaving an admin guessing.
+    state.releaseKeyStatus = (body && typeof body.keyStatus === 'string') ? body.keyStatus : null;
+
     // Trusted proof.
     if (payload.valid === true) {
       state.payload = payload;
@@ -328,6 +366,27 @@ function createLicenseManager({
   // isLicensed(): knowing a newer version exists grants no entitlement, and an
   // expired customer still needs to see it. Trustworthy because it arrives inside
   // the signed payload, so nothing on the path can invent an update.
+  // The vendor-signed authorisation this server may relay to its agents:
+  // { payload, signature } exactly as received, or null when there is none to
+  // relay. An agent verifies the signature against the vendor key it embeds, so
+  // these bytes are the whole point — the server is a courier here, not an
+  // authority.
+  //
+  // Read from the cache at startup too, so a server that has not re-validated
+  // since a restart can still prove what it is allowed to sign with.
+  function getTrustProof() {
+    if (state.trustProof && state.trustProof.payload && state.trustProof.payload.trust) {
+      return state.trustProof;
+    }
+    return null;
+  }
+
+  // What the vendor last said about the key this server presented:
+  // 'authorized' | 'pending' | null (nothing presented, or an older signer).
+  function getReleaseKeyStatus() {
+    return state.releaseKeyStatus || null;
+  }
+
   function getAvailableReleases() {
     if (!state.releases) return null;
     return {
@@ -390,6 +449,8 @@ function createLicenseManager({
     getPlan,
     getFeatures,
     getAvailableReleases,
+    getTrustProof,
+    getReleaseKeyStatus,
     canAcceptNewConnection,
     getStatus,
   };

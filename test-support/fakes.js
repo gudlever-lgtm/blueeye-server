@@ -12,6 +12,7 @@ const { issueToken } = require('../src/auth/jwt');
 const { createSettingsService } = require('../src/services/settings');
 const { createSecretBox } = require('../src/lib/secretBox');
 const { createCommandSigner } = require('../src/services/commandSigner');
+const { publicKeyFingerprint } = require('../src/lib/fingerprint');
 const { makeServiceTests } = require('./serviceTestsFakes');
 const { createConnectorRegistry } = require('../src/integrations/connectors');
 const { createCmdbConnectorRegistry } = require('../src/cmdb/connectors');
@@ -3485,6 +3486,17 @@ function makeApp(overrides = {}) {
 // Fake agent-release signing key service. Configured by default so existing tests
 // (which onboard agents / read settings) aren't gated; pass { configured: false } to
 // exercise the "no key" gate, or override individual methods.
+// A REAL Ed25519 key pair for the fake release-key service. It used to hand out
+// the string "FAKE" inside PEM markers, which was enough while nothing did more
+// than pass it along — but the fingerprint the vendor authorises is computed
+// over the key's actual bytes, so a fake key now produces an empty fingerprint
+// and nothing verifies. One pair, generated once, shared by every test.
+const FAKE_RELEASE_KEYPAIR = (() => {
+  const { publicKey, privateKey } = require('crypto').generateKeyPairSync('ed25519');
+  const pem = publicKey.export({ type: 'spki', format: 'pem' }).toString();
+  return { pem, publicKey, privateKey, fingerprint: publicKeyFingerprint(pem) };
+})();
+
 function makeReleaseKeyService(overrides = {}) {
   const configured = overrides.configured !== undefined ? overrides.configured : true;
   // Verify-only models the real deployment shape that has bitten hardest: a
@@ -3497,7 +3509,7 @@ function makeReleaseKeyService(overrides = {}) {
   const statusOf = () => (verifyOnly ? verifyStatus : (configured ? okStatus : noStatus));
   return {
     load: overrides.load || (async () => {}),
-    getPublicKey: overrides.getPublicKey || (() => (configured || verifyOnly ? '-----BEGIN PUBLIC KEY-----\nFAKE\n-----END PUBLIC KEY-----' : '')),
+    getPublicKey: overrides.getPublicKey || (() => (configured || verifyOnly ? FAKE_RELEASE_KEYPAIR.pem : '')),
     isConfigured: overrides.isConfigured || (() => configured || verifyOnly),
     canSign: overrides.canSign || (() => configured && !verifyOnly),
     signBlockedReason: overrides.signBlockedReason || (() => statusOf().signBlocked),
@@ -3530,6 +3542,7 @@ const throwingAsync = (message = 'simulated database failure') => async () => {
 };
 
 module.exports = {
+  FAKE_RELEASE_KEYPAIR,
   makeDiagnoseSessionsRepo,
   makeSeverityRulesRepo,
   makeLocationsRepo,

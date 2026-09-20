@@ -639,9 +639,10 @@ function createSettingsService({ settingsRepo, config, liveAnalysis = null, live
   }
 
   // ---- Alerting channels (Settings → Alerting) ----------------------------
-  // Email/webhook/syslog channel config — enable flags, per-channel minimum
-  // severity, recipients/URLs/hosts, and the two secrets (SMTP password + webhook
-  // HMAC). Editable at runtime (admin) instead of env-only, and live-applied onto
+  // Email/webhook/Matrix/syslog channel config — enable flags, per-channel
+  // minimum severity, recipients/URLs/hosts, and the three secrets (SMTP
+  // password + webhook HMAC + Matrix access token). Editable at runtime (admin)
+  // instead of env-only, and live-applied onto
   // the running alerting config (liveAlerting) so the dispatcher + channels pick
   // edits up without a restart. Defaults come from the env-loaded alerting config,
   // so existing .env deployments keep working. The two secrets are write-only:
@@ -663,6 +664,7 @@ function createSettingsService({ settingsRepo, config, liveAnalysis = null, live
     const ch = a.channels || {};
     const e = ch.email || {}; const es = e.smtp || {};
     const w = ch.webhook || {};
+    const m = ch.matrix || {};
     const s = ch.syslog || {};
     return {
       enabled: !!a.enabled,
@@ -674,6 +676,10 @@ function createSettingsService({ settingsRepo, config, liveAnalysis = null, live
           smtp: { host: asStr(es.host), port: asPort(es.port, 587), user: asStr(es.user), pass: asStr(es.pass), secure: !!es.secure },
         },
         webhook: { enabled: !!w.enabled, minSeverity: sevOrDefault(w.minSeverity, 'CRIT'), url: asStr(w.url), secret: asStr(w.secret) },
+        matrix: {
+          enabled: !!m.enabled, minSeverity: sevOrDefault(m.minSeverity, 'WARN'),
+          homeserver: asStr(m.homeserver), roomId: asStr(m.roomId), accessToken: asStr(m.accessToken),
+        },
         syslog: {
           enabled: !!s.enabled, minSeverity: sevOrDefault(s.minSeverity, 'INFO'),
           host: asStr(s.host), port: asPort(s.port, 514), proto: SYSLOG_PROTOS.includes(s.proto) ? s.proto : 'udp', appName: asStr(s.appName) || 'blueeye',
@@ -693,7 +699,7 @@ function createSettingsService({ settingsRepo, config, liveAnalysis = null, live
   // The client-safe view: every editable field EXCEPT the two secrets, which are
   // reported only as "set or not" + a masked hint, never echoed.
   function redactAlerting(cfg) {
-    const e = cfg.channels.email; const w = cfg.channels.webhook;
+    const e = cfg.channels.email; const w = cfg.channels.webhook; const m = cfg.channels.matrix;
     const mask = (k) => (k ? `••••${k.slice(-4)}` : '');
     return {
       enabled: cfg.enabled, cooldownMs: cfg.cooldownMs,
@@ -706,6 +712,12 @@ function createSettingsService({ settingsRepo, config, liveAnalysis = null, live
         webhook: {
           enabled: w.enabled, minSeverity: w.minSeverity, url: w.url,
           secretSet: w.secret !== '', secretHint: mask(w.secret),
+        },
+        // A Matrix access token is a bearer credential for the bot account —
+        // same class as the SMTP password, so the same write-only treatment.
+        matrix: {
+          enabled: m.enabled, minSeverity: m.minSeverity, homeserver: m.homeserver, roomId: m.roomId,
+          accessTokenSet: m.accessToken !== '', accessTokenHint: mask(m.accessToken),
         },
         syslog: { ...cfg.channels.syslog },
       },
@@ -809,6 +821,41 @@ function createSettingsService({ settingsRepo, config, liveAnalysis = null, live
       if (Object.keys(wv).length) value.webhook = wv;
     }
 
+    // matrix
+    if (p.matrix && typeof p.matrix === 'object') {
+      const m = p.matrix; const mv = {};
+      chkBool(m, mv, 'enabled'); chkSev(m, mv, 'matrix');
+      if (m.homeserver !== undefined) {
+        const u = String(m.homeserver).trim();
+        let blocked = null;
+        if (u !== '' && (!/^https?:\/\//i.test(u) || u.length > 500)) errors['matrix.homeserver'] = 'homeserver must be an http(s) URL (max 500 chars)';
+        // Same SSRF guard as the webhook URL. A self-hosted homeserver is very
+        // often INSIDE the network, which is exactly the case the guard has to
+        // get right — baseUrlBlockedReason allows a private target only where
+        // the deployment has opted into it, so this does not block the normal
+        // on-prem setup while still refusing an arbitrary pivot.
+        else if (u !== '' && (blocked = baseUrlBlockedReason(u))) errors['matrix.homeserver'] = blocked;
+        else mv.homeserver = u;
+      }
+      if (m.roomId !== undefined) {
+        const r = String(m.roomId).trim();
+        // An internal room id (!abc:example.dk), not an alias (#ops:example.dk):
+        // an alias can be re-pointed at another room by whoever controls it,
+        // which is not a property the alert channel should have.
+        if (r !== '' && (!/^![^\s:]+:[^\s:]+$/.test(r) || r.length > 255)) {
+          errors['matrix.roomId'] = 'roomId must be an internal room id like !abc:example.dk (not a #alias)';
+        } else mv.roomId = r;
+      }
+      if (m.clearAccessToken === true || m.clearAccessToken === 'true') mv.accessToken = '';
+      else if (m.accessToken !== undefined) {
+        const k = String(m.accessToken);
+        if (k.trim() === '') { /* keep the stored token */ }
+        else if (k.length > 500) errors['matrix.accessToken'] = 'accessToken must be at most 500 characters';
+        else mv.accessToken = k;
+      }
+      if (Object.keys(mv).length) value.matrix = mv;
+    }
+
     // syslog
     if (p.syslog && typeof p.syslog === 'object') {
       const s = p.syslog; const sv = {};
@@ -836,7 +883,7 @@ function createSettingsService({ settingsRepo, config, liveAnalysis = null, live
     const out = JSON.parse(JSON.stringify(cur));
     if (value.enabled !== undefined) out.enabled = value.enabled;
     if (value.cooldownMs !== undefined) out.cooldownMs = value.cooldownMs;
-    for (const name of ['email', 'webhook', 'syslog']) {
+    for (const name of ['email', 'webhook', 'matrix', 'syslog']) {
       const v = value[name];
       if (!v) continue;
       for (const k of Object.keys(v)) {
@@ -856,7 +903,7 @@ function createSettingsService({ settingsRepo, config, liveAnalysis = null, live
     live.enabled = m.enabled;
     live.cooldownMs = m.cooldownMs;
     live.channels = live.channels || {};
-    for (const name of ['email', 'webhook', 'syslog']) {
+    for (const name of ['email', 'webhook', 'matrix', 'syslog']) {
       live.channels[name] = live.channels[name] || {};
       const src = m.channels[name];
       for (const k of Object.keys(src)) {

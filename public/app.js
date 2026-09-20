@@ -217,6 +217,29 @@ async function api(path, { method = 'GET', body } = {}) {
   return data;
 }
 
+// Authenticated fetch for responses api() cannot parse — blobs (CSV/PDF/PNG
+// downloads), HTML documents, anything streamed. It returns the raw Response so
+// the caller can take .blob()/.text(), but it shares api()'s two jobs that have
+// nothing to do with JSON: attaching the bearer token, and treating a 401 as an
+// expired session rather than as an ordinary failure.
+//
+// That second part is why this exists. Seven call sites used a bare fetch() and
+// so, when the session expired mid-download, rendered "HTTP 401" and left the
+// user on a dashboard that was no longer signed in — every subsequent action
+// failing for a reason the UI never stated. Now they log out and say so, exactly
+// like every other request.
+async function authedFetch(path, init = {}) {
+  const res = await fetch(path, {
+    ...init,
+    headers: { ...(init.headers || {}), ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+  });
+  if (res.status === 401) {
+    logout();
+    throw new Error('Session expired — please log in again.');
+  }
+  return res;
+}
+
 // Human-readable text from an api() error: prefer the field-level validation
 // details (joined), else the thrown message.
 function errText(e) {
@@ -319,17 +342,47 @@ function invalidateFeatures() {
   licenseFeatures = null; featuresLoadedAt = 0;
   licensePlan = null; planLoadedAt = 0;
 }
+// Set when the last licence read FAILED (as opposed to succeeding with an
+// empty map). The two are not the same thing and used to be indistinguishable:
+// applyFeatureVisibility() dims every module the map does not mention, so a
+// failed read silently greys out modules the customer has actually paid for,
+// with nothing in the UI and nothing in the log. The flag drives a one-time
+// warning, and the failure is captured into the client log like any other.
+let licenseLoadFailed = false;
 async function loadFeatures() {
   if (licenseFeatures && Date.now() - featuresLoadedAt < FEATURES_TTL_MS) return licenseFeatures;
-  try { licenseFeatures = await api('/license/features'); featuresLoadedAt = Date.now(); }
-  catch { if (!licenseFeatures) licenseFeatures = {}; }
+  try {
+    licenseFeatures = await api('/license/features');
+    featuresLoadedAt = Date.now();
+    licenseLoadFailed = false;
+  } catch (e) {
+    if (!licenseFeatures) licenseFeatures = {};
+    licenseLoadFailed = true;
+    recordClientLog('error', `Could not read /license/features: ${e.message}`);
+  }
   return licenseFeatures;
 }
 async function loadPlan() {
   if (licensePlan && Date.now() - planLoadedAt < FEATURES_TTL_MS) return licensePlan;
-  try { licensePlan = await api('/license/plan'); planLoadedAt = Date.now(); }
-  catch { if (!licensePlan) licensePlan = {}; }
+  try {
+    licensePlan = await api('/license/plan');
+    planLoadedAt = Date.now();
+  } catch (e) {
+    if (!licensePlan) licensePlan = {};
+    licenseLoadFailed = true;
+    recordClientLog('error', `Could not read /license/plan: ${e.message}`);
+  }
   return licensePlan;
+}
+
+// Warn ONCE per session when the licence could not be read, so the dimmed
+// modules have an explanation. Repeating it on every render would be noise —
+// the client log keeps the full history.
+let licenseWarningShown = false;
+function warnIfLicenceUnreadable() {
+  if (!licenseLoadFailed || licenseWarningShown) return;
+  licenseWarningShown = true;
+  toast(t('license.loadFailed'), true);
 }
 // The customer-facing name of the active licence ("Professional"), or '' if unknown.
 function activePlanName() { return (licensePlan && licensePlan.plan_name) || ''; }
@@ -956,7 +1009,7 @@ const PAGE_INFO = {
         el('span', {}, 'the email / webhook / syslog tests deliver an actual test message, and an ITSM/IPAM test performs a real (read-only) connectivity call to the receiver. SSO and the other services are probed for reachability.')),
       el('h4', {}, 'What is screened'),
       el('ul', {},
-        el('li', {}, el('strong', {}, 'Email & alert channels '), '— SMTP email, webhook and syslog. Configure under ', viewLink('settings', 'Settings → Alerting'), '.'),
+        el('li', {}, el('strong', {}, 'Email & alert channels '), '— SMTP email, webhook, Matrix and syslog. Configure under ', viewLink('settings', 'Settings → Alerting'), '.'),
         el('li', {}, el('strong', {}, 'ITSM / API receivers '), '— ServiceNow, Jira/TOPdesk/GLPI, a generic webhook or a custom ticket API, and the Nautobot device sync (Settings → ITSM).'),
         el('li', {}, el('strong', {}, 'CMDB / asset inventory '), '— the single CMDB source agents link to: ServiceNow, Nautobot, NetBox, i-doit, GLPI or a custom source (Settings → CMDB).'),
         el('li', {}, el('strong', {}, 'Authentication (SSO) '), '— LDAP/AD bind, OIDC discovery and the SAML IdP.'),
@@ -1307,7 +1360,7 @@ const PAGE_INFO = {
       el('h4', {}, 'Editable here (stored in the database)'),
       el('ul', {},
         el('li', {}, settingsLink('analyse', 'Analysis'), ': thresholds for anomaly detection — CRIT/WARN in σ, baseline window and how many measurements are required before alerting.'),
-        el('li', {}, settingsLink('alerting', 'Alerting'), ': channels (e-mail/webhook/syslog) — enable, set a minimum severity, and fill in the connection details. Secrets (SMTP password, webhook HMAC) are write-only: stored on the server, never shown again.'),
+        el('li', {}, settingsLink('alerting', 'Alerting'), ': channels (e-mail/webhook/Matrix/syslog) — enable, set a minimum severity, and fill in the connection details. Secrets (SMTP password, webhook HMAC, Matrix access token) are write-only: stored on the server, never shown again.'),
         el('li', {}, settingsLink('retention', 'Retention'), ': how long raw/aggregated data and findings are kept before being cleaned up.'),
         el('li', {}, settingsLink('types', 'Traffic types'), ': define the categories (DNS, Facebook …) from service ports and destination ASN. Shown on ', viewLink('overview', 'Traffic'), ' → Traffic type.'),
         el('li', {}, settingsLink('map', 'Map'), ': tile and geocoder source for the maps (use an EU/self-hosted source in production).'),
@@ -3492,7 +3545,7 @@ const findingsState = { hostId: '', severity: '', metric: '', sort: { key: 'time
 async function downloadExport(resource, format, params = {}) {
   const qs = new URLSearchParams({ format, ...params }).toString();
   try {
-    const res = await fetch(`/api/export/${resource}?${qs}`, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
+    const res = await authedFetch(`/api/export/${resource}?${qs}`);
     if (!res.ok) {
       let msg; try { msg = (await res.json()).error; } catch { /* non-JSON */ }
       throw new Error(msg || `HTTP ${res.status}`);
@@ -3801,7 +3854,7 @@ async function loadEventConfigContext(id, card) {
         ? el('pre', { class: 'config-diff' }, diff.changedLines.map((l) => `${l.op} ${l.text}`).join('\n'))
         : null);
   } catch (err) {
-    card.replaceChildren(el('p', { class: err.status === 403 ? 'muted' : 'error' }, err.status === 403 ? 'Requires operator/admin.' : err.message));
+    card.replaceChildren(el('p', { class: err.status === 403 ? 'muted' : 'error' }, err.status === 403 ? t('cfg.needsOperator') : err.message));
   }
 }
 
@@ -6853,6 +6906,9 @@ function getInterfacesPage() {
     ] }),
     fetchAgents: () => api('/agents').catch(() => []),
     fetchInterfaces: (id) => api(`/api/interfaces?agentId=${encodeURIComponent(id)}`),
+    // Capacity forecast for the same agent's links. Read separately from the
+    // 5-second table poll — see the note in public/views/interfaces.js.
+    fetchForecast: (id) => api(`/api/forecast/interfaces?agentId=${encodeURIComponent(id)}`),
     openAgents: () => gotoView('agents'),
     startPolling: (fn) => {
       stopIfaces();
@@ -8096,7 +8152,7 @@ function openFlows(agentId, prefill) { selectedAgentId = agentId; flowsPrefill =
 // api() parses JSON, so blob downloads go through here instead).
 async function downloadAuthed(path, filename) {
   try {
-    const res = await fetch(path, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
+    const res = await authedFetch(path);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const blob = await res.blob();
     const url = URL.createObjectURL(blob);
@@ -8809,7 +8865,7 @@ async function loadDeviceConfigHistory(id, card) {
   try {
     const { snapshots, diffs } = await api(`/api/devices/${id}/config-history`);
     if (!snapshots || !snapshots.length) {
-      card.replaceChildren(form, el('p', { class: 'muted' }, 'No config snapshots captured for this device yet.'));
+      card.replaceChildren(form, el('p', { class: 'muted' }, t('cfg.none')));
       return;
     }
     const diffEls = (diffs || []).map((d) => el('details', { class: 'cfg-diff' },
@@ -8818,10 +8874,10 @@ async function loadDeviceConfigHistory(id, card) {
         el('span', { class: 'muted' }, ` +${(d.stats && d.stats.added) || 0}/-${(d.stats && d.stats.removed) || 0}${(d.riskReasons || []).length ? ` · ${d.riskReasons.join(', ')}` : ''}`)),
       el('pre', { class: 'config-diff' }, (d.changedLines || []).map((l) => `${l.op} ${l.text}`).join('\n'))));
     card.replaceChildren(form,
-      el('p', { class: 'muted' }, `${snapshots.length} snapshot(s); ${(diffs || []).length} change(s). Secrets are masked.`),
-      (diffs || []).length ? el('div', { class: 'cfg-diffs' }, ...diffEls) : el('p', { class: 'muted' }, 'No changes between snapshots.'));
+      el('p', { class: 'muted' }, t('cfg.summary', { snapshots: snapshots.length, changes: (diffs || []).length })),
+      (diffs || []).length ? el('div', { class: 'cfg-diffs' }, ...diffEls) : el('p', { class: 'muted' }, t('cfg.noChanges')));
   } catch (err) {
-    card.replaceChildren(el('p', { class: err.status === 403 ? 'muted' : 'error' }, err.status === 403 ? 'Requires operator/admin.' : err.message));
+    card.replaceChildren(el('p', { class: err.status === 403 ? 'muted' : 'error' }, err.status === 403 ? t('cfg.needsOperator') : err.message));
   }
 }
 
@@ -9042,7 +9098,14 @@ async function loadAgentDependencies(id, host) {
   try {
     [data, agents] = await Promise.all([
       api(`/api/topology/dependencies?host=${encodeURIComponent(id)}&direction=both&limit=100`),
-      api('/agents').catch(() => []),
+      // Names are a nicety — the dependency edges are the point, and a failure
+      // here degrades to "host 17" rather than an empty panel. But it used to
+      // degrade SILENTLY, so a permissions or outage problem looked like the
+      // hosts genuinely having no names. Keep the fallback, record the reason.
+      api('/agents').catch((e) => {
+        recordClientLog('warn', `Dependency panel: could not load agent names (${e.message}); showing host ids.`);
+        return [];
+      }),
     ]);
   } catch (e) {
     host.replaceChildren(el('div', { class: 'error' }, errText(e)));
@@ -9231,6 +9294,12 @@ function agentDetailFolds(id, agent) {
     curl.wrap,
     runBtn, probeStatus);
   const probeLatestHost = el('div', { class: 'probe-latest' });
+  // Opening a result row mounts its history chart; the 7 s page poller used to
+  // re-render the whole table underneath it, so the row collapsed on its own
+  // mid-read. Pause the table's refresh while a row is open — the rest of the
+  // page keeps polling — and say so, the same deal the Probes tab offers.
+  const probePauseNote = el('div', { class: 'muted small', hidden: true }, t('probe.row.paused'));
+  let probeDetailOpen = false;
 
   async function runProbe() {
     const host = target.value.trim();
@@ -9243,17 +9312,29 @@ function agentDetailFolds(id, agent) {
     try {
       await api(`/agents/${id}/probe`, { method: 'POST', body });
       probeStatus.textContent = 'Sent — results will arrive in a moment.';
-      setTimeout(refreshProbes, 2500); setTimeout(refreshProbes, 6000);
+      setTimeout(() => refreshProbes(true), 2500); setTimeout(() => refreshProbes(true), 6000);
     } catch (e) {
       probeStatus.className = 'error';
       probeStatus.textContent = e.status === 409 ? 'The agent is not connected right now.' : (e.data && e.data.details ? Object.values(e.data.details).join(' · ') : e.message);
     } finally { runBtn.disabled = false; }
   }
   runBtn.addEventListener('click', runProbe);
-  async function refreshProbes() {
+  // `force` is the path a just-run probe takes: the reader asked for new
+  // results, so the table is rebuilt even with a row open.
+  async function refreshProbes(force = false) {
+    if (probeDetailOpen && !force) return;
     let data;
     try { data = await api(`/api/probes/latest?agentId=${encodeURIComponent(id)}`); } catch { return; }
-    probeLatestHost.replaceChildren(probeLatestTable(data.results || [], (r) => probeDetail(r, id), (tool, r, btn) => requestToolInstall(id, tool, btn)));
+    // The rebuilt table starts with every row closed, so the flag has to go
+    // back with it or the poller stays paused forever.
+    probeDetailOpen = false;
+    probePauseNote.hidden = true;
+    probeLatestHost.replaceChildren(probeLatestTable(
+      data.results || [],
+      (r) => probeDetail(r, id),
+      (tool, r, btn) => requestToolInstall(id, tool, btn),
+      (isOpen) => { probeDetailOpen = isOpen; probePauseNote.hidden = !isOpen; },
+    ));
   }
 
   // ---- Interfaces ----
@@ -9294,7 +9375,7 @@ function agentDetailFolds(id, agent) {
   const nicSummary = el('span', { class: 'muted' }, nics.length ? `· ${nics.length} interface(s)` : '· none reported');
 
   const folds = [
-    el('details', { class: 'sec', open: true }, el('summary', {}, 'Probes ', el('span', { class: 'muted' }, '· ping · TCP · DNS · traceroute · cURL')), probeForm, probeLatestHost),
+    el('details', { class: 'sec', open: true }, el('summary', {}, 'Probes ', el('span', { class: 'muted' }, '· ping · TCP · DNS · traceroute · cURL')), probeForm, probePauseNote, probeLatestHost),
     el('details', { class: 'sec', open: true }, el('summary', {}, 'Interfaces ', ifaceStatus), ifaceHost),
     el('details', { class: 'sec' }, el('summary', {}, 'NIC firmware ', nicSummary), nicTable(nics)),
     el('details', { class: 'sec' }, el('summary', {}, 'Traffic ', el('span', { class: 'muted' }, '· recent bandwidth')), trafficHost),
@@ -11460,7 +11541,7 @@ const DOCS = [
       },
       {
         id: 'alerting', title: 'Configure alerting', body: () => [
-          docsLead('Deliver findings/events to email, a webhook, or syslog. Configured under Settings → Alerting; changes apply live to the running dispatcher.'),
+          docsLead('Deliver findings/events to email, a webhook, a Matrix room, or syslog. Configured under Settings → Alerting; changes apply live to the running dispatcher.'),
           el('ul', {},
             el('li', {}, el('strong', {}, 'Email (SMTP) '), '— host, port, TLS, from-address and (optional) credentials. Use a EU/self-hosted relay in keeping with the no-US-vendor rule.'),
             el('li', {}, el('strong', {}, 'Webhook '), '— a receiver URL; sign it with a shared secret so the receiver can verify authenticity. An unsigned webhook is flagged as a warning in Test Settings.'),
@@ -11470,7 +11551,7 @@ const DOCS = [
             ['Use the per-channel ', el('strong', {}, 'Test'), ' to send a real test message, or screen all channels at once from ', settingsLink('screening', 'Test Settings'), '.'],
             ['Optionally set ', settingsLink('maintenance', 'Maintenance windows'), ' to silence alerts during planned work.'],
           ]),
-          docsExpect('A successful email/webhook/syslog test delivers an actual message to the destination — check the inbox/receiver/collector to confirm. A failure reports the transport error (SMTP auth, connection refused, TLS). Test Settings additionally flags insecure posture (plaintext, unsigned, no auth) even when delivery “works”.'),
+          docsExpect('A successful email/webhook/Matrix/syslog test delivers an actual message to the destination — check the inbox/receiver/collector to confirm. A failure reports the transport error (SMTP auth, connection refused, TLS). Test Settings additionally flags insecure posture (plaintext, unsigned, no auth) even when delivery “works”.'),
         ],
       },
       {
@@ -11686,6 +11767,11 @@ async function settingsAgentKeyView() {
     root.append(el('div', { class: 'empty error' }, errText(err)));
     return root;
   }
+  // Whether the vendor has authorised this key comes from the licence proof,
+  // which /system/version already surfaces. Best-effort: a key panel that works
+  // beats one that fails because the licence server was briefly unreachable.
+  let ver = null;
+  try { ver = await api('/system/version'); } catch { ver = null; }
 
   if (status.configured) {
     root.append(el('div', { class: 'section-head' }, el('h3', {}, 'Agent signing key'), el('span', { class: 'badge active' }, 'Created ✓')));
@@ -11699,6 +11785,26 @@ async function settingsAgentKeyView() {
     // one-click update: the dashboard said "Created ✓", the updates went out
     // unsigned, and every pinned agent refused them. Say it here, where an admin
     // comes to check the key.
+    // What the VENDOR says about this key. An agent that has been through the
+    // trust chain accepts a key only when a vendor-signed proof names its
+    // fingerprint, so "generated here" is not the same as "the fleet will take
+    // it" — and an operator has to see that before clicking Re-pin, not after.
+    if (status.fingerprint && ver && ver.vendorKeyStatus !== undefined) {
+      const authorized = ver.vendorAuthorizedFingerprint === status.fingerprint;
+      if (ver.vendorKeyStatus === 'pending' || (ver.vendorKeyStatus && !authorized)) {
+        const box = el('div', { class: 'callout' });
+        box.append(el('p', {}, el('strong', {}, '⏳ This key is waiting for vendor approval.')));
+        box.append(el('p', { class: 'muted' },
+          'Your licence server has recorded this key but has not authorised it, so agents that verify the vendor chain will refuse it. '
+          + 'Send this fingerprint to BlueEyes support and ask them to approve it:'));
+        box.append(el('p', {}, el('code', {}, status.fingerprint)));
+        box.append(el('p', { class: 'muted small' },
+          'Agents installed before the trust chain existed still accept a re-pin signed with the key it replaces, so they can be updated meanwhile.'));
+        root.append(box);
+      } else if (authorized) {
+        root.append(el('p', { class: 'muted' }, '✓ The vendor has authorised this key — agents verifying the vendor chain accept it.'));
+      }
+    }
     if (!status.canSign) {
       const box = el('div', { class: 'callout' });
       box.append(el('p', {}, el('strong', {}, '⚠ This key cannot sign agent releases.')));
@@ -12795,7 +12901,7 @@ async function settingsCmdbView() {
   testBtn.addEventListener('click', async () => {
     result.className = 'muted small'; result.textContent = 'Testing…'; testBtn.disabled = true;
     try {
-      const res = await fetch('/api/settings/cmdb/test', { method: 'POST', headers: token ? { Authorization: `Bearer ${token}` } : {} });
+      const res = await authedFetch('/api/settings/cmdb/test', { method: 'POST' });
       let data = null; try { data = await res.json(); } catch { /* no body */ }
       if (res.ok) {
         result.className = 'small ok';
@@ -12837,7 +12943,7 @@ async function settingsAlertingView() {
   // know it's off" rule used for the assistant.
   const alertingLicensed = !data.license || data.license.alerting !== false;
   root.append(el('p', { class: 'muted settings-intro' },
-    'When a finding is raised it can be dispatched by e-mail, webhook or syslog. Turn alerting on, then enable the channels you want and set a minimum severity for each. Settings are stored in the database and take effect immediately — no restart.'));
+    'When a finding is raised it can be dispatched by e-mail, webhook, Matrix or syslog. Turn alerting on, then enable the channels you want and set a minimum severity for each. Settings are stored in the database and take effect immediately — no restart.'));
   if (!alertingLicensed) {
     root.append(el('div', { class: 'settings-grid' }, alertingUnlicensedCard(data.license)));
     return root;
@@ -12846,6 +12952,7 @@ async function settingsAlertingView() {
     alertingGeneralCard(a),
     alertingEmailCard(ch.email),
     alertingWebhookCard(ch.webhook),
+    alertingMatrixCard(ch.matrix),
     alertingSyslogCard(ch.syslog)));
   return root;
 }
@@ -13009,6 +13116,33 @@ function alertingWebhookCard(channel) {
       return slice;
     },
     onSaved: (al) => { const nw = (al.channels && al.channels.webhook) || {}; secret.reset(!!nw.secretSet, nw.secretHint || ''); },
+  });
+}
+
+// Matrix — a room on the customer's OWN homeserver (Synapse/Conduit/Dendrite).
+// The access token is a bearer credential for the bot account, so it gets the
+// same write-only treatment as the SMTP password and the webhook HMAC.
+function alertingMatrixCard(channel) {
+  const m = channel || {};
+  const hsI = el('input', { type: 'text', value: m.homeserver || '', placeholder: 'https://matrix.example.eu' });
+  const roomI = el('input', { type: 'text', value: m.roomId || '', placeholder: '!ops:example.eu' });
+  const token = alertSecretField(t('alert.matrix.token'), t('alert.matrix.tokenHint'), !!m.accessTokenSet, m.accessTokenHint || '');
+  return alertingChannelCard({
+    name: 'matrix', title: t('alert.matrix.title'), blurb: t('alert.matrix.blurb'), channel: m,
+    bodyRows: [
+      alertField(t('alert.matrix.homeserver'), hsI, t('alert.matrix.homeserverHint')),
+      // An alias can be re-pointed at another room by whoever controls it, which
+      // is not a property the channel carrying your alerts should have.
+      alertField(t('alert.matrix.room'), roomI, t('alert.matrix.roomHint')),
+      ...token.rows,
+    ],
+    gather: () => {
+      const slice = { homeserver: hsI.value.trim(), roomId: roomI.value.trim() };
+      if (token.clear.checked) slice.clearAccessToken = true;
+      else if (token.input.value.trim() !== '') slice.accessToken = token.input.value.trim();
+      return slice;
+    },
+    onSaved: (al) => { const nm = (al.channels && al.channels.matrix) || {}; token.reset(!!nm.accessTokenSet, nm.accessTokenHint || ''); },
   });
 }
 
@@ -13247,7 +13381,7 @@ function ldapAuditCard() {
 async function settingsMaintenanceView() {
   const [data, agents, locations] = await Promise.all([api('/api/settings'), api('/agents').catch(() => []), api('/locations').catch(() => [])]);
   const root = el('div');
-  root.append(el('p', { class: 'muted settings-intro' }, 'During a maintenance window alert notifications (e-mail/webhook/syslog) are suppressed — findings are still recorded and shown. Use it during planned work so nobody gets paged unnecessarily.'));
+  root.append(el('p', { class: 'muted settings-intro' }, 'During a maintenance window alert notifications (e-mail/webhook/Matrix/syslog) are suppressed — findings are still recorded and shown. Use it during planned work so nobody gets paged unnecessarily.'));
   let windows = (data.maintenance && Array.isArray(data.maintenance.windows)) ? data.maintenance.windows.slice() : [];
   const listHost = el('div', {});
   const err = el('p', { class: 'error' });
@@ -14074,7 +14208,7 @@ function geoipSettingsCard(geoip) {
   // (it writes into the server's own /data volume, so no host path is needed).
   let polling = null;
   async function refreshGeoip() { try { const d = await api('/api/settings'); renderStatus(d.geoip); } catch { /* ignore */ } }
-  function setUpdating(on) { updateBtn.disabled = on; updateBtn.textContent = on ? 'Downloading + building…' : 'Update now (download latest)'; }
+  function setUpdating(on) { updateBtn.disabled = on; updateBtn.textContent = on ? t('geoip.updating') : t('geoip.updateNow'); }
   async function pollUpdate() {
     try {
       const { update: u } = await api('/api/settings/geoip/update');
@@ -14441,7 +14575,7 @@ async function nis2Download(path, filename) {
   try {
     // No locale here: /export/*.csv is a raw register dump keyed by the stored
     // column names, meant to be re-read by a spreadsheet, not by a person.
-    const res = await fetch(path, { headers: { Authorization: `Bearer ${token}` } });
+    const res = await authedFetch(path);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const blob = await res.blob();
     const url = URL.createObjectURL(blob);
@@ -14465,7 +14599,7 @@ function withLocale(path) {
 // window for the browser's "Save as PDF". The document carries its own print CSS.
 async function nis2Print(path) {
   try {
-    const res = await fetch(withLocale(path), { headers: { Authorization: `Bearer ${token}` } });
+    const res = await authedFetch(withLocale(path));
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const html = await res.text();
     const w = window.open('', '_blank');
@@ -15160,9 +15294,9 @@ async function reportGenerator() {
     const spec = buildSpec();
     if (!spec.sections.length) { toast('Select at least one section', true); return; }
     try {
-      const res = await fetch(withLocale('/api/nis2/custom-reports/export'), {
+      const res = await authedFetch(withLocale('/api/nis2/custom-reports/export'), {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(spec),
       });
       if (!res.ok) { let m = `HTTP ${res.status}`; try { m = (await res.json()).error || m; } catch { /* ignore */ } throw new Error(m); }
@@ -15351,7 +15485,7 @@ function mountServiceAssurance() {
     // with the header and handed over as an object URL, the same way the CSV
     // export already does it.
     apiBlob: async (path) => {
-      const res = await fetch(path, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
+      const res = await authedFetch(path);
       if (!res.ok) {
         let msg; try { msg = (await res.json()).error; } catch { /* non-JSON body */ }
         throw new Error(msg || `HTTP ${res.status}`);
@@ -16115,6 +16249,48 @@ function focusLoginField() {
   else emailEl.focus();
 }
 
+// Per-view teardown: the timers and Leaflet instances a screen owns, and which
+// screen is allowed to keep them.
+//
+// This used to be nine hand-written lines in render(), each of the shape
+// `if (currentView !== 'x') stopX();`. Two problems with that. A new screen
+// with a poller had to remember to add a line — and forgetting leaks an
+// interval that keeps fetching from a screen nobody is looking at, which is
+// invisible until you notice the request log. And nothing enforced that the
+// name in the condition matched the screen the stop() belonged to.
+//
+// One table instead, checked by a test: every entry names the view that may
+// keep the resource, and everything else is released on every render.
+//
+// `null` means "nobody keeps it" — the traffic maps rebuild with their view
+// unconditionally, which is what `stopTrafficMaps()` on every render meant.
+const VIEW_RESOURCES = [
+  { view: 'overview', stop: () => stopOverview() },
+  { view: 'probes', stop: () => stopProbes() },
+  { view: 'interfaces', stop: () => stopIfaces() },
+  { view: 'fleet', stop: () => stopFleet() },
+  { view: 'agent', stop: () => stopAgent() },
+  // The Leaflet maps are torn down when their view is left; they rebuild on entry.
+  { view: 'geo', stop: () => stopGeo() },
+  { view: 'map', stop: () => stopMap() },
+  { view: 'topology', stop: () => stopTopoMap() },
+  { view: null, stop: () => stopTrafficMaps() },
+];
+
+// Releases everything except what `view` is allowed to keep.
+function releaseViewResources(view) {
+  for (const r of VIEW_RESOURCES) {
+    if (r.view === view) continue;
+    try {
+      r.stop();
+    } catch (e) {
+      // A teardown that throws must not stop the OTHER teardowns, or one broken
+      // screen leaks every other screen's timers behind it.
+      recordClientLog('warn', `Tearing down "${r.view || 'shared'}" resources failed: ${e.message}`);
+    }
+  }
+}
+
 async function render({ silent = false } = {}) {
   if (!token) {
     $('#login').classList.remove('hidden');
@@ -16140,6 +16316,7 @@ async function render({ silent = false } = {}) {
   await loadProfile(); // apply the user's saved colour theme (once per session)
   await Promise.all([loadFeatures(), loadPlan()]);
   applyFeatureVisibility(); // dim modules the licence excludes (tied to the active plan)
+  warnIfLicenceUnreadable(); // ...and say so once if we could not read it at all
   applyRoleVisibility(); // hide nav items above the user's role + collapse empty groups
   // Show who is logged in: email + role.
   $('#whoami').replaceChildren(
@@ -16149,20 +16326,10 @@ async function render({ silent = false } = {}) {
   // Admin-only, once per session: nudge to set the agent signing key if it's missing.
   maybePromptSigningKey();
 
-  // Stop the overview poller when leaving that view (it restarts itself when shown).
   // The kitchen sink owns its drawer, popover and row menu; they are appended
   // to <body>, so leaving the view does not remove them.
   if (ui && currentView !== 'kitchenSink') ui.closeOverlays();
-  if (currentView !== 'overview') stopOverview();
-  if (currentView !== 'probes') stopProbes();
-  if (currentView !== 'interfaces') stopIfaces();
-  if (currentView !== 'fleet') stopFleet();
-  if (currentView !== 'agent') stopAgent();
-  // Tear down the Leaflet maps when leaving their views (they rebuild on entry).
-  if (currentView !== 'geo') stopGeo();
-  if (currentView !== 'map') stopMap();
-  if (currentView !== 'topology') stopTopoMap();
-  stopTrafficMaps(); // traffic maps always rebuild with their view
+  releaseViewResources(currentView);
 
   // Admin-only tabs (e.g. Users); send non-admins back to agents if needed.
   for (const b of document.querySelectorAll('.tabs button[data-admin]')) {
@@ -16196,17 +16363,61 @@ async function render({ silent = false } = {}) {
   syncCrumb();
 
   const view = $('#view');
-  if (!silent) view.replaceChildren(el('div', { class: 'empty' }, 'Loading…'));
+  if (!silent) {
+    view.replaceChildren(el('div', { class: 'empty' }, t('view.loading')));
+    announceView(t('view.loading'));
+  }
   try {
     const node = await views[currentView]();
     view.replaceChildren(node);
+    // A successful render — silent or not — means refreshing works again, so
+    // the next failure is a new run and is worth reporting.
+    refreshFailing = false;
     // On user navigation (not the silent auto-refresh) move focus to the new
     // content, so keyboard/screen-reader users land on it instead of being left
     // on the nav button. #view has tabindex="-1" to be programmatically focusable.
-    if (!silent && typeof view.focus === 'function') view.focus();
+    if (!silent) {
+      if (typeof view.focus === 'function') view.focus();
+      announceView(t('view.loaded'));
+    }
   } catch (err) {
-    if (!silent) view.replaceChildren(el('div', { class: 'empty error' }, err.message));
+    if (!silent) {
+      // A dead end is worse than a failure: give the reason AND a way back in,
+      // rather than a bare message the user can only escape by navigating away.
+      view.replaceChildren(el('div', { class: 'empty error' },
+        el('p', {}, t('view.loadFailed', { reason: err.message })),
+        el('button', { class: 'btn btn-secondary', type: 'button', onclick: () => render() }, t('view.retry'))));
+      announceView(t('view.loadFailed', { reason: err.message }));
+      recordClientLog('error', `View "${currentView}" failed to render: ${err.message}`);
+      return;
+    }
+    // SILENT auto-refresh. This branch used to do nothing at all — the screen
+    // kept showing data from before the failure, with no indication it had
+    // stopped updating, which is the worst possible outcome on a monitoring
+    // dashboard: it looks live and it is not. The rendered data is deliberately
+    // left alone (stale data beats a blank page mid-incident), but the user is
+    // told, once per run of failures, that it is no longer refreshing.
+    noteRefreshFailure(err);
   }
+}
+
+// Narrates screen transitions into the polite live region in index.html. Kept
+// separate from toast(): a page change is not a notification, and a toast that
+// fired for an unrelated reason must not be overwritten by navigation.
+function announceView(message) {
+  const host = $('#view-status');
+  if (host) host.textContent = message;
+}
+
+// Auto-refresh failures are reported once per run, not once per tick: a server
+// that is down produces a failure every few seconds, and a toast storm would
+// bury the one message that matters. Reset on the next success.
+let refreshFailing = false;
+function noteRefreshFailure(err) {
+  recordClientLog('error', `Auto-refresh of "${currentView}" failed: ${err.message}`);
+  if (refreshFailing) return;
+  refreshFailing = true;
+  toast(t('view.refreshFailed', { reason: err.message }), true);
 }
 
 // ---- Auto-refresh ---------------------------------------------------------

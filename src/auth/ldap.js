@@ -73,7 +73,16 @@ function createLdapAuth({
   async function isEnabled() {
     if (!authEnabledFlag || !licensed()) return false;
     let cfg = null;
-    try { cfg = await ldapConfigRepo.get(); } catch { cfg = null; }
+    // A repo failure here is NOT the same as "no directory configured", but it
+    // used to look identical: the catch returned null and directory login
+    // silently fell back to local accounts, with nothing written anywhere. An
+    // operator's only clue was that AD logins had stopped working. Log it.
+    try {
+      cfg = await ldapConfigRepo.get();
+    } catch (err) {
+      logger.error(`ldap: could not read the directory config (${err.message}); treating LDAP as disabled — directory logins will fall back to local accounts.`);
+      cfg = null;
+    }
     return Boolean(cfg && cfg.enabled);
   }
 
@@ -87,7 +96,16 @@ function createLdapAuth({
   // (matched = how many of the user's groups mapped). role is null when none map.
   async function resolveRole(groupDns) {
     let maps = [];
-    try { maps = await ldapRoleMapRepo.findAll(); } catch { maps = []; }
+    // An empty map means "no group grants a role", which denies access — the
+    // right answer when nobody has configured one, and a confusing one when the
+    // lookup simply failed. There is deliberately no default role, so a silent
+    // failure here locks every directory user out.
+    try {
+      maps = await ldapRoleMapRepo.findAll();
+    } catch (err) {
+      logger.error(`ldap: could not read the group→role map (${err.message}); NO directory user can be granted a role until this is fixed.`);
+      maps = [];
+    }
     const wanted = new Map(maps.map((m) => [String(m.ldap_group_dn).toLowerCase(), m.blueeye_role]));
     let role = null;
     let matched = 0;
@@ -144,8 +162,17 @@ function createLdapAuth({
     const client = clientFactory({ url: urlFor(cfg), tlsOptions: {} });
     if (!client) return { enabled: true, ok: false, reason: 'unavailable', matched: 0 };
 
+    // A bind password that will not decrypt (rotated BLUEEYE_SECRET, corrupt
+    // row) degrades to an EMPTY password, which the directory then rejects — so
+    // the visible symptom is "wrong credentials" and the real cause is a key
+    // problem on this side. Say so.
     let bindPw = '';
-    try { bindPw = secretBox.decrypt(cfg.bind_pw_encrypted || ''); } catch { bindPw = ''; }
+    try {
+      bindPw = secretBox.decrypt(cfg.bind_pw_encrypted || '');
+    } catch (err) {
+      logger.error(`ldap: could not decrypt the stored bind password (${err.message}); binding with an empty one, which the directory will refuse. Re-enter it under Settings → Authentication.`);
+      bindPw = '';
+    }
 
     try {
       // 1) Service bind for the search (skip when no bind_dn -> anonymous).
@@ -192,13 +219,27 @@ function createLdapAuth({
   // (or anonymously) and confirm base_dn is reachable. Returns { ok, detail }.
   async function testConnection() {
     let cfg = null;
-    try { cfg = await ldapConfigRepo.getWithSecret(); } catch { cfg = null; }
+    // This one is surfaced to the admin in the UI rather than only logged: the
+    // whole point of the button is to say what is wrong.
+    try {
+      cfg = await ldapConfigRepo.getWithSecret();
+    } catch (err) {
+      logger.error(`ldap: could not read the directory config for the connection test (${err.message}).`);
+      return { ok: false, detail: `could not read the stored LDAP config: ${err.message}` };
+    }
     if (!cfg) return { ok: false, detail: 'no LDAP config stored' };
     if (!cfg.use_tls && !isLocalHost(cfg.host)) return { ok: false, detail: 'TLS required: refusing plaintext bind to a non-local host' };
     const client = clientFactory({ url: urlFor(cfg), tlsOptions: {} });
     if (!client) return { ok: false, detail: 'ldapts is not installed' };
     let bindPw = '';
-    try { bindPw = secretBox.decrypt(cfg.bind_pw_encrypted || ''); } catch { bindPw = ''; }
+    let bindPwFailed = false;
+    try { bindPw = secretBox.decrypt(cfg.bind_pw_encrypted || ''); } catch { bindPw = ''; bindPwFailed = true; }
+    if (bindPwFailed && cfg.bind_dn) {
+      // Reporting this as "invalid credentials" would send the admin to the
+      // directory to check an account that is fine.
+      logger.error('ldap: stored bind password could not be decrypted during the connection test.');
+      return { ok: false, detail: 'the stored bind password could not be decrypted (has BLUEEYE_SECRET changed?) — re-enter it and save' };
+    }
     try {
       if (cfg.bind_dn) await client.bind(cfg.bind_dn, bindPw);
       await client.search(cfg.base_dn, { scope: 'base', filter: '(objectClass=*)', attributes: ['dn'], sizeLimit: 1 });

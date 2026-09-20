@@ -9250,6 +9250,12 @@ function agentDetailFolds(id, agent) {
     curl.wrap,
     runBtn, probeStatus);
   const probeLatestHost = el('div', { class: 'probe-latest' });
+  // Opening a result row mounts its history chart; the 7 s page poller used to
+  // re-render the whole table underneath it, so the row collapsed on its own
+  // mid-read. Pause the table's refresh while a row is open — the rest of the
+  // page keeps polling — and say so, the same deal the Probes tab offers.
+  const probePauseNote = el('div', { class: 'muted small', hidden: true }, t('probe.row.paused'));
+  let probeDetailOpen = false;
 
   async function runProbe() {
     const host = target.value.trim();
@@ -9262,17 +9268,29 @@ function agentDetailFolds(id, agent) {
     try {
       await api(`/agents/${id}/probe`, { method: 'POST', body });
       probeStatus.textContent = 'Sent — results will arrive in a moment.';
-      setTimeout(refreshProbes, 2500); setTimeout(refreshProbes, 6000);
+      setTimeout(() => refreshProbes(true), 2500); setTimeout(() => refreshProbes(true), 6000);
     } catch (e) {
       probeStatus.className = 'error';
       probeStatus.textContent = e.status === 409 ? 'The agent is not connected right now.' : (e.data && e.data.details ? Object.values(e.data.details).join(' · ') : e.message);
     } finally { runBtn.disabled = false; }
   }
   runBtn.addEventListener('click', runProbe);
-  async function refreshProbes() {
+  // `force` is the path a just-run probe takes: the reader asked for new
+  // results, so the table is rebuilt even with a row open.
+  async function refreshProbes(force = false) {
+    if (probeDetailOpen && !force) return;
     let data;
     try { data = await api(`/api/probes/latest?agentId=${encodeURIComponent(id)}`); } catch { return; }
-    probeLatestHost.replaceChildren(probeLatestTable(data.results || [], (r) => probeDetail(r, id), (tool, r, btn) => requestToolInstall(id, tool, btn)));
+    // The rebuilt table starts with every row closed, so the flag has to go
+    // back with it or the poller stays paused forever.
+    probeDetailOpen = false;
+    probePauseNote.hidden = true;
+    probeLatestHost.replaceChildren(probeLatestTable(
+      data.results || [],
+      (r) => probeDetail(r, id),
+      (tool, r, btn) => requestToolInstall(id, tool, btn),
+      (isOpen) => { probeDetailOpen = isOpen; probePauseNote.hidden = !isOpen; },
+    ));
   }
 
   // ---- Interfaces ----
@@ -9313,7 +9331,7 @@ function agentDetailFolds(id, agent) {
   const nicSummary = el('span', { class: 'muted' }, nics.length ? `· ${nics.length} interface(s)` : '· none reported');
 
   const folds = [
-    el('details', { class: 'sec', open: true }, el('summary', {}, 'Probes ', el('span', { class: 'muted' }, '· ping · TCP · DNS · traceroute · cURL')), probeForm, probeLatestHost),
+    el('details', { class: 'sec', open: true }, el('summary', {}, 'Probes ', el('span', { class: 'muted' }, '· ping · TCP · DNS · traceroute · cURL')), probeForm, probePauseNote, probeLatestHost),
     el('details', { class: 'sec', open: true }, el('summary', {}, 'Interfaces ', ifaceStatus), ifaceHost),
     el('details', { class: 'sec' }, el('summary', {}, 'NIC firmware ', nicSummary), nicTable(nics)),
     el('details', { class: 'sec' }, el('summary', {}, 'Traffic ', el('span', { class: 'muted' }, '· recent bandwidth')), trafficHost),

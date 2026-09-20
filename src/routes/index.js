@@ -151,6 +151,7 @@ function createApiRouter({
   snmpNeighborsRepo = null,
   fdbEntriesRepo = null,
   snmpTopologyIngest = null,
+  deviceInterfacesRepo = null,
   burstRunsRepo = null,
   burstService = null,
   interfaceStatesRepo = null,
@@ -418,7 +419,8 @@ function createApiRouter({
   // server's polling at an address); "poll now" is operator+.
   if (snmpDevicesRepo) {
     router.use('/api/snmp-devices', createSnmpDevicesRouter({
-      snmpDevicesRepo, fdbEntriesRepo, snmpNeighborsRepo, agentsRepo, agentCommander, auditLogger, logger,
+      snmpDevicesRepo, fdbEntriesRepo, snmpNeighborsRepo, deviceInterfacesRepo,
+      agentsRepo, agentCommander, auditLogger, logger,
     }));
   }
   // Burst mode — one target, once a second, for up to two minutes. Read

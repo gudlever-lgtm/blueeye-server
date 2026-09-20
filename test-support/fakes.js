@@ -613,6 +613,89 @@ function makeFdbEntriesRepo(overrides = {}) {
   };
 }
 
+function makeDeviceInterfacesRepo(overrides = {}) {
+  const rows = [];
+  let seq = 0;
+  const iso = (v) => (v == null ? null : (v instanceof Date ? v.toISOString() : new Date(v).toISOString()));
+  const mapOut = (r) => ({
+    id: r.id, deviceId: r.device_id, ifName: r.if_name, nameSource: r.name_source,
+    ifIndex: r.if_index, ifIndexChangedAt: iso(r.if_index_changed_at),
+    ifAlias: r.if_alias, ifDescr: r.if_descr, ifType: r.if_type,
+    speedMbps: r.speed_mbps, adminStatus: r.admin_status, operStatus: r.oper_status,
+    physAddress: r.phys_address, firstSeen: iso(r.first_seen), lastSeen: iso(r.last_seen),
+  });
+
+  return {
+    rows,
+    // Implements the (device, ifName) upsert for real, INCLUDING the renumber
+    // report: a port whose ifIndex moved is the case the counter path depends
+    // on, and a fake that silently overwrote it would let a broken delta pass.
+    upsertMany: overrides.upsertMany || (async (deviceId, interfaces, { at = new Date() } = {}) => {
+      let upserted = 0;
+      const renumbered = [];
+      for (const i of interfaces || []) {
+        if (!i || !i.ifName) continue;
+        const next = i.ifIndex == null ? null : Number(i.ifIndex);
+        const existing = rows.find((r) => r.device_id === Number(deviceId) && r.if_name === i.ifName);
+        if (existing) {
+          if (existing.if_index != null && next != null && existing.if_index !== next) {
+            renumbered.push({ ifName: i.ifName, from: existing.if_index, to: next });
+            existing.if_index_changed_at = at;
+          }
+          existing.if_index = next;
+          existing.name_source = i.nameSource || 'ifName';
+          existing.if_alias = i.ifAlias ?? null;
+          existing.if_descr = i.ifDescr ?? null;
+          existing.if_type = i.ifType ?? null;
+          existing.speed_mbps = i.speedMbps ?? null;
+          existing.admin_status = i.adminStatus ?? null;
+          existing.oper_status = i.operStatus ?? null;
+          existing.phys_address = i.physAddress ?? null;
+          existing.last_seen = at;
+        } else {
+          rows.push({
+            id: (seq += 1), device_id: Number(deviceId), if_name: i.ifName,
+            name_source: i.nameSource || 'ifName', if_index: next, if_index_changed_at: null,
+            if_alias: i.ifAlias ?? null, if_descr: i.ifDescr ?? null, if_type: i.ifType ?? null,
+            speed_mbps: i.speedMbps ?? null, admin_status: i.adminStatus ?? null,
+            oper_status: i.operStatus ?? null, phys_address: i.physAddress ?? null,
+            first_seen: at, last_seen: at,
+          });
+        }
+        upserted += 1;
+      }
+      return { upserted, renumbered };
+    }),
+    idMapForDevice: overrides.idMapForDevice || (async (deviceId) => {
+      const byName = new Map();
+      const byIndex = new Map();
+      for (const r of rows.filter((x) => x.device_id === Number(deviceId))) {
+        byName.set(r.if_name, r.id);
+        if (r.if_index != null) byIndex.set(Number(r.if_index), r.id);
+      }
+      return { byName, byIndex };
+    }),
+    listForDevice: overrides.listForDevice || (async (deviceId, { limit = 1000 } = {}) => rows
+      .filter((r) => r.device_id === Number(deviceId))
+      .sort((a, b) => (a.if_index == null) - (b.if_index == null)
+        || (a.if_index - b.if_index) || String(a.if_name).localeCompare(String(b.if_name)))
+      .slice(0, limit).map(mapOut)),
+    findById: overrides.findById || (async (id) => {
+      const r = rows.find((x) => x.id === Number(id));
+      return r ? mapOut(r) : null;
+    }),
+    countForDevice: overrides.countForDevice || (async (deviceId) => rows
+      .filter((r) => r.device_id === Number(deviceId)).length),
+    purgeBefore: overrides.purgeBefore || (async (cutoff) => {
+      const before = rows.length;
+      for (let i = rows.length - 1; i >= 0; i -= 1) {
+        if (new Date(rows[i].last_seen) < cutoff) rows.splice(i, 1);
+      }
+      return before - rows.length;
+    }),
+  };
+}
+
 function makeSnmpNeighborsRepo(overrides = {}) {
   const rows = [];
   let seq = 0;
@@ -2973,6 +3056,7 @@ function makeApp(overrides = {}) {
   const snmpDevicesRepo = overrides.snmpDevicesRepo === undefined ? makeSnmpDevicesRepo() : overrides.snmpDevicesRepo;
   const fdbEntriesRepo = overrides.fdbEntriesRepo === undefined ? makeFdbEntriesRepo() : overrides.fdbEntriesRepo;
   const snmpNeighborsRepo = overrides.snmpNeighborsRepo === undefined ? makeSnmpNeighborsRepo() : overrides.snmpNeighborsRepo;
+  const deviceInterfacesRepo = overrides.deviceInterfacesRepo === undefined ? makeDeviceInterfacesRepo() : overrides.deviceInterfacesRepo;
   const burstRunsRepo = overrides.burstRunsRepo === undefined ? makeBurstRunsRepo() : overrides.burstRunsRepo;
   // The REAL service over the fakes, so the dispatch, the ownership check on a
   // returning result and the stored verdict are exercised end-to-end.
@@ -2983,7 +3067,7 @@ function makeApp(overrides = {}) {
   // write the devices assigned to it — is exercised end-to-end rather than
   // stubbed. It is the security property of this feature.
   const snmpTopologyIngest = overrides.snmpTopologyIngest === undefined
-    ? (snmpDevicesRepo ? createSnmpTopologyIngest({ snmpDevicesRepo, fdbEntriesRepo, snmpNeighborsRepo }) : null)
+    ? (snmpDevicesRepo ? createSnmpTopologyIngest({ snmpDevicesRepo, fdbEntriesRepo, snmpNeighborsRepo, deviceInterfacesRepo }) : null)
     : overrides.snmpTopologyIngest;
   // The REAL ingest over the fake repositories, so sender resolution and the
   // bucketed dedup key are exercised end-to-end rather than stubbed — they are
@@ -3064,6 +3148,7 @@ function makeApp(overrides = {}) {
     fdbEntriesRepo,
     snmpNeighborsRepo,
     snmpTopologyIngest,
+    deviceInterfacesRepo,
     burstRunsRepo,
     burstService,
     interfaceStatesRepo,
@@ -3226,6 +3311,7 @@ module.exports = {
   makeSnmpDevicesRepo,
   makeFdbEntriesRepo,
   makeSnmpNeighborsRepo,
+  makeDeviceInterfacesRepo,
   makeBurstRunsRepo,
   makeInterfaceStatesRepo,
   makeAlertDispatchLogRepo,

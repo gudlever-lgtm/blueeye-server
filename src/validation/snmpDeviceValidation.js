@@ -17,6 +17,13 @@ const { normalizeMac, isUsableMac } = require('../identity/arpTable');
 //     five thousand must not cost the other 4 999.
 
 const COLLECT_KINDS = ['if', 'fdb', 'lldp', 'vlan'];
+// Which OID the interface NAME came from. Not every switch implements ifName;
+// some only have ifDescr, which is less stable, and a row built from the weaker
+// one should say so rather than leaving it to be assumed.
+const NAME_SOURCES = ['ifName', 'ifDescr', 'ifIndex'];
+// IF-MIB ifAdminStatus / ifOperStatus, already named by the agent. Anything
+// else becomes null: an unknown status is not a status.
+const IF_STATUSES = ['up', 'down', 'testing', 'dormant', 'notPresent', 'lowerLayerDown', 'unknown'];
 const VERSIONS = ['1', '2c'];
 const HOST_MAX = 255;
 const NAME_MAX = 255;
@@ -242,7 +249,26 @@ function validateDeviceTopology(raw) {
     const ifIndex = Number(row.ifIndex);
     const ifName = str(row.ifName, IFNAME_MAX);
     if (Number.isInteger(ifIndex) && ifIndex > 0 && ifName) {
-      interfaces.push({ ifIndex, ifName, ifAlias: str(row.ifAlias, 255) });
+      const speed = Number(row.speedMbps);
+      const ifType = Number(row.ifType);
+      const mac = normalizeMac(row.physAddress);
+      interfaces.push({
+        ifIndex,
+        ifName,
+        // The name is the identity of the row, so where it came from travels
+        // with it (migration 108). An unrecognised value is the safe default,
+        // never a made-up provenance.
+        nameSource: NAME_SOURCES.includes(row.nameSource) ? row.nameSource : 'ifName',
+        ifAlias: str(row.ifAlias, 255),
+        ifDescr: str(row.ifDescr, 255),
+        ifType: Number.isInteger(ifType) && ifType > 0 ? ifType : null,
+        // 0 is what a device reports for a port whose speed it does not know.
+        // Storing it as 0 would make "unknown" look like "stalled".
+        speedMbps: Number.isInteger(speed) && speed > 0 ? speed : null,
+        adminStatus: IF_STATUSES.includes(row.adminStatus) ? row.adminStatus : null,
+        operStatus: IF_STATUSES.includes(row.operStatus) ? row.operStatus : null,
+        physAddress: mac && isUsableMac(mac) ? mac : null,
+      });
     }
   }
 
@@ -317,6 +343,8 @@ function validateSnmpTopologyBatch(raw, errors) {
 }
 
 module.exports = {
+  NAME_SOURCES,
+  IF_STATUSES,
   validateSnmpDevice,
   validateSnmpTopologyBatch,
   validateDeviceTopology,

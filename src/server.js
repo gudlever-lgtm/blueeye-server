@@ -74,6 +74,7 @@ const { createDeviceEventIngest } = require('./devices/deviceEventIngest');
 const { createSnmpDevicesRepository } = require('./repositories/snmpDevicesRepository');
 const { createFdbEntriesRepository } = require('./repositories/fdbEntriesRepository');
 const { createSnmpNeighborsRepository } = require('./repositories/snmpNeighborsRepository');
+const { createDeviceInterfacesRepository } = require('./repositories/deviceInterfacesRepository');
 const { createSnmpTopologyIngest } = require('./devices/snmpTopologyIngest');
 const { createBurstRunsRepository } = require('./repositories/burstRunsRepository');
 const { createBurstService } = require('./probes/burstService');
@@ -620,10 +621,12 @@ function start() {
   const snmpDevicesRepo = createSnmpDevicesRepository(db, { secretBox });
   const fdbEntriesRepo = createFdbEntriesRepository(db);
   const snmpNeighborsRepo = createSnmpNeighborsRepository(db);
+  const deviceInterfacesRepo = createDeviceInterfacesRepository(db);
   const snmpTopologyIngest = createSnmpTopologyIngest({
     snmpDevicesRepo,
     fdbEntriesRepo,
     snmpNeighborsRepo,
+    deviceInterfacesRepo,
     logger,
   });
 
@@ -1028,6 +1031,7 @@ function start() {
     fdbEntriesRepo,
     snmpNeighborsRepo,
     snmpTopologyIngest,
+    deviceInterfacesRepo,
     burstRunsRepo,
     burstService,
     interfaceStatesRepo,

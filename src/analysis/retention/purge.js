@@ -54,6 +54,13 @@ function createPurge({ repo, config, now = () => new Date() }) {
       const cut = new Date(t - config.burstRunRetentionDays * DAY_MS);
       burstRuns = await repo.purgeBurstRunsBefore(cut);
     }
+    // The port inventory on polled switches. Guarded like the rest, and the
+    // longest window of the SNMP dimensions — see the note in config.js.
+    let deviceInterfaces = 0;
+    if (config.deviceInterfaceRetentionDays && typeof repo.purgeDeviceInterfacesBefore === 'function') {
+      const cut = new Date(t - config.deviceInterfaceRetentionDays * DAY_MS);
+      deviceInterfaces = await repo.purgeDeviceInterfacesBefore(cut);
+    }
     // Interface state transitions (history) and the snapshot rows of interfaces
     // that stopped being reported. Guarded like the dimensions above.
     let interfaceTransitions = 0;
@@ -65,7 +72,7 @@ function createPurge({ repo, config, now = () => new Date() }) {
         interfaceStates = await repo.purgeInterfaceStatesBefore(cut);
       }
     }
-    return { flowRollups, metricRollups, findings, configSnapshots, arpEntries, deviceEvents, fdbEntries, snmpNeighbors, burstRuns, interfaceTransitions, interfaceStates };
+    return { flowRollups, metricRollups, findings, configSnapshots, arpEntries, deviceEvents, fdbEntries, snmpNeighbors, burstRuns, deviceInterfaces, interfaceTransitions, interfaceStates };
   }
 
   return { purgeExpired };

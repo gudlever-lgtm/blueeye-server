@@ -30,6 +30,7 @@ function createSnmpDevicesRouter({
   snmpDevicesRepo,
   fdbEntriesRepo = null,
   snmpNeighborsRepo = null,
+  deviceInterfacesRepo = null,
   agentsRepo,
   agentCommander = null,
   auditLogger = null,
@@ -93,7 +94,29 @@ function createSnmpDevicesRouter({
     } catch (err) {
       if (logger) logger.warn(`snmp-devices: neighbours unavailable for ${id} (${err.message})`);
     }
-    res.json({ device, fdb, fdbTotal, neighbours });
+    // The ports themselves. Best-effort like the two above, and for the same
+    // reason: the poll state is worth opening the page for on its own.
+    let interfaces = [];
+    try {
+      if (deviceInterfacesRepo) interfaces = await deviceInterfacesRepo.listForDevice(id, { limit: 1000 });
+    } catch (err) {
+      if (logger) logger.warn(`snmp-devices: interfaces unavailable for ${id} (${err.message})`);
+    }
+    res.json({ device, fdb, fdbTotal, neighbours, interfaces });
+  }));
+
+  // The port table on its own, for a screen that wants it without the
+  // forwarding table beside it. 404 for an unknown device rather than an empty
+  // list: "this switch has no ports" and "there is no such switch" are
+  // different answers.
+  router.get('/:id/interfaces', ...viewer, asyncHandler(async (req, res) => {
+    const id = parseId(req.params.id);
+    if (id === null) return res.status(400).json({ error: 'id must be a positive integer' });
+    const device = await snmpDevicesRepo.findById(id);
+    if (!device) return res.status(404).json({ error: 'Device not found' });
+    if (!deviceInterfacesRepo) return res.status(503).json({ error: 'Interface inventory is not configured' });
+    const interfaces = await deviceInterfacesRepo.listForDevice(id, { limit: 1000 });
+    res.json({ deviceId: id, interfaces });
   }));
 
   router.post('/', ...admin, asyncHandler(async (req, res) => {

@@ -24,6 +24,11 @@ function createSnmpTopologyIngest({
   // Reusing it would attribute a switch's neighbours to whichever agent shared
   // the number, which does not throw — it just draws the wrong network.
   snmpNeighborsRepo = null,
+  // The ports themselves. The agent has been sending this list since stage 02
+  // and the validator has been accepting it; until now nothing stored it, so
+  // the ifIndex->ifName table crossed the wire on every poll and was thrown
+  // away. It is the join every per-port measurement needs.
+  deviceInterfacesRepo = null,
   logger = null,
   now = () => new Date(),
 }) {
@@ -44,8 +49,13 @@ function createSnmpTopologyIngest({
     let stored = 0;
     let fdbRows = 0;
     let neighbourRows = 0;
+    let interfaceRows = 0;
     let refused = 0;
     const deviceErrors = [];
+    // Ports whose ifIndex moved since the last poll. Reported back to the
+    // caller because a counter delta that spans a renumbering is two different
+    // ports subtracted from each other — see migration 108.
+    const renumbered = [];
 
     for (const d of devices) {
       if (!owned.has(d.deviceId)) {
@@ -56,6 +66,19 @@ function createSnmpTopologyIngest({
         continue;
       }
       try {
+        // Interfaces FIRST: the forwarding table and the neighbours both name
+        // ports, and a port that does not exist in the inventory yet cannot be
+        // joined to. Best-effort like the neighbours — an inventory failure
+        // must not cost the forwarding table somebody is waiting for.
+        if (deviceInterfacesRepo && d.interfaces && d.interfaces.length) {
+          try {
+            const out = await deviceInterfacesRepo.upsertMany(d.deviceId, d.interfaces, { at });
+            interfaceRows += out.upserted;
+            for (const r of out.renumbered) renumbered.push({ deviceId: d.deviceId, ...r });
+          } catch (err) {
+            if (logger) logger.warn(`snmp-topology: interface ingest failed for device ${d.deviceId} (${err.message})`);
+          }
+        }
         if (d.fdb.length) {
           fdbRows += await fdbEntriesRepo.upsertMany(d.deviceId, d.fdb, { at });
         }
@@ -101,7 +124,7 @@ function createSnmpTopologyIngest({
       }
     }
 
-    return { stored, fdbRows, neighbourRows, refused, failuresRecorded, deviceErrors };
+    return { stored, fdbRows, neighbourRows, interfaceRows, renumbered, refused, failuresRecorded, deviceErrors };
   }
 
   return { ingest };

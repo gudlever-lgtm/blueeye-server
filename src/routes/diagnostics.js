@@ -105,6 +105,7 @@ function createDiagnosticsRouter({
     // Email & alert channels.
     add('alert:email', 'email', alertRunnable('email'), true, screening.screenEmail(g.channels.email));
     add('alert:webhook', 'email', alertRunnable('webhook'), true, screening.screenWebhook(g.channels.webhook));
+    add('alert:matrix', 'email', alertRunnable('matrix'), true, screening.screenMatrix(g.channels.matrix));
     add('alert:syslog', 'email', alertRunnable('syslog'), true, screening.screenSyslog(g.channels.syslog));
 
     // ITSM / outbound API receivers (ServiceNow tickets, generic/custom receivers,

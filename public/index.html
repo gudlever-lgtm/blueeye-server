@@ -5,16 +5,24 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <link rel="icon" href="/favicon.ico" sizes="32x32 16x16" />
     <title>BlueEyes Network Resilience System — Server</title>
-    <!-- Leaflet (open source, BSD) for the locations map. Loaded from the
-         official CDN; if it is unavailable (offline/CSP) the map view falls
-         back to a location list. Point these at a self-hosted copy for a fully
-         on-prem deployment. -->
-    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-    <script defer src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <!-- Leaflet 1.9.4 (BSD-2-Clause) + marker clustering 1.5.3 (MIT), SERVED
+         FROM THIS SERVER — see public/vendor/leaflet/ and its two LICENSE
+         files. They used to load from unpkg.com, which was three problems at
+         once: this product is sold as on-prem and EU-hosted, so an air-gapped
+         install silently lost its maps; a US CDN in the page contradicts the
+         "no US vendors" convention in CLAUDE.md; and a script from another
+         origin executes with the dashboard's full authority, so a compromise
+         upstream is a compromise here. Vendoring costs 244 KB and removes all
+         three. The CSP (src/middleware/securityHeaders.js) no longer whitelists
+         any third-party script origin as a result.
+         Leaflet resolves its marker images relative to leaflet.css, so
+         images/ must stay beside it. -->
+    <link rel="stylesheet" href="/vendor/leaflet/leaflet.css" />
+    <script defer src="/vendor/leaflet/leaflet.js"></script>
     <!-- Optional marker clustering (degrades gracefully if unavailable). -->
-    <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css" />
-    <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css" />
-    <script defer src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
+    <link rel="stylesheet" href="/vendor/leaflet/MarkerCluster.css" />
+    <link rel="stylesheet" href="/vendor/leaflet/MarkerCluster.Default.css" />
+    <script defer src="/vendor/leaflet/leaflet.markercluster.js"></script>
     <!-- tokens.css first (it defines the palette every rule below reads),
          then the legacy sheet, then the UI-contract components. -->
     <link rel="stylesheet" href="/css/tokens.css" />
@@ -227,6 +235,15 @@
             </div>
           </div>
         </header>
+        <!-- Screens are swapped into #view by render(). A sighted user sees
+             "Loading…" replaced by the page; a screen-reader user got nothing,
+             because replaceChildren() on a non-live region announces nothing
+             and moving focus only reads the new heading once it has arrived.
+             #view-status is the polite live region render() narrates into
+             ("Loading Fleet", "Fleet failed to load"). It is visually hidden,
+             never rendered into by a view, and separate from #toast so a page
+             transition cannot stomp an unrelated notification. -->
+        <p id="view-status" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></p>
         <main id="view" tabindex="-1"></main>
       </div>
     </div>

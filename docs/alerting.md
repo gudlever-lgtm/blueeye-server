@@ -19,6 +19,25 @@ All share the interface `send(finding, group) → { ok, detail }`.
 - **webhook** — `POST`s the finding (+ correlation group) as JSON to a configured
   URL, **HMAC-SHA256 signed** with a shared secret. The receiver verifies
   `X-BlueEye-Signature: sha256=<hex>` against the raw body.
+- **matrix** — posts into a room on the customer's **own** Matrix homeserver
+  (Synapse / Conduit / Dendrite). This is the chat channel an on-prem, EU,
+  no-US-vendors product can actually ship: the homeserver runs inside the same
+  network, so an alert never leaves the building. Slack or Teams would have been
+  the other way round.
+
+  It is also the one thing the other three cannot do — email is where alerts go
+  to be missed, a webhook needs somebody to build the far end, and syslog is for
+  machines. A room is where the people who fix this already are.
+
+  The client-server API is used directly over `fetch`, no SDK:
+  `PUT /_matrix/client/v3/rooms/{roomId}/send/m.room.message/{txnId}`. **PUT with
+  a transaction id**, not POST, because it is idempotent — the id is derived from
+  the finding, so a retry after a timeout cannot post the same alert twice. Both
+  a plain `body` and an HTML `formatted_body` are sent, carrying the same
+  information: many clients and every notification preview show only the plain
+  one. Configure `homeserver`, the internal `roomId` (`!abc:example.dk` — an
+  **alias** is refused, because whoever controls one can re-point it at another
+  room) and a bot `accessToken`, which is write-only like the SMTP password.
 - **syslog** — RFC5424 over UDP/TCP, formatted to forward to Cisco ISE. Severity
   maps `CRIT→err (3)`, `WARN→warning (4)`, `INFO→info (6)`; facility `local0`.
 

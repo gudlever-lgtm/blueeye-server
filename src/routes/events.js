@@ -10,6 +10,7 @@ const { validateEventNote } = require('../validation/eventNoteValidation');
 const { buildTimeline } = require('../eventCases/timeline');
 const { maskedDiff } = require('../config/configContext');
 const { scoreSimilarEvents } = require('../eventCases/similarity');
+const { silentLogger } = require('../logger');
 const { gatherEventAskContext } = require('../eventCases/askContext');
 const { buildEventGuide } = require('../eventCases/guide');
 const { buildMatchingPlaybook, buildHistoricalMatches, shouldGenerateAi } = require('../eventCases/recommendation');
@@ -66,6 +67,7 @@ function createEventsRouter({
   remediationPlaybooksRepo = null,
   blastRadiusService = null,
   eventNotesRepo = null,
+  logger = silentLogger,
 }) {
   const router = express.Router();
   const reader = requireRole(ROLES.VIEWER, ROLES.OPERATOR, ROLES.ADMIN);
@@ -115,11 +117,21 @@ function createEventsRouter({
     // downstream hosts/services are affected if this device fails. Computed on
     // read from the topology graph, seeded by the event's agent-id host.
     // Best-effort — a topology/DB hiccup must not break the event view.
+    //
+    // But "best-effort" must not mean "indistinguishable from an answer". This
+    // is the field an operator acts on mid-incident, and `blastRadius: null`
+    // used to mean BOTH "nothing downstream depends on this device" and "the
+    // topology query failed" — with nothing logged either way. So the failure
+    // is now logged AND reported: `blastRadiusError` tells the client the
+    // difference, and the UI says "could not be computed" instead of quietly
+    // implying an all-clear.
     if (blastRadiusService && typeof blastRadiusService.compute === 'function' && Number.isInteger(Number(event.hostId))) {
       try {
         event.blastRadius = await blastRadiusService.compute(Number(event.hostId));
       } catch (err) {
         event.blastRadius = null;
+        event.blastRadiusError = 'unavailable';
+        logger.warn(`events: blast radius for event ${id} (host ${event.hostId}) failed: ${err && err.message}`);
       }
     }
 

@@ -2,217 +2,38 @@
 
 const crypto = require('crypto');
 const express = require('express');
-const { asyncHandler } = require('../middleware/asyncHandler');
-const { requireAuth, requireRole } = require('../auth/middleware');
-const { ROLES } = require('../auth/roles');
-const { validateAgentManagedInput, MAX_INTERVAL_MS } = require('../validation/agentValidation');
-const { validateTimeRange } = require('../validation/resultsValidation');
-const { validateProbeSpec } = require('../validation/probeValidation');
-const { parseId } = require('../validation/locationValidation');
-const { verifyProof } = require('../license/verify');
-const { INSTALLABLE_TOOLS, isAllowedTool } = require('../agentTools');
-const { diagnoseConnection } = require('../ws/connectionDiagnosis');
-const { silentLogger } = require('../logger');
-const { isNewer } = require('../lib/version');
-const { publicKeyFingerprint } = require('../lib/fingerprint');
+const { asyncHandler } = require('../../middleware/asyncHandler');
+const { requireAuth, requireRole } = require('../../auth/middleware');
+const { ROLES } = require('../../auth/roles');
+const { parseId } = require('../../validation/locationValidation');
+const { validateProbeSpec } = require('../../validation/probeValidation');
+const { INSTALLABLE_TOOLS, isAllowedTool } = require('../../agentTools');
+const { diagnoseConnection } = require('../../ws/connectionDiagnosis');
+const { isNewer } = require('../../lib/version');
+const { MAX_INTERVAL_MS } = require('../../validation/agentValidation');
+// The fingerprint of a KEY (SHA-256 of its SPKI DER bytes) — what the vendor
+// authorises and what the agent computes over the key it is offered.
+const { publicKeyFingerprint } = require('../../lib/fingerprint');
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-// Aggregates the byPort / byProtocol / topTalkers entries across a set of
-// NetFlow measurements, optionally filtered to one port and/or protocol.
-// `series` is the matched bytes per measurement (oldest first) and is only
-// populated when a port or protocol filter is active. Pure; exported for tests.
-function aggregateFlows(rows, { port = null, protocol = null } = {}) {
-  const byPort = new Map();
-  const byProtocol = new Map();
-  const byTalker = new Map();
-  const series = [];
-
-  const bump = (map, key, e) => {
-    const cur = map.get(key) || { bytes: 0, packets: 0, flows: 0 };
-    cur.bytes += Number(e.bytes) || 0;
-    cur.packets += Number(e.packets) || 0;
-    cur.flows += Number(e.flows) || 0;
-    map.set(key, cur);
-  };
-
-  for (const row of rows) {
-    const t = row.payload && row.payload.traffic;
-    if (!t || (!t.byPort && !t.byProtocol && !t.topTalkers)) continue;
-    let matchBytes = 0;
-    for (const e of t.byPort || []) {
-      if (port !== null && e.port !== port) continue;
-      bump(byPort, e.port, e);
-      if (port !== null) matchBytes += Number(e.bytes) || 0;
-    }
-    for (const e of t.byProtocol || []) {
-      if (protocol && String(e.protocol).toLowerCase() !== protocol) continue;
-      bump(byProtocol, e.protocol, e);
-      if (protocol && port === null) matchBytes += Number(e.bytes) || 0;
-    }
-    for (const e of t.topTalkers || []) bump(byTalker, e.pair, e);
-    const at = row.created_at instanceof Date ? row.created_at.toISOString() : row.created_at;
-    if (port !== null || protocol) series.push({ at, bytes: matchBytes });
-  }
-
-  const sortMap = (map, key) =>
-    Array.from(map.entries())
-      .map(([k, v]) => ({ [key]: k, ...v }))
-      .sort((a, b) => b.bytes - a.bytes);
-
-  return {
-    byPort: sortMap(byPort, 'port'),
-    byProtocol: sortMap(byProtocol, 'protocol'),
-    topTalkers: sortMap(byTalker, 'pair').slice(0, 50),
-    series: series.reverse(), // oldest first
-  };
-}
-
-// Agents router with role-based access control:
-//   - viewer+        may read         (GET)
-//   - operator/admin may edit metadata (PUT — server-managed fields only)
-//   - admin          may delete       (DELETE)
+// The privileged half of /agents: everything the server PUSHES down an agent's
+// socket — ping, diagnose, update, rekey, delete, install-tool, run-test,
+// probe, speedtest — plus the two endpoints that explain and repair the socket
+// itself (/connection, /reconnect).
 //
-// Agents are created via enrollment (prompt 4) — there is intentionally no
-// manual POST /agents here.
-function createAgentsRouter({ agentsRepo, locationsRepo, resultsRepo, agentCommander, agentSourceStore, releaseStore = null, releasePublicKey = '', releaseKeyService = null, licenseManager = null, publishRelease = null, auditRepo = null, auditEventsRepo = null, auditLogger = null, integrationTrigger = null, commandSigner = null, logger = silentLogger, reconnect = {} }) {
-  // How long POST /:id/reconnect waits for the agent to re-dial after the forced
-  // close (the agent's first backoff step is ~1 s), and how often it re-checks.
-  const reconnectWaitMs = Number.isInteger(reconnect.waitMs) ? reconnect.waitMs : 12000;
-  const reconnectPollMs = Number.isInteger(reconnect.pollMs) ? reconnect.pollMs : 250;
+// These are the routes that change a customer's host rather than read a row,
+// so they are the reason the audit helpers and the command signer exist.
+function createAgentCommandsRouter(ctx) {
   const router = express.Router();
+  const {
+    agentsRepo, agentCommander, agentSourceStore, releaseStore, releaseKeyService, releasePublicKey,
+    licenseManager, publishRelease, auditRepo, auditEventsRepo, auditLogger, logger,
+    reconnectWaitMs, reconnectPollMs,
+    signCommand, canSignCommands, invalidId, notFound, validationError,
+    recordRequested, recordSystemError, markFailed,
+  } = ctx;
 
-  // Signs a privileged command (upgrade/delete/install-tool) so the agent can
-  // verify the SERVER asked for it, not merely something holding its socket.
-  // A server without a managed signing key returns the command unchanged — the
-  // agent stays lenient by default, so nothing breaks. Must be called LAST, once
-  // auditId is attached: the audit id is part of what gets signed.
-  const signCommand = (agentId, command) => (commandSigner ? commandSigner.sign(agentId, command) : command);
-
-  // Response helpers for the error shapes repeated across this router.
-  const invalidId = (res) => res.status(400).json({ error: 'Invalid id' });
-  const notFound = (res) => res.status(404).json({ error: 'Agent not found' });
-  const validationError = (res, details) => res.status(400).json({ error: 'Validation failed', details });
-
-  // Audit helpers for server-initiated actions (upgrade/delete). Best-effort:
-  // auditing must never fail or block the action it records. record() returns the
-  // new row id (so the command can carry it for the agent to echo on completion);
-  // markFailed() flips it terminal when we already know it won't proceed.
-  async function recordRequested(action, agent, req, targetVersion = null) {
-    if (!auditRepo || typeof auditRepo.record !== 'function') return null;
-    try {
-      return await auditRepo.record({
-        agentId: agent.id,
-        agentHostname: agent.hostname || null,
-        locationId: agent.location_id ?? null,
-        actorUserId: (req.user && req.user.id) || null,
-        actorEmail: (req.user && req.user.email) || null,
-        actorRole: (req.user && req.user.role) || null,
-        action,
-        targetVersion,
-      });
-    } catch (err) {
-      // Best-effort audit: never block the action. But the FAILURE of an audit
-      // write belongs in the operational log (we can't audit the audit system),
-      // so it isn't lost silently. See docs/audit-vs-logging.md.
-      (req.log || logger).warn(`agents: audit record(${action}) for agent ${agent && agent.id} failed (${err.message})`);
-      return null;
-    }
-  }
-  // Records a server-side fault the operator will also SEE in the dashboard, so
-  // the log and the screen say the same thing. Best-effort and deduplicated — a
-  // fault that repeats every time Update is clicked leaves one annotated row, not
-  // a hundred.
-  async function recordSystemError(req, { action, targetType = null, targetId = null, targetLabel = null, detail = null }) {
-    if (!auditEventsRepo || typeof auditEventsRepo.recordRecurring !== 'function') return;
-    try {
-      const user = (req && req.user) || {};
-      await auditEventsRepo.recordRecurring({
-        actorType: 'system',
-        actorId: user.id ?? null,
-        actorLabel: user.email ?? null,
-        actorRole: user.role ?? null,
-        action,
-        targetType,
-        targetId: targetId == null ? null : String(targetId),
-        targetLabel,
-        detail,
-        dedupKey: `system:${action}:${targetType || '-'}:${targetId == null ? '-' : targetId}:${(detail && detail.reason) || '-'}`,
-      });
-    } catch (err) {
-      (req && req.log ? req.log : logger).warn(`agents: system-log record(${action}) failed (${err.message})`);
-    }
-  }
-
-  async function markFailed(auditId, resultDetail) {
-    if (!auditId || !auditRepo || typeof auditRepo.complete !== 'function') return;
-    try { await auditRepo.complete(auditId, { state: 'failed', resultDetail }); } catch (err) { logger.warn(`agents: audit complete(failed) for auditId ${auditId} failed (${err.message})`); }
-  }
-
-  // POST /agents/releases — upload a SIGNED agent release tarball (admin). The
-  // server VERIFIES the Ed25519 signature over the release manifest AND that the
-  // tarball's sha256 matches that (signed) manifest BEFORE storing it — so only
-  // authentic, untampered builds ever become available to push to agents. The
-  // tarball is the raw request body (application/octet-stream, so it bypasses the
-  // 1 MB JSON limit); the manifest + signature + version ride in headers:
-  //   X-Release-Version    e.g. 0.3.0
-  //   X-Release-Manifest   base64(JSON) of { version, sha256, size, ... } — the SIGNED bytes
-  //   X-Release-Signature  base64 Ed25519 signature over the canonical manifest
-  router.post(
-    '/releases',
-    requireAuth,
-    requireRole(ROLES.ADMIN),
-    express.raw({ type: 'application/octet-stream', limit: '64mb' }),
-    asyncHandler(async (req, res) => {
-      if (!releaseStore || typeof releaseStore.add !== 'function') {
-        return res.status(503).json({ error: 'Release store not available' });
-      }
-      // releasePublicKey may be a live resolver (managed key, changeable at runtime)
-      // or a plain string (tests / env key).
-      const releaseKey = (typeof releasePublicKey === 'function' ? releasePublicKey() : releasePublicKey) || '';
-      if (!releaseKey) {
-        return res.status(503).json({ error: 'Agent release public key not configured' });
-      }
-      const tarball = Buffer.isBuffer(req.body) ? req.body : null;
-      if (!tarball || tarball.length === 0) {
-        return res.status(400).json({ error: 'Empty body — POST the gzipped tarball as application/octet-stream' });
-      }
-      const version = String(req.get('X-Release-Version') || '').trim();
-      const signature = String(req.get('X-Release-Signature') || '').trim();
-      let manifest = null;
-      try {
-        manifest = JSON.parse(Buffer.from(String(req.get('X-Release-Manifest') || ''), 'base64').toString('utf8'));
-      } catch {
-        manifest = null;
-      }
-      if (!version || !signature || !manifest || typeof manifest !== 'object') {
-        return res.status(400).json({ error: 'Missing or invalid X-Release-Version / X-Release-Signature / X-Release-Manifest' });
-      }
-      if (manifest.version !== version) {
-        return res.status(400).json({ error: 'Manifest version does not match X-Release-Version' });
-      }
-      // 1) Authenticity: Ed25519 signature over the canonical manifest (reuses the
-      //    exact license-proof verifier — a different, release-only public key).
-      if (!verifyProof(manifest, signature, releaseKey)) {
-        return res.status(422).json({ error: 'Release signature did not verify' });
-      }
-      // 2) Integrity: the uploaded bytes must match the sha256 the signed manifest binds.
-      const sha256 = crypto.createHash('sha256').update(tarball).digest('hex');
-      if (manifest.sha256 !== sha256) {
-        return res.status(422).json({ error: 'Tarball sha256 does not match the signed manifest' });
-      }
-      if (Number.isInteger(manifest.size) && manifest.size !== tarball.length) {
-        return res.status(422).json({ error: 'Tarball size does not match the signed manifest' });
-      }
-      const uploadedBy = (req.user && (req.user.id || req.user.sub)) || null;
-      const meta = releaseStore.add({ version, buffer: tarball, sha256, size: tarball.length, signature, manifest, uploadedBy });
-      res.status(201).json({ version: meta.version, sha256: meta.sha256, size: meta.size, createdAt: meta.createdAt });
-    })
-  );
-
-  // POST /agents/:id/ping — liveness check: asks the connected agent to reply
-  // over the WebSocket and reports the round-trip time + the agent's live
-  // version/sources. viewer+ (no side effects). 409 if the agent isn't connected.
   router.post(
     '/:id/ping',
     requireAuth,
@@ -474,7 +295,7 @@ function createAgentsRouter({ agentsRepo, locationsRepo, resultsRepo, agentComma
         // Whether the command itself was signed with the key being replaced. An
         // agent that requires signed commands accepts nothing else, so the
         // dashboard has to be able to say why a rekey was refused.
-        signed: !!(commandSigner && typeof commandSigner.canSign === 'function' && commandSigner.canSign()),
+        signed: canSignCommands(),
         // Whether the vendor has authorised THIS key. An agent that has ever seen
         // a vendor authorisation accepts nothing else, so this is the difference
         // between a rekey that will land and one that will be refused.
@@ -721,173 +542,8 @@ function createAgentsRouter({ agentsRepo, locationsRepo, resultsRepo, agentComma
 
   // GET /agents — list, with the joined location name. Each agent carries the
   // latest hsflowd exporter status it reported (or null), for the dashboard.
-  router.get(
-    '/',
-    requireAuth,
-    requireRole(ROLES.VIEWER, ROLES.OPERATOR, ROLES.ADMIN),
-    asyncHandler(async (req, res) => {
-      const agents = await agentsRepo.findAll();
-      const getStatus = agentCommander && typeof agentCommander.getSflowStatus === 'function'
-        ? agentCommander.getSflowStatus
-        : () => null;
-      // Only attach hsflowd when the agent has actually reported a status, so
-      // the response shape is unchanged for the common (non-sflow) case.
-      res.json(agents.map((a) => {
-        const hs = getStatus(a.id);
-        return hs ? { ...a, hsflowd: hs } : a;
-      }));
-    })
-  );
-
-  // GET /agents/:id
-  router.get(
-    '/:id',
-    requireAuth,
-    requireRole(ROLES.VIEWER, ROLES.OPERATOR, ROLES.ADMIN),
-    asyncHandler(async (req, res) => {
-      const id = parseId(req.params.id);
-      if (id === null) return invalidId(res);
-      const agent = await agentsRepo.findById(id);
-      if (!agent) return notFound(res);
-      res.json(agent);
-    })
-  );
-
-  // GET /agents/:id/audit — the upgrade/delete action trail for one agent
-  // (requested -> completed/failed), newest first. admin only.
-  router.get(
-    '/:id/audit',
-    requireAuth,
-    requireRole(ROLES.ADMIN),
-    asyncHandler(async (req, res) => {
-      const id = parseId(req.params.id);
-      if (id === null) return invalidId(res);
-      if (!auditRepo || typeof auditRepo.findByAgent !== 'function') {
-        return res.status(503).json({ error: 'Audit log not available' });
-      }
-      const agent = await agentsRepo.findById(id);
-      if (!agent) return notFound(res);
-      res.json(await auditRepo.findByAgent(id, { limit: 100 }));
-    })
-  );
-
-  // GET /agents/:id/results — results reported by the agent. viewer+ (user RBAC).
-  // Optional time range: ?from=&to=&limit= (ISO dates; newest first).
-  router.get(
-    '/:id/results',
-    requireAuth,
-    requireRole(ROLES.VIEWER, ROLES.OPERATOR, ROLES.ADMIN),
-    asyncHandler(async (req, res) => {
-      const id = parseId(req.params.id);
-      if (id === null) return invalidId(res);
-      const { value: range, errors } = validateTimeRange(req.query);
-      if (errors) return validationError(res, errors);
-      const agent = await agentsRepo.findById(id);
-      if (!agent) return notFound(res);
-      res.json(await resultsRepo.findByAgentId(id, range));
-    })
-  );
-
-  // GET /agents/:id/flows?port=&protocol=&from=&to= — search NetFlow data the
-  // agent reported (only present when its source is 'netflow'). Aggregates the
-  // byPort / byProtocol entries across the matching measurements in the range,
-  // optionally filtered by a specific port and/or protocol. viewer+.
-  router.get(
-    '/:id/flows',
-    requireAuth,
-    requireRole(ROLES.VIEWER, ROLES.OPERATOR, ROLES.ADMIN),
-    asyncHandler(async (req, res) => {
-      const id = parseId(req.params.id);
-      if (id === null) return invalidId(res);
-      const { value: range, errors } = validateTimeRange(req.query);
-      if (errors) return validationError(res, errors);
-      // Optional filters.
-      let port = null;
-      if (req.query.port !== undefined && req.query.port !== '') {
-        if (!/^\d+$/.test(String(req.query.port))) {
-          return validationError(res, { port: 'port must be an integer' });
-        }
-        port = Number(req.query.port);
-      }
-      const protocol = req.query.protocol ? String(req.query.protocol).toLowerCase() : null;
-
-      const agent = await agentsRepo.findById(id);
-      if (!agent) return notFound(res);
-
-      const rows = await resultsRepo.findByAgentId(id, range);
-      res.json({
-        agentId: id,
-        filter: { port, protocol },
-        from: range.from ? range.from.toISOString() : null,
-        to: range.to ? range.to.toISOString() : null,
-        measurements: rows.length,
-        ...aggregateFlows(rows, { port, protocol }),
-      });
-    })
-  );
-
-  // PUT /agents/:id — updates ONLY the server-managed fields
-  // (display_name, location_id, notes, meta). operator or admin.
-  router.put(
-    '/:id',
-    requireAuth,
-    requireRole(ROLES.OPERATOR, ROLES.ADMIN),
-    asyncHandler(async (req, res) => {
-      const id = parseId(req.params.id);
-      if (id === null) return invalidId(res);
-
-      const { value, errors } = validateAgentManagedInput(req.body);
-      if (errors) return validationError(res, errors);
-
-      const existing = await agentsRepo.findById(id);
-      if (!existing) return notFound(res);
-
-      // Reject a location_id that doesn't reference an existing location, so
-      // the client gets a 400 rather than a foreign-key 500.
-      if (value.location_id !== null && !(await locationsRepo.findById(value.location_id))) {
-        return validationError(res, { location_id: 'location_id does not reference an existing location' });
-      }
-
-      const updated = await agentsRepo.updateManaged(id, value);
-      res.json(updated);
-    })
-  );
-
-  // DELETE /agents/:id — admin only. Force-removes the server-side record without
-  // coordinating with the agent (use POST /:id/delete for graceful removal).
-  router.delete(
-    '/:id',
-    requireAuth,
-    requireRole(ROLES.ADMIN),
-    asyncHandler(async (req, res) => {
-      const id = parseId(req.params.id);
-      if (id === null) return invalidId(res);
-      // Snapshot the agent before removal so the audit + integration event carry
-      // hostname/location (they survive after the row is gone).
-      const agent = await agentsRepo.findById(id);
-      if (!agent) return notFound(res);
-      // Audit 'requested' before the irreversible delete so the record exists even
-      // if the remove query fails. Completed immediately (synchronous operation).
-      const auditId = await recordRequested('force-delete', agent, req);
-      const removed = await agentsRepo.remove(id);
-      if (!removed) {
-        await markFailed(auditId, 'row already gone');
-        return notFound(res);
-      }
-      if (auditId && auditRepo && typeof auditRepo.complete === 'function') {
-        try { await auditRepo.complete(auditId, { state: 'completed', resultDetail: 'force-removed' }); } catch (err) { logger.warn(`agents: audit complete(force-delete) for ${id} failed (${err.message})`); }
-      }
-      // Outbound integrations: notify IPAM the agent is gone. Fire-and-forget; an
-      // integration NEVER blocks or fails the delete (deletion is one-way and
-      // gated by the connector's own allow-delete flag).
-      if (integrationTrigger && typeof integrationTrigger.emitAgentEvent === 'function') {
-        try { integrationTrigger.emitAgentEvent('delete', agent).catch(() => {}); } catch { /* best-effort */ }
-      }
-      res.status(204).end();
-    })
-  );
 
   return router;
 }
 
-module.exports = { createAgentsRouter, aggregateFlows };
+module.exports = { createAgentCommandsRouter };

@@ -120,6 +120,18 @@ function attachAgentWebSocket({
     // theirs. Truly unknown paths are rejected by a fallback in server.js.
     if (pathnameOf(req) !== path) return;
 
+    // Token verification is a DATABASE round-trip, so this socket sits here
+    // unadopted for milliseconds with no 'error' listener of its own — and a
+    // raw socket that errors with no listener raises an uncaught exception.
+    // An agent on a flaky link resetting mid-handshake is the ordinary case,
+    // not a hostile one. Attach before the await, and hand off to ws (which
+    // installs its own handlers) on a successful upgrade.
+    const onEarlyError = (err) => {
+      logger.warn(`Agent WS socket error during handshake: ${err && err.message}`);
+      socket.destroy();
+    };
+    socket.on('error', onEarlyError);
+
     authenticator
       .verifyToken(extractToken(req))
       .then((agent) => {
@@ -137,6 +149,7 @@ function attachAgentWebSocket({
           logger.warn('Rejected agent connection: license invalid or agent limit reached.');
           return;
         }
+        socket.removeListener('error', onEarlyError);
         wss.handleUpgrade(req, socket, head, (ws) => {
           wss.emit('connection', ws, req, agent);
         });

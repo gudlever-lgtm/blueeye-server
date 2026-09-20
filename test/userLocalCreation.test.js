@@ -165,3 +165,61 @@ test('POST /users/:id/resend-temp-password returns 403 when SSO/LDAP is active',
     .send({});
   assert.equal(res.status, 403);
 });
+
+// --------------------------------------------- the guard must fail CLOSED
+//
+// ssoOrLdapActive() is what stops a customer on SSO from having local
+// password accounts created behind their directory. It used to swallow an
+// error from any provider check and answer "no SSO here", which re-enabled the
+// bypass precisely on the install where something was already broken — and
+// said nothing anywhere. These pin the closed behaviour.
+
+test('a provider whose isEnabled() throws refuses local creation instead of allowing it', async () => {
+  const usersRepo = makeUsersRepo({ findByEmail: async () => null });
+  const ldapAuth = makeLdapAuth({ isEnabled: async () => { throw new Error('directory unreachable'); } });
+
+  const res = await request(makeApp({ usersRepo, userMailer: makeUserMailer(), ldapAuth }))
+    .post('/users/local')
+    .set('Authorization', admin())
+    .send({ email: 'sneaky@acme.dk', name: 'Ada', role: 'admin' });
+
+  assert.equal(res.status, 403, 'an unanswerable SSO check must never open local creation');
+  assert.match(res.body.error, /could not determine whether LDAP\/AD sign-in is active/);
+  // And it says what to do about it rather than just refusing.
+  assert.match(res.body.error, /Fix the LDAP\/AD configuration/);
+});
+
+test('resend-temp-password is closed by the same indeterminate check', async () => {
+  const usersRepo = makeUsersRepo({ findById: async () => ({ id: 3, email: 'a@b.dk', role: 'viewer' }) });
+  const oidcAuth = makeOidcAuth({ isEnabled: () => { throw new Error('discovery failed'); } });
+
+  const res = await request(makeApp({ usersRepo, userMailer: makeUserMailer(), oidcAuth }))
+    .post('/users/3/resend-temp-password')
+    .set('Authorization', admin());
+
+  assert.equal(res.status, 403);
+  assert.match(res.body.error, /could not determine whether OIDC sign-in is active/);
+});
+
+test('/users/local-availability reports WHICH method blocks it, and when it could not tell', async () => {
+  const usersRepo = makeUsersRepo();
+
+  const broken = await request(makeApp({ usersRepo, userMailer: makeUserMailer(), ldapAuth: makeLdapAuth({ isEnabled: async () => { throw new Error('boom'); } }) }))
+    .get('/users/local-availability').set('Authorization', admin());
+  assert.equal(broken.status, 200);
+  assert.equal(broken.body.available, false);
+  assert.equal(broken.body.ssoActive, true);
+  assert.equal(broken.body.ssoMethod, 'LDAP/AD');
+  assert.equal(broken.body.ssoIndeterminate, true, 'the UI must be able to tell "blocked" from "unknown"');
+
+  const live = await request(makeApp({ usersRepo, userMailer: makeUserMailer(), ldapAuth: makeLdapAuth({ isEnabled: async () => true }) }))
+    .get('/users/local-availability').set('Authorization', admin());
+  assert.equal(live.body.ssoActive, true);
+  assert.equal(live.body.ssoMethod, 'LDAP/AD');
+  assert.equal(live.body.ssoIndeterminate, false, 'a genuine "SSO is on" is not indeterminate');
+
+  const none = await request(makeApp({ usersRepo, userMailer: makeUserMailer() }))
+    .get('/users/local-availability').set('Authorization', admin());
+  assert.equal(none.body.ssoActive, false);
+  assert.equal(none.body.available, true, 'an install with no SSO wired is unaffected');
+});

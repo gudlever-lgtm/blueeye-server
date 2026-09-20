@@ -327,7 +327,13 @@ test('no private keys or vendor tokens are committed in tracked source', () => {
   for (const f of files) {
     if (!/\.(js|json|sql|md|sh|ps1|yml|yaml|env|example|txt)$/.test(f) && !path.basename(f).startsWith('.env')) continue;
     if (/vector\.json$/.test(f) || /^(test|test-support)\//.test(f)) continue; // test fixtures carry throwaway keys
-    const text = fs.readFileSync(path.join(ROOT, f), 'utf8');
+    // `git ls-files` lists what is TRACKED, which during a rename or a delete
+    // includes files no longer on disk. Reading one threw ENOENT and failed the
+    // whole sweep with a stack trace instead of a finding — a scan that cannot
+    // survive a half-finished refactor is a scan people learn to ignore.
+    const full = path.join(ROOT, f);
+    if (!fs.existsSync(full)) continue;
+    const text = fs.readFileSync(full, 'utf8');
     if (/-----BEGIN (RSA |EC |OPENSSH |ENCRYPTED )?PRIVATE KEY-----/.test(text)) offenders.push(`${f}: private key`);
     if (/(ghp|github_pat)_[A-Za-z0-9_]{20,}/.test(text)) offenders.push(`${f}: GitHub token`);
     if (/AKIA[0-9A-Z]{16}/.test(text)) offenders.push(`${f}: AWS key`);
@@ -347,4 +353,35 @@ test('.env.example carries placeholders only, and .env is git-ignored', () => {
     const value = l.split('=').slice(1).join('=').trim();
     assert.ok(value === '' || /change|example|placeholder|your|xxx|<|>/i.test(value), `.env.example ships a real-looking value: ${l}`);
   }
+});
+
+// A raw control byte in source is never intentional, and it is not cosmetic: a
+// NUL makes grep/rg/diff treat the file as BINARY and skip it silently, so the
+// file drops out of every text sweep — including the ones in this very suite
+// that walk tracked source. It is also fragile, because the byte survives only
+// as long as nothing reformats the file: an editor or a lint autofix that
+// normalises it changes whatever the byte was load-bearing for. Write the
+// escape (`\0`, `\t`, …) instead — it compiles to the same character and stays
+// visible to every tool. Tab and the two newline bytes are ordinary whitespace.
+test('no tracked source file contains a raw control byte (NUL, ESC, vertical tab, …)', () => {
+  let files;
+  try { files = execSync('git ls-files', { cwd: ROOT, encoding: 'utf8' }).split('\n').filter(Boolean); } catch { return; }
+  const offenders = [];
+  for (const f of files) {
+    if (!/\.(js|json|css|html|sql|md|sh|ps1|yml|yaml)$/.test(f)) continue;
+    // Same reason as the secret scan above: tracked, but possibly deleted.
+    const full = path.join(ROOT, f);
+    if (!fs.existsSync(full)) continue;
+    const buf = fs.readFileSync(full);
+    for (let i = 0; i < buf.length; i += 1) {
+      const b = buf[i];
+      // Allow \t (9), \n (10), \r (13); everything else below 0x20, plus DEL.
+      if ((b < 0x20 && b !== 9 && b !== 10 && b !== 13) || b === 0x7f) {
+        const line = buf.slice(0, i).toString('utf8').split('\n').length;
+        offenders.push(`${f}:${line} contains 0x${b.toString(16).padStart(2, '0')}`);
+        break; // one report per file is enough to fix it
+      }
+    }
+  }
+  assert.deepEqual(offenders, []);
 });

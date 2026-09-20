@@ -80,6 +80,26 @@ function screenWebhook(webhook = {}) {
   });
 }
 
+function screenMatrix(matrix = {}) {
+  const homeserver = matrix.homeserver || '';
+  // Plaintext HTTP to a homeserver is worse than for a webhook: the request
+  // carries a bearer access token for the bot account, so anyone on the path
+  // gets the ability to post into the room (and read it, with that token).
+  const security = [transportCheck(homeserver, { plaintext: 'bad' })];
+  if (homeserver) {
+    security.push(matrix.accessTokenSet
+      ? check('auth', 'Access token', 'ok', 'An access token is set — the bot can post to the room.')
+      : check('auth', 'Access token', 'bad', 'No access token — the homeserver will refuse every alert.'));
+    security.push(matrix.roomId
+      ? check('room', 'Room', 'ok', `Alerts are posted to ${matrix.roomId}.`)
+      : check('room', 'Room', 'warn', 'No room configured.'));
+  }
+  return entry('Matrix', {
+    detail: homeserver ? `${hostOf(homeserver)}${matrix.roomId ? ` → ${matrix.roomId}` : ''}` : 'not configured',
+    configured: Boolean(homeserver && matrix.roomId), enabled: Boolean(matrix.enabled), security,
+  });
+}
+
 function screenSyslog(syslog = {}) {
   const host = syslog.host || '';
   const proto = (syslog.proto || 'udp').toLowerCase();
@@ -255,7 +275,7 @@ function screenLicense(status = {}) {
 
 module.exports = {
   rollup, worse, isHttps, isHttp, hostOf,
-  screenEmail, screenWebhook, screenSyslog,
+  screenEmail, screenWebhook, screenMatrix, screenSyslog,
   screenIntegration,
   screenCmdb,
   screenLdap, screenOidc, screenSaml,

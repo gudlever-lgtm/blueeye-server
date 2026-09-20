@@ -638,6 +638,36 @@ overview it is about to draw.
 the region rectangle and the traceroute path layer, plus `pathGeoStops` /
 `renderPathStops`, which the Probes traceroute map shares.
 
+### Screens that own a timer or a map declare it
+
+A screen with a poller or a Leaflet instance has to give it back when the reader
+leaves, or it keeps fetching from a page nobody is looking at — invisible until
+somebody reads the request log.
+
+`render()` used to do that with nine hand-written lines, each of the shape
+`if (currentView !== 'x') stopX();`. Two things were wrong with it: a new screen
+had to remember to add a line, and nothing checked that the view name in the
+condition matched the `stopX()` beside it. A typo released the resource on every
+render, including on the screen that was meant to keep it.
+
+It is one table now — `VIEW_RESOURCES` in `public/app.js`:
+
+```js
+const VIEW_RESOURCES = [
+  { view: 'overview', stop: () => stopOverview() },
+  …
+  { view: null, stop: () => stopTrafficMaps() },  // nobody keeps it
+];
+```
+
+`releaseViewResources(currentView)` releases everything the current screen is
+not named against, and a teardown that throws is logged rather than allowed to
+skip the ones after it — one broken screen must not leak every other screen's
+timers behind it.
+
+Two gate tests hold it up: every `function stopX()` in `app.js` must appear in
+the table, and every view the table names must be a real screen.
+
 
 **Topology delta** carried three rows of controls: change-type chips, a
 site/severity bar, and a third row of removable chips repeating what the second

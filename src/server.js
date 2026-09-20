@@ -3,6 +3,7 @@
 const path = require('path');
 const { config } = require('./config');
 const { createLogger, createLogRing } = require('./logger');
+const { installCrashGuards } = require('./lib/crashGuard');
 const { createRateLimiter } = require('./middleware/rateLimit');
 const { createRevocationRegistry } = require('./auth/revocation');
 const { setRevocationCheck, requireAuth, requireRole } = require('./auth/middleware');
@@ -114,6 +115,7 @@ const { createEmailChannel, createSmtpTransport } = require('./analysis/alerting
 const { createUserMailer } = require('./services/userMailer');
 const { createWebhookChannel } = require('./analysis/alerting/channels/webhook');
 const { createSyslogChannel } = require('./analysis/alerting/channels/syslog');
+const { createMatrixChannel } = require('./analysis/alerting/channels/matrix');
 const { loadRetentionConfig } = require('./analysis/retention/config');
 const { createRetentionRepo } = require('./analysis/retention/repo');
 const { createRollup } = require('./analysis/retention/rollup');
@@ -682,6 +684,8 @@ function start() {
       email: createEmailChannel({ config: alertingConfig.channels.email, createTransport: (smtp) => createSmtpTransport(smtp, logger), logger }),
       webhook: createWebhookChannel({ config: alertingConfig.channels.webhook, logger }),
       syslog: createSyslogChannel({ config: alertingConfig.channels.syslog, logger }),
+      // A room on the customer's own homeserver — see channels/matrix.js.
+      matrix: createMatrixChannel({ config: alertingConfig.channels.matrix, logger }),
     },
     // Alerting dispatches if the license includes the legacy `alerting` module
     // OR the plan grants an alert channel feature (so plan-based Professional+
@@ -689,12 +693,14 @@ function start() {
     licensed: () =>
       featureGate.isFeatureEnabled('alerting') ||
       featureGate.isFeatureEnabled('alerts_email') ||
-      featureGate.isFeatureEnabled('alerts_webhook'),
+      featureGate.isFeatureEnabled('alerts_webhook') ||
+      featureGate.isFeatureEnabled('alerts_matrix'),
     // Per-channel gate: email/webhook honour their plan feature keys, falling
     // back to the legacy `alerting` entitlement; syslog stays under `alerting`.
     channelLicensed: (name) => {
       if (name === 'email') return featureGate.isFeatureEnabled('alerts_email') || featureGate.isFeatureEnabled('alerting');
       if (name === 'webhook') return featureGate.isFeatureEnabled('alerts_webhook') || featureGate.isFeatureEnabled('alerting');
+      if (name === 'matrix') return featureGate.isFeatureEnabled('alerts_matrix') || featureGate.isFeatureEnabled('alerting');
       return featureGate.isFeatureEnabled('alerting');
     },
     alertLog: alertDispatchLogRepo,
@@ -1225,8 +1231,15 @@ function start() {
   // recompute and event auto-resolve.
   startBackgroundJobs();
 
-  function shutdown(signal) {
-    logger.info(`Received ${signal}, shutting down gracefully...`);
+  // Stops everything this process owns and resolves once the HTTP server has
+  // drained and both pools are closed. It deliberately does NOT call
+  // process.exit: the two callers want different exit codes (a signal is a
+  // clean 0, an uncaught exception is a 1), and the crash guard below needs to
+  // reuse this without inheriting a hard-coded success.
+  let teardownStarted = false;
+  function teardown() {
+    if (teardownStarted) return Promise.resolve();
+    teardownStarted = true;
     licenseManager.stop();
     // Stops the singleton background jobs.
     stopBackgroundJobs();
@@ -1234,27 +1247,41 @@ function start() {
     revocationRegistry.stop();
     agentWs.close();
     dashboardWs.close();
-    server.close(async () => {
-      try {
-        await db.close();
-      } catch (err) {
-        logger.error('Error while closing the database pool:', err);
-      }
-      if (tsdb) {
+    return new Promise((resolve) => {
+      server.close(async () => {
         try {
-          await tsdb.close();
+          await db.close();
         } catch (err) {
-          logger.error('Error while closing the TSDB pool:', err);
+          logger.error('Error while closing the database pool:', err);
         }
-      }
-      process.exit(0);
+        if (tsdb) {
+          try {
+            await tsdb.close();
+          } catch (err) {
+            logger.error('Error while closing the TSDB pool:', err);
+          }
+        }
+        resolve();
+      });
     });
+  }
+
+  function shutdown(signal) {
+    logger.info(`Received ${signal}, shutting down gracefully...`);
+    teardown().then(() => process.exit(0));
     // Don't hang forever if connections refuse to drain.
     setTimeout(() => process.exit(1), 10000).unref();
   }
 
   process.on('SIGTERM', () => shutdown('SIGTERM'));
   process.on('SIGINT', () => shutdown('SIGINT'));
+
+  // Last-resort guards, installed AFTER everything above so the fatal path has
+  // a real teardown to run. An unhandled rejection is logged and survived (this
+  // server is full of deliberately best-effort promises); an uncaught exception
+  // drains and exits non-zero so the supervisor restarts us clean. See
+  // src/lib/crashGuard.js for why the two are treated differently.
+  installCrashGuards({ logger, onFatal: teardown });
 
   return server;
 }

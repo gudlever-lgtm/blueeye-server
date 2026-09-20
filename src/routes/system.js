@@ -120,6 +120,23 @@ function createSystemRouter({
         agentReleaseVersion: rel && rel.version ? rel.version : null,
         canSignReleases: canSignReleases(),
         agentKeyConfigured: keyConfigured(),
+        // Whether the VENDOR has authorised the key this server holds. An agent
+        // that has been through the trust chain accepts nothing else, so a key
+        // that is only "generated here" is a key the fleet will refuse — and
+        // that difference has to be visible before an operator clicks Re-pin.
+        // 'authorized' | 'pending' | null (nothing presented yet, or a signer
+        // too old to answer).
+        vendorKeyStatus: licenseManager && typeof licenseManager.getReleaseKeyStatus === 'function'
+          ? licenseManager.getReleaseKeyStatus() : null,
+        // The fingerprint the vendor authorised, so the dashboard can show the
+        // operator what to read back to the vendor when approving a rotation.
+        vendorAuthorizedFingerprint: (() => {
+          const proof = licenseManager && typeof licenseManager.getTrustProof === 'function'
+            ? licenseManager.getTrustProof() : null;
+          const key = proof && proof.payload && proof.payload.trust
+            && proof.payload.trust.server && proof.payload.trust.server.release_key;
+          return key && key.fingerprint ? key.fingerprint : null;
+        })(),
         // False when the server can sign but has no AGENT_RELEASE_DIR to store the
         // result — publishing would fail, so the UI shows the config fix instead.
         releaseStoreReady: releaseStoreReady(),

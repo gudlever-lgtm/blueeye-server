@@ -170,12 +170,12 @@
         children: [ui.dataTable({
           dense: state.dense,
           columns: [
-            { key: 'time', label: t('uip.col.time'), width: '136px', sortable: true, time: true },
-            { key: 'severity', label: t('uip.col.severity'), width: '108px', sortable: true },
-            { key: 'type', label: t('uip.col.type'), width: '150px', sortable: true },
-            { key: 'title', label: t('uip.col.title'), sortable: true },
-            { key: 'host', label: t('uip.col.host'), width: '172px', sortable: true },
-            { key: 'count', label: t('uip.col.count'), width: '122px', sortable: true, num: true },
+            { key: 'time', label: t('ks.col.time'), width: '136px', sortable: true, time: true },
+            { key: 'severity', label: t('ks.col.severity'), width: '108px', sortable: true },
+            { key: 'type', label: t('ks.col.type'), width: '150px', sortable: true },
+            { key: 'title', label: t('ks.col.title'), sortable: true },
+            { key: 'host', label: t('ks.col.host'), width: '172px', sortable: true },
+            { key: 'count', label: t('ks.col.count'), width: '122px', sortable: true, num: true },
             { key: 'actions', label: '', width: '104px' },
           ],
           rows: rows,
@@ -184,10 +184,10 @@
           onOpen: function (row, tr) { openDemoDrawer(ROWS[row.id] || ROWS[0], tr); },
         })],
         foot: [
-          el('span', {}, t('uip.showing', { shown: rows.length, total: rows.length })),
+          el('span', {}, t('ks.showing', { shown: rows.length, total: rows.length })),
           el('div', { class: 'foot-right' },
-            ui.button('secondary', '‹ ' + t('uip.prev'), { disabled: true }),
-            ui.button('secondary', t('uip.next') + ' ›', { disabled: true })),
+            ui.button('secondary', '‹ ' + t('ks.prev'), { disabled: true }),
+            ui.button('secondary', t('ks.next') + ' ›', { disabled: true })),
         ],
       });
     }
@@ -199,16 +199,16 @@
         meta: '12/09/2026, 14:02:33',
         row: tr,
         sections: [
-          ui.drawerSection(t('uip.drawer.what'), el('p', {}, t('ks.drawer.what'))),
-          ui.drawerSection(t('uip.drawer.why'), el('p', {}, t('ks.drawer.why'))),
-          ui.drawerSection(t('uip.drawer.detail'), ui.keyValues([
+          ui.drawerSection(t('ks.drawer.what'), el('p', {}, t('ks.drawer.what'))),
+          ui.drawerSection(t('ks.drawer.why'), el('p', {}, t('ks.drawer.why'))),
+          ui.drawerSection(t('ks.drawer.detail'), ui.keyValues([
             ['Baseline', '18.2 ms'], ['MAD', '6.7 ms'], ['Measured', '61.3 ms'],
             ['z-score', '6.4'], ['Rule', 'latency.median · crit ≥ 5.0'],
           ])),
-          ui.drawerSection(t('uip.drawer.history'), ui.history([
-            ['12/09, 14:02', t('uip.drawer.first')],
+          ui.drawerSection(t('ks.drawer.history'), ui.history([
+            ['12/09, 14:02', t('ks.drawer.first')],
             ['12/09, 14:06', t('ks.drawer.rose')],
-            [null, t('uip.drawer.seen', { count: 135 })],
+            [null, t('ks.drawer.seen', { count: 135 })],
           ])),
         ],
         footer: ui.drawerFooter(

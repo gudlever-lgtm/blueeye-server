@@ -216,7 +216,11 @@ test('the speed-test dialog can put the same test on a schedule', async (t) => {
   const { doc } = await boot(t, { app: appWith({ packages }) });
   doc.querySelector('.tabs button[data-view="agents"]').click();
   await tick(300);
-  const speedBtn = byText(doc, 'button', /^Speed$/);
+  // The speed test is a ⋯ menu entry now, with the other per-agent checks
+  // (see public/views/agents.js).
+  doc.querySelector('#view .row-act [aria-haspopup="menu"]')
+    .dispatchEvent(new doc.defaultView.Event('click', { bubbles: true }));
+  const speedBtn = byText(doc, '.ui-rowmenu button', /^Speed test$/);
   assert.ok(speedBtn, 'no speed-test entry on the agents page');
   speedBtn.click();
   await tick(300);

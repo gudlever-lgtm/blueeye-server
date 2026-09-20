@@ -94,9 +94,14 @@ const toastText = (doc) => (doc.querySelector('#toast') || {}).textContent || ''
 async function clickUpdate(doc) {
   doc.querySelector('.tabs button[data-view="agents"]').click();
   await tick(350);
-  const btn = [...doc.querySelectorAll('#view button')].find((b) => /^Update$/.test(b.textContent.trim()));
-  assert.ok(btn, 'the agents row has no Update button');
-  btn.click();
+  // Update is a ⋯ menu entry now, with the other actions that change the agent
+  // (see public/views/agents.js) — it used to be one of nine buttons in the row.
+  const more = doc.querySelector('#view .row-act [aria-haspopup="menu"]');
+  assert.ok(more, 'the agents row has no ⋯ menu');
+  more.dispatchEvent(new doc.defaultView.Event('click', { bubbles: true }));
+  const item = [...doc.querySelectorAll('.ui-rowmenu button')].find((b) => /^Update to v/.test(b.textContent.trim()));
+  assert.ok(item, `no Update entry — found: ${[...doc.querySelectorAll('.ui-rowmenu button')].map((b) => b.textContent).join(' | ')}`);
+  item.click();
   await tick(350);
 }
 

@@ -93,14 +93,18 @@ function withFixture(files, fn) {
   }
 }
 
+// The rules are what these tests are about, not the file they fire on — the
+// fixture just needs a name ui-check actually scans, which means one in
+// MIGRATED. It used to be uiPreview.js, which was deleted with the preview
+// routes in phase 4.
 function fixtureFindings(body, extra = {}) {
-  return withFixture(Object.assign({ 'uiPreview.js': OK_VIEW + body }, extra), (dir) => run([], dir));
+  return withFixture(Object.assign({ 'views/changes.js': OK_VIEW + body }, extra), (dir) => run([], dir));
 }
 
 test('rule: inline style in a view is a finding', () => {
   const { code, out } = fixtureFindings("var n = el('div', { style: 'margin:8px' });");
   assert.equal(code, 1, out);
-  assert.match(out, /uiPreview\.js:\d+:inline-style/);
+  assert.match(out, /views\/changes\.js:\d+:inline-style/);
 });
 
 test('rule: a <col> width is NOT a finding — it is table geometry, not styling', () => {
@@ -110,9 +114,9 @@ test('rule: a <col> width is NOT a finding — it is table geometry, not styling
 
 test('rule: a colour literal in a view is a finding', () => {
   const { out } = fixtureFindings("var c = '#38bdf8';");
-  assert.match(out, /uiPreview\.js:\d+:colour/);
+  assert.match(out, /views\/changes\.js:\d+:colour/);
   const rgb = fixtureFindings("var c = 'rgba(0,0,0,.4)';");
-  assert.match(rgb.out, /uiPreview\.js:\d+:colour/);
+  assert.match(rgb.out, /views\/changes\.js:\d+:colour/);
 });
 
 test('rule: a colour inside a comment is not a finding — the rule may be explained', () => {
@@ -122,7 +126,7 @@ test('rule: a colour inside a comment is not a finding — the rule may be expla
 
 test('rule: a legacy class in a migrated view is a finding, and names its replacement', () => {
   const { out } = fixtureFindings("var n = el('div', { class: 'hero' });");
-  assert.match(out, /uiPreview\.js:\d+:legacy-class/);
+  assert.match(out, /views\/changes\.js:\d+:legacy-class/);
   assert.match(out, /PageHeader/);
 });
 
@@ -158,8 +162,8 @@ test('rule: one primary plus a secondary is fine', () => {
 });
 
 test('rule: a migrated view that uses none of the templates is a finding', () => {
-  const { out } = withFixture({ 'uiPreview.js': "var n = el('div', {});" }, (dir) => run([], dir));
-  assert.match(out, /uiPreview\.js:1:template/);
+  const { out } = withFixture({ 'views/changes.js': "var n = el('div', {});" }, (dir) => run([], dir));
+  assert.match(out, /views\/changes\.js:1:template/);
   assert.match(out, /ui\.page\(/);
 });
 

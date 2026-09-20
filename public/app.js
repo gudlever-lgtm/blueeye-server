@@ -1341,6 +1341,7 @@ const CONTRACT_VIEWS = new Map([
   ['delta', 'topologyDelta'],
   ['investigation', 'investigate'],
   ['diagnose', 'diagnose'],
+  ['deviceLog', 'deviceLog'],
   ['troubleshooting', 'troubleshooting'],
   ['topology', 'topology'],
   ['flows', 'flows'],
@@ -6720,6 +6721,56 @@ function getDiagnoseView() {
 views.diagnose = async () => {
   const v = getDiagnoseView();
   if (!v) return el('div', { class: 'empty error' }, t('diag.err.ask'));
+  return v.view();
+};
+
+PAGE_INFO.deviceLog = {
+  get hero() { return t('devlog.info.hero'); },
+  get title() { return t('devlog.info.title'); },
+  body: () => [
+    el('p', {}, t('devlog.info.p1')),
+    el('p', {}, t('devlog.info.p2')),
+    el('p', { class: 'muted' }, t('devlog.info.p3')),
+  ],
+};
+
+// ---- Device log (MIGRATED — see public/views/deviceLog.js) ------------------
+//
+// The filter survives a view switch: somebody who narrowed to "critical, last
+// 15 minutes, Gi0/1" and stepped away to read a finding must come back to the
+// list they built, not to the default.
+let deviceLogState = null;
+let deviceLogView = null;
+
+function getDeviceLogView() {
+  if (deviceLogView) return deviceLogView;
+  if (typeof window === 'undefined' || !window.DeviceLogView || !ui) return null;
+  if (!deviceLogState) deviceLogState = {};
+  deviceLogView = window.DeviceLogView.create({
+    el, t, ui, errText,
+    state: deviceLogState,
+    help: () => {
+      const info = PAGE_INFO.deviceLog || {};
+      return { lead: info.hero || '', title: info.title || t('devlog.title'), body: info.body || (() => []) };
+    },
+    fetchEvents: async (f) => {
+      const qs = new URLSearchParams();
+      if (f.minutes != null) qs.set('minutes', String(f.minutes));
+      if (f.maxSeverity != null) qs.set('maxSeverity', String(f.maxSeverity));
+      if (f.eventType) qs.set('eventType', f.eventType);
+      if (f.transport) qs.set('transport', f.transport);
+      if (f.q) qs.set('q', f.q);
+      return api(`/api/device-events?${qs.toString()}`);
+    },
+    fetchCatalog: async () => api('/api/device-events/catalog'),
+    openTimeline: (deviceId) => openAgent(deviceId),
+  });
+  return deviceLogView;
+}
+
+views.deviceLog = async () => {
+  const v = getDeviceLogView();
+  if (!v) return el('div', { class: 'empty error' }, t('devlog.err.title'));
   return v.view();
 };
 

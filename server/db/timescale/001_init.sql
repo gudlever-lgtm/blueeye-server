@@ -257,11 +257,59 @@ CREATE INDEX IF NOT EXISTS idx_audit_actor     ON audit_events (actor_type, acto
 CREATE INDEX IF NOT EXISTS idx_audit_action    ON audit_events (action, ts DESC);
 CREATE INDEX IF NOT EXISTS idx_audit_dedup_key ON audit_events (dedup_key, ts DESC);
 
+-- ---------------------------------------------------------------------
+-- device_events  (MySQL `device_events`, migration 103; received_at -> ts)
+--   What the network equipment itself says: syslog now, SNMP traps next.
+--   HIGH volume and bursty — one switch in an STP loop out-writes the whole
+--   fleet's traffic sampling for as long as the loop lasts — so it is a
+--   hypertable with a 1-day chunk, sized for the device-log screen's default
+--   read (newest first, last 2 hours = one chunk).
+--
+--   NOTE the dedup_key index is NOT unique here, exactly as audit_events
+--   above: a UNIQUE constraint on a hypertable must include the partitioning
+--   column, and folding is a query-time and ingest-time concern, not a
+--   storage constraint. MySQL keeps the UNIQUE; TSDB groups on read.
+-- ---------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS device_events (
+  ts              TIMESTAMPTZ NOT NULL,
+  agent_id        INTEGER     NOT NULL,      -- the agent that RECEIVED it
+  device_id       INTEGER,                   -- the sender, once resolved
+  source_ip       TEXT        NOT NULL,
+  device_time     TIMESTAMPTZ,               -- the device's own clock
+  clock_skew_ms   INTEGER,                   -- and how far off it is
+  transport       TEXT        NOT NULL DEFAULT 'syslog',  -- syslog | trap
+  facility        SMALLINT,
+  severity        SMALLINT    NOT NULL,      -- 0-7, syslog-numeric
+  event_type      TEXT        NOT NULL DEFAULT 'syslog.raw',
+  device_hostname TEXT,
+  tag             TEXT,
+  ifname          TEXT,
+  summary         TEXT        NOT NULL,
+  raw             TEXT,
+  detail          JSONB,
+  dedup_key       TEXT,
+  occurrences     INTEGER     NOT NULL DEFAULT 1
+);
+
+SELECT create_hypertable(
+  'device_events', 'ts',
+  chunk_time_interval => INTERVAL '1 day',
+  if_not_exists       => TRUE
+);
+
+CREATE INDEX IF NOT EXISTS idx_devevt_ts       ON device_events (ts DESC);
+CREATE INDEX IF NOT EXISTS idx_devevt_device   ON device_events (device_id, ts DESC);
+CREATE INDEX IF NOT EXISTS idx_devevt_type     ON device_events (event_type, ts DESC);
+CREATE INDEX IF NOT EXISTS idx_devevt_severity ON device_events (severity, ts DESC);
+CREATE INDEX IF NOT EXISTS idx_devevt_agent    ON device_events (agent_id, ts DESC);
+CREATE INDEX IF NOT EXISTS idx_devevt_dedup    ON device_events (dedup_key, ts DESC);
+
 -- =====================================================================
 -- 2. RETENTION POLICIES  (explicit windows; no defaults)
 --
 --   Raw flow_records, results ......... 30 days
 --   probe_results, speedtest_results .. 90 days
+--   device_events ..................... 30 days
 --   findings, events, audit_events . NO auto-drop (governance)
 --
 --   Ordering is safe: the continuous-aggregate policies below run hourly and
@@ -273,6 +321,10 @@ SELECT add_retention_policy('results',           INTERVAL '30 days', if_not_exis
 SELECT add_retention_policy('flow_records',       INTERVAL '30 days', if_not_exists => TRUE);
 SELECT add_retention_policy('probe_results',      INTERVAL '90 days', if_not_exists => TRUE);
 SELECT add_retention_policy('speedtest_results',  INTERVAL '90 days', if_not_exists => TRUE);
+-- device_events: 30 days. Long enough to explain an outage somebody is still
+-- writing the report for; short enough that a chatty fleet does not turn the
+-- device log into the largest thing on the disk.
+SELECT add_retention_policy('device_events',     INTERVAL '30 days', if_not_exists => TRUE);
 -- findings / events / audit_events: intentionally NO add_retention_policy.
 
 -- =====================================================================

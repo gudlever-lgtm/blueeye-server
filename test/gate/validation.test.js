@@ -48,6 +48,11 @@ const ACCEPTS_EMPTY = new Set([
   // the button did before it could select a subset. An empty body is the
   // normal case, not a mistake.
   'validateDiagnoseRun',
+  // The device log opens with no filter at all — "the last two hours, every
+  // device, every severity" — which is exactly what a technician wants before
+  // they know what they are looking for. Every field IS optional here; the
+  // dedicated rule below still pins each one's bounds.
+  'validateDeviceEventQuery',
 ]);
 
 test('every exported validator survives garbage input and rejects an empty object where it has required fields', () => {
@@ -77,6 +82,64 @@ test('every exported validator survives garbage input and rejects an empty objec
     }
   }
   assert.ok(checked >= 35, `only ${checked} validator functions found`);
+});
+
+test('deviceEventValidation: untrusted device input is bounded at the boundary', () => {
+  const {
+    validateDeviceEvent, validateDeviceEventBatch, validateDeviceEventQuery, MAX_EVENTS_PER_BATCH,
+  } = require('../../src/validation/deviceEventValidation');
+
+  // Every field in a device event originated on network equipment anyone on the
+  // customer's LAN can send UDP to. This is a real boundary, not a formality.
+  const ok = {
+    sourceIp: '10.14.0.11',
+    receivedAt: '2026-09-20T09:41:12.418Z',
+    severity: 2,
+    eventType: 'link.down',
+    summary: 'Interface Gi0/1 changed state to down',
+  };
+  assert.ok(validateDeviceEvent(ok), 'a well-formed event is accepted');
+
+  // A row missing what cannot be guessed is rejected outright.
+  assert.equal(validateDeviceEvent({ ...ok, sourceIp: undefined }), null);
+  assert.equal(validateDeviceEvent({ ...ok, sourceIp: 'sw-core-1' }), null, 'a hostname is not an IP');
+  assert.equal(validateDeviceEvent({ ...ok, receivedAt: 'yesterday' }), null);
+  assert.equal(validateDeviceEvent({ ...ok, severity: 9 }), null);
+  assert.equal(validateDeviceEvent({ ...ok, severity: '2' }), null, 'severity is never coerced');
+
+  // An unknown event_type SHAPE degrades to syslog.raw rather than failing the
+  // row: the line is still evidence.
+  assert.equal(validateDeviceEvent({ ...ok, eventType: 'NOT A TYPE' }).eventType, 'syslog.raw');
+  // But a well-formed type this server has never heard of is KEPT, because the
+  // agent ships the classifier and may be newer than the server.
+  assert.equal(validateDeviceEvent({ ...ok, eventType: 'future.thing' }).eventType, 'future.thing');
+
+  // Strings are bounded, so a device cannot write a megabyte into a column.
+  const huge = validateDeviceEvent({ ...ok, summary: 'x'.repeat(100_000), raw: 'y'.repeat(100_000) });
+  assert.ok(huge.summary.length <= 512);
+  assert.ok(huge.raw.length <= 2048);
+
+  // Clock skew is bounded, so a device claiming 1970 cannot overflow the column.
+  assert.equal(validateDeviceEvent({ ...ok, deviceTime: '1970-01-01T00:00:00Z' }).clockSkewMs, null);
+  assert.equal(
+    validateDeviceEvent({ ...ok, deviceTime: '2026-09-20T09:41:09.418Z' }).clockSkewMs,
+    3000,
+  );
+
+  // The batch is capped, and one bad row costs only itself.
+  assert.ok(rejected(validateDeviceEventBatch({}, {})));
+  assert.ok(rejected(validateDeviceEventBatch(new Array(MAX_EVENTS_PER_BATCH + 1).fill(ok), {})));
+  const mixed = validateDeviceEventBatch([ok, { junk: true }, ok], {});
+  assert.equal(mixed.events.length, 2);
+  assert.equal(mixed.skipped, 1);
+
+  // The read query rejects out-of-range rather than silently clamping.
+  assert.ok(rejected(validateDeviceEventQuery({ minutes: 999_999 }, {})));
+  assert.ok(rejected(validateDeviceEventQuery({ limit: 0 }, {})));
+  assert.ok(rejected(validateDeviceEventQuery({ maxSeverity: 8 }, {})));
+  assert.ok(rejected(validateDeviceEventQuery({ transport: 'carrier-pigeon' }, {})));
+  assert.ok(rejected(validateDeviceEventQuery({ deviceId: 'all' }, {})));
+  assert.deepEqual(validateDeviceEventQuery({}, {}), { minutes: 120, limit: 100, offset: 0 });
 });
 
 test('every src/validation module is named in this suite', () => {

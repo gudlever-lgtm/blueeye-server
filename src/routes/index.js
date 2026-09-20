@@ -44,6 +44,7 @@ const { createDeviceConfigRouter } = require('./deviceConfig');
 const { createAskCache } = require('../eventCases/askCache');
 const { createThresholdsRouter } = require('./thresholds');
 const { createInterfacesRouter } = require('./interfaces');
+const { createDeviceEventsRouter } = require('./deviceEvents');
 const { createFleetRouter } = require('./fleet');
 const { createDashboardRouter } = require('./dashboard');
 const { createForecastRouter } = require('./forecast');
@@ -142,6 +143,8 @@ function createApiRouter({
   lldpNeighborsRepo,
   hostConnectionsRepo,
   arpEntriesRepo = null,
+  deviceEventsRepo = null,
+  deviceEventIngest = null,
   interfaceStatesRepo = null,
   interfaceStateService = null,
   serviceDependenciesRepo,
@@ -307,7 +310,7 @@ function createApiRouter({
   // Shared per-target timeline service (Phase 1 merge/fan-out) — powers both the
   // /api/targets timeline and the /api/findings/:id/context change-diff.
   const targetTimelineService = findingStore
-    ? createTargetTimelineService({ findingStore, probeOutagesRepo, auditEventsRepo, remediationPlaybooksRepo, topologyChangesRepo })
+    ? createTargetTimelineService({ findingStore, probeOutagesRepo, auditEventsRepo, remediationPlaybooksRepo, topologyChangesRepo, deviceEventsRepo })
     : null;
   if (findingStore) router.use('/api/findings', createFindingsRouter({ findingStore, timelineService: targetTimelineService }));
   if (assistant) router.use('/api/assistant', createAssistantRouter({ assistant, featureGate }));
@@ -399,6 +402,9 @@ function createApiRouter({
   if (configSnapshotsRepo) router.use('/api/devices', createDeviceConfigRouter({ configSnapshotsRepo, agentsRepo, auditLogger }));
   if (thresholdsRepo) router.use('/api/thresholds', createThresholdsRouter({ thresholdsRepo, locationsRepo }));
   router.use('/api/interfaces', createInterfacesRouter({ resultsRepo, agentsRepo }));
+  // The device log — what the network equipment itself said (syslog now, SNMP
+  // traps from stage 03). viewer+; owns no analysis, reads `device_events`.
+  if (deviceEventsRepo) router.use('/api/device-events', createDeviceEventsRouter({ deviceEventsRepo, agentsRepo, logger }));
   // Capacity/trend forecasting (robust Theil–Sen projection + days-to-capacity).
   router.use('/api/forecast', createForecastRouter());
   // Read-only baseline context for the dashboard's shared metric component.
@@ -422,6 +428,7 @@ function createApiRouter({
       remediationPlaybooksRepo,
       configSnapshotsRepo,
       interfaceStatesRepo,
+      deviceEventsRepo,
       // Service Assurance incidents — a registered web service that stopped
       // working, or a certificate running out. Gated on the licence at CALL
       // time, not at wiring time: the module's sweep runs regardless of plan,
@@ -626,7 +633,7 @@ function createApiRouter({
   // Unified audit log (license feature `audit_log`) + API tokens (`api_access`).
   if (auditLogRepo) router.use('/api/audit-log', createAuditLogRouter({ auditLogRepo, featureGate, planService }));
   if (apiTokensRepo) router.use('/api/api-tokens', createApiTokensRouter({ apiTokensRepo, featureGate, planService, auditLogger }));
-  router.use('/agents', createAgentReportsRouter({ agentAuth, resultsRepo, resultsTsdbRepo, agentsRepo, auditEventsRepo, analysisPipeline, flowPipeline, probeResultsRepo, probePipeline, probeOutageService, installToolService, lldpNeighborsRepo, topologyChangeService, hostConnectionsRepo, arpEntriesRepo, interfaceStateService, discoveredDevicesRepo, auditLogger, logger }));
+  router.use('/agents', createAgentReportsRouter({ agentAuth, resultsRepo, resultsTsdbRepo, agentsRepo, auditEventsRepo, analysisPipeline, flowPipeline, probeResultsRepo, probePipeline, probeOutageService, installToolService, lldpNeighborsRepo, topologyChangeService, hostConnectionsRepo, arpEntriesRepo, deviceEventIngest, interfaceStateService, discoveredDevicesRepo, auditLogger, logger }));
   router.use('/agents', createAgentEnrollRouter({ enrollmentStore, notifyDashboard, integrationTrigger: integrationsDispatcher, auditEventsRepo, settingsService, rateLimit: enrollRateLimiter }));
 
   return router;

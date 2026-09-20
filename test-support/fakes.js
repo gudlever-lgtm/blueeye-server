@@ -19,6 +19,7 @@ const { createPlanService } = require('../src/license/planService');
 const { createUsageService } = require('../src/services/usageService');
 const { createAuditLogger } = require('../src/services/complianceLogger');
 const { createInterfaceStateService } = require('../src/health/interfaceStateService');
+const { createDeviceEventIngest } = require('../src/devices/deviceEventIngest');
 const { createSnapshotService } = require('../src/evidence/snapshotService');
 const { createBlastRadiusService } = require('../src/topology/blastRadiusService');
 const { createTopologyChangeService } = require('../src/topology/topologyChangeService');
@@ -293,6 +294,148 @@ function makeArpEntriesRepo(overrides = {}) {
     purgeBefore: overrides.purgeBefore || (async (cutoff) => {
       const before = rows.length;
       for (let i = rows.length - 1; i >= 0; i -= 1) if (new Date(rows[i].last_seen) < cutoff) rows.splice(i, 1);
+      return before - rows.length;
+    }),
+  };
+}
+
+// A fake device-events repository (`device_events`, migration 103).
+//
+// In-memory, but it implements the FOLDING for real — a dedup_key collision
+// accumulates occurrences and moves received_at rather than adding a row —
+// because folding is the behaviour most likely to be got wrong, and a fake that
+// always inserts would let a broken dedup key pass every test.
+function makeDeviceEventsRepo(overrides = {}) {
+  const rows = [];
+  let seq = 0;
+  const iso = (v) => (v == null ? null : (v instanceof Date ? v.toISOString() : new Date(v).toISOString()));
+  const ms = (v) => (v == null ? 0 : new Date(v).getTime());
+  const mapOut = (r) => ({
+    id: r.id,
+    agentId: r.agent_id,
+    deviceId: r.device_id,
+    sourceIp: r.source_ip,
+    receivedAt: iso(r.received_at),
+    deviceTime: iso(r.device_time),
+    clockSkewMs: r.clock_skew_ms,
+    transport: r.transport,
+    facility: r.facility,
+    severity: r.severity,
+    eventType: r.event_type,
+    deviceHostname: r.device_hostname,
+    tag: r.tag,
+    ifname: r.ifname,
+    summary: r.summary,
+    raw: r.raw,
+    detail: r.detail,
+    occurrences: r.occurrences,
+  });
+
+  function match(r, f) {
+    if (f.maxSeverity != null && r.severity > f.maxSeverity) return false;
+    if (f.deviceId != null && r.device_id !== Number(f.deviceId)) return false;
+    if (f.agentId != null && r.agent_id !== Number(f.agentId)) return false;
+    if (f.transport && r.transport !== f.transport) return false;
+    if (f.eventType && r.event_type !== f.eventType) return false;
+    if (f.q) {
+      const q = String(f.q).toLowerCase();
+      const hay = [r.summary, r.device_hostname, r.ifname].filter(Boolean).join(' ').toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
+    return true;
+  }
+
+  return {
+    rows,
+    createMany: overrides.createMany || (async (agentId, events) => {
+      let inserted = 0;
+      let folded = 0;
+      for (const e of events || []) {
+        const existing = e.dedupKey ? rows.find((r) => r.dedup_key === e.dedupKey) : null;
+        if (existing) {
+          existing.occurrences += e.occurrences ?? 1;
+          if (ms(e.receivedAt) > ms(existing.received_at)) existing.received_at = e.receivedAt;
+          existing.device_time = e.deviceTime ?? null;
+          existing.clock_skew_ms = e.clockSkewMs ?? null;
+          folded += 1;
+          continue;
+        }
+        rows.push({
+          id: (seq += 1),
+          agent_id: Number(agentId),
+          device_id: e.deviceId ?? null,
+          source_ip: e.sourceIp,
+          received_at: e.receivedAt,
+          device_time: e.deviceTime ?? null,
+          clock_skew_ms: e.clockSkewMs ?? null,
+          transport: e.transport || 'syslog',
+          facility: e.facility ?? null,
+          severity: e.severity,
+          event_type: e.eventType,
+          device_hostname: e.deviceHostname ?? null,
+          tag: e.tag ?? null,
+          ifname: e.ifname ?? null,
+          summary: e.summary,
+          raw: e.raw ?? null,
+          detail: e.detail ?? null,
+          dedup_key: e.dedupKey ?? null,
+          occurrences: e.occurrences ?? 1,
+        });
+        inserted += 1;
+      }
+      return { inserted, folded };
+    }),
+    list: overrides.list || (async (f = {}) => {
+      const minutes = f.minutes ?? 120;
+      const cut = Date.now() - minutes * 60000;
+      return rows
+        .filter((r) => ms(r.received_at) >= cut && match(r, f))
+        .sort((a, b) => ms(b.received_at) - ms(a.received_at) || b.id - a.id)
+        .slice(f.offset ?? 0, (f.offset ?? 0) + (f.limit ?? 100))
+        .map(mapOut);
+    }),
+    severityCounts: overrides.severityCounts || (async (f = {}) => {
+      const minutes = f.minutes ?? 120;
+      const cut = Date.now() - minutes * 60000;
+      const by = new Map();
+      for (const r of rows) {
+        if (ms(r.received_at) < cut) continue;
+        if (f.deviceId != null && r.device_id !== Number(f.deviceId)) continue;
+        if (f.agentId != null && r.agent_id !== Number(f.agentId)) continue;
+        const cur = by.get(r.severity) || { severity: r.severity, rows: 0, occurrences: 0 };
+        cur.rows += 1;
+        cur.occurrences += r.occurrences;
+        by.set(r.severity, cur);
+      }
+      return [...by.values()].sort((a, b) => a.severity - b.severity);
+    }),
+    listForDevice: overrides.listForDevice || (async (deviceId, { from, to, limit = 200, newestFirst = true } = {}) => {
+      const out = rows
+        .filter((r) => r.device_id === Number(deviceId)
+          && (!from || ms(r.received_at) >= ms(from))
+          && (!to || ms(r.received_at) <= ms(to)))
+        .sort((a, b) => (newestFirst
+          ? ms(b.received_at) - ms(a.received_at)
+          : ms(a.received_at) - ms(b.received_at)))
+        .slice(0, limit);
+      return out.map(mapOut);
+    }),
+    listBetween: overrides.listBetween || (async ({ from, to, limit = 200, maxSeverity = null } = {}) => rows
+      .filter((r) => (!from || ms(r.received_at) >= ms(from))
+        && (!to || ms(r.received_at) <= ms(to))
+        && (maxSeverity == null || r.severity <= maxSeverity))
+      .sort((a, b) => ms(b.received_at) - ms(a.received_at))
+      .slice(0, limit)
+      .map(mapOut)),
+    findById: overrides.findById || (async (id) => {
+      const r = rows.find((x) => x.id === Number(id));
+      return r ? mapOut(r) : null;
+    }),
+    purgeBefore: overrides.purgeBefore || (async (cutoff) => {
+      const before = rows.length;
+      for (let i = rows.length - 1; i >= 0; i -= 1) {
+        if (ms(rows[i].received_at) < ms(cutoff)) rows.splice(i, 1);
+      }
       return before - rows.length;
     }),
   };
@@ -2544,6 +2687,13 @@ function makeApp(overrides = {}) {
   const serviceDependenciesRepo = overrides.serviceDependenciesRepo || makeServiceDependenciesRepo();
   const hostConnectionsRepo = overrides.hostConnectionsRepo || makeHostConnectionsRepo();
   const arpEntriesRepo = overrides.arpEntriesRepo === undefined ? makeArpEntriesRepo() : overrides.arpEntriesRepo;
+  const deviceEventsRepo = overrides.deviceEventsRepo === undefined ? makeDeviceEventsRepo() : overrides.deviceEventsRepo;
+  // The REAL ingest over the fake repositories, so sender resolution and the
+  // bucketed dedup key are exercised end-to-end rather than stubbed — they are
+  // the two things in this feature most worth testing.
+  const deviceEventIngest = overrides.deviceEventIngest === undefined
+    ? (deviceEventsRepo ? createDeviceEventIngest({ deviceEventsRepo, agentsRepo, arpEntriesRepo }) : null)
+    : overrides.deviceEventIngest;
   const interfaceStatesRepo = overrides.interfaceStatesRepo === undefined ? makeInterfaceStatesRepo() : overrides.interfaceStatesRepo;
   // The REAL service over the fake repo, so transition detection + flap collapse
   // are exercised end-to-end on results ingest rather than stubbed.
@@ -2611,6 +2761,8 @@ function makeApp(overrides = {}) {
     serviceDependenciesRepo,
     hostConnectionsRepo,
     arpEntriesRepo,
+    deviceEventsRepo,
+    deviceEventIngest,
     interfaceStatesRepo,
     interfaceStateService,
     serviceDependencyJob: overrides.serviceDependencyJob || null,
@@ -2767,6 +2919,7 @@ module.exports = {
   makeFlowPairBaselinesRepo,
   makeDiscoveredDevicesRepo,
   makeArpEntriesRepo,
+  makeDeviceEventsRepo,
   makeInterfaceStatesRepo,
   makeAlertDispatchLogRepo,
   makeEvidenceSnapshotsRepo,

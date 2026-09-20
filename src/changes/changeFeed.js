@@ -385,6 +385,32 @@ function fromConfigSnapshots(rows, { nameFor = (id) => `device ${id}` } = {}) {
   });
 }
 
+// What the network equipment itself said (device_events, migration 103).
+//
+// Only warning and above reaches this feed. The landing page answers "what
+// changed since I last looked", and a fleet of switches emits thousands of
+// notice-level lines an hour — every one of them true, none of them a change
+// anybody needs to be shown first. The full log lives on its own screen; the
+// severity gate is applied by the caller so this mapper stays a pure map.
+function fromDeviceEvents(rows, { nameFor = (id) => `device ${id}`, severityBand = null } = {}) {
+  return (rows || []).map((e) => {
+    const deviceId = e.deviceId != null ? Number(e.deviceId) : null;
+    const who = deviceId == null ? (e.deviceHostname || e.sourceIp) : nameFor(deviceId);
+    const times = e.occurrences > 1 ? ` (x${e.occurrences})` : '';
+    const iface = e.ifname ? ` ${e.ifname}` : '';
+    return makeEvent({
+      timestamp: e.receivedAt,
+      source: 'device',
+      type: e.eventType || 'syslog.raw',
+      severity: typeof severityBand === 'function' ? severityBand(e.severity) : 'INFO',
+      summary: `${who}${iface}: ${e.summary}${times}`,
+      refId: e.id,
+      agentId: deviceId,
+      kind: 'device_event',
+    });
+  });
+}
+
 // --- current-state rows ------------------------------------------------------
 // These are NOT transitions. Neither agent version nor heartbeat is
 // transition-logged (see docs/changes-feed.md), so we can report the condition
@@ -545,7 +571,10 @@ function correlationKey(e) {
 // summary. Everything else (a config capture, a topology change, a playbook run)
 // is a distinct artifact each time it happens and is never folded — you would be
 // hiding three separate pushes behind one row.
-const COLLAPSIBLE_KINDS = new Set(['event', 'finding', 'probe', 'interface_state', 'agent_state', 'service_assurance']);
+// device_event folds for the same reason interface_state does: a port that
+// flaps forty times is ONE thing to look at, not forty rows that bury
+// everything else on the landing page.
+const COLLAPSIBLE_KINDS = new Set(['event', 'finding', 'probe', 'interface_state', 'agent_state', 'service_assurance', 'device_event']);
 
 // Step 2. Folds repeats of one condition into a single newest-first row.
 //
@@ -664,6 +693,7 @@ module.exports = {
   fromServiceAssuranceIncidents,
   fromInterfaceTransitions,
   fromPlaybookRuns,
+  fromDeviceEvents,
   fromConfigSnapshots,
   agentHealthRows,
 };

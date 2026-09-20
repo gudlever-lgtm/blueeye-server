@@ -112,6 +112,12 @@ function createRetentionRepo(db) {
     return deleteInBatches('DELETE FROM arp_entries WHERE last_seen < ? ORDER BY last_seen LIMIT ?', [ts]);
   }
 
+  // Device events. Deleted by age like everything else here; the row is a
+  // record of a moment, never a current state, so nothing re-derives from it.
+  async function purgeDeviceEventsBefore(ts) {
+    return deleteInBatches('DELETE FROM device_events WHERE received_at < ? ORDER BY received_at LIMIT ?', [ts]);
+  }
+
   // Interface state transitions + the current-state snapshot rows of interfaces
   // that stopped being reported entirely. The snapshot cutoff is deliberately
   // longer-lived logic than the history: dropping a state row we still have
@@ -135,6 +141,7 @@ function createRetentionRepo(db) {
     purgeAckedFindingsBefore,
     purgeConfigSnapshotsBefore,
     purgeArpEntriesBefore,
+    purgeDeviceEventsBefore,
     purgeInterfaceTransitionsBefore,
     purgeInterfaceStatesBefore,
   };

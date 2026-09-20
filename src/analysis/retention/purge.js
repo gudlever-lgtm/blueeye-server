@@ -27,6 +27,15 @@ function createPurge({ repo, config, now = () => new Date() }) {
       const arpCut = new Date(t - config.arpRetentionDays * DAY_MS);
       arpEntries = await repo.purgeArpEntriesBefore(arpCut);
     }
+    // Device events (syslog/traps). Guarded like the dimensions above. On a
+    // TSDB deployment this is a no-op: the hypertable expires them with a
+    // TimescaleDB retention policy instead, and the repository says so by
+    // reporting nothing removed.
+    let deviceEvents = 0;
+    if (config.deviceEventRetentionDays && typeof repo.purgeDeviceEventsBefore === 'function') {
+      const cut = new Date(t - config.deviceEventRetentionDays * DAY_MS);
+      deviceEvents = await repo.purgeDeviceEventsBefore(cut);
+    }
     // Interface state transitions (history) and the snapshot rows of interfaces
     // that stopped being reported. Guarded like the dimensions above.
     let interfaceTransitions = 0;
@@ -38,7 +47,7 @@ function createPurge({ repo, config, now = () => new Date() }) {
         interfaceStates = await repo.purgeInterfaceStatesBefore(cut);
       }
     }
-    return { flowRollups, metricRollups, findings, configSnapshots, arpEntries, interfaceTransitions, interfaceStates };
+    return { flowRollups, metricRollups, findings, configSnapshots, arpEntries, deviceEvents, interfaceTransitions, interfaceStates };
   }
 
   return { purgeExpired };

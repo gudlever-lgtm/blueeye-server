@@ -41,6 +41,9 @@
   // The history, newest first. v = the version it shipped in, d = the date that
   // version landed (YYYY-MM-DD, the page groups by month).
   var RELEASES = [
+    { v: '0.168.0', d: '2026-09-20', area: 'diagnostics',
+      en: { t: 'The network equipment can finally speak for itself', s: 'Switches, firewalls and access points log their own faults — a port dropping, a spanning-tree change, an OSPF neighbour going away, a DHCP pool running dry. An agent on the customer network now receives those messages and puts them on the Device log, on the timeline beside the findings, and on the landing page when they matter. Nothing new leaves the site, and credentials are redacted before a line ever leaves the host.' },
+      da: { t: 'Netværksudstyret kan endelig tale for sig selv', s: 'Switche, firewalls og accesspoints logger deres egne fejl — en port der falder ud, en spanning-tree-ændring, en OSPF-nabo der forsvinder, en DHCP-pulje der løber tør. En agent på kundens net modtager nu de beskeder og viser dem i Enhedsloggen, på tidslinjen ved siden af fundene, og på landingssiden når de betyder noget. Intet nyt forlader lokationen, og adgangskoder maskeres før en linje overhovedet forlader værten.' } },
     { v: '0.167.0', d: '2026-09-17', area: 'fleet',
       en: { t: 'Re-pinning an agent is done from the server', s: 'An agent that refuses updates because it trusts an older signing key is re-pinned over its own connection — one click, no shell on the host, no re-enrollment, and the refused update is retried straight after.' },
       da: { t: 'Fastlåsning af en agent sker fra serveren', s: 'En agent, der afviser opdateringer, fordi den stoler på en ældre signeringsnøgle, fastlåses på ny over sin egen forbindelse — ét klik, ingen kommandoer på værten, ingen ny tilmelding, og den afviste opdatering forsøges igen med det samme.' } },

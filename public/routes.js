@@ -44,6 +44,7 @@
     topology: { path: '/topology' },
     delta: { path: '/topology-delta' },
     diagnose: { path: '/diagnose' },
+    deviceLog: { path: '/device-log' },
     troubleshooting: { path: '/troubleshooting' },
     investigation: { path: '/investigate' },
 

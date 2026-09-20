@@ -146,6 +146,36 @@ test('SSO says why there is no invite, where the invite would be', async (t) => 
   assert.equal(doc.querySelectorAll('#view .page-head ~ p.muted').length, 0, 'the loose grey sentence survived');
 });
 
+// "Could not tell" is a different message from "SSO is on": the first is a
+// fault to fix, the second is the install working as designed. The API has
+// separated them since the guard was made fail-closed; this is the screen
+// finally saying which one happened, and pointing at what to do about it.
+test('an unanswerable SSO check says so, names the method and links the article', async (t) => {
+  const { doc } = boot({ t, routes: { 'GET /users/local-availability': {
+    available: false, ssoActive: true, ssoMethod: 'LDAP/AD', ssoIndeterminate: true, mailerReady: true,
+  } } });
+  await settle();
+  const note = doc.querySelector('#view .inline-note');
+  assert.ok(note, 'nothing says why the invite is missing');
+  assert.match(note.textContent, /could not determine whether LDAP\/AD sign-in is active/);
+  // It must not read as "you are on SSO, this is normal" — that is the other case.
+  assert.doesNotMatch(note.textContent, /manage people in your directory/);
+  // And it says the part an admin most needs to hear at 2am.
+  assert.match(note.textContent, /Local sign-in is unaffected/);
+  assert.ok(note.querySelector('a'), 'no link to the documentation article');
+  assert.ok(note.classList.contains('is-warn'), 'a fault to fix is not an info note');
+});
+
+test('a genuine "SSO is on" is still the calm info note, not the warning', async (t) => {
+  const { doc } = boot({ t, routes: { 'GET /users/local-availability': {
+    available: false, ssoActive: true, ssoMethod: 'OIDC', ssoIndeterminate: false, mailerReady: true,
+  } } });
+  await settle();
+  const note = doc.querySelector('#view .inline-note');
+  assert.match(note.textContent, /manage people in your directory/);
+  assert.ok(!note.classList.contains('is-warn'), 'a working install was reported as a fault');
+});
+
 test('no SMTP points at the screen that fixes it', async (t) => {
   const { doc } = boot({ t, routes: { 'GET /users/local-availability': { available: false, ssoActive: false, mailerReady: false } } });
   await settle();

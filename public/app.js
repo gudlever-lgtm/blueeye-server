@@ -11523,6 +11523,36 @@ const DOCS = [
         ],
       },
       {
+        id: 'auth-lockout', title: 'Directory logins stopped working', body: () => [
+          docsLead(t('docs.lockout.lead')),
+          el('div', { class: 'callout' }, el('strong', {}, t('docs.lockout.calm.h')), t('docs.lockout.calm.b')),
+
+          el('h4', {}, t('docs.lockout.h.works')),
+          docsTable([t('docs.lockout.th.broke'), t('docs.lockout.th.dir'), t('docs.lockout.th.local'), t('docs.lockout.th.invite')], [
+            [t('docs.lockout.r1'), t('docs.lockout.fails'), t('docs.lockout.works'), t('docs.lockout.r1.invite')],
+            [t('docs.lockout.r2'), t('docs.lockout.fails'), t('docs.lockout.works'), t('docs.lockout.r2.invite')],
+            [t('docs.lockout.r3'), t('docs.lockout.fails'), t('docs.lockout.works'), t('docs.lockout.r3.invite')],
+            [t('docs.lockout.r4'), t('docs.lockout.na'), t('docs.lockout.works'), t('docs.lockout.r4.invite')],
+          ]),
+          el('p', {}, t('docs.lockout.column')),
+
+          el('h4', {}, t('docs.lockout.h.back')),
+          docsSteps([
+            t('docs.lockout.s1'),
+            [t('docs.lockout.s2.a'), settingsLink('users', t('docs.lockout.link.users')), t('docs.lockout.s2.b')],
+            [t('docs.lockout.s3.a'), settingsLink('auth', t('docs.lockout.link.auth')), t('docs.lockout.s3.b')],
+            t('docs.lockout.s4'),
+          ]),
+          docsCode('SUPERADMIN_EMAIL=you@example.com \\\n  SUPERADMIN_PASSWORD=<a strong one> \\\n  node scripts/seed-superadmin.js'),
+          el('p', { class: 'muted' }, t('docs.lockout.seed')),
+
+          el('h4', {}, t('docs.lockout.h.invite')),
+          el('p', {}, t('docs.lockout.invite.p1')),
+          el('p', {}, t('docs.lockout.invite.p2')),
+          docsExpect(t('docs.lockout.expect')),
+        ],
+      },
+      {
         id: 'enroll-key', title: 'Agent enrollment & the signing key', body: () => [
           docsLead('How new agents join, and the key that underpins secure agent management.'),
           el('p', {}, ['New agents enroll with a one-time (or bulk/multi-use) code from ', viewLink('enrollment', 'Enrollment'), ' (operator+). The one-liner installer verifies the agent source and installs natively (Node + systemd) by default. Each enrolled agent links back to the code it used, so the Enrollment page shows each code’s agents and their live status.']),
@@ -14204,7 +14234,7 @@ function getUsersPage() {
   if (typeof window === 'undefined' || !window.UsersPage || !ui) return null;
   usersPage = window.UsersPage.create({
     el, t, ui, errText,
-    settingsLink,
+    settingsLink, docsLink,
     mode: () => (usersEmbedded ? 'embedded' : 'standalone'),
     help: () => ({ title: t('usr.info.title'), body: () => [
       el('p', {}, t('usr.info.p1')),

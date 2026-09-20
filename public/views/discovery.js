@@ -127,8 +127,18 @@
         // Only a connected agent can be sent a command, so only those are
         // offered — an option that answers 409 is not an option.
         var online = agents.filter(function (a) { return a.status === 'online'; });
+        // MULTI-SELECT, because a sweep only reaches the segments the machine
+        // running it is on. On a routed site "scan the network" is one sweep per
+        // agent, and doing that one dropdown at a time is how a segment gets
+        // forgotten. The server stays in the same list — it is just another
+        // vantage point — and picking it alongside agents is allowed.
         var from = ui.select({
           label: t('disc.from'),
+          multiple: true,
+          // Tall enough to show the choice without scrolling on a small fleet,
+          // capped so a big one does not push the button off the panel.
+          size: Math.min(Math.max(online.length + 1, 3), 8),
+          values: [''],
           options: [['', t('disc.fromServer')]].concat(online.map(function (a) {
             return [String(a.id), t('disc.fromAgent', { name: a.display_name || a.hostname })];
           })),
@@ -136,33 +146,69 @@
         var note = el('span', { class: 'meta' });
         var go = ui.button('primary', t('disc.run'), { onclick: function () { return run(); } });
 
+        function say(text, tone) {
+          note.className = tone ? 'inline-note is-' + tone : 'meta';
+          note.textContent = text;
+        }
+
+        // One agent-run sweep per selected agent, plus the server's own if it
+        // was selected. They are genuinely different: the server sweep answers
+        // with its result, an agent sweep is a request that lands later.
         function run() {
+          var picked = ui.selected(from);
+          if (!picked.length) return say(t('disc.pickOne'), 'warn');
+          var agentIds = picked.filter(function (v) { return v !== ''; }).map(Number);
+          var alsoServer = picked.indexOf('') !== -1;
+
           go.disabled = true;
-          note.className = 'meta';
-          note.textContent = t('disc.running');
-          return deps.scan(from.value ? Number(from.value) : null)
-            .then(function (r) {
-              if (r.mode === 'agent') {
-                // The agent sweeps on its own clock; the result arrives later.
-                note.textContent = t('disc.requested');
-                deps.later(function () { loadCandidates(); loadSweeps(); });
+          say(t('disc.running'));
+
+          var jobs = [];
+          if (agentIds.length) jobs.push(deps.scanMany(agentIds));
+          if (alsoServer) jobs.push(deps.scan(null));
+
+          return Promise.all(jobs.map(function (p) {
+            // settled, not all-or-nothing: the server sweep failing must not
+            // hide that eleven agents accepted theirs.
+            return p.then(function (r) { return { ok: true, r: r }; },
+              function (e) { return { ok: false, e: e }; });
+          })).then(function (outcomes) {
+            var lines = [];
+            var worst = null;
+            outcomes.forEach(function (o) {
+              if (!o.ok) {
+                worst = 'crit';
+                lines.push(o.e && o.e.status === 409 ? t('disc.notConnected') : deps.errText(o.e));
+                return;
+              }
+              var r = o.r;
+              if (r.mode === 'agent' && r.results) {
+                // The fan-out: say how many took it, and name the ones that did not.
+                lines.push(t('disc.requestedMany', { delivered: r.delivered, requested: r.requested }));
+                var missed = r.results.filter(function (x) { return !x.delivered; });
+                if (missed.length) {
+                  worst = worst || 'warn';
+                  lines.push(t('disc.notDelivered', {
+                    names: missed.map(function (x) { return x.hostname || ('#' + x.agentId); }).join(', '),
+                  }));
+                }
+              } else if (r.mode === 'agent') {
+                lines.push(t('disc.requested'));
               } else if (r.refused) {
-                note.className = 'inline-note is-warn';
-                note.textContent = t('disc.refused', { reason: r.reason || '' });
-                loadSweeps();
+                worst = worst || 'warn';
+                lines.push(t('disc.refused', { reason: r.reason || '' }));
               } else {
-                note.textContent = t('disc.swept', {
+                lines.push(t('disc.swept', {
                   addresses: r.addresses == null ? '?' : r.addresses,
                   found: r.found == null ? 0 : r.found,
-                });
-                loadCandidates(); loadSweeps();
+                }));
               }
-            })
-            .catch(function (e) {
-              note.className = 'inline-note is-crit';
-              note.textContent = e && e.status === 409 ? t('disc.notConnected') : deps.errText(e);
-            })
-            .then(function () { go.disabled = false; });
+            });
+            say(lines.join(' · '), worst);
+            loadCandidates(); loadSweeps();
+            // An agent sweeps on its own clock, so its result arrives later.
+            if (agentIds.length) deps.later(function () { loadCandidates(); loadSweeps(); });
+          }).then(function () { go.disabled = false; });
         }
 
         sweepHost.replaceChildren(ui.panel({
@@ -296,19 +342,44 @@
             histHost.replaceChildren(ui.panel({
               title: t('disc.history'),
               note: t('disc.sweepCount', { n: list.length }),
+              // COLUMNS, not the raw `addresses=256 probed=256 found=0 start=…`
+              // line the audit log stores. Those are five facts, and a reader
+              // scanning the history for the sweep that found nothing should
+              // not have to parse a string to spot it. The server does the
+              // parsing now (GET /api/discovery/sweeps).
               children: [ui.dataTable({
                 columns: [
-                  { key: 'time', label: t('disc.col.time'), width: '170px', time: true },
-                  { key: 'result', label: t('disc.col.result'), width: '120px' },
-                  { key: 'detail', label: t('disc.col.detail') },
+                  { key: 'time', label: t('disc.col.time'), width: '160px', time: true },
+                  { key: 'result', label: t('disc.col.result'), width: '110px' },
+                  { key: 'ranBy', label: t('disc.col.ranBy'), width: '170px' },
+                  { key: 'scope', label: t('disc.col.scope') },
+                  { key: 'addresses', label: t('disc.col.addresses'), width: '100px', num: true },
+                  { key: 'found', label: t('disc.col.foundCount'), width: '90px', num: true },
+                  { key: 'duration', label: t('disc.col.duration'), width: '100px', num: true },
                 ],
                 rows: list.map(function (s) {
-                  var refused = s.action === 'discovery_sweep_refused';
+                  var refused = s.refused || s.action === 'discovery_sweep_refused';
+                  var by = s.ranBy || {};
+                  // An agent whose row was deleted since the sweep has no name
+                  // left. Say which id it was rather than inventing one.
+                  var whoRan = by.kind === 'agent'
+                    ? (by.hostname || t('disc.agentGone', { id: by.agentId }))
+                    : t('disc.fromServerShort');
                   return {
                     cells: {
                       time: ui.meta(ui.fmt.short(s.createdAt)),
                       result: ui.badge(refused ? 'warn' : 'ok', refused ? t('disc.refusedShort') : t('disc.sweptShort')),
-                      detail: s.detail ? ui.meta(s.detail) : ui.meta('—'),
+                      ranBy: ui.meta(whoRan),
+                      // A refusal has a reason and no numbers; a sweep has
+                      // numbers and no reason. One column each, never both.
+                      scope: ui.meta(refused
+                        ? (s.reason ? t('disc.refused', { reason: s.reason }) : (s.detail || '—'))
+                        : (s.scope || t('disc.scopeSelf'))),
+                      // `found=0` is a MEASUREMENT — a clean network — so it
+                      // prints as 0. Only a genuinely absent number is a dash.
+                      addresses: ui.meta(s.addresses == null ? '—' : String(s.addresses)),
+                      found: ui.meta(s.found == null ? '—' : String(s.found)),
+                      duration: ui.meta(s.durationMs == null ? '—' : ui.fmt.duration(s.durationMs)),
                     },
                   };
                 }),

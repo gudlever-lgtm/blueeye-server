@@ -187,17 +187,39 @@
     function filter(label, control) {
       return el('label', { class: 'field-inline' }, label, control);
     }
+    // `multiple: true` turns it into a multi-picker: pass `values` (an array)
+    // instead of `value`, give it a `size` so it does not render one row tall,
+    // and read the answer back with ui.selected(node).
     function select(opts) {
+      var many = !!opts.multiple;
+      var chosen = many
+        ? (opts.values || []).map(function (v) { return String(v); })
+        : null;
       return el('select', {
         'aria-label': opts.label || null, id: opts.id || null,
         onchange: opts.onchange || null,
+        multiple: many ? 'multiple' : null,
+        size: opts.size ? String(opts.size) : null,
       }, opts.options.map(function (o) {
         var value = Array.isArray(o) ? o[0] : o;
         var text = Array.isArray(o) ? o[1] : o;
         var attrs = { value: String(value) };
-        if (String(value) === String(opts.value)) attrs.selected = 'selected';
+        var on = many
+          ? chosen.indexOf(String(value)) !== -1
+          : String(value) === String(opts.value);
+        if (on) attrs.selected = 'selected';
         return el('option', attrs, text);
       }));
+    }
+
+    // The values a select currently holds, always as an array — so a caller
+    // does not branch on whether it was built `multiple` or not.
+    function selected(node) {
+      if (!node) return [];
+      if (node.multiple) {
+        return Array.prototype.map.call(node.selectedOptions || [], function (o) { return o.value; });
+      }
+      return node.value === '' || node.value == null ? [] : [node.value];
     }
 
     // ---- Panel ---------------------------------------------------------------
@@ -735,6 +757,7 @@
       toolbar: toolbar,
       filter: filter,
       select: select,
+      selected: selected,
       panel: panel,
       panelGrid: panelGrid,
       button: button,

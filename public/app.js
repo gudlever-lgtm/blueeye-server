@@ -6340,6 +6340,10 @@ function getDiscoveryPage() {
       ? Object.entries(e.data.details).map(([k, v]) => `${k}: ${v}`).join(' · ')
       : null),
     scan: (agentId) => api('/api/discovery/scan', { method: 'POST', body: agentId ? { agentId } : {} }),
+    // Several agents in one request. A sweep only reaches the segments the host
+    // running it sits on, so a routed site needs one per agent — and doing that
+    // a dropdown at a time is how a segment gets forgotten.
+    scanMany: (agentIds) => api('/api/discovery/scan', { method: 'POST', body: { agentIds } }),
     fetchCandidates: (status) => api(`/api/discovery/candidates${status ? `?status=${status}` : ''}`),
     fetchSweeps: () => api('/api/discovery/sweeps?limit=50'),
     promote: (c) => api(`/api/discovery/candidates/${c.id}/promote`, { method: 'POST' }),

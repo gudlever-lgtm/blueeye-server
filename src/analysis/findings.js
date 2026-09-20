@@ -321,6 +321,33 @@ class FindingStore {
       params
     );
 
+    // WHAT is wrong on each host, not just how much. "core-sw: 412 findings" is
+    // a number; "core-sw: discards on 3 ports, latency to 2 targets" is the
+    // thing somebody acts on. One extra grouped read rather than a query per
+    // host, and capped per host when rendered — a host with forty distinct
+    // metrics has a different problem than the list can express.
+    const [hostMetricRows] = await this.pool.query(
+      `SELECT host_id, metric,
+              COUNT(*) AS cnt,
+              SUM(severity = 'CRIT') AS crit,
+              MAX(created_at) AS last_at
+         FROM findings ${clause}
+        GROUP BY host_id, metric
+        ORDER BY host_id ASC, cnt DESC, metric ASC`,
+      params
+    );
+    const metricsByHost = new Map();
+    for (const r of hostMetricRows) {
+      const key = String(r.host_id);
+      if (!metricsByHost.has(key)) metricsByHost.set(key, []);
+      metricsByHost.get(key).push({
+        metric: r.metric,
+        count: Number(r.cnt) || 0,
+        crit: Number(r.crit) || 0,
+        lastAt: r.last_at,
+      });
+    }
+
     const bySeverity = { CRIT: 0, WARN: 0, INFO: 0 };
     let total = 0;
     let acked = 0;
@@ -352,6 +379,8 @@ class FindingStore {
         avgDeviation: r.avg_dev == null ? null : Number(r.avg_dev),
         maxDeviation: r.max_dev == null ? null : Number(r.max_dev),
         lastAt: r.last_at,
+        // Busiest metric first — already ordered by the query.
+        topMetrics: metricsByHost.get(String(r.host_id)) || [],
       })),
     };
   }

@@ -246,6 +246,60 @@ Findings are de-duplicated within a 30-min cooldown (per metric+target) so
 frequent probes don't spam the list or the alert channels. Gated by the analysis
 license+flag; alerts go through the existing dispatcher (alerting flag).
 
+## The Analysis screen leads with places, not rows
+
+The page used to open with five totals and then five hundred raw findings. At
+184 668 findings that is a firehose with a header: nobody reads row 300, and the
+one finding that mattered is in there with the rest.
+
+So the screen leads with **what is wrong, and where** — one row per host, worst
+first (CRIT, then WARN, then volume: a host with one critical outranks a host
+with four hundred warnings, because that is the order somebody works in). Each
+row carries the metrics that are actually wrong on it, busiest first:
+
+```
+oslo-edge-01   CRIT 3   WARN 41   probe.latency ×28 · if.12.in.errPps ×12 · probe.loss ×4   4 min ago   [Accept]
+```
+
+Three metrics, then a count — a row listing forty is unreadable, and a host with
+forty distinct metrics has a different problem than the list can express.
+
+`GET /api/findings/summary` grew `byHost[].topMetrics` for this: one extra
+grouped read, not a query per host. Clicking a row filters the list below to that
+host, which is the natural next question after "this one is worst".
+
+**Accept** on a row bulk-acknowledges that host's findings through
+`POST /api/findings/ack`, scoped to the filters the screen is showing — so it
+accepts what the row says and nothing wider.
+
+### AI on the Analysis screen
+
+The assistant used to be a raw `<input>` and a `.small` button bolted onto the
+**bottom** of the page, below five hundred rows — which is to say, where nobody
+found it. It is a panel above the overview now, built from the same components
+as the rest of the page, with two ways in:
+
+- **Summarise what I am looking at** — `POST /api/assistant/findings-summary`,
+  carrying the screen's current filters as the query string. The answer
+  describes the page being looked at; a summary that ignored the filters would
+  quietly describe a different one.
+- **Explain**, on each overview row — reuses `POST /api/assistant/explain` for
+  that host, so "3 CRIT and 41 WARN, so what?" is answered where the question is
+  asked rather than making somebody retype the host name into a box.
+
+**The context is the AGGREGATE, never the rows.** A fleet can be sitting on six
+figures of findings; forwarding them would be impossible and pointless. The
+summary the server already computes — counts per host and per metric, each host
+carrying what is actually wrong on it — is the same shape a person reads off the
+screen, and it is capped at twelve places and six metrics because a model given
+eighty rows summarises the list rather than the situation. A test asserts that
+no per-finding field (`explanation`, `evidence`, `deviation`, `observed`)
+reaches the prompt.
+
+Nothing to describe means **no provider call at all** — the honest answer costs
+nothing. The panel does not render when the assistant is off or unlicensed, so a
+deployment without it has no AI on the page rather than a button that 403s.
+
 ## AI: per-location summary
 
 Besides per-host `/explain`, the opt-in assistant exposes

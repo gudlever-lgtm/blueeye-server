@@ -2407,6 +2407,16 @@ function makeFindingStore(overrides = {}) {
           acked: list.filter((f) => f.acked).length,
           ...agg(list),
           lastAt: list.reduce((mx, f) => (new Date(f.createdAt || 0) > new Date(mx || 0) ? f.createdAt : mx), null),
+          // WHAT is wrong on this host, busiest first — the difference between
+          // "412 findings" and "discards on 3 ports, latency to 2 targets".
+          topMetrics: [...list.reduce((m, f) => m.set(f.metric, (m.get(f.metric) || []).concat(f)), new Map()).entries()]
+            .map(([metric, fs]) => ({
+              metric,
+              count: fs.length,
+              crit: fs.filter((f) => f.severity === 'CRIT').length,
+              lastAt: fs.reduce((mx, f) => (new Date(f.createdAt || 0) > new Date(mx || 0) ? f.createdAt : mx), null),
+            }))
+            .sort((a, b) => b.count - a.count || String(a.metric).localeCompare(String(b.metric))),
         }))
         .sort((a, b) => b.count - a.count || String(a.hostId).localeCompare(String(b.hostId)));
       return { total: match.length, acked, unacked: match.length - acked, bySeverity, byMetric, byHost };
@@ -2621,11 +2631,13 @@ function makeAssistant(overrides = {}) {
     isEnabled: overrides.isEnabled || (() => Boolean(
       overrides.explain || overrides.summarizeLocation ||
       overrides.explainDiagnostic || overrides.narrateInvestigation ||
-      overrides.askEvent || overrides.suggestRemediation || overrides.generateNis2Draft)),
+      overrides.askEvent || overrides.suggestRemediation || overrides.generateNis2Draft ||
+      overrides.summarizeFindings)),
     status: overrides.status || (() => ({ enabled: false, configured: false, baseUrl: 'https://api.mistral.ai/v1/chat/completions', model: 'mistral-small-latest' })),
     explain: overrides.explain || (async () => disabled()),
     explainDiagnostic: overrides.explainDiagnostic || (async () => disabled()),
     summarizeLocation: overrides.summarizeLocation || (async () => disabled()),
+    summarizeFindings: overrides.summarizeFindings || (async () => disabled()),
     narrateInvestigation: overrides.narrateInvestigation || (async () => disabled()),
     generateNis2Draft: overrides.generateNis2Draft || (async () => disabled()),
     askEvent: overrides.askEvent || (async () => disabled()),

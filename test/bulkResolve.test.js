@@ -51,20 +51,34 @@ test('several events move in one request, and each is audited on its own', async
   assert.match(audited[0].detail, /bulk/);
 });
 
-test('an illegal transition is REPORTED, not silently performed', async () => {
-  // open → resolved is not in the state machine. Bulk must not become the door
-  // that bypasses it.
+test('an open event CAN be resolved in one step', async () => {
+  // Most events are read and dismissed in one go. Forcing them through
+  // `investigating` recorded a step nobody performed, and an audit trail where
+  // everything was "investigated" says nothing about the ones that were.
   const { eventCasesRepo, open, inv1 } = await seededEvents();
   const app = makeApp({ eventCasesRepo });
 
   const res = await op(app, 'post', '/api/events/bulk-status', { ids: [open, inv1], status: 'resolved' });
   assert.equal(res.status, 200);
-  assert.equal(res.body.moved, 1, 'the legal one still moved');
+  assert.equal(res.body.moved, 2, 'open and investigating both reach resolved');
+  assert.equal(eventCasesRepo.rows.find((r) => r.id === open).status, 'resolved');
+});
+
+test('an illegal transition is REPORTED, not silently performed', async () => {
+  // `closed` is still not reachable from `open` — resolving is not skippable,
+  // and bulk must not become the door that bypasses what is left of the chain.
+  const { eventCasesRepo, open, inv1 } = await seededEvents();
+  await eventCasesRepo.updateStatus(inv1, { from: 'investigating', to: 'resolved' });
+  const app = makeApp({ eventCasesRepo });
+
+  const res = await op(app, 'post', '/api/events/bulk-status', { ids: [open, inv1], status: 'closed' });
+  assert.equal(res.status, 200);
+  assert.equal(res.body.moved, 1, 'the resolved one still closed');
 
   const bad = res.body.results.find((r) => r.id === open);
   assert.equal(bad.outcome, 'illegal');
   assert.equal(bad.from, 'open');
-  // NAMED, not just counted: "1 could not be resolved" is unactionable.
+  // NAMED, not just counted: "1 could not be closed" is unactionable.
   assert.equal(eventCasesRepo.rows.find((r) => r.id === open).status, 'open');
 });
 

@@ -26,7 +26,7 @@ keep it — in the table, in the code, and in the report text a regulator reads.
 | Term | Table | What it is |
 | --- | --- | --- |
 | **Anomaly** (a *finding*) | `findings` | One statistical detection: a metric deviated from its baseline. The raw unit. |
-| **Event** | `event_cases` | One or more anomalies on the **same device** inside a correlation window, tracked open → investigating → resolved → closed. |
+| **Event** | `event_cases` | One or more anomalies on the **same device** inside a correlation window, tracked open → investigating → resolved → closed (open may go straight to resolved). |
 | **Situation** | `event_clusters` | One condition seen across **several devices**, with a suspected common cause. |
 | **Probe outage** | `probe_outages` | An active-probe threshold breach (migration 025). A different, older concept — not an event. |
 | **NIS2 incident** | `blueeye_nis2_incidents` | A regulator-facing report. Keeps the directive's word. |

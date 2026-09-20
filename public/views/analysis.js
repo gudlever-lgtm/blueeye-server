@@ -37,6 +37,8 @@
       var root2 = ui.page();
       var stripHost = el('div', {});
       var toolbarHost = el('div', {});
+      var overviewHost = el('div', {});
+      var aiHost = el('div', {});
       var listHost = el('div', {});
       var breakdownHost = el('div', {});
       var agents = [];
@@ -54,7 +56,209 @@
         lead: info.lead,
         help: { title: info.title, body: info.body },
         actions: deps.headerActions(),
-      }), stripHost, toolbarHost, listHost, breakdownHost);
+      }), stripHost, toolbarHost, aiHost, overviewHost, listHost, breakdownHost);
+
+      // ---- AI, where the picture is ------------------------------------------
+      // The assistant used to be a raw <input> and a .small button bolted onto
+      // the BOTTOM of the page, below five hundred rows — which is to say,
+      // where nobody found it. It sits above the overview now, built from the
+      // same components as everything else, and it answers the question
+      // somebody opening this page actually has.
+      //
+      // Opt-in and licence-gated: a deployment without the assistant gets no
+      // panel at all, rather than one that 403s when pressed.
+      function drawAi() {
+        if (!deps.hasAssistant || !deps.hasAssistant()) { aiHost.replaceChildren(); return; }
+
+        var out = el('div', { class: 'assistant-out meta' }, t('analysis.ai.idle'));
+        var input = el('input', { type: 'text', placeholder: t('analysis.ai.placeholder') });
+
+        function busy(on, msg) {
+          summarise.disabled = on;
+          ask.disabled = on;
+          if (msg) { out.className = 'assistant-out meta'; out.textContent = msg; }
+        }
+        function show(res) {
+          out.className = 'assistant-out';
+          out.replaceChildren(
+            el('div', {}, res.answer || t('analysis.ai.empty')),
+            ui.metaXs([res.model, res.total != null ? t('analysis.ai.fromN', { n: res.total }) : null]
+              .filter(Boolean).join(' · ')));
+        }
+        function fail(e) {
+          out.className = 'assistant-out meta';
+          // 403 is the ordinary state on a deployment that has not turned it
+          // on, so it reads as a setting rather than a fault.
+          out.textContent = e && e.status === 403 ? t('analysis.ai.disabled') : deps.errText(e);
+        }
+
+        // The WHOLE SCREEN, on the filters currently applied — so the answer
+        // describes the page being looked at rather than a different one.
+        var summarise = ui.button('primary', t('analysis.ai.summarise'), {
+          onclick: function () {
+            busy(true, t('analysis.ai.thinking'));
+            deps.askScreen({ hostId: state.hostId, severity: state.severity, metric: state.metric })
+              .then(show).catch(fail).then(function () { busy(false); });
+          },
+        });
+        var ask = ui.button('secondary', t('analysis.ai.ask'), {
+          onclick: function () {
+            var q = (input.value || '').trim();
+            if (!q) { input.focus(); return; }
+            busy(true, t('analysis.ai.thinking'));
+            deps.askHost(q, state.hostId).then(show).catch(fail).then(function () { busy(false); });
+          },
+        });
+        input.addEventListener('keydown', function (e) { if (e.key === 'Enter') ask.click(); });
+
+        aiHost.replaceChildren(ui.panel({
+          title: t('analysis.ai.title'),
+          children: [el('div', { class: 'panel-body' },
+            ui.toolbar({ filters: [ui.filter(t('analysis.ai.question'), input)], actions: [ask, summarise] }),
+            out)],
+        }));
+      }
+
+      // ---- what is wrong, where ---------------------------------------------
+      // The page used to open with five totals and then five hundred raw rows.
+      // At 184 668 findings that is not an overview, it is a firehose with a
+      // header: nobody reads row 300, and the one finding that mattered is in
+      // there with the rest.
+      //
+      // So the page LEADS with the places. One row per host, worst first, with
+      // what is actually wrong on it and when it last happened — and an accept
+      // button per row, because "I have seen this site's problems" is the
+      // action somebody actually wants to take.
+      var MAX_METRICS_SHOWN = 3;
+
+      function drawOverview() {
+        if (!summary || !summary.total) { overviewHost.replaceChildren(); return; }
+        var hosts = (summary.byHost || []).slice();
+        if (!hosts.length) { overviewHost.replaceChildren(); return; }
+
+        // CRIT first, then volume. A host with one critical outranks a host
+        // with four hundred warnings — that is the order somebody works in.
+        hosts.sort(function (a, b) {
+          return (b.crit - a.crit) || (b.warn - a.warn) || (b.count - a.count);
+        });
+
+        var note = el('span', { class: 'meta' });
+
+        // The answer lands in the AI panel above rather than inside the row:
+        // a paragraph in a table cell wrecks the row heights, and the panel is
+        // where the reader is already looking for prose.
+        function explainHost(h, btn) {
+          btn.disabled = true;
+          note.className = 'meta';
+          note.textContent = t('analysis.ai.thinking');
+          deps.askHost(t('analysis.explainQuestion', { host: agentName(h.hostId) }), h.hostId)
+            .then(function (res) {
+              note.className = 'meta';
+              note.textContent = '';
+              var box = aiHost.querySelector('.assistant-out');
+              if (box) {
+                box.className = 'assistant-out';
+                box.replaceChildren(
+                  el('div', {}, res.answer || t('analysis.ai.empty')),
+                  ui.metaXs([agentName(h.hostId), res.model].filter(Boolean).join(' · ')));
+                box.scrollIntoView({ block: 'nearest' });
+              }
+            })
+            .catch(function (e) {
+              note.className = 'inline-note is-crit';
+              note.textContent = e && e.status === 403 ? t('analysis.ai.disabled') : deps.errText(e);
+            })
+            .then(function () { btn.disabled = false; });
+        }
+
+        function acceptHost(h, btn) {
+          btn.disabled = true;
+          note.className = 'meta';
+          note.textContent = t('analysis.acceptWorking');
+          // The SAME filters the screen is showing, narrowed to this host — so
+          // it accepts what the row says and nothing wider.
+          deps.acceptAll({
+            hostId: h.hostId,
+            severity: state.severity || undefined,
+            metric: state.metric || undefined,
+          })
+            .then(function (r) {
+              note.textContent = t('analysis.acceptDone', { n: r.acked, host: agentName(h.hostId) });
+              reload();
+            })
+            .catch(function (e) {
+              note.className = 'inline-note is-crit';
+              note.textContent = deps.errText(e);
+              btn.disabled = false;
+            });
+        }
+
+        overviewHost.replaceChildren(ui.panel({
+          title: t('analysis.overview'),
+          note: t('analysis.overviewNote', { n: hosts.length }),
+          children: [ui.dataTable({
+            columns: [
+              { key: 'host', label: t('analysis.col.host') },
+              { key: 'crit', label: 'CRIT', width: '78px', num: true },
+              { key: 'warn', label: 'WARN', width: '78px', num: true },
+              { key: 'wrong', label: t('analysis.col.whatIsWrong') },
+              { key: 'last', label: t('analysis.col.last'), width: '130px', time: true },
+              { key: 'act', label: '', width: '170px' },
+            ].filter(Boolean),
+            rows: hosts.map(function (h) {
+              var shown = (h.topMetrics || []).slice(0, MAX_METRICS_SHOWN);
+              var rest = (h.topMetrics || []).length - shown.length;
+              var accept = deps.canWrite()
+                ? ui.button('secondary', t('analysis.accept'), {
+                  size: 'xs',
+                  onclick: function (e) { if (e) e.stopPropagation(); acceptHost(h, accept); },
+                })
+                : null;
+              // "3 CRIT and 41 WARN — so what?" answered where the question is
+              // asked, rather than making somebody retype the host name into a
+              // box at the bottom of the page.
+              var explain = (deps.hasAssistant && deps.hasAssistant())
+                ? ui.button('secondary', t('analysis.explain'), {
+                  size: 'xs',
+                  onclick: function (e) {
+                    if (e) e.stopPropagation();
+                    explainHost(h, explain);
+                  },
+                })
+                : null;
+              return {
+                host: h,
+                cells: {
+                  // The NAME, not the agent id — "host 30" is a number somebody
+                  // then has to go and look up.
+                  host: ui.hostLink(agentName(h.hostId), function () { deps.openAgent(Number(h.hostId)); }),
+                  crit: h.crit ? ui.badge('crit', String(h.crit)) : ui.meta('0'),
+                  warn: h.warn ? ui.badge('warn', String(h.warn)) : ui.meta('0'),
+                  // What is actually wrong, busiest first. Three is enough to
+                  // recognise the shape of the problem; the rest is a count,
+                  // because a row listing forty metrics is unreadable.
+                  wrong: el('span', {},
+                    shown.map(function (m, i) {
+                      return el('span', {},
+                        i ? ui.meta(' · ') : null,
+                        el('span', { title: m.metric }, m.metric),
+                        ui.metaXs(' ×' + m.count));
+                    }),
+                    rest > 0 ? ui.metaXs(' ' + t('analysis.andMore', { n: rest })) : null),
+                  last: el('span', { title: ui.fmt.abs(h.lastAt) }, ui.fmt.rel(h.lastAt)),
+                  act: (explain || accept) ? el('span', { class: 'row-act' }, explain, accept) : '',
+                },
+              };
+            }),
+            // Clicking the row filters the list below to that host, which is
+            // the natural next question after "this one is worst".
+            onOpen: function (row) {
+              state.hostId = state.hostId === row.host.hostId ? '' : row.host.hostId;
+              reload();
+            },
+          }), note],
+        }));
+      }
 
       // ---- filters ----------------------------------------------------------
       function filterQs(omit) {
@@ -377,8 +581,8 @@
         // The overview reflects host + severity but NOT the metric filter, so it
         // stays a full breakdown across metrics and can populate the dropdown.
         return api('/api/findings/summary' + filterQs(['metric']))
-          .then(function (s) { summary = s; drawStrip(); drawBreakdown(); drawToolbar(); })
-          .catch(function () { summary = null; drawStrip(); drawBreakdown(); });
+          .then(function (s) { summary = s; drawStrip(); drawAi(); drawOverview(); drawBreakdown(); drawToolbar(); })
+          .catch(function () { summary = null; drawStrip(); drawAi(); drawOverview(); drawBreakdown(); });
       }
 
       function reload() {

@@ -237,10 +237,20 @@ Every event gets **its own audit row**, marked `(bulk)`. The audit log answers
   channel gets muted — and a muted channel is worse than a quiet one. The audit
   log still has every row.
 
-### open → resolved is still not a legal step
+### open → resolved, in one step
 
-The state machine is `open → investigating → resolved → closed`. Bulk does not
-change that, so selecting a screen of **open** events and asking for `resolved`
-reports `illegal` for each one rather than inventing an `investigating` step
-nobody performed. In the UI the selection offers only the legal next status for
-what is selected, and says so when the selection is mixed.
+The chain used to be strictly `open → investigating → resolved`, on the
+reasoning that something has to be looked at before it can be called fixed. In
+practice most events are read and dismissed in one go — a link that flapped
+once, a probe that recovered on its own — and forcing them through
+`investigating` recorded a step nobody performed. That is worse than not
+recording it: an audit trail where every event was "investigated" says nothing
+about the ones that actually were.
+
+So `open` has two legal next steps, and the bulk bar offers both: **investigating**
+for the ones somebody is picking up, **resolved** for the ones being dismissed.
+
+What is still rejected: `open → closed` (resolving is not skippable),
+`investigating → closed`, and `resolved → open` (reopening goes through
+`closed`, and needs a comment). The UI only ever offers the legal next steps for
+what is selected, and says so when the selection spans several statuses.

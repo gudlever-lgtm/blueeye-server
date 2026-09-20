@@ -36,6 +36,13 @@ class FeatureDisabledError extends Error {
 
 const ONE_DAY_MS = 24 * 60 * 60 * 1000;
 
+// How much of the aggregate the screen summary forwards. A prompt is not a
+// place to be exhaustive: twelve places and six metrics is enough to describe a
+// picture, and a model given eighty rows summarises the list rather than the
+// situation.
+const MAX_SUMMARY_HOSTS = 12;
+const MAX_SUMMARY_METRICS = 6;
+
 // The exact answer the event assistant must return when the context does not
 // contain enough information — also used by the route to short-circuit (no data
 // at all → this reply without a provider call).
@@ -275,6 +282,97 @@ function createAssistant({
     const user = JSON.stringify(context);
     const answer = await chat(system, user);
     return { answer, model: currentModel(), location: location.name, agents: agentCount, findings: findingCount };
+  }
+
+  // "What is going on?" across whatever the Analysis screen is currently
+  // showing — the whole picture rather than one host.
+  //
+  // THE CONTEXT IS THE SUMMARY, NOT THE ROWS. A fleet can be sitting on six
+  // figures of findings; sending them would be impossible and pointless. The
+  // server already aggregates by host and by metric, each host carrying what is
+  // actually wrong on it, so the model gets the same shape a person reads off
+  // the screen — counts, places and metric names, no raw measurements and no
+  // secrets.
+  //
+  // It also gets the FILTERS, because "3 criticals" means something different
+  // when the screen is filtered to one host, and a summary that ignored the
+  // filter would quietly describe a different page than the one being looked at.
+  async function summarizeFindings(filters = {}) {
+    if (!currentEnabled()) throw new FeatureDisabledError();
+    if (!findingStore || typeof findingStore.summary !== 'function') {
+      const e = new Error('finding summaries are not available');
+      e.name = 'AssistantMisconfigured';
+      throw e;
+    }
+
+    // host_id on a finding is an AGENT id. "host 30" in a summary is a number
+    // somebody then has to go and look up, so resolve the names once — a single
+    // read for the whole answer rather than one per place.
+    const names = new Map();
+    if (agentsRepo && typeof agentsRepo.findAll === 'function') {
+      try {
+        for (const a of await agentsRepo.findAll()) {
+          names.set(String(a.id), a.display_name || a.hostname || String(a.id));
+        }
+      } catch { /* a name is a nicety; the summary still works without one */ }
+    }
+    const hostLabel = (id) => names.get(String(id)) || String(id);
+
+    const summary = await findingStore.summary(filters || {});
+    if (!summary || !summary.total) {
+      // No provider call when there is nothing to describe. The honest answer
+      // costs nothing and takes no time.
+      return {
+        answer: 'There are no findings matching the current filters.',
+        model: null, total: 0, hosts: 0,
+      };
+    }
+
+    const byHost = (summary.byHost || []).slice(0, MAX_SUMMARY_HOSTS).map((h) => ({
+      host: hostLabel(h.hostId),
+      crit: h.crit,
+      warn: h.warn,
+      total: h.count,
+      unacknowledged: h.count - (h.acked || 0),
+      lastAt: h.lastAt,
+      wrong: (h.topMetrics || []).slice(0, MAX_SUMMARY_METRICS)
+        .map((m) => ({ metric: m.metric, count: m.count, crit: m.crit })),
+    }));
+
+    const context = {
+      scope: {
+        host: filters.hostId ? hostLabel(filters.hostId) : 'all hosts',
+        severity: filters.severity || 'all severities',
+        metric: filters.metric || 'all metrics',
+      },
+      totals: {
+        findings: summary.total,
+        unacknowledged: summary.unacked,
+        crit: (summary.bySeverity || {}).CRIT || 0,
+        warn: (summary.bySeverity || {}).WARN || 0,
+        info: (summary.bySeverity || {}).INFO || 0,
+      },
+      // Worst first, which is the order the screen shows and the order somebody
+      // works in.
+      places: byHost.sort((a, b) => (b.crit - a.crit) || (b.warn - a.warn) || (b.total - a.total)),
+      topMetrics: (summary.byMetric || []).slice(0, MAX_SUMMARY_METRICS)
+        .map((m) => ({ metric: m.metric, count: m.count })),
+    };
+
+    const system =
+      'You are a network operations assistant for BlueEyes. In 2-4 sentences, say what the '
+      + 'current picture is: which places are worst, what kind of problem they have, and what to '
+      + 'look at first. Use ONLY the provided context — it is an aggregate (counts per host and '
+      + 'per metric), not raw measurements, so do not invent specific values, timings or causes '
+      + 'that are not in it. Name hosts exactly as given. If the counts are dominated by one '
+      + 'metric on one host, say so plainly rather than listing everything.';
+    const answer = await chat(system, JSON.stringify(context));
+    return {
+      answer,
+      model: currentModel(),
+      total: summary.total,
+      hosts: (summary.byHost || []).length,
+    };
   }
 
   // Explains a flow-pipeline diagnostic snapshot (from POST /agents/:id/diagnose)
@@ -622,7 +720,7 @@ function createAssistant({
     return { answer, model: currentModel() };
   }
 
-  return { isEnabled, status, explain, explainDiagnostic, summarizeLocation, narrateInvestigation, generateNis2Draft, diagnoseTransaction, askEvent, suggestRemediation, suggestClusterCause, buildContext, buildLocationContext, analyseServiceAssurance, analyseDiagnose };
+  return { isEnabled, status, explain, explainDiagnostic, summarizeLocation, summarizeFindings, narrateInvestigation, generateNis2Draft, diagnoseTransaction, askEvent, suggestRemediation, suggestClusterCause, buildContext, buildLocationContext, analyseServiceAssurance, analyseDiagnose };
 }
 
 module.exports = { createAssistant, FeatureDisabledError, EVENT_INSUFFICIENT_ANSWER };

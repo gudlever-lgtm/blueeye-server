@@ -3575,9 +3575,29 @@ function getAnalysisView() {
   if (analysisView) return analysisView;
   if (typeof window === 'undefined' || !window.AnalysisView || !ui) return null;
   analysisView = window.AnalysisView.create({
-    el, api, t, errText, ui, openAgent,
+    el, api, t, errText, ui, openAgent, canWrite,
+    // The assistant is opt-in and licence-gated. The page asks rather than
+    // assuming, so a deployment without it simply has no AI panel instead of
+    // one that 403s when pressed.
+    hasAssistant: () => featureEnabled('assistant'),
+    // "What is going on?" across the current filters — an aggregate, not the
+    // rows: a fleet can hold six figures of findings.
+    askScreen: (filters) => {
+      const qs = new URLSearchParams();
+      Object.entries(filters || {}).forEach(([k, val]) => { if (val) qs.set(k, String(val)); });
+      return api(`/api/assistant/findings-summary${qs.toString() ? `?${qs}` : ''}`, { method: 'POST', body: {} });
+    },
+    askHost: (question, hostId) => api('/api/assistant/explain', { method: 'POST', body: { question, hostId: hostId || undefined } }),
     state: findingsState,
     isAdmin: () => isAdmin(),
+    // "I have seen this host's problems and I accept them." Scoped to the
+    // filters the screen is showing, so it accepts what the row says and
+    // nothing wider — the server applies the same filter set the list uses.
+    acceptAll: (filters) => {
+      const qs = new URLSearchParams();
+      Object.entries(filters || {}).forEach(([k, v]) => { if (v !== undefined && v !== null && v !== '') qs.set(k, String(v)); });
+      return api(`/api/findings/ack${qs.toString() ? `?${qs}` : ''}`, { method: 'POST', body: { all: true } });
+    },
     help: () => {
       const info = PAGE_INFO.findings || {};
       return { lead: info.hero || '', title: info.title || t('analysis.title'), body: info.body || (() => []) };
@@ -3606,46 +3626,11 @@ function getAnalysisView() {
 views.findings = async () => {
   const v = getAnalysisView();
   if (!v) return el('div', { class: 'empty error' }, t('analysis.err.title'));
-  const node = await v.view();
-  // The assistant box is not part of the contract's components yet, so it is
-  // appended rather than composed — it migrates with the rest of Insights.
-  if (featureEnabled('assistant')) node.append(assistantBox(() => findingsState.hostId));
-  return node;
+  // The view composes the assistant itself now (it is built from ui.* like
+  // everything else on the page), so nothing is appended here.
+  return v.view();
 };
 
-// AI-assistant box. Posts to /api/assistant/explain; degrades gracefully when
-// the feature is disabled (403) so it never looks broken.
-function assistantBox(getHostId) {
-  const input = el('input', { type: 'text', placeholder: 'Ask e.g.: why is CPU high on this host?' });
-  const btn = el('button', { class: 'small' }, 'Ask assistant');
-  const out = el('div', { class: 'assistant-out muted' }, 'Ask a question about a host based on the latest findings.');
-  async function ask() {
-    const question = input.value.trim();
-    if (!question) { input.focus(); return; }
-    btn.disabled = true;
-    out.className = 'assistant-out muted';
-    out.textContent = 'Thinking…';
-    try {
-      const res = await api('/api/assistant/explain', { method: 'POST', body: { question, hostId: getHostId() || undefined } });
-      out.className = 'assistant-out';
-      out.replaceChildren(
-        el('div', {}, res.answer || '(empty response)'),
-        el('div', { class: 'assistant-meta muted' }, `${res.model || ''} · ${res.usedFindings ?? 0} findings in context`));
-    } catch (err) {
-      out.className = 'assistant-out muted';
-      out.textContent = err.status === 403
-        ? 'The AI assistant is disabled. An administrator can enable it under Settings → AI.'
-        : err.message;
-    } finally {
-      btn.disabled = false;
-    }
-  }
-  btn.addEventListener('click', ask);
-  input.addEventListener('keydown', (e) => { if (e.key === 'Enter') ask(); });
-  return el('div', { class: 'assistant' },
-    el('div', { class: 'assistant-row' }, input, btn),
-    out);
-}
 
 // ---- Events (stored in event_cases) -------------------------------------
 // An event is a correlated condition on ONE device, wrapping the anomalies that
@@ -3657,7 +3642,10 @@ let selectedEventId = null;
 function openEvent(id) { selectedEventId = id; currentView = 'event'; render(); }
 
 const INC_STATUS_LABEL = { open: 'Open', investigating: 'Investigating', resolved: 'Resolved', closed: 'Closed' };
-const INC_TRANSITIONS = { open: ['investigating'], investigating: ['resolved'], resolved: ['closed'], closed: ['open'] };
+// Mirrors src/eventCases/stateMachine.js, which is what actually enforces it.
+// `open` has two next steps: most events are read and dismissed in one go, and
+// making those walk through `investigating` recorded a step nobody performed.
+const INC_TRANSITIONS = { open: ['investigating', 'resolved'], investigating: ['resolved'], resolved: ['closed'], closed: ['open'] };
 const incStatusBadge = (s) => el('span', { class: `badge inc-status-${s}` }, INC_STATUS_LABEL[s] || s);
 const incSevBadge = (s) => el('span', { class: `badge inc-sev-${s}` }, s);
 
@@ -3697,7 +3685,7 @@ PAGE_INFO.events = {
   hero: 'Events group related anomalies on the same device into one thing you can track from open to closed — with a timeline, the config change that may have triggered it, similar past events, and an opt-in AI assistant. A connected ITSM opens its own event from an event.',
   title: 'Events — grouped anomalies, tracked end-to-end',
   body: () => [
-    el('p', {}, 'Each event wraps the analysis findings (anomalies) that fired close together on one device. Status moves open → investigating → resolved → closed; a closed event can be reopened with a comment (recorded in the audit trail).'),
+    el('p', {}, 'Each event wraps the analysis findings (anomalies) that fired close together on one device. Status moves open → investigating → resolved → closed, and an open event can go straight to resolved when there is nothing to investigate; a closed event can be reopened with a comment (recorded in the audit trail).'),
     el('p', {}, 'BlueEyes deliberately stops at the event. An event is a technical observation the monitoring owns; an ', el('strong', {}, 'event'), ' is a service-desk record with a number, an SLA and an owner, and it belongs in your ITSM. Connect one under Settings → Integrations and an event can open an event there.'),
     el('p', {}, 'The detail page shows the event timeline, the device-config change suspected to have triggered it, similar past events, and — when the EU AI assistant is enabled — a chat that answers questions using only masked, aggregated context.'),
     el('p', { class: 'muted' }, 'Status changes, config history and the AI chat are operator/admin only.'),

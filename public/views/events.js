@@ -35,13 +35,20 @@
     var STATUS_TONE = { open: 'info', investigating: 'warn', resolved: 'ok', closed: 'neutral' };
     var SEV_RANK = { CRIT: 3, WARN: 2, INFO: 1 };
 
-    // The event state machine, mirrored for the UI: open → investigating →
-    // resolved → closed, and closed → open to reopen. It lives in
+    // The event state machine, mirrored for the UI. It lives in
     // src/eventCases/stateMachine.js and the server enforces it; this copy only
     // decides what to OFFER, so the page never proposes a move the API will
     // refuse. A reopen is deliberately absent — it needs a comment, which is a
     // per-event conversation rather than a bulk action.
-    var LEGAL_NEXT = { open: 'investigating', investigating: 'resolved', resolved: 'closed' };
+    //
+    // `open` has TWO next steps: most events are read and dismissed in one go,
+    // and making those walk through `investigating` recorded a step nobody
+    // performed.
+    var LEGAL_NEXT = {
+      open: ['investigating', 'resolved'],
+      investigating: ['resolved'],
+      resolved: ['closed'],
+    };
 
     function view() {
       var state = deps.state;
@@ -81,17 +88,20 @@
           if (ev) statuses[ev.status] = true;
         });
         var from = Object.keys(statuses);
-        var to = from.length === 1 ? LEGAL_NEXT[from[0]] : null;
+        // A button PER legal next step. From `open` that is two — "investigating"
+        // for the ones somebody is picking up, "resolved" for the ones being
+        // dismissed — and naming both beats a dropdown nobody reads.
+        var targets = from.length === 1 ? (LEGAL_NEXT[from[0]] || []) : [];
 
         var note = el('span', { class: 'meta' });
-        var act = to
-          ? ui.button('primary', t('events.bulkMove', { n: picked.length, status: t('events.status.' + to) }), {
-            onclick: function () { run(to); },
-          })
-          : null;
+        var acts = targets.map(function (to, i) {
+          return ui.button(i === targets.length - 1 ? 'primary' : 'secondary',
+            t('events.bulkMove', { n: picked.length, status: t('events.status.' + to) }),
+            { onclick: function () { run(to); } });
+        });
 
         function run(status) {
-          act.disabled = true;
+          acts.forEach(function (b) { b.disabled = true; });
           note.className = 'meta';
           note.textContent = t('events.bulkWorking');
           deps.bulkStatus(picked.map(Number), status)
@@ -114,7 +124,7 @@
             .catch(function (e) {
               note.className = 'inline-note is-crit';
               note.textContent = deps.errText(e);
-              act.disabled = false;
+              acts.forEach(function (b) { b.disabled = false; });
             });
         }
 
@@ -122,11 +132,11 @@
           children: [el('div', { class: 'panel-body' },
             ui.toolbar({
               filters: [ui.filter('', ui.meta(t('events.bulkSelected', { n: picked.length })))],
-              actions: [act, ui.button('secondary', t('events.bulkClear'), {
+              actions: acts.concat([ui.button('secondary', t('events.bulkClear'), {
                 onclick: function () { state.picked = []; draw(); },
-              })].filter(Boolean),
+              })]),
             }),
-            to ? null : ui.inlineNote(t('events.bulkMixed'), 'info'),
+            targets.length ? null : ui.inlineNote(t('events.bulkMixed'), 'info'),
             note)],
         }));
       }
@@ -294,7 +304,7 @@
               // Only rows that can actually move are tickable. Offering a
               // checkbox on a closed event and then reporting "illegal" for it
               // is a worse answer than not offering it.
-              isSelectable: function (row) { return LEGAL_NEXT[row.event.status]; },
+              isSelectable: function (row) { return !!LEGAL_NEXT[row.event.status]; },
               onChange: function (keys) { state.picked = keys; drawBulk(); },
             } : null,
             rows: rows.map(function (i) {

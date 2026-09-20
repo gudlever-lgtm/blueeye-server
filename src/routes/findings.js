@@ -4,6 +4,7 @@ const express = require('express');
 const { asyncHandler } = require('../middleware/asyncHandler');
 const { requireAuth, requireRole } = require('../auth/middleware');
 const { ROLES } = require('../auth/roles');
+const { buildNetworkReport, renderNetworkReportHtml } = require('../analysis/networkReport');
 const { isChangeEvent } = require('../timeline/targetTimeline');
 
 const DEFAULT_CONTEXT_MINUTES = 30;
@@ -56,7 +57,7 @@ function parseListFilters(query) {
 // is exactly the action that needs a record: one request can retire a hundred
 // thousand findings, and afterwards the only evidence it was deliberate is the
 // hash-chained log.
-function createFindingsRouter({ findingStore, timelineService = null, auditLogger = null }) {
+function createFindingsRouter({ findingStore, timelineService = null, auditLogger = null, agentsRepo = null }) {
   const router = express.Router();
 
   // GET /api/findings?hostId=&since= — list findings (viewer+).
@@ -179,6 +180,97 @@ function createFindingsRouter({ findingStore, timelineService = null, auditLogge
         return res.status(404).json({ error: 'Finding not found' });
       }
       res.json({ id, acked: true });
+    })
+  );
+
+  // GET /api/findings/trend — findings over time, bucketed, for the reporting
+  // charts. Same filter set as the list and the summary.
+  //
+  // The BUCKET is explicit, not inferred from the range: hourly over ninety
+  // days is 2 160 points for a chart 760 pixels wide, and daily over one day is
+  // a single bar. The caller picks and the answer says which it got, so a chart
+  // never silently redraws at a different resolution than its axis claims.
+  router.get(
+    '/trend',
+    requireAuth,
+    requireRole(ROLES.VIEWER, ROLES.OPERATOR, ROLES.ADMIN),
+    asyncHandler(async (req, res) => {
+      if (typeof findingStore.trend !== 'function') {
+        return res.status(404).json({ error: 'Trends are not available' });
+      }
+      const parsed = parseListFilters(req.query);
+      if (parsed.error) {
+        return res.status(400).json({ error: 'Validation failed', details: parsed.error });
+      }
+      const bucket = req.query.bucket === undefined || req.query.bucket === '' ? 'day' : String(req.query.bucket);
+      if (!['hour', 'day'].includes(bucket)) {
+        return res.status(400).json({ error: 'bucket must be hour or day' });
+      }
+      const points = await findingStore.trend({ ...parsed.filters, bucket });
+      res.json({ bucket, points, filters: parsed.filters });
+    })
+  );
+
+  // GET /api/findings/report — the executive network report: "fix these
+  // specific issues at these specific locations".
+  //
+  // Rendered with the NIS2 document chrome (src/nis2/report.js) rather than a
+  // second report engine, and DETERMINISTIC: every number is computed here and
+  // every sentence is assembled from those numbers. A report a manager forwards
+  // to an engineer has to be defensible line by line, and "the assistant said
+  // so" is not that.
+  //
+  // `Accept: text/html` (or ?format=html) downloads the document; otherwise the
+  // structured report comes back as JSON, so it can be scheduled, diffed or
+  // fed somewhere else.
+  router.get(
+    '/report',
+    requireAuth,
+    requireRole(ROLES.VIEWER, ROLES.OPERATOR, ROLES.ADMIN),
+    asyncHandler(async (req, res) => {
+      const daysRaw = req.query.days === undefined || req.query.days === '' ? 30 : Number(req.query.days);
+      if (!Number.isInteger(daysRaw) || daysRaw < 1 || daysRaw > 365) {
+        return res.status(400).json({ error: 'days must be between 1 and 365' });
+      }
+      const since = new Date(Date.now() - daysRaw * 24 * 60 * 60 * 1000);
+      const locale = req.query.locale === 'da' ? 'da' : 'en';
+
+      const summary = await findingStore.summary({ since });
+      const trend = typeof findingStore.trend === 'function'
+        ? await findingStore.trend({ since, bucket: daysRaw <= 2 ? 'hour' : 'day' })
+        : [];
+
+      // Agent id → name, and its site. "host 30" in a document somebody
+      // forwards is a number nobody outside this room can act on.
+      const names = new Map();
+      const sites = new Map();
+      if (agentsRepo && typeof agentsRepo.findAll === 'function') {
+        try {
+          for (const a of await agentsRepo.findAll()) {
+            names.set(String(a.id), a.display_name || a.hostname || String(a.id));
+            if (a.location_name || a.locationName) sites.set(String(a.id), a.location_name || a.locationName);
+          }
+        } catch { /* a name is a nicety; the report still states the numbers */ }
+      }
+
+      const report = buildNetworkReport({
+        summary,
+        trend,
+        hostName: (id) => names.get(String(id)) || `#${id}`,
+        locationOf: (id) => sites.get(String(id)) || null,
+        periodDays: daysRaw,
+        locale,
+      });
+
+      const wantsHtml = req.query.format === 'html'
+        || (req.get('accept') || '').includes('text/html');
+      if (!wantsHtml) return res.json({ report });
+
+      const html = renderNetworkReportHtml(report, { org: req.query.org || undefined, locale });
+      res.setHeader('Content-Type', 'text/html; charset=utf-8');
+      res.setHeader('Content-Disposition',
+        `attachment; filename="network-status-${new Date().toISOString().slice(0, 10)}.html"`);
+      return res.send(html);
     })
   );
 

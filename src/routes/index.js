@@ -326,7 +326,7 @@ function createApiRouter({
   const targetTimelineService = findingStore
     ? createTargetTimelineService({ findingStore, probeOutagesRepo, auditEventsRepo, remediationPlaybooksRepo, topologyChangesRepo, deviceEventsRepo })
     : null;
-  if (findingStore) router.use('/api/findings', createFindingsRouter({ findingStore, timelineService: targetTimelineService, auditLogger }));
+  if (findingStore) router.use('/api/findings', createFindingsRouter({ findingStore, timelineService: targetTimelineService, auditLogger, agentsRepo }));
   if (assistant) router.use('/api/assistant', createAssistantRouter({ assistant, featureGate }));
   if (flowsRepo) router.use('/api/geo', createGeoRouter({ flowsRepo, agentsRepo, findingStore, tileConfig: geoTileConfig, getMapConfig, geoProvider, featureGate }));
   if (dispatcher) router.use('/api/alerting', createAlertingRouter({ dispatcher }));

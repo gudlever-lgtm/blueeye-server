@@ -65,6 +65,47 @@ function buildFilter({ hostId, deviceId, interfaceId, severity, metric, since, u
   return { where, params };
 }
 
+// Findings over TIME, bucketed, for the reporting charts.
+//
+// The Analysis screen answers "what is wrong now". This answers "when, and is
+// it getting better" — which is a different question and belongs on a
+// different page. Both run through the same `buildFilter`, so a trend and a
+// list scoped the same way describe the same findings.
+//
+// The bucket is chosen by the caller, not guessed from the range: an hourly
+// bucket over ninety days is 2 160 points for a chart 760 pixels wide, and a
+// daily bucket over one day is a single bar. The route decides, and the
+// choice is visible in the answer.
+async function trendQuery(pool, { bucket, filters, limit }) {
+  // MySQL DATE_FORMAT, not a computed range join: the grouping key IS the
+  // bucket, so an empty hour is simply absent rather than costing a row.
+  const FORMAT = { hour: '%Y-%m-%d %H:00:00', day: '%Y-%m-%d' };
+  const fmt = FORMAT[bucket] || FORMAT.day;
+  const { where, params } = buildFilter(filters || {});
+  const clause = where.length ? `WHERE ${where.join(' AND ')}` : '';
+  const [rows] = await pool.query(
+    `SELECT DATE_FORMAT(created_at, ?) AS bucket,
+            COUNT(*) AS cnt,
+            SUM(severity = 'CRIT') AS crit,
+            SUM(severity = 'WARN') AS warn,
+            SUM(severity = 'INFO') AS info,
+            SUM(acked = 1) AS acked
+       FROM findings ${clause}
+      GROUP BY bucket
+      ORDER BY bucket ASC
+      LIMIT ?`,
+    [fmt, ...params, limit],
+  );
+  return rows.map((r) => ({
+    bucket: r.bucket,
+    count: Number(r.cnt) || 0,
+    crit: Number(r.crit) || 0,
+    warn: Number(r.warn) || 0,
+    info: Number(r.info) || 0,
+    acked: Number(r.acked) || 0,
+  }));
+}
+
 function parseJson(value, fallback) {
   if (value === null || value === undefined) return fallback;
   if (typeof value === 'string') {
@@ -463,6 +504,13 @@ class FindingStore {
   // Already-acked rows are not counted: `acked = 0` in the WHERE means the
   // number that comes back is what THIS call changed, so "accepted 40 000" is
   // true rather than a restatement of how many matched.
+  // See trendQuery above. `limit` bounds the answer even when the filters do
+  // not — a chart cannot draw more points than it has pixels, and an unbounded
+  // GROUP BY over the whole table is the read this feature must never become.
+  async trend({ bucket = 'day', limit = 400, ...filters } = {}) {
+    return trendQuery(this.pool, { bucket, filters, limit: Math.min(Math.max(Number(limit) || 400, 1), 2000) });
+  }
+
   async ackMany({ ids = null, filter = null } = {}) {
     if (Array.isArray(ids)) {
       if (!ids.length) return 0;

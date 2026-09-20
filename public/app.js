@@ -14569,7 +14569,11 @@ const NIS2_FREQ = ['daily', 'weekly', 'monthly', 'quarterly', 'annually', 'ad-ho
 const NIS2_SEVERITY = ['low', 'medium', 'high', 'critical'];
 const NIS2_EVENT_STATUS = ['open', 'investigating', 'contained', 'resolved', 'closed'];
 
-const reportingState = { section: 'nis2' }; // 'nis2' (stationary) | 'generator' (custom)
+const reportingState = { section: 'findings' };
+// 'findings' (what the network did, no setup) | 'nis2' (stationary) | 'generator'
+// (custom) | 'schedules' | 'audit'. Findings opens by default: it is the one
+// section that says something on a fresh install, where NIS2 wants controls and
+// the generator wants a selection before either has an answer.
 const nis2State = { tab: 'dashboard' };
 
 // Maps a value to one of the shared badge palette classes (ok/warn/crit/INFO/neutral).
@@ -14648,10 +14652,142 @@ async function nis2Print(path) {
 let reportingPage = null;
 
 function reportingSections() {
+  // `findings` leads: "how much, of what, and is it getting better" is the
+  // question a reporting page is opened to answer, and it is the one the
+  // Analysis screen deliberately stopped answering when it became an overview
+  // of what is wrong NOW.
   // Audit is RBAC-gated: only admins may see who did what on the server.
   return role === 'admin'
-    ? ['nis2', 'generator', 'schedules', 'audit']
-    : ['nis2', 'generator', 'schedules'];
+    ? ['findings', 'nis2', 'generator', 'schedules', 'audit']
+    : ['findings', 'nis2', 'generator', 'schedules'];
+}
+
+// ---- Reporting → Findings over time ----------------------------------------
+// The totals that used to sit above the Analysis list, with the two things that
+// make a total mean something: WHEN it happened, and WHAT it was.
+const findingsReportState = { days: 30, bucket: 'day' };
+
+async function findingsReport() {
+  const st = findingsReportState;
+  const since = new Date(Date.now() - st.days * 24 * 60 * 60 * 1000).toISOString();
+  const qs = new URLSearchParams({ since });
+  const [summary, trend, agents] = await Promise.all([
+    api(`/api/findings/summary?${qs}`),
+    api(`/api/findings/trend?${qs}&bucket=${st.bucket}`),
+    // Names for the per-host bars. A chart axis reading "30, 31, 7" places
+    // nothing; the agent list is small and already cached by the API layer.
+    api('/agents').catch(() => []),
+  ]);
+  const agentName = (id) => {
+    const a = (agents || []).find((x) => String(x.id) === String(id));
+    return a ? (a.display_name || a.hostname) : `#${id}`;
+  };
+
+  const wrap = el('div', {});
+  const redraw = () => {
+    findingsReport().then((node) => wrap.replaceChildren(node)).catch(() => {});
+  };
+
+  // A day bucket over one day is a single bar; an hour bucket over ninety days
+  // is 2 160 points for a chart 760 pixels wide. The range picks the sensible
+  // default and the reader can still override it.
+  const rangePick = ui.select({
+    label: t('rep.find.range'),
+    value: String(st.days),
+    options: [[1, t('rep.find.day')], [7, t('rep.find.week')], [30, t('rep.find.month')], [90, t('rep.find.quarter')]]
+      .map(([v, label]) => [String(v), label]),
+    onchange: (e) => {
+      st.days = Number(e.target.value);
+      st.bucket = st.days <= 2 ? 'hour' : 'day';
+      redraw();
+    },
+  });
+  const bucketPick = ui.select({
+    label: t('rep.find.bucket'),
+    value: st.bucket,
+    options: [['hour', t('rep.find.hourly')], ['day', t('rep.find.daily')]],
+    onchange: (e) => { st.bucket = e.target.value; redraw(); },
+  });
+
+  const points = trend.points || [];
+  // The bucket label, not the raw key: "2026-09-20 14:00:00" on an axis is
+  // unreadable at any width.
+  const labelOf = (b) => (trend.bucket === 'hour' ? String(b).slice(11, 16) : String(b).slice(5, 10));
+  const sev = (key) => points.map((p) => ({ label: labelOf(p.bucket), y: p[key] }));
+
+  const sum = summary || {};
+  const bySev = sum.bySeverity || {};
+
+  wrap.append(
+    ui.panel({
+      title: t('rep.find.title'),
+      note: t('rep.find.note', { days: st.days }),
+      children: [
+        el('div', { class: 'panel-body' }, ui.toolbar({
+          filters: [ui.filter(t('rep.find.range'), rangePick), ui.filter(t('rep.find.bucket'), bucketPick)],
+          // The executive document: "fix these issues at these places", in the
+          // same print-ready chrome as the NIS2 reports. Deterministic — every
+          // sentence in it is assembled from the numbers on this page.
+          actions: [ui.button('secondary', t('rep.find.download'), {
+            onclick: () => {
+              const url = `/api/findings/report?format=html&days=${st.days}&locale=${encodeURIComponent(window.I18n && window.I18n.getLocale ? window.I18n.getLocale() : 'en')}`;
+              window.open(url, '_blank', 'noopener');
+            },
+          })],
+        })),
+        ui.statStrip([
+          { value: sum.total || 0, label: t('analysis.stat.total') },
+          { value: sum.unacked || 0, label: t('analysis.stat.unacked') },
+          { value: bySev.CRIT || 0, label: t('changes.group.CRIT'), tone: 'crit' },
+          { value: bySev.WARN || 0, label: t('changes.group.WARN'), tone: 'warn' },
+          { value: bySev.INFO || 0, label: t('changes.group.INFO'), tone: 'info' },
+        ]),
+      ],
+    }),
+    // WHEN. Severity as separate series rather than one total, because "300 a
+    // day" reads very differently when it is 3 CRIT and 297 INFO.
+    ui.panel({
+      title: t('rep.find.when'),
+      children: [ui.chart({
+        title: t('rep.find.when'),
+        form: points.length > 14 ? 'line' : 'bars',
+        series: [
+          { name: t('changes.group.CRIT'), points: sev('crit') },
+          { name: t('changes.group.WARN'), points: sev('warn') },
+          { name: t('changes.group.INFO'), points: sev('info') },
+        ],
+        emptyTitle: t('rep.find.noData'),
+      })],
+    }),
+    // WHAT. The metrics driving the volume, and the places carrying it.
+    ui.panelGrid(
+      ui.panel({
+        title: t('rep.find.whatMetric'),
+        children: [ui.chart({
+          title: t('rep.find.whatMetric'),
+          form: 'bars',
+          series: [{
+            name: t('analysis.col.count'),
+            points: (sum.byMetric || []).slice(0, 8).map((m) => ({ label: m.metric, y: m.count })),
+          }],
+          emptyTitle: t('rep.find.noData'),
+        })],
+      }),
+      ui.panel({
+        title: t('rep.find.whatHost'),
+        children: [ui.chart({
+          title: t('rep.find.whatHost'),
+          form: 'bars',
+          series: [{
+            name: t('analysis.col.count'),
+            points: (sum.byHost || []).slice(0, 8).map((h) => ({ label: agentName(h.hostId), y: h.count })),
+          }],
+          emptyTitle: t('rep.find.noData'),
+        })],
+      }),
+    ),
+  );
+  return wrap;
 }
 
 function getReportingPage() {
@@ -14666,10 +14802,11 @@ function getReportingPage() {
       const info = PAGE_INFO.reporting || {};
       return { lead: info.hero || '', title: info.title || t('rep.title'), body: info.body || (() => []) };
     },
-    render: (key) => (key === 'generator' ? reportGenerator()
-      : key === 'schedules' ? reportSchedulesPanel()
-        : key === 'audit' ? auditModule()
-          : nis2Module()),
+    render: (key) => (key === 'findings' ? findingsReport()
+      : key === 'generator' ? reportGenerator()
+        : key === 'schedules' ? reportSchedulesPanel()
+          : key === 'audit' ? auditModule()
+            : nis2Module()),
     errText,
   });
   return reportingPage;
@@ -15365,10 +15502,12 @@ function renderRgPreview(report) {
 }
 
 PAGE_INFO.reporting = {
-  hero: 'Reporting — the NIS2 readiness module plus a Report Generator for building your own reports.',
+  hero: 'Reporting — findings over time, the NIS2 readiness module, and a Report Generator for building your own reports.',
   title: 'Reporting',
   body: () => [
-    el('p', {}, 'Two ways to report:'),
+    el('p', {}, 'Three ways to report:'),
+    el('h4', {}, t('rep.tab.findings')),
+    el('p', {}, t('rep.find.help')),
     el('h4', {}, 'NIS2'),
     el('p', {}, 'A stationary module with fixed parameters: a readiness dashboard, risk register, control evidence, security events, generated management/executive reports and an audit trail.'),
     el('h4', {}, 'Report Generator'),

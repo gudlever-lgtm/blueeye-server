@@ -2365,6 +2365,32 @@ function makeFindingStore(overrides = {}) {
       if (Number.isInteger(limit) && limit > 0) out = out.slice(0, limit);
       return out;
     }),
+    // Buckets by day or hour, like the real store's DATE_FORMAT grouping. An
+    // empty bucket is simply absent — the chart draws what happened, not a row
+    // per quiet hour.
+    trend: overrides.trend || (async ({ bucket = 'day', hostId, severity, metric, since, until } = {}) => {
+      const key = (d) => {
+        const iso = new Date(d || 0).toISOString();
+        return bucket === 'hour' ? `${iso.slice(0, 13)}:00:00` : iso.slice(0, 10);
+      };
+      const match = rows.filter((f) => (!hostId || f.hostId === hostId)
+        && (!severity || f.severity === severity)
+        && (!metric || f.metric === metric)
+        && (!since || new Date(f.createdAt || 0) >= new Date(since))
+        && (!until || new Date(f.createdAt || 0) <= new Date(until)));
+      const by = new Map();
+      for (const f of match) {
+        const k = key(f.createdAt);
+        if (!by.has(k)) by.set(k, { bucket: k, count: 0, crit: 0, warn: 0, info: 0, acked: 0 });
+        const b = by.get(k);
+        b.count += 1;
+        if (f.severity === 'CRIT') b.crit += 1;
+        else if (f.severity === 'WARN') b.warn += 1;
+        else if (f.severity === 'INFO') b.info += 1;
+        if (f.acked) b.acked += 1;
+      }
+      return [...by.values()].sort((a, b) => String(a.bucket).localeCompare(String(b.bucket)));
+    }),
     summary: overrides.summary || (async ({ hostId, severity, metric, since, until } = {}) => {
       const match = rows.filter((f) => (!hostId || f.hostId === hostId)
         && (!severity || f.severity === severity)

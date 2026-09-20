@@ -300,6 +300,49 @@ Nothing to describe means **no provider call at all** — the honest answer cost
 nothing. The panel does not render when the assistant is off or unlicensed, so a
 deployment without it has no AI on the page rather than a button that 403s.
 
+## Reporting: findings over time, and the executive document
+
+The Analysis screen answers **what is wrong now**. The two questions a report is
+opened for — *when did this happen* and *where should somebody be sent* — moved
+to **Reporting → Findings**, which is where the totals from the old Analysis
+header now live, with the graphs that make a total mean something.
+
+`GET /api/findings/trend` buckets by `hour` or `day` over the same filter set as
+the list and the summary. The bucket is **explicit, not inferred from the
+range**: hourly over ninety days is 2 160 points for a chart 760 pixels wide,
+and daily over one day is a single bar. The answer says which bucket it used, so
+a chart never silently redraws at a different resolution than its axis claims.
+Severity is charted as separate series rather than one total, because "300 a
+day" reads very differently when it is 3 CRIT and 297 INFO.
+
+### The executive report
+
+`GET /api/findings/report` builds *"fix these specific issues at these specific
+locations"* — JSON by default, or the print-ready document with `?format=html`.
+
+It is rendered through the **NIS2 document chrome** (`src/nis2/report.js`,
+`renderRegisterHtml`) rather than a second report engine: that module already
+solves print CSS, a per-request locale (two people can pull a report in two
+languages at once) and a section shape the renderer understands.
+
+**It is deterministic, and that is the point.** Every number is computed by the
+server and every sentence is assembled from those numbers — there is a test that
+strips the comments from `src/analysis/networkReport.js` and fails if the module
+ever reaches for a model. A document a manager forwards to an engineer has to be
+defensible line by line, and "the assistant said so" is not that. The AI on the
+Analysis screen is for interpretation at the desk; this is the record.
+
+Three editorial rules keep it readable:
+
+| rule | why |
+| --- | --- |
+| at most 10 places named | a report listing forty sites reads as "everything is broken", which says nothing |
+| a place needs a CRIT or ≥5 warnings to be named | one warning does not earn a row; the rest become a tail count |
+| fewer than 4 buckets → "too short to say" | two numbers are not a trend, and drawing a line through them is a lie |
+
+Where no single place clears the bar, it says so — *"a broad, thin spread rather
+than a concentrated fault"* — instead of naming an arbitrary host.
+
 ## AI: per-location summary
 
 Besides per-host `/explain`, the opt-in assistant exposes

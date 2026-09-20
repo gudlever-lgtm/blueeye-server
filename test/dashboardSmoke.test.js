@@ -36,6 +36,27 @@ const PUBLIC = path.join(__dirname, '..', 'public');
 const html = fs.readFileSync(path.join(PUBLIC, 'index.html'), 'utf8');
 const tick = (ms = 120) => new Promise((r) => setTimeout(r, ms));
 
+// Waits for a CONDITION instead of a guessed number of milliseconds.
+//
+// The guided-action tests used to be a chain of tick(250) / tick(220) /
+// tick(400) — budgets that are ample on an idle machine and not ample on a
+// loaded one. One of them failed exactly once, in a pre-push gate that was
+// sharing the CPU with another full suite, and passed on its own and in two
+// other full runs. That is not a flake to re-run: it is an assertion resting on
+// wall-clock time, and the fix is to rest it on the thing actually being waited
+// for. Each poll yields to the event loop, so pending fetches and renders make
+// progress between checks.
+async function until(predicate, { timeoutMs = 5000, everyMs = 25, what = 'condition' } = {}) {
+  const deadline = Date.now() + timeoutMs;
+  let last;
+  for (;;) {
+    try { last = predicate(); } catch { last = undefined; }
+    if (last) return last;
+    if (Date.now() > deadline) throw new Error(`timed out after ${timeoutMs}ms waiting for ${what}`);
+    await tick(everyMs); // eslint-disable-line no-await-in-loop
+  }
+}
+
 // Every nav destination, including the ones that share a data-view and differ
 // by sub-tab — those are separate screens to the person clicking them.
 function navTargets(doc) {
@@ -316,18 +337,31 @@ test('the guide creates a Service Assurance test the module can list and run', a
   const app = populatedApp();
   const { doc, token } = await boot(t, { app });
   doc.querySelector('.tabs button[data-view="guide"][data-guide="assurance"]').click();
-  await tick(250);
+  await until(() => doc.querySelectorAll('#view .guide-stepper-btn').length > 5, { what: 'the assurance guide stepper' });
   [...doc.querySelectorAll('#view .guide-stepper-btn')][5].click();   // → Tests
-  await tick(220);
-
-  const card = doc.querySelector('#view .guide-action');
-  assert.ok(card, 'the tests step has no action card');
+  // The card is appended before its fields are, so waiting for the card alone
+  // is not waiting for the form — under load that produced "Cannot set
+  // properties of undefined" on inputs[1]. Wait for the fields this test types
+  // into, not just their container.
+  const card = await until(
+    () => {
+      const c = doc.querySelector('#view .guide-action');
+      return c && c.querySelectorAll('.guide-action-input').length >= 4 ? c : null;
+    },
+    { what: 'the tests step action card and its four fields' }
+  );
   const inputs = [...card.querySelectorAll('.guide-action-input')];
   inputs[1].value = 'Front page loads';
   inputs[2].value = '/';
   inputs[3].value = 'Sign in';
   card.querySelector('.guide-action-go').click();
-  await tick(400);
+  // Settled = the card has committed to an answer, either way. Waiting for
+  // "result is visible" alone would time out on a refusal instead of reporting
+  // the reason the validator gave.
+  await until(
+    () => !card.querySelector('.guide-action-result').hidden || !card.querySelector('.guide-action-failure').hidden,
+    { what: 'the guided action to settle' }
+  );
 
   const failure = card.querySelector('.guide-action-failure');
   assert.equal(failure.hidden, true, `the DSL validator refused it: ${failure.textContent}`);
@@ -348,14 +382,22 @@ test('the optional assertion is optional — one step is still a test', async (t
   const app = populatedApp();
   const { doc, token } = await boot(t, { app });
   doc.querySelector('.tabs button[data-view="guide"][data-guide="assurance"]').click();
-  await tick(250);
+  await until(() => doc.querySelectorAll('#view .guide-stepper-btn').length > 5, { what: 'the assurance guide stepper' });
   [...doc.querySelectorAll('#view .guide-stepper-btn')][5].click();
-  await tick(220);
-  const card = doc.querySelector('#view .guide-action');
+  const card = await until(
+    () => {
+      const c = doc.querySelector('#view .guide-action');
+      return c && c.querySelectorAll('.guide-action-input').length >= 2 ? c : null;
+    },
+    { what: "the tests step action card and its fields" }
+  );
   const inputs = [...card.querySelectorAll('.guide-action-input')];
   inputs[1].value = 'Reachable';
   card.querySelector('.guide-action-go').click();
-  await tick(400);
+  await until(
+    () => !card.querySelector('.guide-action-result').hidden || !card.querySelector('.guide-action-failure').hidden,
+    { what: 'the guided action to settle' }
+  );
   assert.equal(card.querySelector('.guide-action-failure').hidden, true);
 
   const listed = await request(app).get('/api/service-tests/tests').set('Authorization', `Bearer ${token}`);

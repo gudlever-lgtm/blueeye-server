@@ -27,6 +27,16 @@ function attachDashboardWebSocket({
     // Cooperative: only claim our path, ignore others (see agentSocket).
     if (pathnameOf(req) !== path) return;
 
+    // The socket has no 'error' listener until ws adopts it, and an unadopted
+    // socket that errors raises an uncaught exception. Verification here is
+    // synchronous so the window is small, but handleUpgrade below is not — a
+    // browser tab closed mid-handshake lands in it. Same guard as agentSocket.
+    const onEarlyError = (err) => {
+      logger.warn(`Dashboard WS socket error during handshake: ${err && err.message}`);
+      socket.destroy();
+    };
+    socket.on('error', onEarlyError);
+
     let user = null;
     try {
       user = verifyToken(extractToken(req));
@@ -40,6 +50,7 @@ function attachDashboardWebSocket({
       return;
     }
 
+    socket.removeListener('error', onEarlyError);
     wss.handleUpgrade(req, socket, head, (ws) => {
       wss.emit('connection', ws, req, user);
     });

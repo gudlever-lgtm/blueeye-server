@@ -50,7 +50,7 @@ function boot({ t, routes = {}, url = 'http://server.test/logs', role = 'admin' 
   if (t) t.after(() => window.close());
   window.localStorage.setItem('blueeye.server.token', 'T');
   window.localStorage.setItem('blueeye.server.role', role);
-  for (const s of [...window.document.querySelectorAll('script[src]')].map((x) => x.getAttribute('src')).filter((x) => x.startsWith('/'))) {
+  for (const s of [...window.document.querySelectorAll('script[src]')].map((x) => x.getAttribute('src')).filter((x) => x.startsWith('/') && !x.startsWith('/vendor/'))) {
     window.eval(fs.readFileSync(path.join(PUBLIC, s.split('?')[0]), 'utf8'));
   }
   return { window, doc: window.document, errors, log };
@@ -61,6 +61,12 @@ const SESSION = (over = {}) => Object.assign({
   'GET /me': { id: 1, email: 'x@y.dk', role: 'admin', preferences: {} },
   'GET /auth/sso': { methods: [] },
   'GET /license': { plan: 'professional', features: {} },
+  // The app reads these on every render. They were absent here, so they 404'd —
+  // harmless while a failed licence read was silent, but that failure is now
+  // recorded in the client log, and this screen MERGES the client log with the
+  // server ring. Three unmocked calls were three extra rows in the table.
+  'GET /license/features': {},
+  'GET /license/plan': { plan: 'professional', plan_name: 'Professional', features: {}, modules: {} },
   'GET /api/logs': { entries: ENTRIES },
 }, over);
 

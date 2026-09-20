@@ -127,11 +127,70 @@
       });
     }
 
+    // ---------------------------------------------------------- forecast
+    //
+    // "When does this link run out of room?" — the projection lives beside the
+    // table that shows where each link is NOW, because the two answer the same
+    // question at different distances. A link at 40% and climbing five points a
+    // day is the one to act on, and nothing on the current-state table can say
+    // that.
+    //
+    // Only links that produced a usable projection are listed. A port with two
+    // days of history, or one whose speed the agent cannot read, is left out
+    // rather than shown with an empty row — the panel's own empty state says
+    // why nothing is there.
+    var DIR_TONE = { rising: 'warn', falling: 'ok', flat: 'neutral' };
+
+    function daysCell(f) {
+      if (!f.ok) return ui.meta(t('fc.tooLittle'));
+      if (f.daysUntilCapacity == null) return ui.meta(t('fc.never'));
+      var n = Math.round(f.daysUntilCapacity);
+      // A link that fills inside a fortnight is the reason to look at this
+      // panel at all, so it carries the tone rather than reading as grey text.
+      var tone = n <= 14 ? 'crit' : n <= 60 ? 'warn' : 'neutral';
+      return ui.badge(tone, t('fc.days', { n: n }));
+    }
+
+    function forecastTable(list) {
+      var horizon = (list[0] && list[0].horizonDays) || 30;
+      return ui.dataTable({
+        columns: [
+          { key: 'iface', label: t('fc.col.iface'), width: '150px' },
+          { key: 'trend', label: t('fc.col.trend'), width: '150px' },
+          { key: 'now', label: t('fc.col.now'), width: '96px', num: true },
+          { key: 'projected', label: t('fc.col.projected', { days: horizon }), width: '110px', num: true },
+          { key: 'until', label: t('fc.col.until'), width: '150px' },
+          { key: 'why', label: '' },
+        ],
+        rows: list.map(function (f) {
+          var pct = function (n) { return n == null ? '–' : Math.round(n) + '%'; };
+          return {
+            cells: {
+              iface: f.iface,
+              trend: f.ok
+                ? el('span', {},
+                  ui.badge(DIR_TONE[f.direction] || 'neutral', t('fc.dir.' + f.direction)),
+                  ' ',
+                  ui.metaXs(t('fc.perDay', { n: (f.slopePerDay > 0 ? '+' : '') + Math.round(f.slopePerDay * 10) / 10 + '%' })))
+                : ui.meta('–'),
+              now: f.ok ? pct(f.current) : '–',
+              projected: f.ok ? pct(f.projected) : '–',
+              until: daysCell(f),
+              // The engine already writes a plain-language explanation carrying
+              // its own evidence; showing it beats paraphrasing it here.
+              why: ui.metaXs(f.explanation || ''),
+            },
+          };
+        }),
+      });
+    }
+
     function view() {
       var state = deps.state;
       var page = ui.page();
       var barHost = el('div', {});
       var tableHost = el('div', {});
+      var forecastHost = el('div', {});
       var agents = [];
 
       var info = deps.help();
@@ -139,19 +198,50 @@
         title: t('iface.title'),
         lead: t('iface.lead'),
         help: { title: info.title, body: info.body },
-      }), barHost, tableHost);
+      }), barHost, tableHost, forecastHost);
 
       function drawBar() {
         var sel = ui.select({
           label: t('iface.agent'),
           value: state.agentId,
           options: agents.map(function (a) { return [String(a.id), a.display_name || a.hostname]; }),
-          onchange: function (e) { state.agentId = e.target.value; load(); },
+          onchange: function (e) { state.agentId = e.target.value; load(); loadForecast(); },
         });
         barHost.replaceChildren(ui.toolbar({
           filters: [ui.filter(t('iface.agent'), sel)],
-          actions: [ui.button('secondary', t('iface.refresh'), { onclick: function () { load(); } })],
+          actions: [ui.button('secondary', t('iface.refresh'), { onclick: function () { load(); loadForecast(); } })],
         }));
+      }
+
+      // The forecast is a SEPARATE read from the 5-second table poll: it reads
+      // two weeks of history, and re-running that every five seconds would be
+      // an expensive answer to a question whose answer moves in days. It loads
+      // when the agent changes, and on an explicit Refresh — not on the poll.
+      function loadForecast() {
+        if (!state.agentId || !deps.fetchForecast) return Promise.resolve();
+        forecastHost.replaceChildren(ui.panel({ title: t('fc.title'), children: [ui.loadingState(3)] }));
+        return deps.fetchForecast(state.agentId)
+          .then(function (d) {
+            var usable = (d.interfaces || []).filter(function (f) { return f.ok; });
+            forecastHost.replaceChildren(ui.panel({
+              title: t('fc.title'),
+              note: t('fc.note', { days: d.windowDays }),
+              children: [usable.length
+                ? forecastTable(usable)
+                : ui.emptyState({ title: t('fc.none'), body: t('fc.noneHint') })],
+            }));
+          })
+          .catch(function (e) {
+            // A failed forecast must not take the interface table with it —
+            // the current state is the more urgent of the two.
+            forecastHost.replaceChildren(ui.panel({
+              title: t('fc.title'),
+              children: [ui.errorState({
+                title: t('fc.err.title'), body: deps.errText(e),
+                detail: 'GET /api/forecast/interfaces', onRetry: loadForecast,
+              })],
+            }));
+          });
       }
 
       function load() {
@@ -187,6 +277,7 @@
             // No estate at all: an agent picker with nothing in it, above a
             // table that can never fill, is three panels saying one thing.
             barHost.replaceChildren();
+            forecastHost.replaceChildren();
             tableHost.replaceChildren(ui.panel({
               title: t('iface.panel'),
               children: [ui.emptyState({
@@ -202,6 +293,7 @@
             state.agentId = String(agents[0].id);
           }
           drawBar();
+          loadForecast();
           return load().then(function () { deps.startPolling(load); });
         })
         .then(function () { return page; });

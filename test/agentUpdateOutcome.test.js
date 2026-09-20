@@ -82,7 +82,7 @@ async function boot(t, app) {
   if (t) t.after(() => window.close());
   window.localStorage.setItem('blueeye.server.token', token);
   window.localStorage.setItem('blueeye.server.role', 'admin');
-  for (const s of [...window.document.querySelectorAll('script[src]')].map((x) => x.getAttribute('src')).filter((x) => x.startsWith('/'))) {
+  for (const s of [...window.document.querySelectorAll('script[src]')].map((x) => x.getAttribute('src')).filter((x) => x.startsWith('/') && !x.startsWith('/vendor/'))) {
     window.eval(fs.readFileSync(path.join(PUBLIC, s.split('?')[0]), 'utf8'));
   }
   await tick(350);

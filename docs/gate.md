@@ -62,8 +62,9 @@ app (`test/gate/_routes.js`) and asserts:
 **`test/gate/ui.test.js`** — the dashboard has no build step, so:
 
 - every `public/*.js` parses as a classic script; every `*.css` is balanced;
-- `index.html` references only local assets that exist and are served, plus
-  the CSP-allowed Leaflet CDN; no inline scripts or `on*` handlers;
+- `index.html` references only assets served from this server (no CDN at all —
+  Leaflet is vendored under `public/vendor/leaflet/`), each of which must exist
+  on disk and answer 200; no inline scripts or `on*` handlers;
 - every `data-view` button has a `views.<tab>` handler and a `PAGE_INFO` entry;
   `data-min-role` / `data-feature` values are known;
 - every `t('key')` exists in **both** locales, catalogues are in parity, and

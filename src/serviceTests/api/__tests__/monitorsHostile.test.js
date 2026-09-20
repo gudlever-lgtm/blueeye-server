@@ -184,7 +184,7 @@ test('every GET answers 200 or 400 for hostile query parameters — never 500', 
     '?application_id=99999999999999999999', '?application_id[]=1', '?application_id=1&application_id=2',
     '?enabled=', '?enabled=true', '?enabled=false', '?enabled=1', '?enabled=maybe', '?enabled[]=true',
     "?type=' OR 1=1--", '?limit=0', '?limit=-5', '?limit=abc', '?limit=99999', '?limit[]=10',
-    '?hours=0', '?hours=abc', '?hours=99999', '?unknown=param', `?name=${encodeURIComponent(' null byte')}`,
+    '?hours=0', '?hours=abc', '?hours=99999', '?unknown=param', `?name=${encodeURIComponent('\0null byte')}`,
   ];
   const paths = ['', '/types', `/${created.id}`, `/${created.id}/results`];
   for (const path of paths) {

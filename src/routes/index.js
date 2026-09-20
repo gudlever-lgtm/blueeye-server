@@ -293,6 +293,7 @@ function createApiRouter({
     // used to detect (and refuse under) an active SSO/LDAP setup.
     userMailer, ldapAuth, oidcAuth, samlAuth,
     publicUrl: (enrollConfig && enrollConfig.publicUrl) || '',
+    logger,
   }));
   router.use('/me', createMeRouter({ usersRepo }));
   router.use('/locations', createLocationsRouter({ locationsRepo, resultsRepo }));
@@ -376,7 +377,7 @@ function createApiRouter({
   // /api/events is the only path: the deprecated /api/incidents alias was
   // removed with the rest of the incident vocabulary (migration 077).
   if (eventCasesRepo && findingStore) {
-    router.use('/api/events', createEventsRouter({ eventCasesRepo, findingStore, auditLogger, auditEventsRepo, auditLogRepo, configSnapshotsRepo, agentsRepo, assistant, featureGate, askCache: createAskCache(), remediationPlaybooksRepo, blastRadiusService, eventNotesRepo }));
+    router.use('/api/events', createEventsRouter({ eventCasesRepo, findingStore, auditLogger, auditEventsRepo, auditLogRepo, configSnapshotsRepo, agentsRepo, assistant, featureGate, askCache: createAskCache(), remediationPlaybooksRepo, blastRadiusService, eventNotesRepo, logger }));
   }
   if (eventClustersRepo) {
     const clusterTimelineService = createEventClusterTimelineService({
@@ -400,7 +401,10 @@ function createApiRouter({
   if (thresholdsRepo) router.use('/api/thresholds', createThresholdsRouter({ thresholdsRepo, locationsRepo }));
   router.use('/api/interfaces', createInterfacesRouter({ resultsRepo, agentsRepo }));
   // Capacity/trend forecasting (robust Theil–Sen projection + days-to-capacity).
-  router.use('/api/forecast', createForecastRouter());
+  // resultsRepo/agentsRepo are what let GET /interfaces read the series and the
+  // link speed itself instead of making the caller assemble both; POST / works
+  // without them.
+  router.use('/api/forecast', createForecastRouter({ resultsRepo, agentsRepo }));
   // Read-only baseline context for the dashboard's shared metric component.
   // viewer+ — see the RBAC note in the router; the operator+ diagnostic route at
   // /api/topology/flow-baselines is left alone.

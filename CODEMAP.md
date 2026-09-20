@@ -126,7 +126,10 @@ src/
 │   └── centroids.js countryCentroids.json
 ├── flows/             # traffic-type categories (DNS/Facebook…) — categories.js
 ├── enroll/            # frictionless enrollment: agentSourceStore.js (source bundle
-│                      # + cached SHA-256), installScript.js (Docker/Node installer),
+│                      # + cached SHA-256, REPRODUCIBLE — the script carries the
+│                      # checksum and the tarball is a later request, so identical
+│                      # source must hash identically; needs GNU tar),
+│                      # installScript.js (Docker/Node installer),
 │                      # artifactStore.js (legacy binaries), fingerprint.js (cert pin)
 ├── license/           # Ed25519 license-proof verify + feature gate
 │   ├── verify.js publicKey.js licenseManager.js licenseCache.js features.js

@@ -2767,10 +2767,13 @@ CREATE TABLE IF NOT EXISTS `snmp_devices` (
   `location_id` INT UNSIGNED NULL DEFAULT NULL,
   `collect` JSON NULL DEFAULT NULL,
   `interval_sec` INT UNSIGNED NOT NULL DEFAULT 300,
+  `counter_interval_sec` INT UNSIGNED NULL DEFAULT NULL,
   `enabled` TINYINT(1) NOT NULL DEFAULT 1,
   `last_polled_at` DATETIME NULL DEFAULT NULL,
   `last_ok_at` DATETIME NULL DEFAULT NULL,
   `last_error` VARCHAR(255) NULL DEFAULT NULL,
+  `last_uptime_ticks` BIGINT UNSIGNED NULL DEFAULT NULL,
+  `last_uptime_at` DATETIME(3) NULL DEFAULT NULL,
   `supported` JSON NULL DEFAULT NULL,
   `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   `updated_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
@@ -2982,6 +2985,97 @@ CREATE TABLE IF NOT EXISTS `device_interfaces` (
   KEY `idx_devif_device_index` (`device_id`, `if_index`),
   KEY `idx_devif_last_seen` (`last_seen`),
   CONSTRAINT `fk_devif_device` FOREIGN KEY (`device_id`) REFERENCES `snmp_devices` (`id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- 109 — device_counter_samples: interface counters from a polled switch, over time.
+--
+-- This is the table the whole SNMP effort was building towards. Everything
+-- before it answered WHERE something is; this answers what a port has been
+-- DOING, and it is the first per-port time series in the product.
+--
+-- WHY BOTH THE RAW COUNTER AND THE COMPUTED RATE.
+--
+-- Nothing else here stores a raw counter: snmpMonitor.js reads twice and sends
+-- rates, and the counters never leave the agent. That is fine when the agent
+-- measures itself at a cadence it owns, and wrong here, because:
+--
+--   * A rate can never be recomputed. Change the definition of "utilisation"
+--     and every historical number is stuck with the old one.
+--   * A counter reset cannot be recognised after the fact. With only rates, a
+--     reboot shows up as a single enormous spike that is indistinguishable from
+--     a real one.
+--   * A MISSING cycle cannot be told from a cycle that measured zero. A raw
+--     counter that did not move says "no traffic"; a row that is not there says
+--     "we did not look".
+--
+-- So the raw value is the evidence and the rate is the derivation, and both are
+-- kept. `discontinuity` is what makes a NULL rate readable rather than
+-- suspicious: the device rebooted, or its ifIndex moved, and the delta across
+-- that boundary would have been a fabricated number.
+--
+-- WHY A WIDE ROW (one per port per poll) AND NOT ONE PER METRIC.
+--
+-- 20 switches x 48 ports x 10 metrics at 60 s is 13.8 million rows a day narrow
+-- and 1.38 million wide — a factor of ten. The cost is that a new metric is an
+-- ALTER rather than a new id, and with IF-MIB that is acceptable: the column set
+-- is defined by an RFC from 2000 and does not move.
+--
+-- WHY interface_id AND NOT ifIndex.
+--
+-- ifIndex is only stable between re-initialisations of the network management
+-- system. Keyed on it, the 18th's numbers for Gi1/0/12 would sit beside the
+-- 19th's for a Gi1/0/12 that is now a different physical port. The samples point
+-- at a `device_interfaces` row (migration 108), whose identity is the NAME, so a
+-- renumbering moves one column in one inventory row and leaves every historical
+-- measurement pointing at the right port.
+--
+-- STORE: TELEMETRY. This is the second-largest write stream in the product after
+-- flow_records, and it belongs in TimescaleDB by the rules in
+-- docs/storage-split-audit.md. It is dual-store like device_events and results:
+-- MySQL is the fallback when TSDB is not configured, with a SHORTER retention,
+-- because 180 bytes x 1.38 million rows a day is 10 GB a month in InnoDB.
+--
+-- NO FOREIGN KEY on interface_id, for the same reason results and device_events
+-- have none: telemetry must not be deleted by a cascade from an inventory row,
+-- and the TSDB copy cannot have one at all. The inventory is purged on a LONGER
+-- window than these samples (180 days vs 90) so the reference stays resolvable.
+CREATE TABLE IF NOT EXISTS `device_counter_samples` (
+  `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `ts` DATETIME(3) NOT NULL,
+  `device_id` INT UNSIGNED NOT NULL,
+  `interface_id` BIGINT UNSIGNED NOT NULL,
+  `in_octets` BIGINT UNSIGNED NULL DEFAULT NULL,
+  `out_octets` BIGINT UNSIGNED NULL DEFAULT NULL,
+  `in_ucast_pkts` BIGINT UNSIGNED NULL DEFAULT NULL,
+  `out_ucast_pkts` BIGINT UNSIGNED NULL DEFAULT NULL,
+  `in_mcast_pkts` BIGINT UNSIGNED NULL DEFAULT NULL,
+  `in_bcast_pkts` BIGINT UNSIGNED NULL DEFAULT NULL,
+  `out_mcast_pkts` BIGINT UNSIGNED NULL DEFAULT NULL,
+  `out_bcast_pkts` BIGINT UNSIGNED NULL DEFAULT NULL,
+  `in_errors` BIGINT UNSIGNED NULL DEFAULT NULL,
+  `out_errors` BIGINT UNSIGNED NULL DEFAULT NULL,
+  `in_discards` BIGINT UNSIGNED NULL DEFAULT NULL,
+  `out_discards` BIGINT UNSIGNED NULL DEFAULT NULL,
+  `fcs_errors` BIGINT UNSIGNED NULL DEFAULT NULL,
+  `alignment_errors` BIGINT UNSIGNED NULL DEFAULT NULL,
+  `late_collisions` BIGINT UNSIGNED NULL DEFAULT NULL,
+  `carrier_sense_errors` BIGINT UNSIGNED NULL DEFAULT NULL,
+  `delta_sec` INT UNSIGNED NULL DEFAULT NULL,
+  `in_bps` DOUBLE NULL DEFAULT NULL,
+  `out_bps` DOUBLE NULL DEFAULT NULL,
+  `in_err_pps` DOUBLE NULL DEFAULT NULL,
+  `out_err_pps` DOUBLE NULL DEFAULT NULL,
+  `in_disc_pps` DOUBLE NULL DEFAULT NULL,
+  `out_disc_pps` DOUBLE NULL DEFAULT NULL,
+  `fcs_pps` DOUBLE NULL DEFAULT NULL,
+  `in_bcast_pps` DOUBLE NULL DEFAULT NULL,
+  `in_util_pct` DOUBLE NULL DEFAULT NULL,
+  `out_util_pct` DOUBLE NULL DEFAULT NULL,
+  `discontinuity` ENUM('first', 'reboot', 'renumber', 'gap', 'wrap') NULL DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uq_counter_sample` (`interface_id`, `ts`),
+  KEY `idx_counter_device_ts` (`device_id`, `ts`),
+  KEY `idx_counter_ts` (`ts`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 SET FOREIGN_KEY_CHECKS = 1;

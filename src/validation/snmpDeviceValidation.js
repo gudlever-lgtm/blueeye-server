@@ -16,7 +16,12 @@ const { normalizeMac, isUsableMac } = require('../identity/arpTable');
 //     switch. A malformed FDB row is skipped and counted; one bad entry out of
 //     five thousand must not cost the other 4 999.
 
-const COLLECT_KINDS = ['if', 'fdb', 'lldp', 'vlan'];
+// What a device may be polled for. 'ifcounters' is the interface counter time
+// series (migration 109) and is deliberately its own kind rather than part of
+// 'if': the port inventory is a handful of rows that change when somebody
+// rewires something, and the counters are ~1.4 million rows a day for twenty
+// switches. Opting into one must not opt into the other.
+const COLLECT_KINDS = ['if', 'fdb', 'lldp', 'vlan', 'ifcounters'];
 // Which OID the interface NAME came from. Not every switch implements ifName;
 // some only have ifDescr, which is less stable, and a row built from the weaker
 // one should say so rather than leaving it to be assumed.
@@ -39,6 +44,20 @@ const MAX_NEIGHBOURS_PER_DEVICE = 512;
 const MAX_VLANS_PER_DEVICE = 4096;
 const MAX_INTERFACES_PER_DEVICE = 4096;
 const MAX_DEVICES_PER_BATCH = 200;
+
+// The counter batch. A chassis with a thousand ports is real, and the agent
+// caps at the same number — this is the boundary refusing to be told otherwise.
+const MAX_COUNTER_INTERFACES_PER_DEVICE = 1024;
+const MIN_COUNTER_INTERVAL_SEC = 30;
+// Every counter column the agent may send. An unlisted key is ignored rather
+// than stored: a future agent adding a column must not be able to write one the
+// schema has no room for.
+const COUNTER_FIELDS = [
+  'inOctets', 'outOctets', 'inUcastPkts', 'outUcastPkts',
+  'inMcastPkts', 'inBcastPkts', 'outMcastPkts', 'outBcastPkts',
+  'inErrors', 'outErrors', 'inDiscards', 'outDiscards',
+  'fcsErrors', 'alignmentErrors', 'lateCollisions', 'carrierSenseErrors',
+];
 
 // A host is an IP literal or a DNS name. Not a URL, not a port, not a CIDR —
 // the shape is checked here and the POLICY (private ranges, the allowlist) is
@@ -342,12 +361,102 @@ function validateSnmpTopologyBatch(raw, errors) {
   return { devices, failures, skipped };
 }
 
+// One device's counter snapshot. Returns null for a row that cannot be stored
+// at all; a row with SOME unusable columns keeps the ones that are fine, the
+// same rule the forwarding table follows — one bad column out of forty must
+// not cost the other thirty-nine.
+function validateDeviceCounters(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const deviceId = Number(raw.deviceId);
+  if (!Number.isInteger(deviceId) || deviceId < 1) return null;
+
+  // The AGENT's clock when the read happened. Without it there is no elapsed
+  // time, and without elapsed time there is no rate — so a batch with no
+  // timestamp is not a measurement.
+  const readAt = typeof raw.readAt === 'string' ? new Date(raw.readAt) : null;
+  if (!readAt || Number.isNaN(readAt.getTime())) return null;
+
+  const ticks = Number(raw.sysUpTimeTicks);
+  const interfaces = [];
+  for (const row of Array.isArray(raw.interfaces) ? raw.interfaces.slice(0, MAX_COUNTER_INTERFACES_PER_DEVICE) : []) {
+    if (!row || typeof row !== 'object') continue;
+    const ifIndex = Number(row.ifIndex);
+    const ifName = str(row.ifName, IFNAME_MAX);
+    // A sample needs SOMETHING to identify its port. The name is the identity
+    // (migration 108) and the index is the fallback; with neither there is
+    // nothing for the measurement to be a measurement of.
+    if (!ifName && !(Number.isInteger(ifIndex) && ifIndex > 0)) continue;
+
+    const iface = { ifIndex: Number.isInteger(ifIndex) && ifIndex > 0 ? ifIndex : null, ifName };
+    for (const f of COUNTER_FIELDS) {
+      const n = Number(row[f]);
+      // Negative is impossible for a counter and NaN is not an answer. Both
+      // become null — absent, not zero, because zero errors is what RULES OUT
+      // a fault and a value we could not read has ruled out nothing.
+      iface[f] = row[f] == null || !Number.isFinite(n) || n < 0 ? null : n;
+    }
+    iface.duplex = ['half', 'full', 'unknown'].includes(row.duplex) ? row.duplex : null;
+    interfaces.push(iface);
+  }
+
+  return {
+    deviceId,
+    readAt: readAt.toISOString(),
+    sysUpTimeTicks: Number.isFinite(ticks) && ticks >= 0 ? ticks : null,
+    // Whether the 64-bit counters were available. It decides whether a
+    // decreasing octet counter can be reasoned about as a wrap at all.
+    hc: raw.hc !== false,
+    // Ports whose ifIndex moved on this cycle, by NAME. A rate across that
+    // boundary is two different ports subtracted from each other.
+    renumbered: (Array.isArray(raw.renumbered) ? raw.renumbered : [])
+      .map((n) => str(n, IFNAME_MAX)).filter(Boolean).slice(0, MAX_COUNTER_INTERFACES_PER_DEVICE),
+    interfaces,
+  };
+}
+
+// The whole counter batch. Same shape and same rules as the topology batch:
+// `devices` is REQUIRED rather than defaulted, because a truncated POST must
+// not look like a successful empty cycle.
+function validateSnmpCounterBatch(raw, errors) {
+  const errs = errors && typeof errors === 'object' ? errors : {};
+  const body = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : null;
+  if (!body) { errs.devices = 'body must be an object'; return undefined; }
+  if (!Array.isArray(body.devices)) { errs.devices = 'devices must be an array'; return undefined; }
+  if (body.errors !== undefined && !Array.isArray(body.errors)) {
+    errs.errors = 'errors must be an array';
+    return undefined;
+  }
+  if (body.devices.length > MAX_DEVICES_PER_BATCH) {
+    errs.devices = `devices must contain at most ${MAX_DEVICES_PER_BATCH} entries`;
+    return undefined;
+  }
+
+  const devices = [];
+  let skipped = 0;
+  for (const row of body.devices) {
+    const d = validateDeviceCounters(row);
+    if (d) devices.push(d); else skipped += 1;
+  }
+
+  const failures = [];
+  for (const row of (Array.isArray(body.errors) ? body.errors : []).slice(0, MAX_DEVICES_PER_BATCH)) {
+    if (!row || typeof row !== 'object') continue;
+    const deviceId = Number(row.deviceId);
+    if (!Number.isInteger(deviceId) || deviceId < 1) continue;
+    failures.push({ deviceId, error: str(row.error, 255) || 'counter poll failed', code: str(row.code, 64) });
+  }
+
+  return { devices, failures, skipped };
+}
+
 module.exports = {
   NAME_SOURCES,
   IF_STATUSES,
   validateSnmpDevice,
   validateSnmpTopologyBatch,
+  validateSnmpCounterBatch,
   validateDeviceTopology,
+  validateDeviceCounters,
   validateFdbEntry,
   validateNeighbour,
   validateCollect,
@@ -357,4 +466,7 @@ module.exports = {
   MAX_INTERVAL_SEC,
   MAX_FDB_PER_DEVICE,
   MAX_DEVICES_PER_BATCH,
+  MAX_COUNTER_INTERFACES_PER_DEVICE,
+  MIN_COUNTER_INTERVAL_SEC,
+  COUNTER_FIELDS,
 };

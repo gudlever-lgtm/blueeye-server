@@ -142,6 +142,13 @@ function createRetentionRepo(db) {
     return deleteInBatches('DELETE FROM device_interfaces WHERE last_seen < ? ORDER BY last_seen LIMIT ?', [ts]);
   }
 
+  // Interface counter samples. A no-op on a TSDB deployment: the hypertable
+  // expires its own chunks with a retention policy, and the repository reports
+  // nothing removed rather than pretending it swept.
+  async function purgeDeviceCountersBefore(ts) {
+    return deleteInBatches('DELETE FROM device_counter_samples WHERE ts < ? ORDER BY ts LIMIT ?', [ts]);
+  }
+
   // Interface state transitions + the current-state snapshot rows of interfaces
   // that stopped being reported entirely. The snapshot cutoff is deliberately
   // longer-lived logic than the history: dropping a state row we still have
@@ -170,6 +177,7 @@ function createRetentionRepo(db) {
     purgeSnmpNeighborsBefore,
     purgeBurstRunsBefore,
     purgeDeviceInterfacesBefore,
+    purgeDeviceCountersBefore,
     purgeInterfaceTransitionsBefore,
     purgeInterfaceStatesBefore,
   };

@@ -21,6 +21,7 @@ const { createAuditLogger } = require('../src/services/complianceLogger');
 const { createInterfaceStateService } = require('../src/health/interfaceStateService');
 const { createDeviceEventIngest } = require('../src/devices/deviceEventIngest');
 const { createSnmpTopologyIngest } = require('../src/devices/snmpTopologyIngest');
+const { createSnmpCounterIngest } = require('../src/devices/snmpCounterIngest');
 const { createBurstService } = require('../src/probes/burstService');
 const { createSnapshotService } = require('../src/evidence/snapshotService');
 const { createBlastRadiusService } = require('../src/topology/blastRadiusService');
@@ -464,10 +465,13 @@ function makeSnmpDevicesRepo(overrides = {}) {
     locationId: r.location_id,
     collect: r.collect,
     intervalSec: r.interval_sec,
+    counterIntervalSec: r.counter_interval_sec ?? null,
     enabled: !!r.enabled,
     lastPolledAt: iso(r.last_polled_at),
     lastOkAt: iso(r.last_ok_at),
     lastError: r.last_error,
+    lastUptimeTicks: r.last_uptime_ticks ?? null,
+    lastUptimeAt: iso(r.last_uptime_at),
     supported: r.supported,
     createdAt: iso(r.created_at),
     updatedAt: iso(r.updated_at),
@@ -504,8 +508,10 @@ function makeSnmpDevicesRepo(overrides = {}) {
         location_id: v.locationId ?? null,
         collect: v.collect ?? ['if', 'fdb', 'lldp', 'vlan'],
         interval_sec: v.intervalSec ?? 300,
+        counter_interval_sec: v.counterIntervalSec ?? null,
         enabled: v.enabled === undefined ? true : !!v.enabled,
         last_polled_at: null, last_ok_at: null, last_error: null, supported: null,
+        last_uptime_ticks: null, last_uptime_at: null,
         created_at: now, updated_at: now,
       };
       rows.push(row);
@@ -517,7 +523,7 @@ function makeSnmpDevicesRepo(overrides = {}) {
       const map = {
         agentId: 'agent_id', host: 'host', port: 'port', version: 'version',
         displayName: 'display_name', locationId: 'location_id', collect: 'collect',
-        intervalSec: 'interval_sec', community: 'community',
+        intervalSec: 'interval_sec', counterIntervalSec: 'counter_interval_sec', community: 'community',
       };
       for (const [k, col] of Object.entries(map)) {
         if (patch[k] !== undefined) r[col] = patch[k];
@@ -545,6 +551,13 @@ function makeSnmpDevicesRepo(overrides = {}) {
         // minutes ago" rather than just "failing".
         r.last_error = error == null ? null : String(error).slice(0, 255);
       }
+    }),
+    // The device clock a counter cycle read, for the NEXT cycle's reboot check.
+    recordCounterPoll: overrides.recordCounterPoll || (async (id, { uptimeTicks = null, at = new Date() } = {}) => {
+      const r = rows.find((x) => x.id === Number(id));
+      if (!r) return;
+      r.last_uptime_ticks = uptimeTicks;
+      r.last_uptime_at = at;
     }),
   };
 }
@@ -690,6 +703,64 @@ function makeDeviceInterfacesRepo(overrides = {}) {
       const before = rows.length;
       for (let i = rows.length - 1; i >= 0; i -= 1) {
         if (new Date(rows[i].last_seen) < cutoff) rows.splice(i, 1);
+      }
+      return before - rows.length;
+    }),
+  };
+}
+
+function makeCounterSamplesRepo(overrides = {}) {
+  const rows = [];
+  const iso = (v) => (v == null ? null : (v instanceof Date ? v.toISOString() : new Date(v).toISOString()));
+  const mapOut = (r) => ({ ...r, ts: iso(r.ts) });
+
+  return {
+    rows,
+    insertMany: overrides.insertMany || (async (list) => {
+      let n = 0;
+      for (const r of list || []) {
+        // The real store has UNIQUE (interface_id, ts) and INSERT IGNORE, so a
+        // retried submit must not double-count here either.
+        const dup = rows.some((x) => x.interfaceId === r.interfaceId
+          && new Date(x.ts).getTime() === new Date(r.ts).getTime());
+        if (dup) continue;
+        rows.push({ ...r });
+        n += 1;
+      }
+      return n;
+    }),
+    latestForDevice: overrides.latestForDevice || (async (deviceId) => {
+      const byInterface = new Map();
+      for (const r of rows.filter((x) => Number(x.deviceId) === Number(deviceId))) {
+        const cur = byInterface.get(r.interfaceId);
+        if (!cur || new Date(r.ts) > new Date(cur.ts)) byInterface.set(r.interfaceId, mapOut(r));
+      }
+      return byInterface;
+    }),
+    latestWithNames: overrides.latestWithNames || (async (deviceId) => {
+      const byInterface = new Map();
+      for (const r of rows.filter((x) => Number(x.deviceId) === Number(deviceId))) {
+        const cur = byInterface.get(r.interfaceId);
+        if (!cur || new Date(r.ts) > new Date(cur.ts)) byInterface.set(r.interfaceId, mapOut(r));
+      }
+      return [...byInterface.values()];
+    }),
+    series: overrides.series || (async (interfaceId, { from, to, maxPoints = 500 } = {}) => {
+      const picked = rows
+        .filter((r) => Number(r.interfaceId) === Number(interfaceId)
+          && new Date(r.ts) >= new Date(from) && new Date(r.ts) <= new Date(to))
+        .sort((a, b) => new Date(a.ts) - new Date(b.ts));
+      const step = picked.length > maxPoints ? Math.ceil(picked.length / maxPoints) : 1;
+      return {
+        total: picked.length,
+        step,
+        samples: (step === 1 ? picked : picked.filter((_, i) => i % step === 0)).map(mapOut),
+      };
+    }),
+    purgeBefore: overrides.purgeBefore || (async (cutoff) => {
+      const before = rows.length;
+      for (let i = rows.length - 1; i >= 0; i -= 1) {
+        if (new Date(rows[i].ts) < cutoff) rows.splice(i, 1);
       }
       return before - rows.length;
     }),
@@ -3057,6 +3128,7 @@ function makeApp(overrides = {}) {
   const fdbEntriesRepo = overrides.fdbEntriesRepo === undefined ? makeFdbEntriesRepo() : overrides.fdbEntriesRepo;
   const snmpNeighborsRepo = overrides.snmpNeighborsRepo === undefined ? makeSnmpNeighborsRepo() : overrides.snmpNeighborsRepo;
   const deviceInterfacesRepo = overrides.deviceInterfacesRepo === undefined ? makeDeviceInterfacesRepo() : overrides.deviceInterfacesRepo;
+  const counterSamplesRepo = overrides.counterSamplesRepo === undefined ? makeCounterSamplesRepo() : overrides.counterSamplesRepo;
   const burstRunsRepo = overrides.burstRunsRepo === undefined ? makeBurstRunsRepo() : overrides.burstRunsRepo;
   // The REAL service over the fakes, so the dispatch, the ownership check on a
   // returning result and the stored verdict are exercised end-to-end.
@@ -3069,6 +3141,14 @@ function makeApp(overrides = {}) {
   const snmpTopologyIngest = overrides.snmpTopologyIngest === undefined
     ? (snmpDevicesRepo ? createSnmpTopologyIngest({ snmpDevicesRepo, fdbEntriesRepo, snmpNeighborsRepo, deviceInterfacesRepo }) : null)
     : overrides.snmpTopologyIngest;
+  // The REAL counter ingest over the fakes, so the delta arithmetic, the reboot
+  // check and the port resolution are exercised end-to-end. They are where a
+  // wrong answer is invisible until somebody acts on it.
+  const snmpCounterIngest = overrides.snmpCounterIngest === undefined
+    ? ((snmpDevicesRepo && deviceInterfacesRepo && counterSamplesRepo)
+      ? createSnmpCounterIngest({ snmpDevicesRepo, deviceInterfacesRepo, counterSamplesRepo })
+      : null)
+    : overrides.snmpCounterIngest;
   // The REAL ingest over the fake repositories, so sender resolution and the
   // bucketed dedup key are exercised end-to-end rather than stubbed — they are
   // the two things in this feature most worth testing.
@@ -3148,7 +3228,9 @@ function makeApp(overrides = {}) {
     fdbEntriesRepo,
     snmpNeighborsRepo,
     snmpTopologyIngest,
+    snmpCounterIngest,
     deviceInterfacesRepo,
+    counterSamplesRepo,
     burstRunsRepo,
     burstService,
     interfaceStatesRepo,
@@ -3312,6 +3394,7 @@ module.exports = {
   makeFdbEntriesRepo,
   makeSnmpNeighborsRepo,
   makeDeviceInterfacesRepo,
+  makeCounterSamplesRepo,
   makeBurstRunsRepo,
   makeInterfaceStatesRepo,
   makeAlertDispatchLogRepo,

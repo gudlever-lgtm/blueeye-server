@@ -75,6 +75,9 @@ const { createSnmpDevicesRepository } = require('./repositories/snmpDevicesRepos
 const { createFdbEntriesRepository } = require('./repositories/fdbEntriesRepository');
 const { createSnmpNeighborsRepository } = require('./repositories/snmpNeighborsRepository');
 const { createDeviceInterfacesRepository } = require('./repositories/deviceInterfacesRepository');
+const { createDeviceCounterSamplesRepository } = require('./repositories/deviceCounterSamplesRepository');
+const { createDeviceCounterSamplesTsdbRepository } = require('./repositories/deviceCounterSamplesTsdbRepository');
+const { createSnmpCounterIngest } = require('./devices/snmpCounterIngest');
 const { createSnmpTopologyIngest } = require('./devices/snmpTopologyIngest');
 const { createBurstRunsRepository } = require('./repositories/burstRunsRepository');
 const { createBurstService } = require('./probes/burstService');
@@ -629,6 +632,19 @@ function start() {
     deviceInterfacesRepo,
     logger,
   });
+  // Interface counters. The second-largest write stream in the product after
+  // flow_records, so it follows the same dual-store rule as `results` and
+  // `device_events`: TimescaleDB when configured, MySQL otherwise, one
+  // interface and the caller never asks which answered.
+  const counterSamplesRepo = tsdb
+    ? createDeviceCounterSamplesTsdbRepository(tsdb)
+    : createDeviceCounterSamplesRepository(db);
+  const snmpCounterIngest = createSnmpCounterIngest({
+    snmpDevicesRepo,
+    deviceInterfacesRepo,
+    counterSamplesRepo,
+    logger,
+  });
 
   // Burst mode. The commander is a stable object built at startup (it looks the
   // live socket up per call), so the service can be built here and handed BOTH
@@ -1031,7 +1047,9 @@ function start() {
     fdbEntriesRepo,
     snmpNeighborsRepo,
     snmpTopologyIngest,
+    snmpCounterIngest,
     deviceInterfacesRepo,
+    counterSamplesRepo,
     burstRunsRepo,
     burstService,
     interfaceStatesRepo,

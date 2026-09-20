@@ -31,6 +31,7 @@ function createSnmpDevicesRouter({
   fdbEntriesRepo = null,
   snmpNeighborsRepo = null,
   deviceInterfacesRepo = null,
+  counterSamplesRepo = null,
   agentsRepo,
   agentCommander = null,
   auditLogger = null,
@@ -117,6 +118,72 @@ function createSnmpDevicesRouter({
     if (!deviceInterfacesRepo) return res.status(503).json({ error: 'Interface inventory is not configured' });
     const interfaces = await deviceInterfacesRepo.listForDevice(id, { limit: 1000 });
     res.json({ deviceId: id, interfaces });
+  }));
+
+  // The newest counter sample for every port on a device — the per-switch port
+  // table with its rates on it. 404 for an unknown device; 503 when counters
+  // are not configured at all, which is a different answer from "no data".
+  router.get('/:id/counters', ...viewer, asyncHandler(async (req, res) => {
+    const id = parseId(req.params.id);
+    if (id === null) return res.status(400).json({ error: 'id must be a positive integer' });
+    const device = await snmpDevicesRepo.findById(id);
+    if (!device) return res.status(404).json({ error: 'Device not found' });
+    if (!counterSamplesRepo) return res.status(503).json({ error: 'Counter collection is not configured' });
+
+    const samples = await counterSamplesRepo.latestWithNames(id);
+    // The TSDB variant cannot join the port name (it lives in MySQL), so the
+    // decoration happens here for both — one read either way.
+    let names = new Map();
+    if (deviceInterfacesRepo) {
+      try {
+        const ports = await deviceInterfacesRepo.listForDevice(id, { limit: 4096 });
+        names = new Map(ports.map((p) => [p.id, p]));
+      } catch (err) {
+        if (logger) logger.warn(`snmp-devices: port names unavailable for ${id} (${err.message})`);
+      }
+    }
+    res.json({
+      deviceId: id,
+      counters: samples.map((sample) => {
+        const port = names.get(sample.interfaceId);
+        return {
+          ...sample,
+          ifName: sample.ifName ?? (port ? port.ifName : null),
+          ifAlias: port ? port.ifAlias : null,
+          speedMbps: port ? port.speedMbps : null,
+          operStatus: port ? port.operStatus : null,
+          adminStatus: port ? port.adminStatus : null,
+        };
+      }),
+    });
+  }));
+
+  // One port's series over a window. The chart.
+  router.get('/:id/interfaces/:interfaceId/series', ...viewer, asyncHandler(async (req, res) => {
+    const id = parseId(req.params.id);
+    const interfaceId = parseId(req.params.interfaceId);
+    if (id === null || interfaceId === null) {
+      return res.status(400).json({ error: 'id and interfaceId must be positive integers' });
+    }
+    const device = await snmpDevicesRepo.findById(id);
+    if (!device) return res.status(404).json({ error: 'Device not found' });
+    if (!counterSamplesRepo) return res.status(503).json({ error: 'Counter collection is not configured' });
+
+    // The port must belong to THIS device. Without the check, an interface id
+    // from another switch would return its series under this device's page.
+    if (deviceInterfacesRepo) {
+      const port = await deviceInterfacesRepo.findById(interfaceId);
+      if (!port || Number(port.deviceId) !== id) {
+        return res.status(404).json({ error: 'Interface not found on that device' });
+      }
+    }
+
+    const minutes = Number(req.query.minutes);
+    const window = Number.isInteger(minutes) && minutes >= 5 && minutes <= 20160 ? minutes : 240;
+    const to = new Date();
+    const from = new Date(to.getTime() - window * 60 * 1000);
+    const out = await counterSamplesRepo.series(interfaceId, { from, to, maxPoints: 500 });
+    res.json({ deviceId: id, interfaceId, minutes: window, ...out });
   }));
 
   router.post('/', ...admin, asyncHandler(async (req, res) => {

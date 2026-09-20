@@ -78,6 +78,7 @@ const { createDeviceInterfacesRepository } = require('./repositories/deviceInter
 const { createDeviceCounterSamplesRepository } = require('./repositories/deviceCounterSamplesRepository');
 const { createDeviceCounterSamplesTsdbRepository } = require('./repositories/deviceCounterSamplesTsdbRepository');
 const { createSnmpCounterIngest } = require('./devices/snmpCounterIngest');
+const { createL2LoopService } = require('./analysis/l2LoopService');
 const { createSnmpTopologyIngest } = require('./devices/snmpTopologyIngest');
 const { createBurstRunsRepository } = require('./repositories/burstRunsRepository');
 const { createBurstService } = require('./probes/burstService');
@@ -625,23 +626,44 @@ function start() {
   const fdbEntriesRepo = createFdbEntriesRepository(db);
   const snmpNeighborsRepo = createSnmpNeighborsRepository(db);
   const deviceInterfacesRepo = createDeviceInterfacesRepository(db);
+  const counterSamplesRepo = tsdb
+    ? createDeviceCounterSamplesTsdbRepository(tsdb)
+    : createDeviceCounterSamplesRepository(db);
+
+  // Layer-2 loop detection. Built here and handed to the topology ingest,
+  // which is what calls it: the moment a forwarding table is re-read is the
+  // moment a flapping MAC becomes visible.
+  //
+  // The findingStore and the dashboard socket do not exist yet at this point,
+  // so both are getters — a loop finding is an ordinary finding and goes to the
+  // same place every other one does.
+  const l2LoopService = createL2LoopService({
+    fdbEntriesRepo,
+    counterSamplesRepo,
+    deviceEventsRepo,
+    deviceInterfacesRepo,
+    snmpDevicesRepo,
+    findingStore,
+    eventCaseService,
+    publishFinding: (hostId, message) => (dashboardWs ? dashboardWs.broadcast(message) : 0),
+    logger,
+  });
   const snmpTopologyIngest = createSnmpTopologyIngest({
     snmpDevicesRepo,
     fdbEntriesRepo,
     snmpNeighborsRepo,
     deviceInterfacesRepo,
+    l2LoopService,
     logger,
   });
   // Interface counters. The second-largest write stream in the product after
   // flow_records, so it follows the same dual-store rule as `results` and
   // `device_events`: TimescaleDB when configured, MySQL otherwise, one
   // interface and the caller never asks which answered.
-  const counterSamplesRepo = tsdb
-    ? createDeviceCounterSamplesTsdbRepository(tsdb)
-    : createDeviceCounterSamplesRepository(db);
-  // The counter ingest is built AFTER the analysis pipeline (further down),
+  // The counter INGEST is built after the analysis pipeline (further down),
   // because it feeds samples straight into it and a getter here would be
-  // evaluated at destructuring time.
+  // evaluated at destructuring time. The repository above is needed earlier,
+  // by the loop detector.
 
   // Burst mode. The commander is a stable object built at startup (it looks the
   // live socket up per call), so the service can be built here and handed BOTH

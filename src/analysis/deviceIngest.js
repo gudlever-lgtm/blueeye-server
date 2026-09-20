@@ -1,5 +1,7 @@
 'use strict';
 
+const { numOrNull, intOrNull } = require('../lib/num');
+
 // Maps one counter sample into the MetricSamples the detector evaluates.
 //
 // THE GAP THIS CLOSES. `extractSamples()` — the agent path — emits six metrics:
@@ -52,23 +54,23 @@ function extractDeviceSamples(sample, { hostId, ts = null } = {}) {
   // still stored and still evidence; they are just not a measurement of an
   // interval.
   if (sample.discontinuity) return [];
-  const interfaceId = Number(sample.interfaceId);
-  if (!Number.isInteger(interfaceId) || interfaceId < 1) return [];
+  const interfaceId = intOrNull(sample.interfaceId);
+  if (interfaceId === null || interfaceId < 1) return [];
 
   const at = ts ? new Date(ts) : new Date(sample.ts);
   const out = [];
   for (const [field, suffix] of METRICS) {
-    const value = sample[field];
-    // Null is "not measured", and it must never become 0 — zero errors is what
-    // RULES OUT a fault, so an unmeasured column turned into a zero would
-    // actively teach the baseline that a broken port is healthy.
-    if (value == null || !Number.isFinite(Number(value))) continue;
+    // numOrNull, not Number(): Number(null) is 0, and an unmeasured column
+    // turned into a zero would actively teach the baseline that a broken port
+    // is healthy — zero errors is what RULES OUT a fault.
+    const value = numOrNull(sample[field]);
+    if (value === null) continue;
     out.push({
       hostId: String(hostId),
-      deviceId: sample.deviceId == null ? null : Number(sample.deviceId),
+      deviceId: intOrNull(sample.deviceId),
       interfaceId,
       metric: `if.${interfaceId}.${suffix}`,
-      value: Number(value),
+      value,
       ts: at,
       // The port's name, for an explanation that reads as a place rather than
       // as an id. Optional: the sample carries it only on the reads that join.

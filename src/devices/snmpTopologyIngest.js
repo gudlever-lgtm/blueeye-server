@@ -29,6 +29,11 @@ function createSnmpTopologyIngest({
   // the ifIndex->ifName table crossed the wire on every poll and was thrown
   // away. It is the join every per-port measurement needs.
   deviceInterfacesRepo = null,
+  // Loop detection runs HERE, after the forwarding table has just been
+  // re-read, because that is the moment the MAC move counters have moved. On a
+  // timer it would either check a table nothing has touched or miss the window
+  // where a loop is visible at all.
+  l2LoopService = null,
   logger = null,
   now = () => new Date(),
 }) {
@@ -56,6 +61,10 @@ function createSnmpTopologyIngest({
     // caller because a counter delta that spans a renumbering is two different
     // ports subtracted from each other — see migration 108.
     const renumbered = [];
+    // Devices whose forwarding table this cycle actually wrote. Only those are
+    // worth a loop check — a device that failed or was refused has no new
+    // evidence either way.
+    const storedDeviceIds = [];
 
     for (const d of devices) {
       if (!owned.has(d.deviceId)) {
@@ -98,6 +107,7 @@ function createSnmpTopologyIngest({
         }
         await snmpDevicesRepo.recordPoll(d.deviceId, { ok: true, supported: d.supported, at });
         stored += 1;
+        if (d.fdb.length) storedDeviceIds.push(d.deviceId);
       } catch (err) {
         deviceErrors.push({ deviceId: d.deviceId, error: String(err.message).slice(0, 255) });
         if (logger) logger.warn(`snmp-topology: could not store device ${d.deviceId} (${err.message})`);
@@ -124,7 +134,23 @@ function createSnmpTopologyIngest({
       }
     }
 
-    return { stored, fdbRows, neighbourRows, interfaceRows, renumbered, refused, failuresRecorded, deviceErrors };
+    // Loop detection over the devices whose forwarding tables just changed.
+    // Best-effort and last: a detector that throws must never cost the sweep
+    // that was going to feed it.
+    let loops = 0;
+    if (l2LoopService && storedDeviceIds.length) {
+      try {
+        const found = await l2LoopService.checkDevices(storedDeviceIds, { agentId });
+        loops = found.length;
+      } catch (err) {
+        if (logger) logger.warn(`snmp-topology: loop detection failed (${err.message})`);
+      }
+    }
+
+    return {
+      stored, fdbRows, neighbourRows, interfaceRows, renumbered, loops,
+      refused, failuresRecorded, deviceErrors,
+    };
   }
 
   return { ingest };

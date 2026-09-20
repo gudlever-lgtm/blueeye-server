@@ -568,7 +568,9 @@ function makeFdbEntriesRepo(overrides = {}) {
   const iso = (v) => (v == null ? null : (v instanceof Date ? v.toISOString() : new Date(v).toISOString()));
   const mapOut = (r) => ({
     id: r.id, deviceId: r.device_id, mac: r.mac, vlan: r.vlan,
-    bridgePort: r.bridge_port, ifIndex: r.if_index, ifName: r.if_name,
+    bridgePort: r.bridge_port, prevBridgePort: r.prev_bridge_port ?? null,
+    moveCount: r.move_count || 0, lastMoveAt: iso(r.last_move_at),
+    ifIndex: r.if_index, ifName: r.if_name,
     status: r.status, portMacCount: r.port_mac_count,
     firstSeen: iso(r.first_seen), lastSeen: iso(r.last_seen),
   });
@@ -584,6 +586,14 @@ function makeFdbEntriesRepo(overrides = {}) {
         const existing = rows.find((r) => r.device_id === Number(deviceId)
           && r.vlan === (e.vlan ?? 0) && r.mac === e.mac);
         if (existing) {
+          // A MAC that MOVED is the loop signature (migration 111), and the
+          // fake has to record it or a detector test would pass against a
+          // store that silently overwrote the evidence.
+          if (existing.bridge_port !== e.bridgePort) {
+            existing.prev_bridge_port = existing.bridge_port;
+            existing.move_count = (existing.move_count || 0) + 1;
+            existing.last_move_at = at;
+          }
           existing.bridge_port = e.bridgePort;
           existing.if_index = e.ifIndex ?? null;
           existing.if_name = e.ifName ?? null;
@@ -593,7 +603,8 @@ function makeFdbEntriesRepo(overrides = {}) {
         } else {
           rows.push({
             id: (seq += 1), device_id: Number(deviceId), mac: e.mac, vlan: e.vlan ?? 0,
-            bridge_port: e.bridgePort, if_index: e.ifIndex ?? null, if_name: e.ifName ?? null,
+            bridge_port: e.bridgePort, prev_bridge_port: null, move_count: 0, last_move_at: null,
+            if_index: e.ifIndex ?? null, if_name: e.ifName ?? null,
             status: e.status || 'learned', port_mac_count: e.portMacCount ?? 1,
             first_seen: at, last_seen: at,
           });
@@ -610,6 +621,11 @@ function makeFdbEntriesRepo(overrides = {}) {
     listForDevice: overrides.listForDevice || (async (deviceId, { limit = 500, ifName = null } = {}) => rows
       .filter((r) => r.device_id === Number(deviceId) && (!ifName || r.if_name === ifName))
       .sort((a, b) => a.port_mac_count - b.port_mac_count || a.bridge_port - b.bridge_port)
+      .slice(0, limit).map(mapOut)),
+    movingMacs: overrides.movingMacs || (async (deviceId, { since, limit = 500 } = {}) => rows
+      .filter((r) => r.device_id === Number(deviceId) && r.last_move_at
+        && new Date(r.last_move_at) >= new Date(since))
+      .sort((a, b) => b.move_count - a.move_count)
       .slice(0, limit).map(mapOut)),
     listForPort: overrides.listForPort || (async (deviceId, bridgePort, { limit = 200 } = {}) => rows
       .filter((r) => r.device_id === Number(deviceId) && r.bridge_port === Number(bridgePort))
@@ -3143,7 +3159,12 @@ function makeApp(overrides = {}) {
   // write the devices assigned to it — is exercised end-to-end rather than
   // stubbed. It is the security property of this feature.
   const snmpTopologyIngest = overrides.snmpTopologyIngest === undefined
-    ? (snmpDevicesRepo ? createSnmpTopologyIngest({ snmpDevicesRepo, fdbEntriesRepo, snmpNeighborsRepo, deviceInterfacesRepo }) : null)
+    ? (snmpDevicesRepo ? createSnmpTopologyIngest({
+      snmpDevicesRepo, fdbEntriesRepo, snmpNeighborsRepo, deviceInterfacesRepo,
+      // Loop detection runs off the back of a topology cycle, so a test that
+      // wires one gets it exercised end-to-end rather than stubbed.
+      l2LoopService: overrides.l2LoopService || null,
+    }) : null)
     : overrides.snmpTopologyIngest;
   // The REAL counter ingest over the fakes, so the delta arithmetic, the reboot
   // check and the port resolution are exercised end-to-end. They are where a

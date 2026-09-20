@@ -2827,6 +2827,9 @@ CREATE TABLE IF NOT EXISTS `fdb_entries` (
   `mac` CHAR(17) NOT NULL,
   `vlan` SMALLINT UNSIGNED NOT NULL DEFAULT 0,
   `bridge_port` INT UNSIGNED NOT NULL,
+  `prev_bridge_port` INT UNSIGNED NULL DEFAULT NULL,
+  `move_count` INT UNSIGNED NOT NULL DEFAULT 0,
+  `last_move_at` DATETIME NULL DEFAULT NULL,
   `if_index` INT UNSIGNED NULL DEFAULT NULL,
   `if_name` VARCHAR(64) NULL DEFAULT NULL,
   `status` VARCHAR(16) NOT NULL DEFAULT 'learned',
@@ -2838,7 +2841,8 @@ CREATE TABLE IF NOT EXISTS `fdb_entries` (
   KEY `idx_fdb_mac` (`mac`, `last_seen`),
   KEY `idx_fdb_device_port` (`device_id`, `bridge_port`),
   KEY `idx_fdb_last_seen` (`last_seen`),
-  CONSTRAINT `fk_fdb_device` FOREIGN KEY (`device_id`) REFERENCES `snmp_devices` (`id`) ON DELETE CASCADE
+  CONSTRAINT `fk_fdb_device` FOREIGN KEY (`device_id`) REFERENCES `snmp_devices` (`id`) ON DELETE CASCADE,
+  KEY idx_fdb_moves (`device_id`, `last_move_at`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- 106 — snmp_neighbors: LLDP as seen BY A SWITCH.

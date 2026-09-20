@@ -1,5 +1,7 @@
 'use strict';
 
+const { numOrNull } = require('../lib/num');
+
 // Data-access for `device_counter_samples` (migration 109) — interface counters
 // from polled switches, over time.
 //
@@ -52,11 +54,6 @@ function toIso(v) {
   return v instanceof Date ? v.toISOString() : new Date(v).toISOString();
 }
 
-function num(v) {
-  if (v == null) return null;
-  const n = Number(v);
-  return Number.isFinite(n) ? n : null;
-}
 
 function mapRow(row) {
   if (!row) return null;
@@ -66,7 +63,7 @@ function mapRow(row) {
     interfaceId: Number(row.interface_id),
     discontinuity: row.discontinuity ?? null,
   };
-  for (const [col, field] of Object.entries(FIELD)) out[field] = num(row[col]);
+  for (const [col, field] of Object.entries(FIELD)) out[field] = numOrNull(row[col]);
   if (row.if_name !== undefined) out.ifName = row.if_name;
   return out;
 }

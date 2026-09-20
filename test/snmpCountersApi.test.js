@@ -80,8 +80,12 @@ const cycle = (app, { deviceId = 1, readAt, interfaces, ticks = 500_000, ...rest
 
 const get = (app, path, role = 'viewer') => request(app).get(path).set('Authorization', authHeader(role));
 
-const T0 = '2026-09-20T12:00:00.000Z';
-const T1 = '2026-09-20T12:01:00.000Z';
+// RELATIVE to now, one minute apart, not a fixed date. The previous-sample
+// read is a window that ends at the current time, so a hard-coded timestamp
+// ages out of it during the day and the test starts failing by the clock
+// rather than by the code.
+const T0 = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+const T1 = new Date(Date.now() - 4 * 60 * 1000).toISOString();
 
 // ================================================================== the ingest
 test('the first cycle stores raw counters and no rates', async () => {

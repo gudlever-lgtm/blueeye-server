@@ -41,6 +41,13 @@ const BASELINE_SAMPLES = 30;
 // cycle for as long as somebody took to find the cable.
 const REFRACTORY_MINUTES = 30;
 
+// How many ports get a baseline read. Each one is its own query, and a 48-port
+// switch asking 48 times is fine — a chassis with 500 ports asking 500 times,
+// per cycle, is not. The ports are taken in order of their CURRENT broadcast
+// rate, so the ones a surge could possibly be on are the ones that get looked
+// at, and the cap sits far above the three surging ports the detector needs.
+const MAX_BASELINE_PORTS = 64;
+
 function createL2LoopService({
   fdbEntriesRepo,
   counterSamplesRepo = null,
@@ -71,9 +78,16 @@ function createL2LoopService({
       return [];
     }
 
+    // Busiest first, then capped. A loop shows up as the HIGHEST broadcast
+    // rates on the switch, so sorting by the current reading keeps exactly the
+    // ports the detector could find a surge on.
+    const candidates = (Array.isArray(latest) ? latest : [])
+      .filter((s) => s && s.inBcastPps != null)
+      .sort((a, b) => Number(b.inBcastPps) - Number(a.inBcastPps))
+      .slice(0, MAX_BASELINE_PORTS);
+
     const out = [];
-    for (const sample of latest) {
-      if (sample.inBcastPps == null) continue;
+    for (const sample of candidates) {
       let history = [];
       try {
         const series = await counterSamplesRepo.series(sample.interfaceId, {
@@ -238,4 +252,6 @@ function createL2LoopService({
   return { checkDevice, checkDevices };
 }
 
-module.exports = { createL2LoopService, WINDOW_MINUTES, REFRACTORY_MINUTES };
+module.exports = {
+  createL2LoopService, WINDOW_MINUTES, REFRACTORY_MINUTES, MAX_BASELINE_PORTS,
+};

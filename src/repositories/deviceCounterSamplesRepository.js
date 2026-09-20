@@ -32,6 +32,11 @@ const RATE_COLUMNS = [
 ];
 const ALL_COLUMNS = ['ts', 'device_id', 'interface_id', ...RAW_COLUMNS, ...RATE_COLUMNS, 'discontinuity'];
 
+// How far back "the newest sample" is allowed to look. Generous against a
+// 60-second polling interval, and the difference between reading one hour of
+// one device and reading every row it has ever produced.
+const LOOKBACK_MS = 60 * 60 * 1000;
+
 // row key -> the camelCase field the rest of the server uses.
 const FIELD = {
   in_octets: 'inOctets', out_octets: 'outOctets',
@@ -99,17 +104,26 @@ function createDeviceCounterSamplesRepository(db) {
   // The newest sample per interface on one device. This is the WRITE path's
   // read: the rates for a new cycle are computed against these, one query per
   // device rather than one per port.
-  async function latestForDevice(deviceId) {
+  //
+  // THE TIME BOUND IS NOT OPTIONAL. Without it the grouped subquery scans every
+  // sample this device has ever produced — ~70 000 rows a day for a 48-port
+  // switch — once per device per cycle, to find rows that are by definition
+  // minutes old. `since` is generous (an hour by default, against a 60-second
+  // interval) and turns a growing scan into a bounded one. The TSDB twin needs
+  // the same bound for the same reason, and its own README says so: never an
+  // unbounded GROUP BY on a hypertable.
+  async function latestForDevice(deviceId, { since = null } = {}) {
+    const from = since || new Date(Date.now() - LOOKBACK_MS);
     const [rows] = await pool.query(
       `SELECT s.* FROM device_counter_samples s
          JOIN (
            SELECT interface_id, MAX(ts) AS ts
              FROM device_counter_samples
-            WHERE device_id = ?
+            WHERE device_id = ? AND ts >= ?
             GROUP BY interface_id
          ) newest ON newest.interface_id = s.interface_id AND newest.ts = s.ts
-        WHERE s.device_id = ?`,
-      [deviceId, deviceId],
+        WHERE s.device_id = ? AND s.ts >= ?`,
+      [deviceId, from, deviceId, from],
     );
     const byInterface = new Map();
     for (const r of rows) byInterface.set(Number(r.interface_id), mapRow(r));
@@ -138,9 +152,13 @@ function createDeviceCounterSamplesRepository(db) {
     return { total, step, samples: picked.map(mapRow) };
   }
 
-  // The newest sample for every port on a device, with the port's name — the
-  // per-device table on the screen.
-  async function latestWithNames(deviceId) {
+  // The newest sample for every port on a device, WITH the port's name — the
+  // per-device table on the screen. Bounded for the same reason as the write
+  // path's read above — and a port that has not reported inside the window is
+  // simply not in the answer, which is the honest result: the screen shows it
+  // with no counters rather than with a day-old rate presented as current.
+  async function latestWithNames(deviceId, { since = null } = {}) {
+    const from = since || new Date(Date.now() - LOOKBACK_MS);
     const [rows] = await pool.query(
       `SELECT s.*, i.if_name
          FROM device_counter_samples s
@@ -148,12 +166,12 @@ function createDeviceCounterSamplesRepository(db) {
          JOIN (
            SELECT interface_id, MAX(ts) AS ts
              FROM device_counter_samples
-            WHERE device_id = ?
+            WHERE device_id = ? AND ts >= ?
             GROUP BY interface_id
          ) newest ON newest.interface_id = s.interface_id AND newest.ts = s.ts
-        WHERE s.device_id = ?
+        WHERE s.device_id = ? AND s.ts >= ?
         ORDER BY i.if_index IS NULL, i.if_index ASC, i.if_name ASC`,
-      [deviceId, deviceId],
+      [deviceId, from, deviceId, from],
     );
     return rows.map(mapRow);
   }
@@ -178,6 +196,7 @@ function createDeviceCounterSamplesRepository(db) {
 module.exports = {
   createDeviceCounterSamplesRepository,
   mapRow,
+  LOOKBACK_MS,
   RAW_COLUMNS,
   RATE_COLUMNS,
   ALL_COLUMNS,

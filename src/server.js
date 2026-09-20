@@ -642,9 +642,10 @@ function start() {
   // which is what calls it: the moment a forwarding table is re-read is the
   // moment a flapping MAC becomes visible.
   //
-  // The findingStore and the dashboard socket do not exist yet at this point,
-  // so both are getters — a loop finding is an ordinary finding and goes to the
-  // same place every other one does.
+  // A loop finding is an ordinary finding and goes to the same place every
+  // other one does. The dashboard socket is the one thing that does not exist
+  // yet here, so the publish is a closure over `dashboardWs` rather than the
+  // socket itself — reading it at call time, when it is there.
   const l2LoopService = createL2LoopService({
     fdbEntriesRepo,
     counterSamplesRepo,

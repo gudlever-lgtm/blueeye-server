@@ -27,7 +27,7 @@ const { createAnalysisPipeline } = require('../src/analysis/pipeline');
 const {
   makeApp, makeFindingStore, makeAgentsRepo, makeAgentTokensRepo,
   makeSnmpDevicesRepo, makeDeviceInterfacesRepo, makeCounterSamplesRepo,
-  authHeader,
+  authHeader, throwingAsync,
 } = require('../test-support/fakes');
 
 const SAMPLE = (over = {}) => ({
@@ -218,6 +218,18 @@ test('a bad device filter is a 400, not a silent full list', async () => {
     const res = await request(app).get(`/api/findings?${qs}`).set('Authorization', authHeader('viewer'));
     assert.equal(res.status, 400, qs);
   }
+});
+
+test('a findings read that fails is a 500, never an empty device list', async () => {
+  // An empty array here reads as "this switch has no findings", which is the
+  // one answer a monitoring screen must never invent.
+  const app = makeApp({
+    agentsRepo: agentsRepo(),
+    findingStore: makeFindingStore({ list: throwingAsync() }),
+  });
+  const res = await request(app).get('/api/findings?deviceId=4').set('Authorization', authHeader('viewer'));
+  assert.equal(res.status, 500);
+  assert.ok(!Array.isArray(res.body), 'a failure must not be shaped like a result');
 });
 
 test('counters arriving through the ingest reach the detector', async () => {

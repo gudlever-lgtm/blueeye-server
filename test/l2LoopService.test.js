@@ -16,7 +16,7 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const request = require('supertest');
 
-const { createL2LoopService } = require('../src/analysis/l2LoopService');
+const { createL2LoopService, MAX_BASELINE_PORTS } = require('../src/analysis/l2LoopService');
 const {
   makeApp, makeFindingStore, makeFdbEntriesRepo, makeCounterSamplesRepo,
   makeDeviceEventsRepo, makeSnmpDevicesRepo, makeAgentsRepo, makeAgentTokensRepo,
@@ -256,4 +256,29 @@ test('a MAC that stays put records no move', async () => {
   const [row] = await fdbEntriesRepo.listForDevice(1);
   assert.equal(row.moveCount, 0);
   assert.equal(row.lastMoveAt, null);
+});
+
+test('the baseline reads are BOUNDED, and go to the busiest ports', async () => {
+  // One query per port, and a chassis has hundreds. The check only runs on a
+  // device whose MACs are actually moving, which already keeps it rare — but
+  // rare and unbounded is still unbounded, and this is the read that would
+  // fan out on the biggest switch in the building.
+  const asked = [];
+  const ports = [];
+  for (let i = 1; i <= 300; i += 1) {
+    // Ascending rates, so the LAST ports are the busiest — if the cap took the
+    // first N instead of the highest N, this test would see port 1.
+    ports.push({ interfaceId: i, ifName: `Gi1/0/${i}`, inBcastPps: i });
+  }
+  const counterSamplesRepo = {
+    latestWithNames: async () => ports,
+    series: async (interfaceId) => { asked.push(interfaceId); return { samples: [] }; },
+  };
+
+  const { svc } = service({ counterSamplesRepo });
+  await svc.checkDevice(1, { agentId: 9 });
+
+  assert.equal(asked.length, MAX_BASELINE_PORTS, 'the baseline read fanned out past the cap');
+  assert.ok(asked.includes(300), 'the busiest port must be one of the ones looked at');
+  assert.ok(!asked.includes(1), 'the quietest port is not where a broadcast surge is');
 });

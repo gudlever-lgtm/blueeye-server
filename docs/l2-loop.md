@@ -108,6 +108,13 @@ surge it is supposed to measure against. A port with fewer than three samples
 gets `null`, not `0`: an absent baseline must never become the strongest
 possible evidence of a surge.
 
+**The baseline read is capped at 64 ports per device.** Every port's baseline
+is its own query, and a 48-port switch asking 48 times is nothing — a chassis
+with 500 ports asking 500 times, on every topology cycle it has moving MACs,
+is. The ports are taken in order of their current broadcast rate, so the ones
+a surge could possibly be on are the ones looked at, and 64 sits far above the
+three surging ports the rule needs.
+
 **One finding per device per 30 minutes.** A loop that lasts an hour is one
 fault, not sixty. Without the refractory period the detector raises on every
 topology cycle for as long as it takes somebody to find the cable.

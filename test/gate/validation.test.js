@@ -192,6 +192,10 @@ test('snmpDeviceValidation: an address the server must never poll, and a table o
     validateSnmpDevice, validateSnmpTopologyBatch, validateFdbEntry,
     MIN_INTERVAL_SEC, MAX_FDB_PER_DEVICE,
   } = require('../../src/validation/snmpDeviceValidation');
+  // From the delta code, not repeated here: the ceiling the validator enforces
+  // is the one that voids the rate, and the test would be worthless if it
+  // carried its own copy of the number.
+  const { MAX_DELTA_SEC } = require('../../src/devices/counterDelta');
 
   // --- the admin's inventory ------------------------------------------------
   assert.ok(rejected(validateSnmpDevice({})), 'host is required');
@@ -206,10 +210,20 @@ test('snmpDeviceValidation: an address the server must never poll, and a table o
   assert.equal(validateSnmpDevice({ host: '10.0.0.1', version: '3' }).errors, undefined);
   assert.ok(rejected(validateSnmpDevice({ host: '10.0.0.1', version: '3', community: 'public' })));
   assert.ok(rejected(validateSnmpDevice({ host: '10.0.0.1', version: '4' })));
-  // The counter cadence is its own setting, floored, because a counter series'
-  // interval IS its resolution.
+  // The counter cadence is its own setting, floored AND capped, because a
+  // counter series' interval IS its resolution — and because a cadence wider
+  // than counterDelta.MAX_DELTA_SEC voids every rate it would ever produce, so
+  // the device would store readings for ever and show empty rate columns.
   assert.ok(rejected(validateSnmpDevice({ host: '10.0.0.1', counterIntervalSec: 5 })));
   assert.equal(validateSnmpDevice({ host: '10.0.0.1', counterIntervalSec: 30 }).errors, undefined);
+  assert.equal(
+    validateSnmpDevice({ host: '10.0.0.1', counterIntervalSec: MAX_DELTA_SEC }).errors,
+    undefined,
+  );
+  assert.ok(rejected(validateSnmpDevice({ host: '10.0.0.1', counterIntervalSec: MAX_DELTA_SEC + 1 })));
+  // The topology interval keeps its own, much wider ceiling: a topology poll
+  // an hour apart is a normal setting, and nothing about it is a rate.
+  assert.equal(validateSnmpDevice({ host: '10.0.0.1', intervalSec: 3600 }).errors, undefined);
   assert.ok(rejected(validateSnmpDevice({ host: '10.0.0.1', community: 'x'.repeat(500) })));
   assert.ok(rejected(validateSnmpDevice({ host: '10.0.0.1', collect: ['if', 'nope'] })));
   // An explicitly empty collect list is refused rather than silently meaning

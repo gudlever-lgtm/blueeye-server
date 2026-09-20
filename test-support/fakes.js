@@ -870,17 +870,24 @@ function makeCounterSamplesRepo(overrides = {}) {
       }
       return n;
     }),
-    latestForDevice: overrides.latestForDevice || (async (deviceId) => {
+    // The REAL reads are bounded in time — without the bound they scan every
+    // sample the device has ever produced, once per cycle. The fake honours it
+    // so a test cannot pass against behaviour the store does not have.
+    latestForDevice: overrides.latestForDevice || (async (deviceId, { since = null } = {}) => {
+      const from = since || new Date(Date.now() - 60 * 60 * 1000);
       const byInterface = new Map();
-      for (const r of rows.filter((x) => Number(x.deviceId) === Number(deviceId))) {
+      for (const r of rows.filter((x) => Number(x.deviceId) === Number(deviceId)
+        && new Date(x.ts) >= new Date(from))) {
         const cur = byInterface.get(r.interfaceId);
         if (!cur || new Date(r.ts) > new Date(cur.ts)) byInterface.set(r.interfaceId, mapOut(r));
       }
       return byInterface;
     }),
-    latestWithNames: overrides.latestWithNames || (async (deviceId) => {
+    latestWithNames: overrides.latestWithNames || (async (deviceId, { since = null } = {}) => {
+      const from = since || new Date(Date.now() - 60 * 60 * 1000);
       const byInterface = new Map();
-      for (const r of rows.filter((x) => Number(x.deviceId) === Number(deviceId))) {
+      for (const r of rows.filter((x) => Number(x.deviceId) === Number(deviceId)
+        && new Date(x.ts) >= new Date(from))) {
         const cur = byInterface.get(r.interfaceId);
         if (!cur || new Date(r.ts) > new Date(cur.ts)) byInterface.set(r.interfaceId, mapOut(r));
       }

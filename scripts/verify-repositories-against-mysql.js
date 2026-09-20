@@ -41,6 +41,18 @@ const { createObservationsRepository } = require(path.join(ROOT, 'src/serviceTes
 const { createIncidentsRepository } = require(path.join(ROOT, 'src/serviceTests/storage/incidentsRepository'));
 const { createAiAnalysesRepository } = require(path.join(ROOT, 'src/serviceTests/storage/aiAnalysesRepository'));
 const { createRunsRepository } = require(path.join(ROOT, 'src/serviceTests/storage/runsRepository'));
+const { createSnmpDevicesRepository } = require(path.join(ROOT, 'src/repositories/snmpDevicesRepository'));
+const { createDeviceInterfacesRepository } = require(path.join(ROOT, 'src/repositories/deviceInterfacesRepository'));
+const { createDeviceCounterSamplesRepository } = require(path.join(ROOT, 'src/repositories/deviceCounterSamplesRepository'));
+const { createSnmpCredentialProfilesRepository } = require(path.join(ROOT, 'src/repositories/snmpCredentialProfilesRepository'));
+
+// A stand-in for the real secretBox. The encryption itself is tested
+// elsewhere; what these checks need is a value that goes into a BLOB column
+// and comes back out, so a token that is not the plain text is enough.
+const fakeSecretBox = {
+  encrypt: (v) => Buffer.from(`enc:${v}`),
+  decrypt: (v) => String(v).replace(/^enc:/, ''),
+};
 
 const checks = [];
 const check = (name, fn) => checks.push({ name, fn });
@@ -229,6 +241,205 @@ check('runs: the batched read returns each test\'s own newest runs', async (pool
   // Duplicates collapse rather than fanning out twice.
   const deduped = await repo.recentForTests([1, 1, 1], { perTest: 2 });
   assert.strictEqual(deduped.size, 1);
+});
+
+
+// ===================================================== SNMP: devices and ports
+// These four tables are the counter feature (migrations 104, 108, 109, 112).
+// Every statement below is one a scripted pool already asserts the SHAPE of;
+// what it cannot answer is whether MySQL accepts it — a wide 20-column insert,
+// a grouped self-join, an ON DUPLICATE KEY with a COALESCE, and an ENUM that
+// migration 112 widened after the fact.
+
+check('snmp credential profiles: create, resolve, and never hand back a secret', async (pool) => {
+  const repo = createSnmpCredentialProfilesRepository({ pool }, { secretBox: fakeSecretBox });
+
+  const global = await repo.create({ name: 'Global default', version: '2c', community: 'globalsecret' });
+  assert.ok(global.id, 'the profile was not created');
+  assert.strictEqual(global.community, undefined, 'the safe shape must not carry a community');
+  assert.strictEqual(global.hasCommunity, true, 'but WHETHER one is set must be visible');
+
+  // v3, which migration 112 added to the ENUM. An ENUM value the table does
+  // not have is exactly the failure a scripted pool cannot see: MySQL either
+  // refuses it or, in a non-strict mode, stores an empty string.
+  const v3 = await repo.create({
+    name: 'Site v3', version: '3', v3User: 'blueeye',
+    v3AuthProto: 'sha256', v3AuthKey: 'authauthauth',
+    v3PrivProto: 'aes128', v3PrivKey: 'privprivpriv',
+  });
+  assert.strictEqual(v3.version, '3', 'the version ENUM did not keep 3');
+  assert.strictEqual(v3.v3AuthProto, 'sha256');
+
+  const resolved = await repo.resolveWithSecret(v3.id);
+  assert.strictEqual(resolved.v3AuthKey, 'authauthauth', 'the one read that decrypts did not');
+  assert.strictEqual(resolved.securityLevel, 'authPriv', 'the level is derived from the keys, never stated');
+
+  // At most one global default, enforced in code because MySQL treats NULLs as
+  // distinct and a unique index would allow twenty.
+  const byDefault = await repo.findGlobalDefault();
+  assert.strictEqual(byDefault.id, global.id, 'the oldest location-less profile is the default');
+
+  const listed = await repo.list();
+  assert.ok(listed.length >= 2);
+  assert.ok(!JSON.stringify(listed).includes('globalsecret'), 'a listing must never carry a secret');
+
+  assert.strictEqual(await repo.deviceCount(global.id), 0);
+  assert.strictEqual(await repo.remove(v3.id), true);
+  assert.strictEqual(await repo.findById(v3.id), null);
+});
+
+check('snmp devices: the credential chain resolves on the server, once per device', async (pool) => {
+  const profiles = createSnmpCredentialProfilesRepository({ pool }, { secretBox: fakeSecretBox });
+  const repo = createSnmpDevicesRepository({ pool }, {
+    secretBox: fakeSecretBox, credentialProfilesRepo: profiles,
+  });
+  const profile = await profiles.create({ name: 'Chain default', version: '2c', community: 'fromprofile' });
+
+  // agent_id stays null: the FK is ON DELETE SET NULL and this check is about
+  // the device row, not about agents.
+  const own = await repo.create({
+    host: '10.14.0.11', displayName: 'Core switch',
+    collect: ['if', 'fdb', 'ifcounters'], intervalSec: 300, counterIntervalSec: 60,
+    community: 'fromdevice',
+  });
+  assert.strictEqual(own.counterIntervalSec, 60);
+  assert.deepStrictEqual(own.collect, ['if', 'fdb', 'ifcounters'], 'the JSON column did not round trip');
+  assert.strictEqual(own.supported, null, 'never polled is NULL, not an empty list');
+  assert.strictEqual(own.community, undefined, 'the safe columns must not carry the community');
+
+  const viaProfile = await repo.create({
+    host: '10.14.0.12', credentialProfileId: profile.id, version: '2c',
+  });
+
+  // The ONE read that decrypts, and the whole point of the chain: a device with
+  // its own credential keeps it; one without inherits the profile's.
+  const withSecrets = await repo.listForAgentWithSecret(null);
+  assert.strictEqual(withSecrets.length, 0, 'a null agent owns no devices');
+
+  await repo.update(own.id, { agentId: null });
+  const direct = await repo.findById(own.id);
+  assert.strictEqual(direct.host, '10.14.0.11');
+
+  // recordPoll and recordCounterPoll are deliberately separate statements: a
+  // failed topology poll must not move the counter reference forward.
+  await repo.recordPoll(own.id, { ok: true, supported: { ifXTable: true } });
+  await repo.recordCounterPoll(own.id, { uptimeTicks: 506000 });
+  const polled = await repo.findById(own.id);
+  assert.deepStrictEqual(polled.supported, { ifXTable: true });
+  assert.strictEqual(polled.lastUptimeTicks, 506000);
+  assert.ok(polled.lastOkAt, 'a successful poll must stamp last_ok_at');
+
+  await repo.recordPoll(own.id, { ok: false, error: 'timeout' });
+  const failed = await repo.findById(own.id);
+  assert.strictEqual(failed.lastError, 'timeout');
+  assert.ok(failed.lastOkAt, 'a failure must KEEP the last good time');
+
+  assert.strictEqual(await profiles.deviceCount(profile.id), 1, 'the device/profile FK did not join');
+  assert.strictEqual(await repo.remove(viaProfile.id), true);
+});
+
+check('device interfaces: the port NAME is the identity, and a move is reported', async (pool) => {
+  const devices = createSnmpDevicesRepository({ pool }, { secretBox: fakeSecretBox });
+  const repo = createDeviceInterfacesRepository({ pool });
+  const device = await devices.create({ host: '10.14.0.20', displayName: 'Access switch' });
+
+  const first = await repo.upsertMany(device.id, [
+    { ifName: 'Gi0/1', ifIndex: 1, speedMbps: 1000, ifAlias: 'uplink', operStatus: 'up' },
+    { ifName: 'Gi0/2', ifIndex: 2, speedMbps: 1000, operStatus: 'down' },
+  ]);
+  assert.ok(first.upserted >= 2, 'the wide upsert did not write');
+  assert.deepStrictEqual(first.renumbered, [], 'a first sighting is not a move');
+
+  // The whole reason the name is the key: a line card reload renumbers the
+  // ports, and a counter read against the INDEX would subtract two different
+  // ports from each other.
+  const second = await repo.upsertMany(device.id, [
+    { ifName: 'Gi0/1', ifIndex: 10001, speedMbps: 1000, operStatus: 'up' },
+    { ifName: 'Gi0/2', ifIndex: 2, speedMbps: 1000, operStatus: 'down' },
+  ]);
+  assert.deepStrictEqual(second.renumbered, [{ ifName: 'Gi0/1', from: 1, to: 10001 }]);
+  assert.strictEqual(await repo.countForDevice(device.id), 2, 'a renumber must not create a second row');
+
+  const { byName, byIndex } = await repo.idMapForDevice(device.id);
+  assert.ok(byName.get('Gi0/1'), 'the name map is what the counter path resolves through');
+  assert.strictEqual(byIndex.get(10001), byName.get('Gi0/1'));
+
+  // COALESCE on if_index_changed_at: a poll where nothing moved must not erase
+  // the timestamp of the move before it.
+  await repo.upsertMany(device.id, [{ ifName: 'Gi0/1', ifIndex: 10001, speedMbps: 1000 }]);
+  const port = await repo.findById(byName.get('Gi0/1'));
+  assert.ok(port.ifIndexChangedAt, 'a quiet poll erased the move timestamp');
+
+  const listed = await repo.listForDevice(device.id, { limit: 10 });
+  assert.strictEqual(listed.length, 2);
+});
+
+check('device counter samples: a wide insert, a grouped self-join, and a window', async (pool) => {
+  const devices = createSnmpDevicesRepository({ pool }, { secretBox: fakeSecretBox });
+  const interfaces = createDeviceInterfacesRepository({ pool });
+  const repo = createDeviceCounterSamplesRepository({ pool });
+
+  const device = await devices.create({ host: '10.14.0.30', displayName: 'Counter switch' });
+  await interfaces.upsertMany(device.id, [
+    { ifName: 'Gi0/1', ifIndex: 1, speedMbps: 1000 },
+    { ifName: 'Gi0/2', ifIndex: 2, speedMbps: 1000 },
+  ]);
+  const { byName } = await interfaces.idMapForDevice(device.id);
+  const p1 = byName.get('Gi0/1');
+  const p2 = byName.get('Gi0/2');
+
+  const t0 = new Date(Date.now() - 120000);
+  const t1 = new Date(Date.now() - 60000);
+  const written = await repo.insertMany([
+    { ts: t0, deviceId: device.id, interfaceId: p1, inOctets: 1000000, outOctets: 500000, inErrors: 10, discontinuity: 'first' },
+    { ts: t0, deviceId: device.id, interfaceId: p2, inOctets: 7, discontinuity: 'first' },
+    {
+      ts: t1, deviceId: device.id, interfaceId: p1,
+      inOctets: 1750000, outOctets: 600000, inErrors: 16,
+      deltaSec: 60, inBps: 100000, outBps: 13333.33, inErrPps: 0.1, inUtilPct: 0.01,
+      discontinuity: null,
+    },
+  ]);
+  assert.strictEqual(written, 3, 'the wide insert did not write every row');
+
+  // INSERT IGNORE on (interface_id, ts): a retried submit must not double-count.
+  const again = await repo.insertMany([
+    { ts: t1, deviceId: device.id, interfaceId: p1, inOctets: 1750000 },
+  ]);
+  assert.strictEqual(again, 0, 'a retried submit was counted twice');
+
+  // The write path's read: newest per interface, inside the window.
+  const latest = await repo.latestForDevice(device.id);
+  assert.strictEqual(latest.size, 2);
+  assert.strictEqual(latest.get(p1).inOctets, 1750000, 'the grouped self-join returned the wrong row');
+  assert.strictEqual(latest.get(p1).inBps, 100000);
+  assert.strictEqual(latest.get(p2).inBps, null, 'an absent rate must read back as null, never 0');
+
+  // ... and the same read with the port name, which is the screen.
+  const named = await repo.latestWithNames(device.id);
+  assert.strictEqual(named.length, 2);
+  assert.strictEqual(named[0].ifName, 'Gi0/1', 'ordered by ifIndex, nulls last');
+
+  // The time bound is the difference between reading an hour and reading
+  // everything. A window that starts after the samples must come back empty
+  // rather than silently ignoring the predicate.
+  const none = await repo.latestForDevice(device.id, { since: new Date(Date.now() + 60000) });
+  assert.strictEqual(none.size, 0, 'the ts predicate was not applied');
+
+  const series = await repo.series(p1, { from: t0, to: new Date(), maxPoints: 500 });
+  assert.strictEqual(series.total, 2);
+  assert.strictEqual(series.step, 1);
+  assert.strictEqual(series.samples[0].inOctets, 1000000, 'a series reads forwards');
+  assert.strictEqual(series.samples[0].discontinuity, 'first');
+
+  // Downsampling takes every Nth row rather than averaging: averaging would
+  // smooth away the error spike somebody opened the chart to find.
+  const thin = await repo.series(p1, { from: t0, to: new Date(), maxPoints: 1 });
+  assert.strictEqual(thin.step, 2);
+  assert.strictEqual(thin.samples.length, 1);
+
+  const purged = await repo.purgeBefore(new Date(Date.now() - 90000));
+  assert.strictEqual(purged, 2, 'the batched delete did not remove the old rows');
 });
 
 async function main() {

@@ -22,7 +22,7 @@
 // cannot join here. It returns the samples and the caller decorates them — the
 // same split the device-events reader already makes for agent names.
 
-const { mapRow, RAW_COLUMNS, RATE_COLUMNS, FIELD } = require('./deviceCounterSamplesRepository');
+const { mapRow, RAW_COLUMNS, RATE_COLUMNS, FIELD, LOOKBACK_MS } = require('./deviceCounterSamplesRepository');
 
 const INSERT_COLUMNS = ['ts', 'device_id', 'interface_id', ...RAW_COLUMNS, ...RATE_COLUMNS, 'discontinuity'];
 
@@ -53,29 +53,35 @@ function createDeviceCounterSamplesTsdbRepository(tsdb) {
     return out.length;
   }
 
-  // DISTINCT ON — the Postgres idiom for the newest row per interface. The
-  // device filter plus the (interface_id, ts DESC) index means this reads the
-  // current chunk rather than the table.
-  async function latestForDevice(deviceId) {
+  // DISTINCT ON — the Postgres idiom for the newest row per interface.
+  //
+  // THE ts PREDICATE IS WHAT MAKES IT READ ONE CHUNK. Without it the planner
+  // has no way to exclude chunks and the query appends across every one of
+  // them; server/db/timescale/001_init.sql states the rule outright — never an
+  // unbounded GROUP BY on a hypertable. The device filter alone is not enough,
+  // because a device's rows are spread across every chunk it has ever been in.
+  async function latestForDevice(deviceId, { since = null } = {}) {
+    const from = since || new Date(Date.now() - LOOKBACK_MS);
     const rows = await query(
       `SELECT DISTINCT ON (interface_id) *
          FROM device_counter_samples
-        WHERE device_id = $1
+        WHERE device_id = $1 AND ts >= $2
         ORDER BY interface_id, ts DESC`,
-      [deviceId],
+      [deviceId, from],
     );
     const byInterface = new Map();
     for (const r of rows) byInterface.set(Number(r.interface_id), mapRow(r));
     return byInterface;
   }
 
-  async function latestWithNames(deviceId) {
+  async function latestWithNames(deviceId, { since = null } = {}) {
+    const from = since || new Date(Date.now() - LOOKBACK_MS);
     const rows = await query(
       `SELECT DISTINCT ON (interface_id) *
          FROM device_counter_samples
-        WHERE device_id = $1
+        WHERE device_id = $1 AND ts >= $2
         ORDER BY interface_id, ts DESC`,
-      [deviceId],
+      [deviceId, from],
     );
     return rows.map(mapRow);
   }

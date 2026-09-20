@@ -137,6 +137,15 @@ So `snmp_devices.counter_interval_sec` is separate from `interval_sec`, floored
 at 30 seconds, defaulting to 60. A device is polled for counters only when its
 `collect` list contains `ifcounters`, so the volume is opt-in per device.
 
+It is also **capped at 600 seconds**, which is `MAX_DELTA_SEC` — the same
+number the `gap` rule above uses. A device set to report counters every twenty
+minutes would store readings for ever and never produce one rate, because every
+delta would be wider than the gap ceiling. The validator refuses the setting
+rather than letting the screen fill with raw octets and empty rate columns, and
+it imports the number from `src/devices/counterDelta.js` so the two cannot
+drift. The topology interval keeps its own much wider ceiling (a day) — nothing
+about it is a rate.
+
 ### Four at a time
 
 The topology cycle is deliberately **sequential** — ten simultaneous

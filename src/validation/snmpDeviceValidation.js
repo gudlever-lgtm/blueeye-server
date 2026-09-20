@@ -1,6 +1,7 @@
 'use strict';
 
 const { normalizeMac, isUsableMac } = require('../identity/arpTable');
+const { MAX_DELTA_SEC } = require('../devices/counterDelta');
 
 // Validation for the SNMP device inventory an admin manages, and for the
 // topology batch an agent submits after polling those devices.
@@ -55,6 +56,13 @@ const MAX_DEVICES_PER_BATCH = 200;
 // caps at the same number — this is the boundary refusing to be told otherwise.
 const MAX_COUNTER_INTERFACES_PER_DEVICE = 1024;
 const MIN_COUNTER_INTERVAL_SEC = 30;
+// The counter cadence has a CEILING OF ITS OWN, and it is not the topology
+// interval's. `counterDelta.MAX_DELTA_SEC` voids the rate across any gap wider
+// than it, so a device configured to report counters every twenty minutes
+// would store readings for ever and never produce a single rate — a screen of
+// raw octets and empty columns, with nothing saying why. Importing the number
+// rather than repeating it is what stops the two drifting apart.
+const MAX_COUNTER_INTERVAL_SEC = MAX_DELTA_SEC;
 // Every counter column the agent may send. An unlisted key is ignored rather
 // than stored: a future agent adding a column must not be able to write one the
 // schema has no room for.
@@ -159,8 +167,8 @@ function validateSnmpDevice(raw, { partial = false } = {}) {
       value.counterIntervalSec = null;
     } else {
       const n = Number(body.counterIntervalSec);
-      if (!Number.isInteger(n) || n < MIN_COUNTER_INTERVAL_SEC || n > MAX_INTERVAL_SEC) {
-        errors.counterIntervalSec = `counterIntervalSec must be between ${MIN_COUNTER_INTERVAL_SEC} and ${MAX_INTERVAL_SEC} seconds`;
+      if (!Number.isInteger(n) || n < MIN_COUNTER_INTERVAL_SEC || n > MAX_COUNTER_INTERVAL_SEC) {
+        errors.counterIntervalSec = `counterIntervalSec must be between ${MIN_COUNTER_INTERVAL_SEC} and ${MAX_COUNTER_INTERVAL_SEC} seconds`;
       } else {
         value.counterIntervalSec = n;
       }
@@ -506,5 +514,6 @@ module.exports = {
   MAX_DEVICES_PER_BATCH,
   MAX_COUNTER_INTERFACES_PER_DEVICE,
   MIN_COUNTER_INTERVAL_SEC,
+  MAX_COUNTER_INTERVAL_SEC,
   COUNTER_FIELDS,
 };

@@ -16,7 +16,7 @@ const request = require('supertest');
 
 const {
   makeApp, makeSnmpProfilesRepo, makeSnmpDevicesRepo, makeAgentsRepo,
-  makeAgentTokensRepo, makeLocationsRepo, authHeader,
+  makeAgentTokensRepo, makeLocationsRepo, authHeader, throwingAsync,
 } = require('../test-support/fakes');
 const { validateSnmpProfile } = require('../src/validation/snmpProfileValidation');
 
@@ -281,4 +281,30 @@ test('the agent receives ONE credential per device — never a list to try', asy
   assert.equal(typeof target.community, 'string');
   assert.ok(!Array.isArray(target.community), 'one credential, not a list');
   assert.equal(target.v3, undefined, 'no v3 block on a v2c credential');
+});
+
+test('a repository failure is a 500, and says nothing about the secret store', async () => {
+  // The failure mode that matters on THIS route: the handler must not fall
+  // through to an empty list, which would read as "no profiles are
+  // configured" — and an admin acting on that would create a second global
+  // default beside the one that is already there.
+  const app = makeApp({
+    snmpProfilesRepo: makeSnmpProfilesRepo({
+      list: throwingAsync(),
+      findById: throwingAsync(),
+      create: throwingAsync(),
+    }),
+  });
+  const list = await admin(app, 'get', '/api/snmp-profiles');
+  assert.equal(list.status, 500);
+  assert.ok(!Array.isArray(list.body.profiles), 'a failure is never an empty list');
+
+  assert.equal((await admin(app, 'get', '/api/snmp-profiles/1')).status, 500);
+  assert.equal(
+    (await admin(app, 'post', '/api/snmp-profiles', { name: 'Site A', version: '2c', community: 'x' })).status,
+    500,
+  );
+  // The error text is generic: a stack trace here would name the encryption
+  // helper and the column it writes.
+  assert.ok(!JSON.stringify(list.body).toLowerCase().includes('secretbox'));
 });

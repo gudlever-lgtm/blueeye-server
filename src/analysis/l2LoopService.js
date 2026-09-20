@@ -3,6 +3,7 @@
 const crypto = require('crypto');
 const { detectLoop } = require('./l2Loop');
 const { median } = require('./baselines');
+const { numOrNull } = require('../lib/num');
 
 // Runs the loop detector over what the server already stores, and turns a
 // verdict into a finding.
@@ -78,10 +79,12 @@ function createL2LoopService({
         const series = await counterSamplesRepo.series(sample.interfaceId, {
           from: since, to: now(), maxPoints: BASELINE_SAMPLES,
         });
+        // numOrNull, not Number(): a sample with no broadcast reading must not
+        // become a 0 in the baseline, because a baseline pulled down by absent
+        // readings makes an ordinary rate look like a surge.
         history = (series.samples || [])
-          .map((s) => s.inBcastPps)
-          .filter((v) => v != null && Number.isFinite(Number(v)))
-          .map(Number);
+          .map((s) => numOrNull(s.inBcastPps))
+          .filter((v) => v !== null);
       } catch { history = []; }
       out.push({
         interfaceId: sample.interfaceId,

@@ -75,6 +75,7 @@ const { createSnmpDevicesRepository } = require('./repositories/snmpDevicesRepos
 const { createFdbEntriesRepository } = require('./repositories/fdbEntriesRepository');
 const { createSnmpNeighborsRepository } = require('./repositories/snmpNeighborsRepository');
 const { createDeviceInterfacesRepository } = require('./repositories/deviceInterfacesRepository');
+const { createSnmpCredentialProfilesRepository } = require('./repositories/snmpCredentialProfilesRepository');
 const { createDeviceCounterSamplesRepository } = require('./repositories/deviceCounterSamplesRepository');
 const { createDeviceCounterSamplesTsdbRepository } = require('./repositories/deviceCounterSamplesTsdbRepository');
 const { createSnmpCounterIngest } = require('./devices/snmpCounterIngest');
@@ -622,7 +623,14 @@ function start() {
   // string is AES-256-GCM at rest, so the repository takes the same secretBox
   // `cmdb_config` and `integrations` use; without one, a device simply has no
   // stored credential rather than an unencrypted one.
-  const snmpDevicesRepo = createSnmpDevicesRepository(db, { secretBox });
+  // Credential profiles first: the device repository resolves through them
+  // (device override -> profile -> site -> global default) so the agent gets
+  // ONE credential per device and never tries alternatives.
+  const snmpProfilesRepo = createSnmpCredentialProfilesRepository(db, { secretBox });
+  const snmpDevicesRepo = createSnmpDevicesRepository(db, {
+    secretBox,
+    credentialProfilesRepo: snmpProfilesRepo,
+  });
   const fdbEntriesRepo = createFdbEntriesRepository(db);
   const snmpNeighborsRepo = createSnmpNeighborsRepository(db);
   const deviceInterfacesRepo = createDeviceInterfacesRepository(db);
@@ -1079,6 +1087,7 @@ function start() {
     snmpNeighborsRepo,
     snmpTopologyIngest,
     snmpCounterIngest,
+    snmpProfilesRepo,
     deviceInterfacesRepo,
     counterSamplesRepo,
     burstRunsRepo,

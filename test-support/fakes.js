@@ -451,7 +451,7 @@ function makeDeviceEventsRepo(overrides = {}) {
 // never return a community, and only `listForAgentWithSecret` does. A fake that
 // leaked it everywhere would let a route accidentally return one and still pass
 // its test.
-function makeSnmpDevicesRepo(overrides = {}) {
+function makeSnmpDevicesRepo(overrides = {}, { credentialProfilesRepo = null } = {}) {
   const rows = [];
   let seq = 0;
   const iso = (v) => (v == null ? null : (v instanceof Date ? v.toISOString() : new Date(v).toISOString()));
@@ -466,6 +466,7 @@ function makeSnmpDevicesRepo(overrides = {}) {
     collect: r.collect,
     intervalSec: r.interval_sec,
     counterIntervalSec: r.counter_interval_sec ?? null,
+    credentialProfileId: r.credential_profile_id ?? null,
     enabled: !!r.enabled,
     lastPolledAt: iso(r.last_polled_at),
     lastOkAt: iso(r.last_ok_at),
@@ -492,9 +493,36 @@ function makeSnmpDevicesRepo(overrides = {}) {
       return r ? safe(r) : null;
     }),
     // The ONE read that carries the credential, and only for the polling agent.
-    listForAgentWithSecret: overrides.listForAgentWithSecret || (async (agentId) => rows
-      .filter((r) => r.agent_id === Number(agentId) && r.enabled)
-      .map((r) => ({ ...safe(r), community: r.community ?? null }))),
+    //
+    // It runs the REAL resolution chain when a profiles repo is wired — device
+    // override, then the profile the device names, then its site's, then the
+    // global default — because that chain is the behaviour under test, and a
+    // fake that skipped it would let a broken resolution pass.
+    listForAgentWithSecret: overrides.listForAgentWithSecret || (async (agentId) => {
+      const mine = rows.filter((r) => r.agent_id === Number(agentId) && r.enabled);
+      const out = [];
+      for (const r of mine) {
+        const device = safe(r);
+        if (r.community) {
+          out.push({
+            ...device,
+            community: r.community,
+            credential: { version: device.version, community: r.community, source: 'device' },
+          });
+          continue;
+        }
+        let credential = null;
+        if (credentialProfilesRepo) {
+          const profileId = await credentialProfilesRepo.resolveProfileIdFor({
+            profileId: device.credentialProfileId, locationId: device.locationId,
+          });
+          const resolved = profileId ? await credentialProfilesRepo.resolveWithSecret(profileId) : null;
+          if (resolved) credential = { ...resolved, source: 'profile' };
+        }
+        out.push({ ...device, community: credential ? (credential.community ?? null) : null, credential });
+      }
+      return out;
+    }),
     create: overrides.create || (async (v) => {
       const now = new Date();
       const row = {
@@ -509,6 +537,7 @@ function makeSnmpDevicesRepo(overrides = {}) {
         collect: v.collect ?? ['if', 'fdb', 'lldp', 'vlan'],
         interval_sec: v.intervalSec ?? 300,
         counter_interval_sec: v.counterIntervalSec ?? null,
+        credential_profile_id: v.credentialProfileId ?? null,
         enabled: v.enabled === undefined ? true : !!v.enabled,
         last_polled_at: null, last_ok_at: null, last_error: null, supported: null,
         last_uptime_ticks: null, last_uptime_at: null,
@@ -523,7 +552,8 @@ function makeSnmpDevicesRepo(overrides = {}) {
       const map = {
         agentId: 'agent_id', host: 'host', port: 'port', version: 'version',
         displayName: 'display_name', locationId: 'location_id', collect: 'collect',
-        intervalSec: 'interval_sec', counterIntervalSec: 'counter_interval_sec', community: 'community',
+        intervalSec: 'interval_sec', counterIntervalSec: 'counter_interval_sec',
+        credentialProfileId: 'credential_profile_id', community: 'community',
       };
       for (const [k, col] of Object.entries(map)) {
         if (patch[k] !== undefined) r[col] = patch[k];
@@ -638,6 +668,101 @@ function makeFdbEntriesRepo(overrides = {}) {
         if (new Date(rows[i].last_seen) < cutoff) rows.splice(i, 1);
       }
       return before - rows.length;
+    }),
+  };
+}
+
+function makeSnmpProfilesRepo(overrides = {}) {
+  const rows = [];
+  let seq = 0;
+  const iso = (v) => (v == null ? null : (v instanceof Date ? v.toISOString() : new Date(v).toISOString()));
+  // The SAFE shape: whether a secret is set, never what it is.
+  const safe = (r) => ({
+    id: r.id, name: r.name, locationId: r.location_id, version: r.version,
+    v3AuthProto: r.v3_auth_proto ?? null, v3PrivProto: r.v3_priv_proto ?? null,
+    v3Context: r.v3_context ?? null,
+    hasCommunity: !!r.community, v3User: r.v3_user ?? null,
+    hasV3AuthKey: !!r.v3_auth_key, hasV3PrivKey: !!r.v3_priv_key,
+    createdAt: iso(r.created_at), updatedAt: iso(r.updated_at),
+  });
+
+  return {
+    rows,
+    list: overrides.list || (async () => rows
+      .sort((a, b) => (a.location_id == null ? 0 : 1) - (b.location_id == null ? 0 : 1)
+        || String(a.name).localeCompare(String(b.name)))
+      .map(safe)),
+    findById: overrides.findById || (async (id) => {
+      const r = rows.find((x) => x.id === Number(id));
+      return r ? safe(r) : null;
+    }),
+    findByName: overrides.findByName || (async (name) => {
+      const r = rows.find((x) => x.name === name);
+      return r ? { id: r.id, name: r.name } : null;
+    }),
+    findGlobalDefault: overrides.findGlobalDefault || (async () => {
+      const r = rows.filter((x) => x.location_id == null).sort((a, b) => a.id - b.id)[0];
+      return r ? safe(r) : null;
+    }),
+    create: overrides.create || (async (v) => {
+      const now = new Date();
+      const row = {
+        id: (seq += 1), name: v.name, location_id: v.locationId ?? null,
+        version: v.version || '2c', community: v.community ?? null,
+        v3_user: v.v3User ?? null, v3_auth_proto: v.v3AuthProto ?? null,
+        v3_auth_key: v.v3AuthKey ?? null, v3_priv_proto: v.v3PrivProto ?? null,
+        v3_priv_key: v.v3PrivKey ?? null, v3_context: v.v3Context ?? null,
+        created_at: now, updated_at: now,
+      };
+      rows.push(row);
+      return safe(row);
+    }),
+    update: overrides.update || (async (id, patch) => {
+      const r = rows.find((x) => x.id === Number(id));
+      if (!r) return null;
+      const map = {
+        name: 'name', locationId: 'location_id', version: 'version',
+        community: 'community', v3User: 'v3_user', v3AuthProto: 'v3_auth_proto',
+        v3AuthKey: 'v3_auth_key', v3PrivProto: 'v3_priv_proto',
+        v3PrivKey: 'v3_priv_key', v3Context: 'v3_context',
+      };
+      for (const [k, col] of Object.entries(map)) {
+        if (patch[k] !== undefined) r[col] = patch[k];
+      }
+      r.updated_at = new Date();
+      return safe(r);
+    }),
+    remove: overrides.remove || (async (id) => {
+      const i = rows.findIndex((x) => x.id === Number(id));
+      if (i < 0) return false;
+      rows.splice(i, 1);
+      return true;
+    }),
+    deviceCount: overrides.deviceCount || (async () => 0),
+    // THE ONE READ THAT DECRYPTS, mirrored here so a test can exercise the
+    // resolution chain end-to-end.
+    resolveWithSecret: overrides.resolveWithSecret || (async (id) => {
+      const r = rows.find((x) => x.id === Number(id));
+      if (!r) return null;
+      const level = !r.v3_user ? null
+        : (r.v3_auth_key && r.v3_priv_key ? 'authPriv' : (r.v3_auth_key ? 'authNoPriv' : 'noAuthNoPriv'));
+      return {
+        profileId: r.id, profileName: r.name, version: r.version,
+        community: r.community ?? null, v3User: r.v3_user ?? null,
+        v3AuthProto: r.v3_auth_proto ?? null, v3AuthKey: r.v3_auth_key ?? null,
+        v3PrivProto: r.v3_priv_proto ?? null, v3PrivKey: r.v3_priv_key ?? null,
+        v3Context: r.v3_context ?? null, securityLevel: level,
+      };
+    }),
+    // device override -> site profile -> global default.
+    resolveProfileIdFor: overrides.resolveProfileIdFor || (async ({ profileId = null, locationId = null } = {}) => {
+      if (profileId) return Number(profileId);
+      if (locationId) {
+        const site = rows.filter((r) => r.location_id === Number(locationId)).sort((a, b) => a.id - b.id)[0];
+        if (site) return site.id;
+      }
+      const global = rows.filter((r) => r.location_id == null).sort((a, b) => a.id - b.id)[0];
+      return global ? global.id : null;
     }),
   };
 }
@@ -3144,7 +3269,8 @@ function makeApp(overrides = {}) {
   const hostConnectionsRepo = overrides.hostConnectionsRepo || makeHostConnectionsRepo();
   const arpEntriesRepo = overrides.arpEntriesRepo === undefined ? makeArpEntriesRepo() : overrides.arpEntriesRepo;
   const deviceEventsRepo = overrides.deviceEventsRepo === undefined ? makeDeviceEventsRepo() : overrides.deviceEventsRepo;
-  const snmpDevicesRepo = overrides.snmpDevicesRepo === undefined ? makeSnmpDevicesRepo() : overrides.snmpDevicesRepo;
+  const snmpProfilesRepo = overrides.snmpProfilesRepo === undefined ? makeSnmpProfilesRepo() : overrides.snmpProfilesRepo;
+  const snmpDevicesRepo = overrides.snmpDevicesRepo === undefined ? makeSnmpDevicesRepo({}, { credentialProfilesRepo: snmpProfilesRepo }) : overrides.snmpDevicesRepo;
   const fdbEntriesRepo = overrides.fdbEntriesRepo === undefined ? makeFdbEntriesRepo() : overrides.fdbEntriesRepo;
   const snmpNeighborsRepo = overrides.snmpNeighborsRepo === undefined ? makeSnmpNeighborsRepo() : overrides.snmpNeighborsRepo;
   const deviceInterfacesRepo = overrides.deviceInterfacesRepo === undefined ? makeDeviceInterfacesRepo() : overrides.deviceInterfacesRepo;
@@ -3259,6 +3385,7 @@ function makeApp(overrides = {}) {
     snmpNeighborsRepo,
     snmpTopologyIngest,
     snmpCounterIngest,
+    snmpProfilesRepo,
     deviceInterfacesRepo,
     counterSamplesRepo,
     burstRunsRepo,
@@ -3425,6 +3552,7 @@ module.exports = {
   makeSnmpNeighborsRepo,
   makeDeviceInterfacesRepo,
   makeCounterSamplesRepo,
+  makeSnmpProfilesRepo,
   makeBurstRunsRepo,
   makeInterfaceStatesRepo,
   makeAlertDispatchLogRepo,

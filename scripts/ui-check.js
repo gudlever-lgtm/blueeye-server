@@ -59,6 +59,7 @@ const MIGRATED = [
   'views/investigate.js',
   'views/diagnose.js',
   'views/deviceLog.js',
+  'views/snmpDevice.js',
   'views/troubleshooting.js',
   'views/topology.js',
   'views/flows.js',

@@ -46,6 +46,7 @@ const { createThresholdsRouter } = require('./thresholds');
 const { createInterfacesRouter } = require('./interfaces');
 const { createDeviceEventsRouter } = require('./deviceEvents');
 const { createSnmpDevicesRouter } = require('./snmpDevices');
+const { createSnmpProfilesRouter } = require('./snmpProfiles');
 const { createBurstRouter } = require('./burst');
 const { createFleetRouter } = require('./fleet');
 const { createDashboardRouter } = require('./dashboard');
@@ -153,6 +154,7 @@ function createApiRouter({
   snmpTopologyIngest = null,
   deviceInterfacesRepo = null,
   snmpCounterIngest = null,
+  snmpProfilesRepo = null,
   counterSamplesRepo = null,
   burstRunsRepo = null,
   burstService = null,
@@ -428,6 +430,14 @@ function createApiRouter({
   // Burst mode — one target, once a second, for up to two minutes. Read
   // viewer+ (a finished burst is a measurement); starting one is operator+,
   // because it makes an agent emit traffic at a rate nothing else here does.
+  // SNMP credential profiles. ADMIN for everything, including the read: a list
+  // of profiles says which sites share a secret and which use v3, which is a
+  // map of where to attack first.
+  if (snmpProfilesRepo) {
+    router.use('/api/snmp-profiles', createSnmpProfilesRouter({
+      snmpProfilesRepo, locationsRepo, auditLogger, logger,
+    }));
+  }
   if (burstRunsRepo) {
     router.use('/api/burst', createBurstRouter({ burstRunsRepo, burstService, agentsRepo, logger }));
   }

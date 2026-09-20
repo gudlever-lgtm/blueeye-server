@@ -145,6 +145,48 @@ test('deviceEventValidation: untrusted device input is bounded at the boundary',
   assert.deepEqual(validateDeviceEventQuery({}, {}), { minutes: 120, limit: 100, offset: 0 });
 });
 
+test('snmpProfileValidation: a credential that cannot work is refused before a switch stops answering', () => {
+  const { validateSnmpProfile, V3_KEY_MIN } = require('../../src/validation/snmpProfileValidation');
+
+  // A profile needs a name and, for v1/v2c, a community.
+  assert.ok(rejected(validateSnmpProfile({})));
+  assert.ok(rejected(validateSnmpProfile({ name: 'Site A', version: '2c' })), 'v2c needs a community');
+  assert.equal(validateSnmpProfile({ name: 'Site A', version: '2c', community: 'public' }).errors, undefined);
+
+  // THE ONE THAT MATTERS: SNMPv3 cannot encrypt without authenticating. That is
+  // not a weaker security level, it is one that does not exist, and a device
+  // refuses it — so refusing it here is the difference between an error message
+  // and a switch that quietly stops answering.
+  assert.ok(rejected(validateSnmpProfile({
+    name: 'x', version: '3', v3User: 'u', v3PrivProto: 'aes', v3PrivKey: 'privsecret1',
+  })), 'priv without auth');
+
+  assert.ok(rejected(validateSnmpProfile({ name: 'x', version: '3' })), 'v3 needs a user');
+  assert.ok(rejected(validateSnmpProfile({
+    name: 'x', version: '3', v3User: 'u', v3AuthProto: 'sha', v3AuthKey: 'x'.repeat(V3_KEY_MIN - 1),
+  })), 'a key shorter than the protocol allows');
+  assert.ok(rejected(validateSnmpProfile({
+    name: 'x', version: '3', v3User: 'u', v3AuthKey: 'authsecret1',
+  })), 'a key with no protocol');
+  assert.ok(rejected(validateSnmpProfile({
+    name: 'x', version: '3', v3User: 'u', v3AuthProto: 'nope', v3AuthKey: 'authsecret1',
+  })), 'an unknown auth protocol');
+
+  const ok = validateSnmpProfile({
+    name: 'Core v3', version: '3', v3User: 'blueeye',
+    v3AuthProto: 'sha256', v3AuthKey: 'authsecret1',
+    v3PrivProto: 'aes', v3PrivKey: 'privsecret1',
+  });
+  assert.equal(ok.errors, undefined);
+
+  // A patch validates the MERGED shape, so removing the auth key from an
+  // authPriv profile is caught rather than discovered later.
+  assert.ok(rejected(validateSnmpProfile(
+    { v3AuthKey: null },
+    { partial: true, existing: { version: '3', v3User: 'u', hasV3AuthKey: true, hasV3PrivKey: true } },
+  )));
+});
+
 test('snmpDeviceValidation: an address the server must never poll, and a table off a switch', () => {
   const {
     validateSnmpDevice, validateSnmpTopologyBatch, validateFdbEntry,
@@ -156,9 +198,18 @@ test('snmpDeviceValidation: an address the server must never poll, and a table o
   assert.ok(rejected(validateSnmpDevice({ host: 'http://10.0.0.1' })), 'a host is not a URL');
   assert.ok(rejected(validateSnmpDevice({ host: '10.0.0.1', port: 0 })));
   assert.ok(rejected(validateSnmpDevice({ host: '10.0.0.1', port: 99999 })));
-  // v3 is deliberately not offered yet: it needs an auth/priv credential pair
-  // and a key-management story, and half-supporting it is worse than saying so.
-  assert.ok(rejected(validateSnmpDevice({ host: '10.0.0.1', version: '3' })));
+  // v3 IS offered now (migration 112) — but a device row cannot hold a v3
+  // credential: an auth/priv key pair belongs on a credential PROFILE, where it
+  // is encrypted once and shared by every switch at a site. A row carrying both
+  // a v3 version and a community is a contradiction, and it would poll with
+  // whichever the resolution chain reached first.
+  assert.equal(validateSnmpDevice({ host: '10.0.0.1', version: '3' }).errors, undefined);
+  assert.ok(rejected(validateSnmpDevice({ host: '10.0.0.1', version: '3', community: 'public' })));
+  assert.ok(rejected(validateSnmpDevice({ host: '10.0.0.1', version: '4' })));
+  // The counter cadence is its own setting, floored, because a counter series'
+  // interval IS its resolution.
+  assert.ok(rejected(validateSnmpDevice({ host: '10.0.0.1', counterIntervalSec: 5 })));
+  assert.equal(validateSnmpDevice({ host: '10.0.0.1', counterIntervalSec: 30 }).errors, undefined);
   assert.ok(rejected(validateSnmpDevice({ host: '10.0.0.1', community: 'x'.repeat(500) })));
   assert.ok(rejected(validateSnmpDevice({ host: '10.0.0.1', collect: ['if', 'nope'] })));
   // An explicitly empty collect list is refused rather than silently meaning

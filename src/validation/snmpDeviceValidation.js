@@ -29,7 +29,13 @@ const NAME_SOURCES = ['ifName', 'ifDescr', 'ifIndex'];
 // IF-MIB ifAdminStatus / ifOperStatus, already named by the agent. Anything
 // else becomes null: an unknown status is not a status.
 const IF_STATUSES = ['up', 'down', 'testing', 'dormant', 'notPresent', 'lowerLayerDown', 'unknown'];
+// Versions a DEVICE ROW may carry. v3 is accepted now (migration 112), but a
+// device row cannot hold a v3 credential: an auth/priv key pair belongs on a
+// CREDENTIAL PROFILE, where it is encrypted once and shared by every switch at
+// a site. A v3 device therefore resolves its credential from a profile, and
+// saying so is what keeps half-configured v3 from looking configured.
 const VERSIONS = ['1', '2c'];
+const DEVICE_VERSIONS = ['1', '2c', '3'];
 const HOST_MAX = 255;
 const NAME_MAX = 255;
 const COMMUNITY_MAX = 128;
@@ -110,11 +116,8 @@ function validateSnmpDevice(raw, { partial = false } = {}) {
   }
 
   if (body.version !== undefined) {
-    // v3 is deliberately not offered yet: it needs an auth/priv credential pair
-    // and a key-management story, and half-supporting it would be worse than
-    // saying so. See docs/snmp-topology.md.
-    if (!VERSIONS.includes(String(body.version))) {
-      errors.version = `version must be one of: ${VERSIONS.join(', ')}`;
+    if (!DEVICE_VERSIONS.includes(String(body.version))) {
+      errors.version = `version must be one of: ${DEVICE_VERSIONS.join(', ')}`;
     } else {
       value.version = String(body.version);
     }
@@ -127,6 +130,40 @@ function validateSnmpDevice(raw, { partial = false } = {}) {
       errors.community = `community must be a string of at most ${COMMUNITY_MAX} characters`;
     } else {
       value.community = body.community;
+    }
+  }
+
+  // A v3 device with a community is a contradiction: v3 has no community, and a
+  // row carrying both would poll with whichever the resolution chain reached
+  // first. A v3 device takes its credential from a PROFILE.
+  if (String(value.version || body.version) === '3' && value.community) {
+    errors.community = 'SNMPv3 has no community string — point this device at a v3 credential profile instead';
+  }
+
+  // Which profile to resolve through. NULL means "work it out": the device's
+  // site, then the global default.
+  if (body.credentialProfileId !== undefined) {
+    if (body.credentialProfileId === null) {
+      value.credentialProfileId = null;
+    } else {
+      const n = Number(body.credentialProfileId);
+      if (!Number.isInteger(n) || n < 1) errors.credentialProfileId = 'credentialProfileId must be a positive integer';
+      else value.credentialProfileId = n;
+    }
+  }
+
+  // The counter cadence, when this device is polled for counters at all. Its
+  // own setting because a counter series' interval IS its resolution.
+  if (body.counterIntervalSec !== undefined) {
+    if (body.counterIntervalSec === null) {
+      value.counterIntervalSec = null;
+    } else {
+      const n = Number(body.counterIntervalSec);
+      if (!Number.isInteger(n) || n < MIN_COUNTER_INTERVAL_SEC || n > MAX_INTERVAL_SEC) {
+        errors.counterIntervalSec = `counterIntervalSec must be between ${MIN_COUNTER_INTERVAL_SEC} and ${MAX_INTERVAL_SEC} seconds`;
+      } else {
+        value.counterIntervalSec = n;
+      }
     }
   }
 
@@ -462,6 +499,7 @@ module.exports = {
   validateCollect,
   COLLECT_KINDS,
   VERSIONS,
+  DEVICE_VERSIONS,
   MIN_INTERVAL_SEC,
   MAX_INTERVAL_SEC,
   MAX_FDB_PER_DEVICE,

@@ -11,8 +11,9 @@
 // exception and is named so nobody reaches for it absent-mindedly.
 
 const SAFE_COLUMNS = `id, agent_id, host, port, version, display_name, location_id,
-  collect, interval_sec, counter_interval_sec, enabled, last_polled_at, last_ok_at,
-  last_error, last_uptime_ticks, last_uptime_at, supported, created_at, updated_at`;
+  credential_profile_id, collect, interval_sec, counter_interval_sec, enabled,
+  last_polled_at, last_ok_at, last_error, last_uptime_ticks, last_uptime_at,
+  supported, created_at, updated_at`;
 
 function toIso(v) {
   if (v == null) return null;
@@ -35,6 +36,10 @@ function mapRow(row) {
     version: String(row.version),
     displayName: row.display_name ?? null,
     locationId: row.location_id == null ? null : Number(row.location_id),
+    // NULL means "resolve it" — by site, then globally (migration 112). A
+    // device with its own community still wins over both, so every row that
+    // existed before profiles keeps working with nothing to migrate.
+    credentialProfileId: row.credential_profile_id == null ? null : Number(row.credential_profile_id),
     collect: parseJson(row.collect, ['if', 'fdb', 'lldp', 'vlan']),
     intervalSec: Number(row.interval_sec),
     // NULL means this device is not polled for counters. The volume is opt-in
@@ -59,7 +64,7 @@ function mapRow(row) {
   };
 }
 
-function createSnmpDevicesRepository(db, { secretBox = null } = {}) {
+function createSnmpDevicesRepository(db, { secretBox = null, credentialProfilesRepo = null } = {}) {
   const { pool } = db;
 
   async function list({ agentId = null, enabled = null } = {}) {
@@ -99,29 +104,85 @@ function createSnmpDevicesRepository(db, { secretBox = null } = {}) {
         WHERE agent_id = ? AND enabled = 1 ORDER BY id ASC`,
       [agentId],
     );
-    return rows.map((row) => {
+    // THE RESOLUTION CHAIN (migration 112), run HERE on the server:
+    //
+    //   1. the device's own credential
+    //   2. the profile the device names
+    //   3. the profile for the device's site
+    //   4. the global default profile
+    //   5. nothing — reported as such, never as a quiet fallback to 'public'
+    //
+    // The agent receives ONE credential per device and never learns profiles
+    // exist. Trying several in order at the agent is credential spraying: it
+    // locks v3 accounts and, on v2c, times out three times per device per
+    // cycle against a 60-second interval floor.
+    const out = [];
+    for (const row of rows) {
       const device = mapRow(row);
-      let community = null;
+      let credential = null;
+
       if (row.community_encrypted && secretBox) {
-        try { community = secretBox.decrypt(row.community_encrypted); } catch { community = null; }
+        try {
+          const community = secretBox.decrypt(row.community_encrypted);
+          if (community) {
+            credential = { version: device.version, community, source: 'device' };
+          }
+        } catch { credential = null; }
       }
-      return { ...device, community };
-    });
+
+      if (!credential && credentialProfilesRepo) {
+        try {
+          const profileId = await credentialProfilesRepo.resolveProfileIdFor({
+            profileId: device.credentialProfileId,
+            locationId: device.locationId,
+          });
+          const resolved = profileId ? await credentialProfilesRepo.resolveWithSecret(profileId) : null;
+          if (resolved) {
+            credential = {
+              // The version that RUNS is the credential's, not the device row's:
+              // a v3 profile against a device row still saying 2c would
+              // otherwise authenticate with a community that does not exist.
+              version: resolved.version,
+              community: resolved.community,
+              v3User: resolved.v3User,
+              v3AuthProto: resolved.v3AuthProto,
+              v3AuthKey: resolved.v3AuthKey,
+              v3PrivProto: resolved.v3PrivProto,
+              v3PrivKey: resolved.v3PrivKey,
+              v3Context: resolved.v3Context,
+              securityLevel: resolved.securityLevel,
+              source: 'profile',
+              profileId: resolved.profileId,
+              profileName: resolved.profileName,
+            };
+          }
+        } catch { credential = null; }
+      }
+
+      out.push({
+        ...device,
+        // Kept for the agents and tests that read `community` directly.
+        community: credential ? (credential.community ?? null) : null,
+        credential,
+      });
+    }
+    return out;
   }
 
   async function create({
     agentId = null, host, port = 161, version = '2c', community = null,
     displayName = null, locationId = null, collect = null, intervalSec = 300,
-    counterIntervalSec = null, enabled = true,
+    counterIntervalSec = null, credentialProfileId = null, enabled = true,
   }) {
     const encrypted = community && secretBox ? secretBox.encrypt(community) : null;
     const [res] = await pool.query(
       `INSERT INTO snmp_devices
-         (agent_id, host, port, version, community_encrypted, display_name,
-          location_id, collect, interval_sec, counter_interval_sec, enabled)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         (agent_id, host, port, version, community_encrypted, credential_profile_id,
+          display_name, location_id, collect, interval_sec, counter_interval_sec, enabled)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
-        agentId, host, port, version, encrypted, displayName, locationId,
+        agentId, host, port, version, encrypted, credentialProfileId,
+        displayName, locationId,
         collect == null ? null : JSON.stringify(collect), intervalSec,
         counterIntervalSec, enabled ? 1 : 0,
       ],
@@ -147,6 +208,7 @@ function createSnmpDevicesRepository(db, { secretBox = null } = {}) {
     if (patch.collect !== undefined) set('collect', patch.collect == null ? null : JSON.stringify(patch.collect));
     if (patch.intervalSec !== undefined) set('interval_sec', patch.intervalSec);
     if (patch.counterIntervalSec !== undefined) set('counter_interval_sec', patch.counterIntervalSec);
+    if (patch.credentialProfileId !== undefined) set('credential_profile_id', patch.credentialProfileId);
     if (patch.enabled !== undefined) set('enabled', patch.enabled ? 1 : 0);
     if (patch.community !== undefined) {
       set('community_encrypted', patch.community && secretBox ? secretBox.encrypt(patch.community) : null);

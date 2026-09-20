@@ -2765,8 +2765,9 @@ CREATE TABLE IF NOT EXISTS `snmp_devices` (
   `agent_id` INT UNSIGNED NULL DEFAULT NULL,
   `host` VARCHAR(255) NOT NULL,
   `port` SMALLINT UNSIGNED NOT NULL DEFAULT 161,
-  `version` ENUM('1', '2c') NOT NULL DEFAULT '2c',
+  `version` ENUM('1', '2c', '3') NOT NULL DEFAULT '2c',
   `community_encrypted` TEXT NULL DEFAULT NULL,
+  `credential_profile_id` INT UNSIGNED NULL DEFAULT NULL,
   `display_name` VARCHAR(255) NULL DEFAULT NULL,
   `location_id` INT UNSIGNED NULL DEFAULT NULL,
   `collect` JSON NULL DEFAULT NULL,
@@ -2785,7 +2786,8 @@ CREATE TABLE IF NOT EXISTS `snmp_devices` (
   UNIQUE KEY `uq_snmp_devices_host` (`host`, `port`),
   KEY `idx_snmp_devices_agent` (`agent_id`, `enabled`),
   CONSTRAINT `fk_snmp_devices_agent` FOREIGN KEY (`agent_id`) REFERENCES `agents` (`id`) ON DELETE SET NULL,
-  CONSTRAINT `fk_snmp_devices_location` FOREIGN KEY (`location_id`) REFERENCES `locations` (`id`) ON DELETE SET NULL
+  CONSTRAINT `fk_snmp_devices_location` FOREIGN KEY (`location_id`) REFERENCES `locations` (`id`) ON DELETE SET NULL,
+  CONSTRAINT `fk_snmp_devices_profile` FOREIGN KEY (`credential_profile_id`) REFERENCES `snmp_credential_profiles` (`id`) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- 105 — fdb_entries: which switch port a MAC address is on.
@@ -3084,6 +3086,59 @@ CREATE TABLE IF NOT EXISTS `device_counter_samples` (
   UNIQUE KEY `uq_counter_sample` (`interface_id`, `ts`),
   KEY `idx_counter_device_ts` (`device_id`, `ts`),
   KEY `idx_counter_ts` (`ts`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- 112 — SNMP credential profiles, and SNMPv3.
+--
+-- WHAT WAS PROPOSED, AND WHAT IS BUILT.
+--
+-- The proposal was: a profile per site, an optional profile per subnet, an
+-- override per device, and the AGENT tries them in order, remembers what
+-- worked and reports auth_failed per device.
+--
+-- The hierarchy is built. The ordered trying is NOT, and the reason is in
+-- SNMP-AUDIT.md: trying credentials in sequence against an address is
+-- credential spraying, and it is technically identical to an attack whatever
+-- the intent.
+--
+--   * Against v3 it is actively harmful. v3 is authenticated, failed authPriv
+--     attempts are logged as security events on most platforms and some lock
+--     the account.
+--   * Against v2c it produces silent failure. A wrong community usually gets
+--     no error at all, just a timeout — three profiles x 30 s per device per
+--     cycle, sequentially, against a 60 s interval floor. The polling collapses
+--     before it finds anything.
+--   * It is out of step with the rest of this feature, which checks the SSRF
+--     deny-list TWICE for every device and keeps the community out of
+--     SAFE_COLUMNS so a route cannot leak it by accident.
+--
+-- So the profile is resolved ON THE SERVER — device override, then the site
+-- profile, then the global default — and the agent receives ONE credential per
+-- device, exactly as it does today. The agent never learns that profiles exist,
+-- which keeps the secret surface on the agent exactly the size it already is.
+--
+-- The subnet level is deliberately left out. `locations` already exists and is
+-- what `snmp_devices.location_id` points at; a middle tier needing CIDR matching
+-- on the server has to earn its place with a case that site + override cannot
+-- express, and none was given.
+CREATE TABLE IF NOT EXISTS `snmp_credential_profiles` (
+  `id` INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `name` VARCHAR(190) NOT NULL,
+  `location_id` INT UNSIGNED NULL DEFAULT NULL,
+  `version` ENUM('1', '2c', '3') NOT NULL DEFAULT '2c',
+  `community_encrypted` TEXT NULL DEFAULT NULL,
+  `v3_user` VARCHAR(190) NULL DEFAULT NULL,
+  `v3_auth_proto` ENUM('md5', 'sha', 'sha224', 'sha256', 'sha384', 'sha512') NULL DEFAULT NULL,
+  `v3_auth_key_encrypted` TEXT NULL DEFAULT NULL,
+  `v3_priv_proto` ENUM('des', 'aes', 'aes256b', 'aes256r') NULL DEFAULT NULL,
+  `v3_priv_key_encrypted` TEXT NULL DEFAULT NULL,
+  `v3_context` VARCHAR(190) NULL DEFAULT NULL,
+  `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uq_snmp_profile_name` (`name`),
+  KEY `idx_snmp_profile_location` (`location_id`),
+  CONSTRAINT `fk_snmp_profile_location` FOREIGN KEY (`location_id`) REFERENCES `locations` (`id`) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 SET FOREIGN_KEY_CHECKS = 1;

@@ -1,5 +1,52 @@
 # Changelog
 
+## 0.173.0 — The vendor decides which key a fleet accepts
+
+An agent verifies the releases and the privileged commands it acts on against a
+release key it learned **from this server**. That holds right up to the moment
+this server is the thing compromised: the attacker generates a key, re-keys the
+fleet, and from then on their code verifies. A key that arrives over the same
+channel as the thing it authenticates proves nothing.
+
+The trust chain is rooted outside that blast radius, in infrastructure that
+already exists:
+
+```
+vendor key (blueeye-licens, embedded in the agent AND here)
+  └─ licence proof  trust: { license{id,customer_id},
+  │                          server{id, release_key{algorithm,fingerprint}},
+  │                          sequence }  + valid_until
+  ▼
+this server  — presents its release PUBLIC key on every licence validation,
+  │            keeps the signed answer, relays it UNCHANGED with a rekey
+  ▼
+agent        — verifies it against the vendor key it embeds, then accepts the
+               key only if the fingerprints match
+```
+
+`POST /validate` now carries `releaseKey` (public half only). The vendor
+authorises the first key a licence presents automatically — a new install needs
+no vendor click — and records any **change** as pending, signing nothing until
+vendor staff approve it. That asymmetry is the security property: a server that
+has been taken over can present a key all day and authorise none.
+
+`POST /agents/:id/rekey` attaches the proof when the vendor authorised *this*
+key, and deliberately attaches nothing when it authorised a different one —
+sending a mismatched authorisation would only produce a refusal at the agent.
+The attempt is recorded as `agent.rekey-unauthorized` in the system log.
+`GET /system/version` gains `vendorKeyStatus` + `vendorAuthorizedFingerprint`,
+and Settings → Agent key says whether a key is authorised, pending, or waiting
+for a fingerprint to be read back to support.
+
+Fingerprints are now SHA-256 over a key's **SPKI DER bytes**
+(`src/lib/fingerprint.js`, byte-identical in all three repos and pinned by
+`test/fingerprintContract.test.js`). Hashing the PEM text made the value depend
+on line endings, and it decides whether an agent accepts code.
+
+Recovering a lost signing key: generate here → the next licence validation
+presents it → the vendor approves the fingerprint → re-key the agents. No host
+access at any point.
+
 ## 0.169.0 — An audit, and the findings fixed
 
 An audit across blueeye-server, blueeye-agent and blueeye-licens. Most of what it

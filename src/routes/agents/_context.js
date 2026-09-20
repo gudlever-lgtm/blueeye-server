@@ -16,6 +16,10 @@ const { silentLogger } = require('../../logger');
 function createAgentsContext({
   agentsRepo, locationsRepo, resultsRepo, agentCommander, agentSourceStore,
   releaseStore = null, releasePublicKey = '', releaseKeyService = null, publishRelease = null,
+  // The licence manager carries the vendor-signed authorisation a rekey relays:
+  // this server may hold a key, but only the vendor can say the fleet should
+  // accept it (see licenseManager.getTrustProof).
+  licenseManager = null,
   auditRepo = null, auditEventsRepo = null, auditLogger = null, integrationTrigger = null,
   commandSigner = null, logger = silentLogger, reconnect = {},
 }) {
@@ -102,7 +106,7 @@ function createAgentsContext({
   return {
     // repositories + services
     agentsRepo, locationsRepo, resultsRepo, agentCommander, agentSourceStore,
-    releaseStore, releasePublicKey, releaseKeyService, publishRelease,
+    releaseStore, releasePublicKey, releaseKeyService, licenseManager, publishRelease,
     auditRepo, auditEventsRepo, auditLogger, integrationTrigger, logger,
     // reconnect tuning (POST /:id/reconnect)
     reconnectWaitMs, reconnectPollMs,

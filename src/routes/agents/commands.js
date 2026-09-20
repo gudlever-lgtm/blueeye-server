@@ -11,6 +11,9 @@ const { INSTALLABLE_TOOLS, isAllowedTool } = require('../../agentTools');
 const { diagnoseConnection } = require('../../ws/connectionDiagnosis');
 const { isNewer } = require('../../lib/version');
 const { MAX_INTERVAL_MS } = require('../../validation/agentValidation');
+// The fingerprint of a KEY (SHA-256 of its SPKI DER bytes) — what the vendor
+// authorises and what the agent computes over the key it is offered.
+const { publicKeyFingerprint } = require('../../lib/fingerprint');
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -25,7 +28,7 @@ function createAgentCommandsRouter(ctx) {
   const router = express.Router();
   const {
     agentsRepo, agentCommander, agentSourceStore, releaseStore, releaseKeyService, releasePublicKey,
-    publishRelease, auditRepo, auditEventsRepo, auditLogger, logger,
+    licenseManager, publishRelease, auditRepo, auditEventsRepo, auditLogger, logger,
     reconnectWaitMs, reconnectPollMs,
     signCommand, canSignCommands, invalidId, notFound, validationError,
     recordRequested, recordSystemError, markFailed,
@@ -240,9 +243,41 @@ function createAgentCommandsRouter(ctx) {
       if (!agentCommander || typeof agentCommander.sendCommandAndWait !== 'function') {
         return res.status(503).json({ error: 'Agent channel not available' });
       }
-      const fingerprint = crypto.createHash('sha256').update(publicKey).digest('hex');
+      // The fingerprint of the KEY (SHA-256 of its SPKI DER bytes), which is what
+      // the vendor authorises and what the agent computes over the key it is
+      // offered. Hashing the PEM text instead would make this depend on line
+      // endings, and it decides whether a fleet accepts code.
+      const fingerprint = publicKeyFingerprint(publicKey);
+
+      // The vendor's authorisation, exactly as it was signed. The agent verifies
+      // this against the vendor key it EMBEDS, so this server is a courier here,
+      // not an authority: without a proof naming THIS key, an agent that has
+      // already seen one refuses the rekey — which is precisely what stops a
+      // server that has been taken over from re-anchoring its own fleet.
+      const trustProof = licenseManager && typeof licenseManager.getTrustProof === 'function'
+        ? licenseManager.getTrustProof() : null;
+      const authorizedFingerprint = trustProof
+        && trustProof.payload
+        && trustProof.payload.trust
+        && trustProof.payload.trust.server
+        && trustProof.payload.trust.server.release_key
+        ? trustProof.payload.trust.server.release_key.fingerprint : null;
+      // Sending a proof that authorises a DIFFERENT key would only produce a
+      // refusal at the agent. Say so here instead, where the operator is.
+      const vendorAuthorized = !!authorizedFingerprint && authorizedFingerprint === fingerprint;
+      if (trustProof && !vendorAuthorized) {
+        await recordSystemError(req, {
+          action: 'agent.rekey-unauthorized',
+          targetType: 'agent',
+          targetId: id,
+          targetLabel: agent.hostname || null,
+          detail: { reason: 'vendor-authorizes-another-key', fingerprint: fingerprint.slice(0, 16) },
+        });
+      }
+
       const auditId = await recordRequested('rekey', agent, req, fingerprint.slice(0, 32));
       const command = { name: 'rekey', publicKey };
+      if (vendorAuthorized) command.vendorProof = trustProof;
       if (auditId) command.auditId = auditId;
       const out = await agentCommander.sendCommandAndWait(id, signCommand(id, command), { timeoutMs: 8000 });
       if (out.delivered === 0) {
@@ -261,6 +296,11 @@ function createAgentCommandsRouter(ctx) {
         // agent that requires signed commands accepts nothing else, so the
         // dashboard has to be able to say why a rekey was refused.
         signed: canSignCommands(),
+        // Whether the vendor has authorised THIS key. An agent that has ever seen
+        // a vendor authorisation accepts nothing else, so this is the difference
+        // between a rekey that will land and one that will be refused.
+        vendorAuthorized,
+        vendorAuthorizedFingerprint: authorizedFingerprint,
         auditId: auditId || null,
       });
     })

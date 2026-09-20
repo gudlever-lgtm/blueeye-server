@@ -43,6 +43,9 @@
   // The history, newest first. v = the version it shipped in, d = the date that
   // version landed (YYYY-MM-DD, the page groups by month).
   var RELEASES = [
+    { v: '0.173.0', d: '2026-09-20', area: 'platform',
+      en: { t: 'The vendor decides which key a fleet accepts', s: 'Agents no longer take this server\u2019s word for which key signs their updates: the authorised key is named inside the vendor-signed licence proof, so a server that has been taken over cannot re-anchor its own fleet.' },
+      da: { t: 'Leverand\u00f8ren afg\u00f8r, hvilken n\u00f8gle en flåde accepterer', s: 'Agenter tager ikke l\u00e6ngere denne servers ord for, hvilken n\u00f8gle der signerer deres opdateringer: den autoriserede n\u00f8gle st\u00e5r inde i det leverand\u00f8rsignerede licensbevis, s\u00e5 en overtaget server ikke kan omankre sin egen fl\u00e5de.' } },
     { v: '0.172.0', d: '2026-09-20', area: 'platform',
       en: { t: 'The server and the agent stay up when something unexpected happens', s: 'A stray unhandled promise used to be able to end the process — on the server, and on an agent running on a host nobody is watching. Now it is a log line, while a genuinely unknown state still drains its connections and restarts cleanly.' },
       da: { t: 'Serveren og agenten bliver oppe, når noget uventet sker', s: 'En overset afvist promise kunne før lukke processen — både på serveren og på en agent, der kører på en maskine, ingen kigger på. Nu er det en linje i loggen, mens en reelt ukendt tilstand stadig lukker sine forbindelser ordentligt og starter forfra.' } },

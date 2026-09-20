@@ -34,6 +34,13 @@ stored or returned in plaintext (mirrors the integration-credentials pattern).
 Every LDAP attempt (success and failure) is written to `ldap_login_audit`. Local
 login is never audited here, so existing behaviour is untouched.
 
+The fallback in step 2 is deliberate and load-bearing: an unreachable directory,
+a failed bind or an enable-check that throws all degrade to local password
+sign-in rather than refusing it. That is what stops a directory outage from
+locking administrators out of the server — see
+**[auth-lockout.md](auth-lockout.md)**, which also covers the *opposite* policy
+applied to local user creation (fail **closed**) and the ways back in.
+
 ### TLS
 
 LDAPS is required: a plaintext bind (`use_tls=false`) to a **non-local** host is

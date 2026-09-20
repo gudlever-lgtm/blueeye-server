@@ -12,6 +12,14 @@ LDAP/AD, OIDC or SAML is enabled, the endpoints below return **403** and the
 dashboard hides the button (customers on SSO manage users in their directory).
 `GET /users/local-availability` is the single source of truth the UI reads.
 
+The check **fails closed**: a provider whose enable-check throws is treated as
+"possibly active" and the invite is refused, rather than being read as "no SSO
+here" and allowed. The 403 then names the method and what to do about it, and
+`local-availability` reports `ssoIndeterminate: true` so the UI can say *why* the
+button is missing. This cannot lock an admin out — sign-in does not consult this
+check and `POST /users` is not gated by it — but the reasoning matters if you are
+changing this area: see **[auth-lockout.md](auth-lockout.md)**.
+
 An SMTP host must be configured (**Settings → Alerting** — the same SMTP used for
 alert emails). Without it the endpoints answer **503** and the UI shows a hint.
 

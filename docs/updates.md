@@ -125,6 +125,38 @@ Two things have to be true for a one-click update to land on a pinned agent:
    Each unsigned push is recorded in the system log as `agent.update-unsigned`
    with the reason, so the cause outlives the toast.
 
+### Who decides which key an agent accepts
+
+Not this server. The key an agent verifies releases and privileged commands
+against is named inside the **vendor-signed licence proof** this server already
+fetches, and the agent verifies that signature against a vendor key it embeds.
+
+```
+vendor key (blueeye-licens)
+  └─ licence proof  trust: { license{id,customer_id},
+  │                          server{id, release_key{algorithm,fingerprint}},
+  │                          sequence }  + valid_until
+  ▼
+this server   — presents its release PUBLIC key on every validation,
+  │             keeps the signed answer, relays it UNCHANGED with a rekey
+  ▼
+agent         — verifies signature → customer → validity → sequence →
+                fingerprint(offered key) == fingerprint(authorised)
+```
+
+The consequence to plan around: **generating a key here is not enough**. The
+vendor authorises the FIRST key a licence presents automatically, but a *change*
+is recorded as pending and authorises nothing until vendor staff approve it.
+Settings → Agent key shows which state a key is in and the fingerprint to read
+back when asking for approval. Agents installed before the chain existed still
+accept a re-pin signed with the key it replaces, so a fleet is never locked out
+mid-migration — but the first vendor authorisation an agent accepts latches it,
+and from then on only the vendor can move it.
+
+Recovering a lost signing key therefore goes: generate here → present (the next
+licence validation does it) → vendor approves the fingerprint → re-key the
+agents. No host access at any point.
+
 2. **The agent pins the key this server signs with.** After generating a new
    key, existing agents still trust the old one. Re-pin them **from the server** —
    an installed agent is managed from here, and nothing assumes a shell on the

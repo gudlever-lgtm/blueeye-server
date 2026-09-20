@@ -174,3 +174,128 @@ test('a verify-only server still says re-pinning alone will not fix it', async (
   assert.equal(res.status, 200);
   assert.equal(res.body.canSign, false);
 });
+
+// ------------------------------------------------- the vendor authorisation
+//
+// The server is a COURIER here, not an authority: it relays the vendor-signed
+// proof exactly as it received it, and the agent decides. What is tested below
+// is that it relays the right thing, and stays quiet when it has nothing the
+// agent would accept.
+
+const { FAKE_RELEASE_KEYPAIR } = require('../test-support/fakes');
+const { publicKeyFingerprint } = require('../src/lib/fingerprint');
+
+function proofAuthorising(fingerprint, { sequence = 3 } = {}) {
+  return {
+    payload: {
+      valid: true,
+      serverId: 'server-abc',
+      proof_issued_at: new Date().toISOString(),
+      valid_until: new Date(Date.now() + 36 * 3600 * 1000).toISOString(),
+      trust: {
+        license: { id: '7', customer_id: '42' },
+        server: { id: 'server-abc', release_key: { algorithm: 'Ed25519', fingerprint } },
+        sequence,
+      },
+    },
+    // The signature is opaque to the server — it never verifies it, it carries
+    // it. Only the agent's embedded vendor key can say anything about it.
+    signature: 'dmVuZG9yLXNpZ25hdHVyZQ==',
+  };
+}
+
+function rekeyAppWith({ trustProof = null, keyStatus = null } = {}) {
+  const sent = [];
+  const app = makeApp({
+    agentsRepo: makeAgentsRepo({
+      findAll: async () => [AGENT],
+      findById: async (id) => (Number(id) === AGENT.id ? AGENT : null),
+    }),
+    auditRepo: makeAuditRepo(),
+    auditEventsRepo: makeAuditEventsRepo(),
+    agentCommander: {
+      sendCommand: () => 1,
+      sendCommandAndWait: async (id, command) => { sent.push(command); return { delivered: 1, acked: true, reply: { accepted: true } }; },
+    },
+    releaseKeyService: makeReleaseKeyService(),
+    licenseManager: {
+      getTrustProof: () => trustProof,
+      getReleaseKeyStatus: () => keyStatus,
+      isLicensed: () => true,
+      getStatus: () => ({ status: 'valid' }),
+      getFeatures: () => ({}),
+      getMaxAgents: () => 100,
+      getPlan: () => null,
+      getAvailableReleases: () => null,
+      canAcceptNewConnection: () => ({ ok: true }),
+    },
+  });
+  return { app, sent };
+}
+
+test('a rekey carries the vendor authorisation when the vendor authorised THIS key', async () => {
+  const fingerprint = publicKeyFingerprint(FAKE_RELEASE_KEYPAIR.pem);
+  const proof = proofAuthorising(fingerprint);
+  const { app, sent } = rekeyAppWith({ trustProof: proof, keyStatus: 'authorized' });
+
+  const res = await request(app).post(`/agents/${AGENT.id}/rekey`).set('Authorization', authHeader('admin'));
+  assert.equal(res.status, 202);
+  assert.equal(res.body.vendorAuthorized, true);
+  assert.equal(res.body.fingerprint, fingerprint);
+  assert.equal(sent.length, 1);
+  // Relayed byte for byte: a payload this server re-serialised from its own
+  // state would not verify at the agent, and must not.
+  assert.deepEqual(sent[0].vendorProof, proof);
+  assert.equal(sent[0].vendorProof.signature, proof.signature);
+});
+
+test('a rekey carries NO proof when the vendor authorised a different key', async () => {
+  // The rotation-in-progress case: the admin generated a new key here, the
+  // vendor has not approved it yet. Sending the old authorisation would only
+  // produce a refusal at the agent.
+  const { app, sent } = rekeyAppWith({ trustProof: proofAuthorising('a'.repeat(64)), keyStatus: 'pending' });
+
+  const res = await request(app).post(`/agents/${AGENT.id}/rekey`).set('Authorization', authHeader('admin'));
+  assert.equal(res.status, 202);
+  assert.equal(res.body.vendorAuthorized, false);
+  assert.equal(res.body.vendorAuthorizedFingerprint, 'a'.repeat(64));
+  assert.equal(sent[0].vendorProof, undefined);
+});
+
+test('a server with no licence proof at all still re-keys the old way', async () => {
+  // Before the chain reaches a deployment — and for an agent that has never
+  // been vendor-rooted — the signed-with-the-old-key path is all there is.
+  const { app, sent } = rekeyAppWith({ trustProof: null });
+  const res = await request(app).post(`/agents/${AGENT.id}/rekey`).set('Authorization', authHeader('admin'));
+  assert.equal(res.status, 202);
+  assert.equal(res.body.vendorAuthorized, false);
+  assert.equal(res.body.vendorAuthorizedFingerprint, null);
+  assert.equal(sent[0].vendorProof, undefined);
+  assert.ok(sent[0].commandSignature, 'it must still be signed with the key being replaced');
+});
+
+test('an unauthorised rekey attempt is recorded in the system log', async () => {
+  const auditEventsRepo = makeAuditEventsRepo();
+  const app = makeApp({
+    agentsRepo: makeAgentsRepo({ findAll: async () => [AGENT], findById: async () => AGENT }),
+    auditRepo: makeAuditRepo(),
+    auditEventsRepo,
+    agentCommander: { sendCommand: () => 1, sendCommandAndWait: async () => ({ delivered: 1, acked: true, reply: { accepted: true } }) },
+    releaseKeyService: makeReleaseKeyService(),
+    licenseManager: {
+      getTrustProof: () => proofAuthorising('b'.repeat(64)),
+      getReleaseKeyStatus: () => 'pending',
+      isLicensed: () => true,
+      getStatus: () => ({ status: 'valid' }),
+      getFeatures: () => ({}),
+      getMaxAgents: () => 100,
+      getPlan: () => null,
+      getAvailableReleases: () => null,
+      canAcceptNewConnection: () => ({ ok: true }),
+    },
+  });
+  await request(app).post(`/agents/${AGENT.id}/rekey`).set('Authorization', authHeader('admin'));
+  const row = (auditEventsRepo.rows || []).find((r) => r.action === 'agent.rekey-unauthorized');
+  assert.ok(row, 'pushing a key the vendor has not authorised left no trace');
+  assert.equal(row.detail.reason, 'vendor-authorizes-another-key');
+});

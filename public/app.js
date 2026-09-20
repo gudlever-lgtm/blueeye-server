@@ -11642,6 +11642,11 @@ async function settingsAgentKeyView() {
     root.append(el('div', { class: 'empty error' }, errText(err)));
     return root;
   }
+  // Whether the vendor has authorised this key comes from the licence proof,
+  // which /system/version already surfaces. Best-effort: a key panel that works
+  // beats one that fails because the licence server was briefly unreachable.
+  let ver = null;
+  try { ver = await api('/system/version'); } catch { ver = null; }
 
   if (status.configured) {
     root.append(el('div', { class: 'section-head' }, el('h3', {}, 'Agent signing key'), el('span', { class: 'badge active' }, 'Created ✓')));
@@ -11655,6 +11660,26 @@ async function settingsAgentKeyView() {
     // one-click update: the dashboard said "Created ✓", the updates went out
     // unsigned, and every pinned agent refused them. Say it here, where an admin
     // comes to check the key.
+    // What the VENDOR says about this key. An agent that has been through the
+    // trust chain accepts a key only when a vendor-signed proof names its
+    // fingerprint, so "generated here" is not the same as "the fleet will take
+    // it" — and an operator has to see that before clicking Re-pin, not after.
+    if (status.fingerprint && ver && ver.vendorKeyStatus !== undefined) {
+      const authorized = ver.vendorAuthorizedFingerprint === status.fingerprint;
+      if (ver.vendorKeyStatus === 'pending' || (ver.vendorKeyStatus && !authorized)) {
+        const box = el('div', { class: 'callout' });
+        box.append(el('p', {}, el('strong', {}, '⏳ This key is waiting for vendor approval.')));
+        box.append(el('p', { class: 'muted' },
+          'Your licence server has recorded this key but has not authorised it, so agents that verify the vendor chain will refuse it. '
+          + 'Send this fingerprint to BlueEyes support and ask them to approve it:'));
+        box.append(el('p', {}, el('code', {}, status.fingerprint)));
+        box.append(el('p', { class: 'muted small' },
+          'Agents installed before the trust chain existed still accept a re-pin signed with the key it replaces, so they can be updated meanwhile.'));
+        root.append(box);
+      } else if (authorized) {
+        root.append(el('p', { class: 'muted' }, '✓ The vendor has authorised this key — agents verifying the vendor chain accept it.'));
+      }
+    }
     if (!status.canSign) {
       const box = el('div', { class: 'callout' });
       box.append(el('p', {}, el('strong', {}, '⚠ This key cannot sign agent releases.')));

@@ -328,6 +328,11 @@ function start() {
     logger,
     getAgentCount: () => (agentWs ? agentWs.connectionCount() : 0),
     keyTrust,
+    // Present this server's agent-release PUBLIC key for vendor authorisation.
+    // Late-bound: releaseKeyService is wired further down, and validation only
+    // ever runs after boot (the resolver is guarded and returns '' if asked
+    // early). Public material only — the private half never leaves this host.
+    getReleasePublicKey: () => releaseKeyService.getPublicKey(),
   });
 
   // Plan service: resolves the active package (Pilot/Starter/Professional) from

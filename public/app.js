@@ -6724,6 +6724,16 @@ views.diagnose = async () => {
   return v.view();
 };
 
+PAGE_INFO.burst = {
+  get hero() { return t('burst.info.hero'); },
+  get title() { return t('burst.info.title'); },
+  body: () => [
+    el('p', {}, t('burst.info.p1')),
+    el('p', {}, t('burst.info.p2')),
+    el('p', { class: 'muted' }, t('burst.info.p3')),
+  ],
+};
+
 PAGE_INFO.deviceLog = {
   get hero() { return t('devlog.info.hero'); },
   get title() { return t('devlog.info.title'); },
@@ -7096,11 +7106,13 @@ function getProbesView() {
     // different hero banners now feed one (?) popover.
     helpFor: (tab) => {
       const info = (tab === 'packages' ? PAGE_INFO.tests
-        : (tab === 'connection' ? PAGE_INFO.connectionTest : PAGE_INFO.probes)) || {};
+        : (tab === 'connection' ? PAGE_INFO.connectionTest
+          : (tab === 'burst' ? PAGE_INFO.burst : PAGE_INFO.probes))) || {};
       return { lead: info.hero || '', title: info.title || t('probes.title'), body: info.body || (() => []) };
     },
     tabBody: (tab) => (tab === 'packages' ? testPackagesView()
-      : (tab === 'connection' ? connectionTestView() : probeRunnerView())),
+      : (tab === 'connection' ? connectionTestView()
+        : (tab === 'burst' ? burstView() : probeRunnerView()))),
   });
   return probesView;
 }
@@ -7112,10 +7124,307 @@ views.probes = async () => {
   // than a blank page.
   const root = el('div');
   const sub = probesTab === 'packages' ? testPackagesView
-    : (probesTab === 'connection' ? connectionTestView : probeRunnerView);
+    : (probesTab === 'connection' ? connectionTestView
+      : (probesTab === 'burst' ? burstView : probeRunnerView));
   root.append(await sub());
   return root;
 };
+
+// ---- Burst mode -----------------------------------------------------------
+//
+// One target, once a second, for up to two minutes — the resolution the
+// 60-second reporting interval cannot give. A five-second loss event is
+// invisible in the normal data, and that is exactly the fault somebody is
+// standing in front of when they open this tab.
+//
+// THE SENTENCE UNDER THE CHART IS THE OUTPUT. A row of numbers tells a
+// technician what they already knew; whether the loss is EVEN or CLUSTERED is
+// the diagnostic value, and the server computes it in code and stores it with
+// the run. This screen shows the sentence first and the figures beside it.
+//
+// The live chart draws from `burst-sample` frames on the dashboard socket, so
+// the line grows while the measurement happens. A dropped frame costs one
+// point; the authoritative series arrives with the finished run.
+let burstWatcher = null;
+const burstState = { agentId: null, target: '', seconds: 60, probe: 'ping', port: '', runId: null };
+
+// The chart. Hand-drawn SVG like the rest of this dashboard, and it takes its
+// colours from the tokens rather than naming any.
+function burstChart(samples, { total, clusters = [] } = {}) {
+  const W = 700;
+  const H = 150;
+  const L = 44;
+  const R = 10;
+  const T = 16;
+  const B = 32;
+  const n = Math.max(total || samples.length, 1);
+  const rtts = samples.filter((s) => s.ok && Number.isFinite(s.rttMs)).map((s) => s.rttMs);
+  const maxRtt = rtts.length ? Math.max(...rtts) : 1;
+  // A little headroom so the peak is not welded to the top edge.
+  const top = maxRtt * 1.15 || 1;
+  const x = (i) => L + (i / Math.max(n - 1, 1)) * (W - L - R);
+  const y = (v) => T + (1 - v / top) * (H - T - B);
+
+  const svg = el('svg', {
+    class: 'burst-chart', viewBox: `0 0 ${W} ${H}`, role: 'img',
+    'aria-label': t('burst.chart.alt', { n: samples.length, lost: samples.filter((s) => !s.ok).length }),
+  });
+
+  // Gridlines at a quarter, half and three quarters of the scale, each labelled
+  // with a value the chart actually reaches.
+  for (const frac of [1, 0.5]) {
+    const v = top * frac;
+    svg.append(el('line', { x1: L, y1: y(v), x2: W - R, y2: y(v), class: 'burst-grid' }));
+    svg.append(el('text', { x: L - 6, y: y(v) + 4, class: 'burst-axis', 'text-anchor': 'end' }, `${v.toFixed(1)} ms`));
+  }
+  svg.append(el('line', { x1: L, y1: y(0), x2: W - R, y2: y(0), class: 'burst-axis-line' }));
+
+  // Shade the loss clusters, so the shape the verdict describes is visible
+  // rather than something the reader has to find in the line.
+  for (const c of clusters) {
+    const x1 = x(c.start);
+    const x2 = x(c.end);
+    svg.append(el('rect', {
+      x: String(x1), y: String(T), width: String(Math.max(x2 - x1, 2)), height: String(H - T - B),
+      class: 'burst-lossband',
+    }));
+  }
+
+  // The rtt line, broken at every loss: joining across a gap would draw a line
+  // through a packet that never arrived.
+  let run = [];
+  const flush = () => {
+    if (run.length > 1) svg.append(el('polyline', { points: run.join(' '), class: 'burst-line' }));
+    else if (run.length === 1) {
+      const [px, py] = run[0].split(',');
+      svg.append(el('circle', { cx: px, cy: py, r: '1.6', class: 'burst-dot' }));
+    }
+    run = [];
+  };
+  samples.forEach((s, i) => {
+    if (s.ok && Number.isFinite(s.rttMs)) run.push(`${x(i).toFixed(1)},${y(s.rttMs).toFixed(1)}`);
+    else flush();
+  });
+  flush();
+
+  // A marker per lost sample, on the baseline.
+  samples.forEach((s, i) => {
+    if (s.ok) return;
+    svg.append(el('circle', { cx: String(x(i).toFixed(1)), cy: String(y(0)), r: '3', class: 'burst-lost' }));
+  });
+
+  svg.append(el('text', { x: String(L), y: String(H - 8), class: 'burst-axis' }, '0 s'));
+  svg.append(el('text', { x: String(W - R), y: String(H - 8), class: 'burst-axis', 'text-anchor': 'end' },
+    `${samples.length ? samples[samples.length - 1].t : 0} s`));
+  return svg;
+}
+
+async function burstView() {
+  const root = el('div', { class: 'burst' });
+  const formHost = el('div', {});
+  const outHost = el('div', {});
+  root.append(formHost, outHost);
+
+  const agents = await api('/agents').catch(() => []);
+  if (!agents.length) {
+    root.append(el('div', { class: 'empty' }, t('burst.noAgents')));
+    return root;
+  }
+  if (burstState.agentId == null) burstState.agentId = agents[0].id;
+
+  // ---- the form -----------------------------------------------------------
+  const agentSel = ui.select({
+    id: 'burst-agent', label: t('burst.field.agent'), value: String(burstState.agentId),
+    options: agents.map((a) => [String(a.id), a.display_name || a.hostname || `#${a.id}`]),
+    onchange: (e) => { burstState.agentId = Number(e.target.value); },
+  });
+  const targetIn = el('input', {
+    id: 'burst-target', type: 'text', maxlength: '255',
+    placeholder: t('burst.field.target.placeholder'), 'aria-label': t('burst.field.target'),
+  });
+  targetIn.value = burstState.target;
+  const secondsSel = ui.select({
+    id: 'burst-seconds', label: t('burst.field.seconds'), value: String(burstState.seconds),
+    options: [['30', '30 s'], ['60', '60 s'], ['120', '120 s']],
+    onchange: (e) => { burstState.seconds = Number(e.target.value); },
+  });
+  const probeSel = ui.select({
+    id: 'burst-probe', label: t('burst.field.probe'), value: burstState.probe,
+    options: [['ping', 'ping (ICMP)'], ['tcp', 'TCP connect'], ['dns', 'DNS']],
+    onchange: (e) => { burstState.probe = e.target.value; portIn.hidden = e.target.value !== 'tcp'; },
+  });
+  const portIn = el('input', {
+    id: 'burst-port', type: 'number', min: '1', max: '65535',
+    placeholder: t('burst.field.port'), 'aria-label': t('burst.field.port'),
+  });
+  portIn.value = burstState.port;
+  portIn.hidden = burstState.probe !== 'tcp';
+
+  const startBtn = ui.button('primary', t('burst.action.start'), { onclick: () => startBurst() });
+  const stopBtn = ui.button('secondary', t('burst.action.stop'), { onclick: () => stopBurst() });
+  stopBtn.disabled = true;
+  const status = el('span', { class: 'meta-xs' });
+
+  formHost.append(ui.panel({
+    title: t('burst.form.title'),
+    note: t('burst.form.note'),
+    children: [ui.formActions([
+      ui.filter(t('burst.field.agent'), agentSel),
+      ui.filter(t('burst.field.target'), targetIn),
+      ui.filter(t('burst.field.probe'), probeSel),
+      portIn,
+      ui.filter(t('burst.field.seconds'), secondsSel),
+      startBtn, stopBtn, status,
+    ])],
+  }));
+
+  // ---- the live run -------------------------------------------------------
+  let live = [];
+  let liveTotal = 0;
+
+  function drawLive() {
+    const lost = live.filter((s) => !s.ok).length;
+    outHost.replaceChildren(ui.panel({
+      title: t('burst.live.title'),
+      note: t('burst.live.progress', { n: live.length, total: liveTotal || live.length }),
+      children: [
+        el('div', { class: 'burst-stats' },
+          burstStat(t('burst.stat.loss'), live.length ? `${((lost / live.length) * 100).toFixed(1)} %` : '–', lost ? 'bad' : ''),
+          burstStat(t('burst.stat.samples'), String(live.length), '')),
+        burstChart(live, { total: liveTotal }),
+        // No verdict yet, and it does not guess one: the shape is computed on
+        // the server from the whole series, once it exists.
+        ui.inlineNote ? ui.inlineNote(t('burst.live.pending')) : el('p', { class: 'muted' }, t('burst.live.pending')),
+      ],
+    }));
+  }
+
+  function burstStat(label, value, tone) {
+    return el('div', { class: `burst-stat${tone ? ` ${tone}` : ''}` },
+      el('span', { class: 'burst-stat-n' }, value),
+      el('span', { class: 'burst-stat-l' }, label));
+  }
+
+  function drawRun(run) {
+    const tone = run.pattern === 'clean' ? 'ok' : (run.lossPct > 0 ? 'bad' : '');
+    outHost.replaceChildren(ui.panel({
+      title: t('burst.result.title', { target: run.target }),
+      note: `${run.probe} · ${run.seconds} s · ${run.hz} Hz`,
+      children: [
+        el('div', { class: 'burst-stats' },
+          burstStat(t('burst.stat.loss'), run.lossPct == null ? '–' : `${run.lossPct} %`, tone),
+          burstStat(t('burst.stat.median'), run.medianRttMs == null ? '–' : `${run.medianRttMs} ms`, ''),
+          burstStat(t('burst.stat.p95'), run.p95RttMs == null ? '–' : `${run.p95RttMs} ms`, ''),
+          burstStat(t('burst.stat.jitter'), run.jitterMs == null ? '–' : `${run.jitterMs} ms`, ''),
+          burstStat(t('burst.stat.clusters'), run.lossClusters == null ? '–' : String(run.lossClusters), run.lossClusters > 1 ? 'bad' : '')),
+        burstChart(run.samples || [], { total: run.sampleCount, clusters: run.clusters || [] }),
+        // THE OUTPUT. Everything above it is supporting evidence.
+        run.explanation
+          ? el('p', { class: 'burst-verdict' }, run.explanation)
+          : el('p', { class: 'muted' }, t('burst.result.noVerdict', { status: run.status })),
+      ],
+    }));
+  }
+
+  async function startBurst() {
+    const target = targetIn.value.trim();
+    if (!target) { status.textContent = t('burst.err.target'); return; }
+    live = [];
+    liveTotal = burstState.seconds;
+    startBtn.disabled = true;
+    status.textContent = t('burst.status.starting');
+    drawLive();
+
+    let run;
+    try {
+      const body = {
+        agentId: burstState.agentId, target, seconds: burstState.seconds, probe: burstState.probe,
+      };
+      if (burstState.probe === 'tcp') body.port = Number(portIn.value) || undefined;
+      ({ run } = await api('/api/burst', { method: 'POST', body }));
+    } catch (e) {
+      startBtn.disabled = false;
+      status.textContent = errText(e);
+      outHost.replaceChildren();
+      return;
+    }
+
+    burstState.runId = run.id;
+    burstState.target = target;
+    stopBtn.disabled = false;
+    status.textContent = t('burst.status.running');
+
+    // Watch the live stream for THIS run only.
+    burstWatcher = (payload) => {
+      if (!payload || Number(payload.runId) !== Number(run.id)) return;
+      live.push(payload.sample);
+      if (payload.total) liveTotal = payload.total;
+      drawLive();
+    };
+
+    // The finished run does not arrive on the socket — the samples do. Poll for
+    // the stored verdict, which is the thing worth waiting for, and stop as
+    // soon as the row is no longer running.
+    const deadline = Date.now() + (burstState.seconds + 30) * 1000;
+    const poll = async () => {
+      if (Date.now() > deadline) { finish(t('burst.status.timeout')); return; }
+      let fresh;
+      try { fresh = (await api(`/api/burst/${run.id}`)).run; } catch { fresh = null; }
+      if (fresh && fresh.status !== 'running') { drawRun(fresh); finish(''); return; }
+      setTimeout(poll, 2000);
+    };
+    setTimeout(poll, 2000);
+  }
+
+  function finish(message) {
+    burstWatcher = null;
+    startBtn.disabled = false;
+    stopBtn.disabled = true;
+    status.textContent = message;
+  }
+
+  async function stopBurst() {
+    if (!burstState.runId) return;
+    stopBtn.disabled = true;
+    try { await api(`/api/burst/${burstState.runId}/stop`, { method: 'POST' }); }
+    catch (e) { status.textContent = errText(e); }
+  }
+
+  // ---- recent runs --------------------------------------------------------
+  try {
+    const { runs } = await api('/api/burst?limit=10');
+    if (runs && runs.length) {
+      root.append(ui.panel({
+        title: t('burst.recent.title'),
+        children: [ui.dataTable({
+          dense: true,
+          columns: [
+            { key: 'when', label: t('burst.col.when'), width: '150px', time: true },
+            { key: 'target', label: t('burst.col.target'), width: '180px' },
+            { key: 'loss', label: t('burst.col.loss'), width: '90px', num: true },
+            { key: 'verdict', label: t('burst.col.verdict') },
+          ],
+          rows: runs.map((r) => ({
+            cells: {
+              when: new Date(r.startedAt).toLocaleString(),
+              target: el('code', {}, r.target),
+              loss: r.lossPct == null ? '–' : `${r.lossPct} %`,
+              // The sentence, again — it is what makes a list of past runs
+              // readable rather than a column of percentages.
+              verdict: r.explanation || el('span', { class: 'muted' }, r.status),
+            },
+            raw: r,
+          })),
+          onOpen: async (row) => {
+            try { drawRun((await api(`/api/burst/${row.raw.id}`)).run); } catch (e) { toast(errText(e)); }
+          },
+        })],
+      }));
+    }
+  } catch { /* the history is a courtesy; the tool is the form above */ }
+
+  return root;
+}
 
 // ---- Connection test ------------------------------------------------------
 // One address, the whole battery. The Run-a-probe tab above asks one question
@@ -14309,6 +14618,10 @@ function connectLive() {
     else if (msg.type === 'agent-enrolled') onAgentEvent('enrolled', msg.payload);
     else if (msg.type === 'agent-status') onAgentEvent(msg.payload && msg.payload.status, msg.payload);
     else if (msg.type === 'event_cluster') onEventCluster(msg.payload);
+    // A burst sample, as it happens. Delivered to whoever is watching the
+    // chart right now; nobody watching means the frame is simply dropped —
+    // the authoritative series arrives with the finished run.
+    else if (msg.type === 'burst-sample' && burstWatcher) burstWatcher(msg.payload);
   });
   sock.addEventListener('close', () => {
     liveWs = null;

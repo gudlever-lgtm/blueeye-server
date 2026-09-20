@@ -41,9 +41,13 @@ const agentsRepo = () => makeAgentsRepo({
 
 // A trap as the agent's translator produces it — no device clock, a trap OID in
 // `tag`, and the varbinds in `detail`.
+//
+// `receivedAt` is RELATIVE to now, not a fixed date: the device log's default
+// window is the last two hours, so a hard-coded timestamp silently ages out of
+// every read and the test starts failing by the clock rather than by the code.
 const TRAP = (over = {}) => ({
   sourceIp: '10.14.0.11',
-  receivedAt: '2026-09-20T09:41:11.000Z',
+  receivedAt: new Date(Date.now() - 60_000).toISOString(),
   deviceTime: null,
   transport: 'trap',
   facility: null,
@@ -102,7 +106,7 @@ test('traps and syslog arrive in ONE batch and both store', async () => {
   const syslogRow = {
     ...TRAP(),
     transport: 'syslog',
-    deviceTime: '2026-09-20T09:41:09.000Z',
+    deviceTime: new Date(Date.now() - 63_000).toISOString(),
     facility: 23,
     tag: '%LINK-3-UPDOWN',
     summary: 'Interface GigabitEthernet0/1, changed state to down',

@@ -46,6 +46,7 @@ const { createThresholdsRouter } = require('./thresholds');
 const { createInterfacesRouter } = require('./interfaces');
 const { createDeviceEventsRouter } = require('./deviceEvents');
 const { createSnmpDevicesRouter } = require('./snmpDevices');
+const { createBurstRouter } = require('./burst');
 const { createFleetRouter } = require('./fleet');
 const { createDashboardRouter } = require('./dashboard');
 const { createForecastRouter } = require('./forecast');
@@ -150,6 +151,8 @@ function createApiRouter({
   snmpNeighborsRepo = null,
   fdbEntriesRepo = null,
   snmpTopologyIngest = null,
+  burstRunsRepo = null,
+  burstService = null,
   interfaceStatesRepo = null,
   interfaceStateService = null,
   serviceDependenciesRepo,
@@ -417,6 +420,12 @@ function createApiRouter({
     router.use('/api/snmp-devices', createSnmpDevicesRouter({
       snmpDevicesRepo, fdbEntriesRepo, snmpNeighborsRepo, agentsRepo, agentCommander, auditLogger, logger,
     }));
+  }
+  // Burst mode — one target, once a second, for up to two minutes. Read
+  // viewer+ (a finished burst is a measurement); starting one is operator+,
+  // because it makes an agent emit traffic at a rate nothing else here does.
+  if (burstRunsRepo) {
+    router.use('/api/burst', createBurstRouter({ burstRunsRepo, burstService, agentsRepo, logger }));
   }
   // Capacity/trend forecasting (robust Theil–Sen projection + days-to-capacity).
   router.use('/api/forecast', createForecastRouter());

@@ -21,6 +21,7 @@ const { createAuditLogger } = require('../src/services/complianceLogger');
 const { createInterfaceStateService } = require('../src/health/interfaceStateService');
 const { createDeviceEventIngest } = require('../src/devices/deviceEventIngest');
 const { createSnmpTopologyIngest } = require('../src/devices/snmpTopologyIngest');
+const { createBurstService } = require('../src/probes/burstService');
 const { createSnapshotService } = require('../src/evidence/snapshotService');
 const { createBlastRadiusService } = require('../src/topology/blastRadiusService');
 const { createTopologyChangeService } = require('../src/topology/topologyChangeService');
@@ -635,6 +636,90 @@ function makeSnmpNeighborsRepo(overrides = {}) {
     listForDevice: overrides.listForDevice || (async (deviceId, { limit = 500 } = {}) => rows
       .filter((r) => r.deviceId === Number(deviceId)).slice(0, limit)),
     purgeBefore: overrides.purgeBefore || (async () => 0),
+  };
+}
+
+// A fake burst-runs repository (`burst_runs`, migration 107).
+function makeBurstRunsRepo(overrides = {}) {
+  const rows = [];
+  let seq = 0;
+  const iso = (v) => (v == null ? null : (v instanceof Date ? v.toISOString() : new Date(v).toISOString()));
+  const mapOut = (r, withSamples) => {
+    const out = {
+      id: r.id, agentId: r.agent_id, target: r.target, probe: r.probe,
+      requestedSeconds: r.requested_seconds, seconds: r.seconds, hz: r.hz,
+      startedAt: iso(r.started_at), endedAt: iso(r.ended_at), status: r.status,
+      error: r.error, sampleCount: r.sample_count, lostCount: r.lost_count,
+      lossPct: r.loss_pct, medianRttMs: r.median_rtt_ms, p95RttMs: r.p95_rtt_ms,
+      jitterMs: r.jitter_ms, lossClusters: r.loss_clusters, pattern: r.pattern,
+      explanation: r.explanation, createdBy: r.created_by, createdAt: iso(r.created_at),
+    };
+    // Mirrors the real repository: the series is carried only by the read that
+    // asks for it, so a list of twenty runs stays small.
+    if (withSamples) out.samples = r.samples || [];
+    return out;
+  };
+  return {
+    rows,
+    start: overrides.start || (async (v) => {
+      const row = {
+        id: (seq += 1), agent_id: v.agentId, target: v.target, probe: v.probe || 'ping',
+        requested_seconds: v.requestedSeconds ?? null, seconds: v.seconds, hz: v.hz ?? 1,
+        started_at: v.at || new Date(), ended_at: null, status: 'running', error: null,
+        samples: null, sample_count: 0, lost_count: 0, loss_pct: null,
+        median_rtt_ms: null, p95_rtt_ms: null, jitter_ms: null, loss_clusters: null,
+        pattern: null, explanation: null, created_by: v.createdBy ?? null, created_at: new Date(),
+      };
+      rows.push(row);
+      return mapOut(row);
+    }),
+    complete: overrides.complete || (async (id, { samples, analysis, status = 'complete', endedAt = new Date(), error = null }) => {
+      const r = rows.find((x) => x.id === Number(id));
+      if (!r) return null;
+      r.status = status;
+      r.ended_at = endedAt;
+      r.error = error;
+      r.samples = samples || null;
+      if (analysis) {
+        r.sample_count = analysis.sampleCount;
+        r.lost_count = analysis.lostCount;
+        r.loss_pct = analysis.lossPct;
+        r.median_rtt_ms = analysis.medianRttMs;
+        r.p95_rtt_ms = analysis.p95RttMs;
+        r.jitter_ms = analysis.jitterMs;
+        r.loss_clusters = analysis.lossClusters;
+        r.pattern = analysis.pattern;
+        r.explanation = analysis.explanation;
+      }
+      return mapOut(r, true);
+    }),
+    findById: overrides.findById || (async (id, { withSamples = false } = {}) => {
+      const r = rows.find((x) => x.id === Number(id));
+      return r ? mapOut(r, withSamples) : null;
+    }),
+    list: overrides.list || (async ({ agentId = null, limit = 25, offset = 0 } = {}) => rows
+      .filter((r) => agentId == null || r.agent_id === Number(agentId))
+      .sort((a, b) => new Date(b.started_at) - new Date(a.started_at) || b.id - a.id)
+      .slice(offset, offset + limit)
+      .map((r) => mapOut(r))),
+    expireStale: overrides.expireStale || (async (olderThan) => {
+      let n = 0;
+      for (const r of rows) {
+        if (r.status === 'running' && new Date(r.started_at) < olderThan) {
+          r.status = 'failed';
+          r.error = 'the agent never reported the result';
+          n += 1;
+        }
+      }
+      return n;
+    }),
+    purgeBefore: overrides.purgeBefore || (async (cutoff) => {
+      const before = rows.length;
+      for (let i = rows.length - 1; i >= 0; i -= 1) {
+        if (new Date(rows[i].started_at) < cutoff) rows.splice(i, 1);
+      }
+      return before - rows.length;
+    }),
   };
 }
 
@@ -2888,6 +2973,12 @@ function makeApp(overrides = {}) {
   const snmpDevicesRepo = overrides.snmpDevicesRepo === undefined ? makeSnmpDevicesRepo() : overrides.snmpDevicesRepo;
   const fdbEntriesRepo = overrides.fdbEntriesRepo === undefined ? makeFdbEntriesRepo() : overrides.fdbEntriesRepo;
   const snmpNeighborsRepo = overrides.snmpNeighborsRepo === undefined ? makeSnmpNeighborsRepo() : overrides.snmpNeighborsRepo;
+  const burstRunsRepo = overrides.burstRunsRepo === undefined ? makeBurstRunsRepo() : overrides.burstRunsRepo;
+  // The REAL service over the fakes, so the dispatch, the ownership check on a
+  // returning result and the stored verdict are exercised end-to-end.
+  const burstService = overrides.burstService === undefined
+    ? (burstRunsRepo ? createBurstService({ burstRunsRepo, agentCommander }) : null)
+    : overrides.burstService;
   // The REAL ingest over the fakes, so the OWNERSHIP CHECK — an agent may only
   // write the devices assigned to it — is exercised end-to-end rather than
   // stubbed. It is the security property of this feature.
@@ -2973,6 +3064,8 @@ function makeApp(overrides = {}) {
     fdbEntriesRepo,
     snmpNeighborsRepo,
     snmpTopologyIngest,
+    burstRunsRepo,
+    burstService,
     interfaceStatesRepo,
     interfaceStateService,
     serviceDependencyJob: overrides.serviceDependencyJob || null,
@@ -3133,6 +3226,7 @@ module.exports = {
   makeSnmpDevicesRepo,
   makeFdbEntriesRepo,
   makeSnmpNeighborsRepo,
+  makeBurstRunsRepo,
   makeInterfaceStatesRepo,
   makeAlertDispatchLogRepo,
   makeEvidenceSnapshotsRepo,

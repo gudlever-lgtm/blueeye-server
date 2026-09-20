@@ -128,6 +128,13 @@ function createRetentionRepo(db) {
     return deleteInBatches('DELETE FROM snmp_neighbors WHERE last_seen < ? ORDER BY last_seen LIMIT ?', [ts]);
   }
 
+  // Burst runs, samples and all — the samples are a JSON column on the row, so
+  // deleting the run takes its series with it and there is no second table to
+  // keep in step.
+  async function purgeBurstRunsBefore(ts) {
+    return deleteInBatches('DELETE FROM burst_runs WHERE started_at < ? ORDER BY started_at LIMIT ?', [ts]);
+  }
+
   // Interface state transitions + the current-state snapshot rows of interfaces
   // that stopped being reported entirely. The snapshot cutoff is deliberately
   // longer-lived logic than the history: dropping a state row we still have
@@ -154,6 +161,7 @@ function createRetentionRepo(db) {
     purgeDeviceEventsBefore,
     purgeFdbEntriesBefore,
     purgeSnmpNeighborsBefore,
+    purgeBurstRunsBefore,
     purgeInterfaceTransitionsBefore,
     purgeInterfaceStatesBefore,
   };

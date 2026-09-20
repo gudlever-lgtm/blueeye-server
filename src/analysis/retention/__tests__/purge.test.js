@@ -55,6 +55,27 @@ test('config-snapshot purge is skipped when the repo/config lacks the dimension'
   assert.equal(res.configSnapshots, 0);
 });
 
+test('burst runs are purged on their own, longer window', async () => {
+  // A burst is a measurement somebody chose to take, not a stream, so it is
+  // kept longer than the telemetry around it and gets its own cutoff.
+  let cut = null;
+  const repo = {
+    purgeFlowRollupsBefore: async () => 0,
+    purgeMetricRollupsBefore: async () => 0,
+    purgeAckedFindingsBefore: async () => 0,
+    purgeBurstRunsBefore: async (ts) => { cut = ts; return 2; },
+  };
+  const purge = createPurge({ repo, config: { ...config, burstRunRetentionDays: 90 }, now: () => NOW });
+  const res = await purge.purgeExpired();
+  assert.equal(res.burstRuns, 2);
+  assert.equal(cut.toISOString(), new Date(NOW.getTime() - 90 * 864e5).toISOString());
+});
+
+test('the burst purge is skipped when the repo/config lacks the dimension', async () => {
+  const purge = createPurge({ repo: fakeRepo([]), config, now: () => NOW });
+  assert.equal((await purge.purgeExpired()).burstRuns, 0);
+});
+
 test('purge deletes old ACKED findings but NEVER an unacknowledged CRIT', async () => {
   const old = new Date('2024-01-01T00:00:00Z'); // way past findingRetentionDays
   const repo = fakeRepo([

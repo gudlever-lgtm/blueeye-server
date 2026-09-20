@@ -53,6 +53,9 @@ const ACCEPTS_EMPTY = new Set([
   // they know what they are looking for. Every field IS optional here; the
   // dedicated rule below still pins each one's bounds.
   'validateDeviceEventQuery',
+  // The burst list opens unfiltered — every recent run, newest first — which
+  // is what somebody wants before they know which run they are looking for.
+  'validateBurstQuery',
 ]);
 
 test('every exported validator survives garbage input and rejects an empty object where it has required fields', () => {
@@ -225,6 +228,45 @@ test('snmpDeviceValidation: an address the server must never poll, and a table o
     devices: [{ deviceId: 7, fdb: new Array(MAX_FDB_PER_DEVICE + 500).fill(ok) }],
   }, {});
   assert.ok(huge.devices[0].fdb.length <= MAX_FDB_PER_DEVICE);
+});
+
+test('burstValidation: a packet generator is bounded at the boundary', () => {
+  const {
+    validateBurstRequest, validateBurstQuery, MAX_SECONDS, MIN_SECONDS, MAX_HZ,
+  } = require('../../src/validation/burstValidation');
+
+  // A burst makes an agent emit traffic at a rate nothing else here does. The
+  // server REFUSES out of range where the AGENT clamps — deliberate asymmetry:
+  // a person filling in a form should be told 3600 is too long, while an agent
+  // handed a bad number mid-fault should still measure something.
+  assert.deepEqual(validateBurstRequest({ agentId: 9, target: '10.14.0.11' }).errors, undefined);
+  assert.ok(rejected(validateBurstRequest({})));
+  assert.ok(rejected(validateBurstRequest({ target: '10.14.0.11' })), 'agentId is required');
+  assert.ok(rejected(validateBurstRequest({ agentId: 9 })), 'target is required');
+  assert.ok(rejected(validateBurstRequest({ agentId: 9, target: 'http://10.14.0.11' })), 'a target is not a URL');
+  assert.ok(rejected(validateBurstRequest({ agentId: 9, target: '10.14.0.11', seconds: MAX_SECONDS + 1 })));
+  assert.ok(rejected(validateBurstRequest({ agentId: 9, target: '10.14.0.11', seconds: MIN_SECONDS - 1 })));
+  assert.ok(rejected(validateBurstRequest({ agentId: 9, target: '10.14.0.11', hz: MAX_HZ + 1 })));
+  assert.ok(rejected(validateBurstRequest({ agentId: 9, target: '10.14.0.11', hz: 0 })));
+
+  // Only probes that FIT in one tick: a traceroute or a page load takes longer
+  // than the interval, so every tick would overlap the last.
+  assert.ok(rejected(validateBurstRequest({ agentId: 9, target: '10.14.0.11', probe: 'traceroute' })));
+  assert.ok(rejected(validateBurstRequest({ agentId: 9, target: '10.14.0.11', probe: 'pageload' })));
+
+  // A tcp burst without a port is refused rather than defaulted: guessing would
+  // measure a port nobody asked about and report the answer as if they had.
+  assert.ok(rejected(validateBurstRequest({ agentId: 9, target: '10.14.0.11', probe: 'tcp' })));
+  assert.deepEqual(
+    validateBurstRequest({ agentId: 9, target: '10.14.0.11', probe: 'tcp', port: 443 }).errors,
+    undefined,
+  );
+
+  // The read query rejects out of range rather than clamping.
+  assert.ok(rejected(validateBurstQuery({ limit: 0 }, {})));
+  assert.ok(rejected(validateBurstQuery({ limit: 1000 }, {})));
+  assert.ok(rejected(validateBurstQuery({ agentId: 'all' }, {})));
+  assert.deepEqual(validateBurstQuery({}, {}), { limit: 25, offset: 0 });
 });
 
 test('every src/validation module is named in this suite', () => {

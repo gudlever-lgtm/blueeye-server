@@ -38,7 +38,7 @@
     interfaces: { path: '/interfaces' },
     nics: { path: '/nics' },
 
-    probes: { path: '/probes', tabs: ['run', 'connection', 'packages'], tabKey: 'probesTab' },
+    probes: { path: '/probes', tabs: ['run', 'connection', 'burst', 'packages'], tabKey: 'probesTab' },
     transactions: { path: '/transaction-tests', tabs: ['list', 'matrix'], tabKey: 'txTab' },
     flows: { path: '/flows' },
     topology: { path: '/topology' },

@@ -75,6 +75,8 @@ const { createSnmpDevicesRepository } = require('./repositories/snmpDevicesRepos
 const { createFdbEntriesRepository } = require('./repositories/fdbEntriesRepository');
 const { createSnmpNeighborsRepository } = require('./repositories/snmpNeighborsRepository');
 const { createSnmpTopologyIngest } = require('./devices/snmpTopologyIngest');
+const { createBurstRunsRepository } = require('./repositories/burstRunsRepository');
+const { createBurstService } = require('./probes/burstService');
 const { createInterfaceStatesRepository } = require('./repositories/interfaceStatesRepository');
 const { createInterfaceStateService } = require('./health/interfaceStateService');
 const { createServiceDependencyJob } = require('./topology/serviceDependencyJob');
@@ -624,6 +626,13 @@ function start() {
     snmpNeighborsRepo,
     logger,
   });
+
+  // Burst mode. The commander is a stable object built at startup (it looks the
+  // live socket up per call), so the service can be built here and handed BOTH
+  // to createApp and to the WebSocket hub — the hub needs it to record the
+  // samples that come back, the routes need it to dispatch.
+  const burstRunsRepo = createBurstRunsRepository(db);
+  const burstService = createBurstService({ burstRunsRepo, agentCommander, logger });
   const interfaceStatesRepo = createInterfaceStatesRepository(db);
   // Interface transitions are recorded at the results-ingest seam — the one place
   // that sees every observation — not reconstructed by polling current state.
@@ -1019,6 +1028,8 @@ function start() {
     fdbEntriesRepo,
     snmpNeighborsRepo,
     snmpTopologyIngest,
+    burstRunsRepo,
+    burstService,
     interfaceStatesRepo,
     interfaceStateService,
     serviceDependencyJob,
@@ -1151,6 +1162,7 @@ function start() {
     agentsRepo,
     auditRepo,
     auditEventsRepo,
+    burstService,
     logger,
     path: config.ws.path,
     heartbeatMs: config.ws.heartbeatIntervalMs,

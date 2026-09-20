@@ -1,5 +1,108 @@
 # Changelog
 
+## 0.169.0 — An audit, and the findings fixed
+
+An audit across blueeye-server, blueeye-agent and blueeye-licens. Most of what it
+found was small and quiet; the pattern was that the quiet ones had no way of
+becoming loud. So this release is largely about making failure visible, and
+about turning four "MUST stay in sync" comments into tests.
+
+**A raw NUL byte in five source files.** `src/routes/agentReports.js:56` wrote a
+separator as a literal `0x00` inside a template literal instead of `\0`. The
+byte made `grep`, `rg`, `diff` and `file` treat the file as BINARY and skip it
+in silence — it dropped out of three sweeps during the audit before anyone
+noticed, including the ones in this repo's own gate that walk tracked source.
+A new gate test looks for control bytes, and it immediately found four more
+(`analysis/topology.js`, `health/nicInventory.js`, `probeOutages/detection.js`,
+`topology/topologyDiff.js`). The escape compiles to the same character, so no
+stored `dedup_key` or edge key changes.
+
+**Nothing survived an unhandled rejection.** None of the three repos installed
+`unhandledRejection` or `uncaughtException` handlers, and under Node's defaults
+the first means an exit. Two paths reached it: the `upgrade` handler in
+`ws/agentSocket.js` left a socket without an `error` listener during async token
+verification, and the agent's command dispatcher is an `async` EventEmitter
+listener with nowhere to put a rejection. `src/lib/crashGuard.js` now treats the
+two differently — a rejection is logged and survived, an uncaught exception
+drains connections and exits non-zero so a supervisor restarts clean.
+
+**Four cross-repo contracts held together by comments.** `canonicalize()` exists
+in three byte-identical copies, `PROTOCOL_VERSION` in two, the evidence
+allowlist in two, each with a comment saying "MUST stay identical". A divergence
+in `canonicalize` makes every licence proof fail to verify on every install, and
+nothing was checking. `test/gate/_contracts.js` pins them in all three repos,
+with both fixed vectors and a comment-insensitive source digest — a change has
+to be made in all three before any of them go green.
+
+**Leaflet came from a US CDN.** `public/index.html` loaded the map library from
+unpkg.com with no SRI, which is three problems in a product sold as on-prem and
+EU-hosted: an air-gapped install silently lost its maps, it contradicts the
+"no US vendors" convention, and a script from another origin executes with the
+dashboard's full authority. It is vendored under `public/vendor/leaflet/` (244 KB,
+BSD-2-Clause + MIT), `script-src` is `'self'` with no third-party origin left,
+and the UI gate now forbids external assets outright rather than allowing one.
+
+**An unsigned `rekey` could replace the trust anchor.** `update`, `delete` and
+`install-tool` are lenient by default for backward compatibility, and that is
+defensible — they are bounded. `rekey` is not: it replaces the key every LATER
+signature is checked against, so accepting an unsigned one turns a single moment
+of socket access into permanent, silent code execution. The agent (v0.33.0) now
+refuses an unsigned rekey when it already holds a key. A legitimate rotation is
+signed with the key being replaced, which is what this server does whenever it
+can; recovering a fleet whose server lost its key takes `BLUEEYE_ALLOW_UNSIGNED_REKEY=1`
+on the host — the level of authority re-anchoring trust always deserved.
+
+**Capacity forecasting existed and was unreachable.** `src/analysis/forecast.js`
+(Theil–Sen + days-to-capacity) and `POST /api/forecast` were correct, tested, and
+called by nothing: the endpoint needs a caller to supply the series, and no
+caller existed. `GET /api/forecast/interfaces` reads the series from stored
+results and the ceiling from the link's own negotiated speed — no new storage,
+no capacity number for an operator to invent — and the Interfaces screen shows
+which link saturates first.
+
+**Alerting had nowhere people actually look.** Email is missed, a webhook needs
+someone to build the far end, syslog is for machines. A **Matrix** channel posts
+into a room on the customer's own homeserver (Synapse/Conduit/Dendrite), over
+the client-server API with no SDK, idempotent per finding so a retry cannot
+double-post. Runtime-configurable like the other three, access token write-only,
+and screened in the Test area.
+
+**Silent failures that changed what a user sees.** `events.js` returned
+`blastRadius: null` for both "nothing downstream" and "the query failed";
+`auth/ldap.js` read a directory it could not reach as "not configured" and fell
+back to local login with nothing logged; `users.js` `ssoOrLdapActive()` failed
+OPEN, re-enabling the local-password bypass it exists to prevent, on exactly the
+install where something was already wrong. All three now log, and the first and
+third say which case it is. In the dashboard, a failed licence read no longer
+silently dims modules the customer paid for, a failed auto-refresh no longer
+leaves stale data looking live, and seven `fetch()` calls that bypassed the
+session handling now log out on a 401 like everything else.
+
+**Two files that were several files.** `routes/nis2.js` (607 lines, 40 routes,
+eight unrelated resources) and `routes/agents.js` (855 lines, three different
+jobs) are now directories with a shared context and one file per concern. The
+route inventory is byte-identical before and after — the gate sweeps all 444
+routes, so it would have said otherwise.
+
+**Things that can now only get better.** `test/gate/i18nRatchet.test.js` counts
+the dashboard's hardcoded English (630 in `app.js`, 0 in `serviceAssurance.js`)
+and fails if it grows — and fails if it shrinks without lowering the pin, so a
+migration is a number in the diff. In blueeye-agent, `test/gate/protocolDoc.test.js`
+pins PROTOCOL.md's command table to the real recognisers; the document had gone
+twenty-three releases stale, missing six commands.
+
+**A screen that forgets to stop its poller.** `render()` carried nine
+hand-written `if (currentView !== 'x') stopX();` lines. A new screen with a
+timer had to remember to add one, and forgetting leaks an interval that keeps
+fetching from a page nobody is looking at — invisible until somebody reads the
+request log. Nothing checked that the view name matched the `stopX()` beside it
+either, and a typo released the resource on every render including the screen
+meant to keep it. It is one `VIEW_RESOURCES` table now, with two gate tests: every
+teardown must be in it, and every view it names must exist.
+
+Accessibility: screen transitions are announced into a live region, and a failed
+screen offers a retry instead of a dead end.
+
 ## 0.167.0 — Re-pinning an agent is something the server does
 
 [#199](https://github.com/gudlever-lgtm/blueeye-server/pull/199) fixed this for a

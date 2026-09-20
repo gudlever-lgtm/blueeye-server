@@ -13,6 +13,11 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 
+process.env.NODE_ENV = process.env.NODE_ENV || 'test';
+process.env.JWT_SECRET = process.env.JWT_SECRET || 'test-secret-do-not-use-in-prod';
+const { makeApp } = require('../test-support/fakes');
+const { listRoutes } = require('./gate/_routes');
+
 const ROOT = path.join(__dirname, '..');
 const MIGRATIONS = path.join(ROOT, 'migrations');
 const RENAME = '077_rename_incidents_to_events.sql';
@@ -93,10 +98,18 @@ test('no source file queries a renamed table', () => {
 // has no build step and no route-level test. This is that missing check.
 test('every /api/nis2/* path the dashboard calls exists on the NIS2 router', () => {
   const app = fs.readFileSync(path.join(ROOT, 'public/app.js'), 'utf8');
-  const router = fs.readFileSync(path.join(ROOT, 'src/routes/nis2.js'), 'utf8');
 
-  // Mounted paths, e.g. router.get('/incidents/:id', …) → /incidents/:id
-  const mounted = [...router.matchAll(/router\.(?:get|post|put|delete|patch)\(\s*'([^']+)'/g)].map((m) => m[1]);
+  // Enumerated from the LIVE app rather than by reading a source file.
+  //
+  // This used to `readFileSync('src/routes/nis2.js')` and regex the route
+  // strings out of it. That broke the moment the router became a directory —
+  // with ENOENT, not a finding — and it would have broken just as silently if
+  // the file had merely been renamed. The whole point of this test is to catch
+  // a dashboard call the server does not serve; reading the routes off the
+  // mounted app is both simpler and immune to how they are organised.
+  const mounted = listRoutes(makeApp())
+    .filter((r) => r.path.startsWith('/api/nis2'))
+    .map((r) => r.path.slice('/api/nis2'.length) || '/');
   assert.ok(mounted.length > 10, `expected NIS2 routes, found ${mounted.length}`);
 
   // Turn a mounted path into a matcher: `:param` matches one segment.

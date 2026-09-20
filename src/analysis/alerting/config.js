@@ -40,6 +40,17 @@ function loadAlertingConfig(env = process.env) {
         url: env.ALERT_WEBHOOK_URL || '',
         secret: env.ALERT_WEBHOOK_SECRET || '',
       },
+      // Matrix — a room on the customer's OWN homeserver. See
+      // channels/matrix.js for why this, rather than Slack or Teams, is the
+      // chat channel an on-prem EU product ships. WARN+ by default: a room is
+      // read by people, and INFO in a room is how a room gets muted.
+      matrix: {
+        enabled: toBool(env.ALERT_MATRIX_ENABLED, false),
+        minSeverity: sevOf(env.ALERT_MATRIX_MIN_SEVERITY, Severity.WARN),
+        homeserver: env.MATRIX_HOMESERVER || '',
+        roomId: env.MATRIX_ROOM_ID || '',
+        accessToken: env.MATRIX_ACCESS_TOKEN || '',
+      },
       syslog: {
         enabled: toBool(env.ALERT_SYSLOG_ENABLED, false),
         minSeverity: sevOf(env.ALERT_SYSLOG_MIN_SEVERITY, Severity.INFO),

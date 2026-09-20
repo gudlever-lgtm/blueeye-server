@@ -31,6 +31,10 @@ const FEATURE_CATALOG = {
   dashboard_advanced: { label: 'Advanced dashboard', minPlan: 'professional', status: 'available' },
   alerts_email: { label: 'E-mail alerts', minPlan: 'starter', status: 'available' },
   alerts_webhook: { label: 'Webhook alerts', minPlan: 'professional', status: 'available' },
+  // A room on the customer's own Matrix homeserver (Synapse/Conduit/Dendrite).
+  // Professional alongside webhook: both are integration channels, as opposed
+  // to email, which every plan from Starter up needs to be useful at all.
+  alerts_matrix: { label: 'Matrix alerts', minPlan: 'professional', status: 'available' },
   reports_basic: { label: 'Basic reports', minPlan: 'pilot', status: 'available' },
   reports_pdf: { label: 'PDF reports', minPlan: 'starter', status: 'available' },
   reports_csv: { label: 'CSV reports', minPlan: 'starter', status: 'available' },
@@ -93,6 +97,7 @@ const PRO_FEATURES = [
   'dashboard_advanced',
   'reports_sla',
   'alerts_webhook',
+  'alerts_matrix',
   'reports_compliance',
   'rbac',
   'audit_log',

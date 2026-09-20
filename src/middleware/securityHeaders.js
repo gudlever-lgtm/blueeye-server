@@ -7,13 +7,20 @@
 //
 // The Content-Security-Policy is deliberately tuned to the existing
 // dependency-free dashboard so it hardens without breaking it:
-//   - script-src / style-src allow https://unpkg.com because public/index.html
-//     loads Leaflet (map) from that CDN; 'self' covers /app.js + /styles.css.
+//   - script-src is 'self' ONLY. Leaflet used to come from unpkg.com and the
+//     policy had to whitelist it; it is now served from public/vendor/leaflet/,
+//     so no third-party origin can execute in this page at all. Do not add one
+//     back: a script from another origin runs with the dashboard's full
+//     authority (the user's JWT is in its localStorage), which makes a
+//     compromise upstream a compromise here — and this product ships on-prem,
+//     often air-gapped, where an external script simply never loads.
 //   - style-src keeps 'unsafe-inline' (the SPA builds DOM with inline styles).
 //   - img-src / connect-src / font-src allow https: + data: + blob: so the
 //     operator-configurable EU/self-hosted map tiles + geocoder keep working
 //     (the tile origin is set at runtime in Settings → Map, so it can't be
-//     pinned here without breaking custom tiles).
+//     pinned here without breaking custom tiles). Note the asymmetry is the
+//     point: FETCHING a tile image from a configured origin is not the same
+//     risk as EXECUTING a script from one.
 //   - the dangerous directives stay strict: object-src 'none',
 //     frame-ancestors 'none', base-uri 'self', form-action 'self'.
 function buildCsp() {
@@ -24,8 +31,8 @@ function buildCsp() {
     "frame-ancestors 'none'",
     "form-action 'self'",
     "img-src 'self' data: blob: https:",
-    "script-src 'self' https://unpkg.com",
-    "style-src 'self' 'unsafe-inline' https://unpkg.com",
+    "script-src 'self'",
+    "style-src 'self' 'unsafe-inline'",
     "font-src 'self' data: https:",
     "connect-src 'self' https:",
   ].join('; ');

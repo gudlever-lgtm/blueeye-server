@@ -80,7 +80,7 @@ test('a tab strip announces itself as one: tablist, tabs, exactly one selected',
   assert.equal(strip.getAttribute('role'), 'tablist');
   assert.ok(strip.getAttribute('aria-label'), 'the strip does not say what it switches');
   const tabs = tabsOf(strip);
-  assert.equal(tabs.length, 3, `expected three tabs, got ${tabs.length}`);
+  assert.equal(tabs.length, 4, `expected four tabs, got ${tabs.length}`);
   const selected = tabs.filter((b) => b.getAttribute('aria-selected') === 'true');
   assert.equal(selected.length, 1, 'a tab strip must have exactly one selected tab');
   assert.ok(selected[0].classList.contains('active'), 'the selected tab is not the active one');

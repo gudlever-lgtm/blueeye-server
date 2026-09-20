@@ -2651,4 +2651,281 @@ CREATE TABLE IF NOT EXISTS `report_schedules` (
   KEY idx_report_schedules_enabled (enabled)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- 103 — device_events: what the network equipment itself says.
+--
+-- Until now the server could see that something broke (anomaly findings, probe
+-- outages) but not why. The devices already say why — link flaps, STP topology
+-- changes, OSPF adjacency drops, DHCP pool exhaustion — and nothing listened.
+-- The agent listens now (blueeye-agent src/syslog/), and this is where what it
+-- hears lands.
+--
+-- ONE TABLE FOR SYSLOG AND TRAPS. `transport` is an ENUM with both values from
+-- the start even though only 'syslog' is written today. An SNMP trap and a
+-- syslog line are the same thing arriving over a different socket: same sender,
+-- same device, same event_type vocabulary, same place on the timeline. Adding
+-- the column later would mean a second migration against a table that by then
+-- holds millions of rows, and a second ingest path to keep in step with this
+-- one. The cost of deciding now is one unused enum value.
+--
+-- NO FOREIGN KEYS. This is TELEMETRY by the classification in
+-- docs/storage-split-audit.md — HIGH write volume, and bound for TimescaleDB
+-- when TSDB is enabled (the repository has a MySQL and a TSDB implementation,
+-- the same dual-store pattern `results` and `probe_results` use). A hypertable
+-- cannot carry an FK into MySQL, so `agent_id` and `device_id` are plain
+-- integers here for exactly the reason transaction_results (046) has none.
+--
+-- WHY device_id IS NULLABLE. The sender is resolved from its IP against
+-- arp_entries and the SNMP monitor targets. When that fails — a device nobody
+-- has ARPed yet, a relay forwarding on someone else's behalf — the row is still
+-- stored, with device_id NULL and source_ip intact. Discarding it would lose
+-- the one message that explains an outage because the inventory was incomplete,
+-- which is precisely when inventories are incomplete.
+--
+-- WHY clock_skew_ms IS A COLUMN. Switches keep bad time. A device whose clock
+-- is three seconds behind silently ruins every correlation built on its
+-- timestamps, and an operator reading the log has no way to tell. Storing the
+-- measured difference between the device's own stamp and the moment the agent
+-- received the line puts that failure on the screen instead of inside the data.
+-- NULL means the line carried no device time at all, which is not zero skew.
+--
+-- DEDUP. `dedup_key` is nullable + UNIQUE, the same mechanism audit_events (035)
+-- uses to fold recurring activity onto one row. The key the ingest builds
+-- INCLUDES A TIME BUCKET, so folding is bounded to a window: a link flap today
+-- never merges into one from last week, and a rate that changes over time stays
+-- visible as separate rows. NULL opts a row out of folding entirely.
+CREATE TABLE IF NOT EXISTS `device_events` (
+  `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `agent_id` INT UNSIGNED NOT NULL,
+  `device_id` INT UNSIGNED NULL DEFAULT NULL,
+  `source_ip` VARCHAR(45) NOT NULL,
+  `received_at` DATETIME(3) NOT NULL,
+  `device_time` DATETIME(3) NULL DEFAULT NULL,
+  `clock_skew_ms` INT NULL DEFAULT NULL,
+  `transport` ENUM('syslog', 'trap') NOT NULL DEFAULT 'syslog',
+  `facility` TINYINT UNSIGNED NULL DEFAULT NULL,
+  `severity` TINYINT UNSIGNED NOT NULL,
+  `event_type` VARCHAR(64) NOT NULL DEFAULT 'syslog.raw',
+  `device_hostname` VARCHAR(255) NULL DEFAULT NULL,
+  `tag` VARCHAR(64) NULL DEFAULT NULL,
+  `ifname` VARCHAR(64) NULL DEFAULT NULL,
+  `summary` VARCHAR(512) NOT NULL,
+  `raw` TEXT NULL DEFAULT NULL,
+  `detail` JSON NULL DEFAULT NULL,
+  `dedup_key` VARCHAR(160) NULL DEFAULT NULL,
+  `occurrences` INT UNSIGNED NOT NULL DEFAULT 1,
+  `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uq_device_events_dedup` (`dedup_key`),
+  KEY `idx_device_events_received` (`received_at`),
+  KEY `idx_device_events_device` (`device_id`, `received_at`),
+  KEY `idx_device_events_type` (`event_type`, `received_at`),
+  KEY `idx_device_events_severity` (`severity`, `received_at`),
+  KEY `idx_device_events_agent` (`agent_id`, `received_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- 104 — snmp_devices: the switches an agent polls ON BEHALF OF the server.
+--
+-- WHAT THIS BREAKS, AND WHY IT HAD TO BREAK.
+--
+-- SNMP already existed here, bound 1:1. `agents.monitor_config.source = 'snmp'`
+-- makes the WHOLE agent poll one remote device instead of its own /proc, so a
+-- site with twelve switches needed twelve agents. And `insertSnmpDevice()`
+-- (agentsRepository) creates an `agents` row with the sentinel platform 'snmp'
+-- when an admin promotes a discovered candidate — a row nothing ever polls.
+--
+-- This table breaks the binding: one agent polls MANY devices, ALONGSIDE its own
+-- traffic sampling. `monitor_config` is untouched, so every agent in the field
+-- keeps working exactly as before; an agent too old to understand `snmpTargets`
+-- ignores an unknown config key, which is the contract we already rely on.
+--
+-- WHY IT IS NOT AN `agents` ROW. A polled switch is not an agent: it has no
+-- token, no WebSocket, no version, no heartbeat, and no self-update. Modelling
+-- it as one means every fleet-health rollup, every "agents behind" badge and
+-- every licence seat count has to learn to exclude it — and each of those is a
+-- place to get it wrong later. `agent_id` here says WHO POLLS IT, which is a
+-- different fact.
+--
+-- WHY THE COMMUNITY STRING IS AES-256-GCM AT REST. An SNMPv2c community is a
+-- password in clear text on the wire; that is the protocol's fault and we cannot
+-- fix it. What we can refuse to do is keep it readable in the database or hand
+-- it back on a GET. Same secretBox treatment as `cmdb_config` and
+-- `integrations`, decrypted only when the config is handed to the agent over the
+-- already-authenticated channel.
+--
+-- SSRF. `host` is validated against the Service Assurance host policy on write
+-- AND again before a poll is dispatched — the same two-check rule, because a
+-- row written before an allowlist narrowed must not keep reaching a target the
+-- policy now refuses.
+CREATE TABLE IF NOT EXISTS `snmp_devices` (
+  `id` INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `agent_id` INT UNSIGNED NULL DEFAULT NULL,
+  `host` VARCHAR(255) NOT NULL,
+  `port` SMALLINT UNSIGNED NOT NULL DEFAULT 161,
+  `version` ENUM('1', '2c') NOT NULL DEFAULT '2c',
+  `community_encrypted` TEXT NULL DEFAULT NULL,
+  `display_name` VARCHAR(255) NULL DEFAULT NULL,
+  `location_id` INT UNSIGNED NULL DEFAULT NULL,
+  `collect` JSON NULL DEFAULT NULL,
+  `interval_sec` INT UNSIGNED NOT NULL DEFAULT 300,
+  `enabled` TINYINT(1) NOT NULL DEFAULT 1,
+  `last_polled_at` DATETIME NULL DEFAULT NULL,
+  `last_ok_at` DATETIME NULL DEFAULT NULL,
+  `last_error` VARCHAR(255) NULL DEFAULT NULL,
+  `supported` JSON NULL DEFAULT NULL,
+  `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uq_snmp_devices_host` (`host`, `port`),
+  KEY `idx_snmp_devices_agent` (`agent_id`, `enabled`),
+  CONSTRAINT `fk_snmp_devices_agent` FOREIGN KEY (`agent_id`) REFERENCES `agents` (`id`) ON DELETE SET NULL,
+  CONSTRAINT `fk_snmp_devices_location` FOREIGN KEY (`location_id`) REFERENCES `locations` (`id`) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- 105 — fdb_entries: which switch port a MAC address is on.
+--
+-- THE QUESTION THIS ANSWERS. "The printer on the second floor is offline" ends,
+-- eventually, at a physical port on a physical switch. Until now BlueEyes could
+-- get as far as IP↔MAC (arp_entries, migration 073) and stop: an agent's
+-- neighbour cache knows that 192.168.20.84 is 00:1b:44:11:3a:b7, and nothing
+-- knew that 00:1b:44:11:3a:b7 is on sw-acc-2 Gi0/14. That last hop is the one
+-- that sends somebody to the right patch panel.
+--
+-- BRIDGE PORT IS NOT ifIndex. This is the detail the whole table rests on.
+-- dot1qTpFdbPort/dot1dTpFdbPort give a BRIDGE PORT NUMBER, which is an index
+-- into dot1dBasePortTable — not the ifIndex that names the interface. On plenty
+-- of switches they happen to coincide for the first few ports and then diverge,
+-- which is worse than never matching, because it produces an answer that is
+-- right in the lab and wrong in the building. So the agent walks
+-- dot1dBasePortIfIndex and resolves the mapping BEFORE reporting, and both
+-- numbers are stored: `bridge_port` as the device said it, `if_index` and
+-- `if_name` as resolved. When the resolution fails, if_index/if_name are NULL
+-- and the row still records where it came from, rather than inventing a port.
+--
+-- WHY VLAN IS IN THE PRIMARY KEY. Q-BRIDGE learns per VLAN. The same MAC can
+-- legitimately appear in two VLANs on the same switch (a router sub-interface,
+-- a device on a voice and a data VLAN), and folding those into one row would
+-- silently discard a real observation. Devices that only implement the older
+-- BRIDGE-MIB report no VLAN; those rows use vlan 0, which is not a real VLAN id
+-- and is therefore unambiguous as "the device did not say".
+--
+-- AGEING, NOT HISTORY. A forwarding table is a snapshot of a moment. Rows are
+-- upserted on last_seen and aged out by retention; there is no history table,
+-- because "where was this MAC three weeks ago" is a question a forwarding
+-- database cannot honestly answer — the entry ages out of the SWITCH in minutes.
+-- What matters for search is first_seen/last_seen, so a stale answer is
+-- visibly stale rather than confidently wrong. Same rule arp_entries follows.
+CREATE TABLE IF NOT EXISTS `fdb_entries` (
+  `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `device_id` INT UNSIGNED NOT NULL,
+  `mac` CHAR(17) NOT NULL,
+  `vlan` SMALLINT UNSIGNED NOT NULL DEFAULT 0,
+  `bridge_port` INT UNSIGNED NOT NULL,
+  `if_index` INT UNSIGNED NULL DEFAULT NULL,
+  `if_name` VARCHAR(64) NULL DEFAULT NULL,
+  `status` VARCHAR(16) NOT NULL DEFAULT 'learned',
+  `port_mac_count` INT UNSIGNED NOT NULL DEFAULT 1,
+  `first_seen` DATETIME NOT NULL,
+  `last_seen` DATETIME NOT NULL,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uq_fdb_device_vlan_mac` (`device_id`, `vlan`, `mac`),
+  KEY `idx_fdb_mac` (`mac`, `last_seen`),
+  KEY `idx_fdb_device_port` (`device_id`, `bridge_port`),
+  KEY `idx_fdb_last_seen` (`last_seen`),
+  CONSTRAINT `fk_fdb_device` FOREIGN KEY (`device_id`) REFERENCES `snmp_devices` (`id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- 106 — snmp_neighbors: LLDP as seen BY A SWITCH.
+--
+-- WHY THIS IS NOT `lldp_neighbors` (migration 063).
+--
+-- That table keys on `local_agent_id`, which is an `agents` id. An SNMP device
+-- lives in `snmp_devices` (104) with its own id sequence, so writing a device id
+-- into that column would collide with agent ids and silently attribute a
+-- switch's neighbours to whichever agent happened to share the number. The
+-- topology graph reads that table; a collision there does not throw, it just
+-- draws the wrong network — the worst failure mode this product has.
+--
+-- So: a separate table with a foreign key to the right parent, and the merge
+-- into the topology graph left as its own decision. That decision is genuinely
+-- architectural — a switch sees far more neighbours than an agent host does,
+-- including every access point and phone, and folding the two sources together
+-- changes what the graph MEANS. It deserves its own change with its own
+-- reasoning, not a column reused because it was nearby.
+--
+-- The data is collected and stored now so nothing is lost while that decision
+-- waits, and `GET /api/snmp-devices/:id` serves it per device.
+CREATE TABLE IF NOT EXISTS `snmp_neighbors` (
+  `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `device_id` INT UNSIGNED NOT NULL,
+  `local_port` INT UNSIGNED NULL DEFAULT NULL,
+  `local_if_index` INT UNSIGNED NULL DEFAULT NULL,
+  `local_if_name` VARCHAR(64) NULL DEFAULT NULL,
+  `remote_chassis_id` VARCHAR(255) NOT NULL,
+  `remote_port_id` VARCHAR(255) NULL DEFAULT NULL,
+  `remote_port_desc` VARCHAR(255) NULL DEFAULT NULL,
+  `remote_sys_name` VARCHAR(255) NULL DEFAULT NULL,
+  `first_seen` DATETIME NOT NULL,
+  `last_seen` DATETIME NOT NULL,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uq_snmp_neighbors` (`device_id`, `remote_chassis_id`, `remote_port_id`),
+  KEY `idx_snmp_neighbors_device` (`device_id`, `last_seen`),
+  KEY `idx_snmp_neighbors_remote` (`remote_chassis_id`),
+  KEY `idx_snmp_neighbors_last_seen` (`last_seen`),
+  CONSTRAINT `fk_snmp_neighbors_device` FOREIGN KEY (`device_id`) REFERENCES `snmp_devices` (`id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- 107 — burst_runs: one-target, once-a-second measurement, on demand.
+--
+-- THE GAP THIS FILLS. Agents report on a 60-second interval and the analysis
+-- baselines are hourly, so a five-second loss event is invisible. The fault a
+-- technician is standing in front of, on the phone, right now, does not exist
+-- in the data. A burst is not a new metric — it is a temporary resolution.
+--
+-- WHY THE SAMPLES ARE A JSON COLUMN AND NOT A TABLE.
+--
+-- A burst is at most 120 seconds at 2 Hz: 240 points, bounded, written once and
+-- read as a whole. That is a small FIELD, not a time series. A row-per-sample
+-- table would add a hot-path insert loop, a second retention dimension and a
+-- join to every read, to store something that is never queried across runs,
+-- never aggregated, and never grows after the run ends.
+--
+-- `probe_results` is the opposite case and stays as it is: unbounded, appended
+-- forever, queried across time. The difference between the two is exactly why
+-- this one is a column.
+--
+-- WHY THE VERDICT IS STORED. The analysis (median + MAD, and whether the losses
+-- CLUSTER) is computed once, in code, from the samples — and kept, so the row
+-- reads the same in a report six weeks later as it did on the screen. Same rule
+-- every finding in this product follows: the explanation travels with the
+-- measurement, and nothing re-derives a verdict from data that has since aged.
+CREATE TABLE IF NOT EXISTS `burst_runs` (
+  `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `agent_id` INT UNSIGNED NOT NULL,
+  `target` VARCHAR(255) NOT NULL,
+  `probe` VARCHAR(16) NOT NULL DEFAULT 'ping',
+  `requested_seconds` INT UNSIGNED NULL DEFAULT NULL,
+  `seconds` INT UNSIGNED NOT NULL,
+  `hz` DECIMAL(4, 2) NOT NULL DEFAULT 1.00,
+  `started_at` DATETIME(3) NOT NULL,
+  `ended_at` DATETIME(3) NULL DEFAULT NULL,
+  `status` ENUM('running', 'complete', 'cancelled', 'failed') NOT NULL DEFAULT 'running',
+  `error` VARCHAR(255) NULL DEFAULT NULL,
+  `samples` JSON NULL DEFAULT NULL,
+  `sample_count` INT UNSIGNED NOT NULL DEFAULT 0,
+  `lost_count` INT UNSIGNED NOT NULL DEFAULT 0,
+  `loss_pct` DECIMAL(5, 2) NULL DEFAULT NULL,
+  `median_rtt_ms` DECIMAL(10, 3) NULL DEFAULT NULL,
+  `p95_rtt_ms` DECIMAL(10, 3) NULL DEFAULT NULL,
+  `jitter_ms` DECIMAL(10, 3) NULL DEFAULT NULL,
+  `loss_clusters` INT UNSIGNED NULL DEFAULT NULL,
+  `pattern` VARCHAR(32) NULL DEFAULT NULL,
+  `explanation` VARCHAR(512) NULL DEFAULT NULL,
+  `created_by` INT UNSIGNED NULL DEFAULT NULL,
+  `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  KEY `idx_burst_runs_agent` (`agent_id`, `started_at`),
+  KEY `idx_burst_runs_started` (`started_at`),
+  CONSTRAINT `fk_burst_runs_user` FOREIGN KEY (`created_by`) REFERENCES `users` (`id`) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 SET FOREIGN_KEY_CHECKS = 1;

@@ -1,6 +1,7 @@
 'use strict';
 
 const { buildTargetTimeline } = require('./targetTimeline');
+const { severityBand } = require('../devices/deviceEventCatalog');
 
 // Orchestrates the per-target timeline: fetches each source independently and
 // merges them via the pure buildTargetTimeline read-model.
@@ -30,6 +31,7 @@ function createTargetTimelineService({
   auditEventsRepo,
   remediationPlaybooksRepo,
   topologyChangesRepo,
+  deviceEventsRepo = null,
 } = {}) {
   // --- per-source fetchers (each rejects on its own backend failure) ---------
 
@@ -68,6 +70,16 @@ function createTargetTimelineService({
     return topologyChangesRepo.listForAgent({ agentId, from, to, limit });
   }
 
+  // What the device itself said in the window (device_events, migration 103).
+  // Keyed on device_id — the agent row the sender RESOLVED to — not on the
+  // agent that received the line, because the timeline is about the equipment.
+  // Events from an unresolved sender have device_id NULL and correctly appear
+  // on nobody's timeline; they are still readable in the device log.
+  async function fetchDeviceEvents(agentId, { from, to, limit }) {
+    if (!deviceEventsRepo || typeof deviceEventsRepo.listForDevice !== 'function') return [];
+    return deviceEventsRepo.listForDevice(agentId, { from, to, limit });
+  }
+
   // Fans out all sources; merges the ones that succeed; flags any that failed.
   async function getTimeline(agentId, { from = null, to = null, limit = 500 } = {}) {
     const sources = [
@@ -76,13 +88,14 @@ function createTargetTimelineService({
       ['agentEvents', fetchAgentEvents],
       ['playbookRuns', fetchPlaybookRuns],
       ['topologyChanges', fetchTopologyChanges],
+      ['deviceEvents', fetchDeviceEvents],
     ];
 
     const settled = await Promise.allSettled(
       sources.map(([, fn]) => fn(agentId, { from, to, limit }))
     );
 
-    const merged = { findings: [], probeOutages: [], agentEvents: [], playbookRuns: [], topologyChanges: [] };
+    const merged = { findings: [], probeOutages: [], agentEvents: [], playbookRuns: [], topologyChanges: [], deviceEvents: [] };
     const failedSources = [];
     settled.forEach((res, idx) => {
       const [name] = sources[idx];
@@ -90,7 +103,7 @@ function createTargetTimelineService({
       else failedSources.push(name);
     });
 
-    const events = buildTargetTimeline({ ...merged, limit });
+    const events = buildTargetTimeline({ ...merged, severityBand, limit });
     return { events, partial: failedSources.length > 0, failedSources };
   }
 

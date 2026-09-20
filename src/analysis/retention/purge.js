@@ -27,6 +27,33 @@ function createPurge({ repo, config, now = () => new Date() }) {
       const arpCut = new Date(t - config.arpRetentionDays * DAY_MS);
       arpEntries = await repo.purgeArpEntriesBefore(arpCut);
     }
+    // Device events (syslog/traps). Guarded like the dimensions above. On a
+    // TSDB deployment this is a no-op: the hypertable expires them with a
+    // TimescaleDB retention policy instead, and the repository says so by
+    // reporting nothing removed.
+    let deviceEvents = 0;
+    if (config.deviceEventRetentionDays && typeof repo.purgeDeviceEventsBefore === 'function') {
+      const cut = new Date(t - config.deviceEventRetentionDays * DAY_MS);
+      deviceEvents = await repo.purgeDeviceEventsBefore(cut);
+    }
+    // Forwarding-table entries + the switch-seen neighbours. Guarded like the
+    // dimensions above.
+    let fdbEntries = 0;
+    let snmpNeighbors = 0;
+    if (config.fdbRetentionDays && typeof repo.purgeFdbEntriesBefore === 'function') {
+      const cut = new Date(t - config.fdbRetentionDays * DAY_MS);
+      fdbEntries = await repo.purgeFdbEntriesBefore(cut);
+      if (typeof repo.purgeSnmpNeighborsBefore === 'function') {
+        snmpNeighbors = await repo.purgeSnmpNeighborsBefore(cut);
+      }
+    }
+    // Burst runs. A burst is a deliberate measurement rather than a stream, so
+    // it is kept longer than the telemetry around it; guarded like the rest.
+    let burstRuns = 0;
+    if (config.burstRunRetentionDays && typeof repo.purgeBurstRunsBefore === 'function') {
+      const cut = new Date(t - config.burstRunRetentionDays * DAY_MS);
+      burstRuns = await repo.purgeBurstRunsBefore(cut);
+    }
     // Interface state transitions (history) and the snapshot rows of interfaces
     // that stopped being reported. Guarded like the dimensions above.
     let interfaceTransitions = 0;
@@ -38,7 +65,7 @@ function createPurge({ repo, config, now = () => new Date() }) {
         interfaceStates = await repo.purgeInterfaceStatesBefore(cut);
       }
     }
-    return { flowRollups, metricRollups, findings, configSnapshots, arpEntries, interfaceTransitions, interfaceStates };
+    return { flowRollups, metricRollups, findings, configSnapshots, arpEntries, deviceEvents, fdbEntries, snmpNeighbors, burstRuns, interfaceTransitions, interfaceStates };
   }
 
   return { purgeExpired };

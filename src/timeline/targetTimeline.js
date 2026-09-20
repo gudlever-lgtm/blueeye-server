@@ -29,11 +29,12 @@ const SOURCES = Object.freeze({
   AGENT: 'agent',
   PLAYBOOK: 'playbook',
   TOPOLOGY: 'topology',
+  DEVICE: 'device',
 });
 
 // Stable tie-break order among events that share a timestamp — keeps the story
 // readable and the output deterministic (important for tests).
-const SOURCE_ORDER = { finding: 0, probe: 1, agent: 2, playbook: 3, topology: 4 };
+const SOURCE_ORDER = { finding: 0, probe: 1, agent: 2, playbook: 3, topology: 4, device: 5 };
 
 function toIso(v) {
   if (v == null) return null;
@@ -160,6 +161,35 @@ function mapTopologyChange(c) {
   }];
 }
 
+// A message the device itself sent (device_events, migration 103) — syslog, and
+// SNMP traps from stage 03.
+//
+// This is the only source on the timeline that speaks with the equipment's own
+// voice rather than the server's inference about it, which is exactly why it
+// earns a place: a finding says the link is unreachable, and the line next to it
+// says the switch logged LINK-3-UPDOWN four seconds earlier.
+//
+// The eight syslog levels narrow to the three this timeline speaks through
+// severityBand() in devices/deviceEventCatalog.js — one definition, used here
+// and by the changes feed.
+//
+// occurrences > 1 is stated rather than hidden: "(x40)" on one line is the
+// difference between a port that blipped and a port that is flapping.
+function mapDeviceEvent(e, { severityBand } = {}) {
+  if (!e) return [];
+  const band = typeof severityBand === 'function' ? severityBand(e.severity) : 'INFO';
+  const times = e.occurrences > 1 ? ` (x${e.occurrences})` : '';
+  const iface = e.ifname ? `${e.ifname}: ` : '';
+  return [{
+    timestamp: toIso(e.receivedAt),
+    source: SOURCES.DEVICE,
+    type: e.eventType || 'syslog.raw',
+    severity: band,
+    summary: `${iface}${e.summary}${times}`,
+    ref_id: e.id,
+  }];
+}
+
 // Merge the already-fetched source arrays into one timeline, newest first.
 // Any source array may be omitted/empty. `limit` (when a positive integer) caps
 // the returned events to the most recent N after the merge.
@@ -169,6 +199,10 @@ function buildTargetTimeline({
   agentEvents = [],
   playbookRuns = [],
   topologyChanges = [],
+  deviceEvents = [],
+  // Injected rather than imported so this module stays a pure merge with no
+  // dependency on the device catalogue; the service passes the real one.
+  severityBand = null,
   limit = null,
 } = {}) {
   const events = [];
@@ -177,6 +211,7 @@ function buildTargetTimeline({
   for (const e of agentEvents) events.push(...mapAgentEvent(e));
   for (const r of playbookRuns) events.push(...mapPlaybookRun(r));
   for (const c of topologyChanges) events.push(...mapTopologyChange(c));
+  for (const d of deviceEvents) events.push(...mapDeviceEvent(d, { severityBand }));
 
   // Drop anything we couldn't assign a timestamp to (a malformed row) rather
   // than emit a null-timestamped event that would sort unpredictably.
@@ -202,10 +237,29 @@ function buildTargetTimeline({
 // one definition.
 const CHANGE_EVENT_TYPES = new Set(['agent.online', 'agent.enrolled']);
 
+// Device events that are a CHANGE rather than a symptom: somebody or something
+// altered the device. A config write and a reboot changed it; a link going down
+// is the fault showing itself. This split is what makes "what changed before
+// this finding" answerable from the device's own log — which is the question
+// the whole feature exists for.
+const CHANGE_DEVICE_EVENT_TYPES = new Set([
+  'config.changed',
+  'device.rebooted',
+  'port.err_disabled',
+  'stp.root_changed',
+  // Somebody shut this port. A linkDown trap whose ifAdminStatus is also down
+  // is not the fault showing itself — it is a person, and "what changed before
+  // this finding" should say so.
+  'link.admin_down',
+]);
+
 function classifyEvent(event) {
   if (!event) return 'symptom';
   if (event.source === SOURCES.PLAYBOOK) return 'change';
   if (event.source === SOURCES.TOPOLOGY) return 'change'; // a topology change IS a change
+  if (event.source === SOURCES.DEVICE) {
+    return CHANGE_DEVICE_EVENT_TYPES.has(event.type) ? 'change' : 'symptom';
+  }
   if (CHANGE_EVENT_TYPES.has(event.type)) return 'change';
   return 'symptom';
 }
@@ -224,5 +278,6 @@ module.exports = {
   mapAgentEvent,
   mapPlaybookRun,
   mapTopologyChange,
+  mapDeviceEvent,
   SOURCES,
 };

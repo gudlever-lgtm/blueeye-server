@@ -21,7 +21,7 @@
     var t = deps.t;
     var ui = deps.ui;
 
-    var TABS = ['run', 'connection', 'packages'];
+    var TABS = ['run', 'connection', 'burst', 'packages'];
     // The tab's own label, from the catalogue the route map already names them in.
     function tabLabel(key) {
       var k = 'route.tab.probes.' + key;

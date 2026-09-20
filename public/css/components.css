@@ -513,6 +513,37 @@
 .ui .auth-card .meta { margin: 0; }
 .ui .auth-card #fc-logout { align-self: flex-start; }
 
+/* ---- Burst mode -----------------------------------------------------------
+   One target, once a second. The chart is hand-drawn SVG like the rest of the
+   dashboard's graphs, and every colour here is a token — the loss band and the
+   lost-sample markers reuse the severity scale rather than naming a red, so
+   they re-theme with every palette like everything else. */
+.ui .burst-stats { display: flex; flex-wrap: wrap; gap: var(--s-5); margin-bottom: var(--s-4); }
+.ui .burst-stat { display: flex; flex-direction: column; gap: var(--s-1); }
+.ui .burst-stat-n { font-size: var(--fs-xl); font-weight: 700; line-height: 1.1;
+  font-variant-numeric: tabular-nums; }
+.ui .burst-stat-l { font-size: var(--fs-xs); color: var(--text-muted); }
+.ui .burst-stat.bad .burst-stat-n { color: var(--sev-crit); }
+.ui .burst-stat.ok .burst-stat-n { color: var(--sev-ok); }
+
+.ui .burst-chart { display: block; width: 100%; height: auto; }
+.ui .burst-grid { stroke: var(--border); stroke-width: 1; }
+.ui .burst-axis-line { stroke: var(--border-strong); stroke-width: 1; }
+.ui .burst-axis { fill: var(--text-muted); font-family: var(--mono); font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums; }
+.ui .burst-line { fill: none; stroke: var(--accent); stroke-width: 2;
+  stroke-linejoin: round; stroke-linecap: round; }
+.ui .burst-dot { fill: var(--accent); }
+/* The shaded run behind a cluster of losses: the SHAPE the verdict describes,
+   made visible rather than left for the reader to find in the line. */
+.ui .burst-lossband { fill: var(--sev-crit); fill-opacity: 0.16; }
+.ui .burst-lost { fill: var(--sev-crit); }
+
+/* The sentence. Everything above it is supporting evidence, so it is set as
+   prose rather than as another figure. */
+.ui .burst-verdict { margin: var(--s-4) 0 0; font-size: var(--fs-md); line-height: 1.55;
+  padding-left: var(--s-3); border-left: 2px solid var(--accent); }
+
 /* A utilisation cell: the bar app.js draws, with its percentage beside it. The
    bar itself is still styles.css's `.usagebar` — it is shared with the storage
    line and the password meter, so it is not this screen's to move. */

@@ -1,9 +1,13 @@
-// public/about.js — the About page: what BlueEyes is, and what it grew into.
+// public/about.js — the feature history the About page is built from.
 //
-// A dated feature history. Every entry carries the version it shipped in and
-// the date that version landed on main, so the page answers two questions an
-// operator actually asks: "what is this build?" and "when did the thing I am
-// looking at arrive?".
+// A dated record. Every entry carries the version it shipped in and the date
+// that version landed on main, so the page answers two questions an operator
+// actually asks: "what is this build?" and "when did the thing I am looking at
+// arrive?".
+//
+// This file is the DATA. The screen that draws it is public/views/about.js,
+// which is on the UI contract — keeping the two apart means a hundred history
+// entries do not sit in the middle of a view module.
 //
 // The list is curated, not generated: 350+ version bumps are noise, and a
 // changelog nobody can scan is a changelog nobody reads. One line per thing
@@ -16,9 +20,7 @@
 // nothing outside this page ever names them. The page CHROME (headings,
 // filters, the build line) does go through t(), like the rest of the UI.
 //
-// Loaded as its own classic script (no build step, repo convention) and
-// mounted by views.about in app.js, which passes the shared helpers in rather
-// than this file reaching into app.js globals — the same seam guides.js uses.
+// Loaded as its own classic script (no build step, repo convention).
 
 (function (root) {
   'use strict';
@@ -324,80 +326,7 @@
     return order.map(function (b) { return { bucket: b, items: groups[b] }; });
   }
 
-  // The page. deps: { el, t, plural, locale, version, releaseDate }.
-  function create(deps) {
-    var el = deps.el;
-    var t = deps.t;
-    var locale = deps.locale || 'en';
-    var text = function (entry) { return entry[locale] || entry.en; };
-    var plural = deps.plural || function (key, n) { return String(n); };
-
-    var root = el('div', { class: 'about' });
-    var area = 'all';
-
-    root.append(el('div', { class: 'section-head' },
-      el('h2', {}, t('about.title')),
-      el('span', { class: 'muted' }, t('about.subtitle'))));
-
-    // What this host is running. The version and its release date come from
-    // GET /system/version — the same pair the sidebar foot is stamped with —
-    // so the page can never claim a build the server is not on.
-    var build = el('div', { class: 'about-build' },
-      el('span', { class: 'about-build-name' }, 'BlueEyes Network Resilience System'),
-      el('span', { class: 'badge about-build-ver' }, deps.version ? 'v' + deps.version : '—'),
-      el('span', { class: 'muted' }, deps.releaseDate
-        ? t('about.build.released', { date: deps.releaseDate })
-        : t('about.build.unknownDate')));
-    root.append(build);
-    root.append(el('p', { class: 'about-lead' }, t('about.lead')));
-
-    var chips = el('div', { class: 'about-filters' });
-    var list = el('div', { class: 'about-timeline' });
-
-    function counts(key) {
-      return RELEASES.filter(function (e) { return key === 'all' || e.area === key; }).length;
-    }
-
-    function drawChips() {
-      var keys = ['all'].concat(AREAS);
-      chips.replaceChildren.apply(chips, keys.map(function (key) {
-        var label = key === 'all' ? t('about.filter.all') : t(AREA_KEYS[key]);
-        return el('button', {
-          type: 'button',
-          class: 'chip' + (key === area ? ' active' : ''),
-          'aria-pressed': key === area ? 'true' : 'false',
-          onclick: function () { area = key; drawChips(); drawList(); },
-        }, label, el('span', { class: 'chip-count' }, String(counts(key))));
-      }));
-    }
-
-    function drawList() {
-      var shown = RELEASES.filter(function (e) { return area === 'all' || e.area === area; });
-      var nodes = [el('p', { class: 'muted about-count' }, plural('about.count', shown.length, { count: String(shown.length) }))];
-      byMonth(shown).forEach(function (group) {
-        nodes.push(el('h3', { class: 'about-month' }, monthLabel(group.bucket, locale)));
-        nodes.push(el('ol', { class: 'about-items' }, group.items.map(function (e) {
-          var body = text(e);
-          return el('li', { class: 'about-item' },
-            el('div', { class: 'about-item-meta' },
-              el('span', { class: 'badge about-ver' }, 'v' + e.v),
-              el('span', { class: 'about-area' }, t(AREA_KEYS[e.area]))),
-            el('div', { class: 'about-item-body' },
-              el('div', { class: 'about-item-title' }, body.t),
-              el('div', { class: 'about-item-sum muted' }, body.s)));
-        })));
-      });
-      list.replaceChildren.apply(list, nodes);
-    }
-
-    drawChips();
-    drawList();
-    root.append(chips, list);
-    root.append(el('p', { class: 'muted about-foot' }, t('about.foot')));
-    return root;
-  }
-
-  var About = { AREAS: AREAS, AREA_KEYS: AREA_KEYS, RELEASES: RELEASES, byMonth: byMonth, monthLabel: monthLabel, create: create };
+  var About = { AREAS: AREAS, AREA_KEYS: AREA_KEYS, RELEASES: RELEASES, byMonth: byMonth, monthLabel: monthLabel };
   if (root) root.About = About;
   if (typeof module !== 'undefined' && module.exports) module.exports = About;
 })(typeof window !== 'undefined' ? window : null);

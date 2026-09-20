@@ -46,7 +46,6 @@ const CONTRACT_CSS = new Set(['css/base.css', 'css/components.css']);
 // this as each screen is migrated; nothing is ever removed.
 const MIGRATED = [
   'ui.js',
-  'uiPreview.js',
   'kitchenSink.js',
   // Phase 3, in the order docs/ui-contract.md sets out.
   'views/changes.js',
@@ -75,6 +74,19 @@ const MIGRATED = [
   'views/systemLogs.js',
   'views/userLogs.js',
   'views/settings.js',
+  'views/agents.js',
+  'views/interfaces.js',
+  'views/nics.js',
+  'views/event.js',
+  'views/situation.js',
+  'views/agent.js',
+  'views/location.js',
+  // Reached from the account menu rather than the rail, but a page all the same.
+  'views/about.js',
+  'views/docs.js',
+  'views/users.js',
+  'views/screening.js',
+  'views/license.js',
 ];
 
 // Classes the contract replaced. A migrated file may not use them.

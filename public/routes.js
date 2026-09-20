@@ -36,7 +36,7 @@
     agents: { path: '/agents' },
     agent: { path: '/agents', param: true },
     interfaces: { path: '/interfaces' },
-    nics: { path: '/nics' },
+    nics: { path: '/nics', tabs: ['models', 'agents'], tabKey: 'nicsTab' },
 
     probes: { path: '/probes', tabs: ['run', 'connection', 'burst', 'packages'], tabKey: 'probesTab' },
     transactions: { path: '/transaction-tests', tabs: ['list', 'matrix'], tabKey: 'txTab' },
@@ -87,13 +87,23 @@
         'updates', 'agents', 'snmp', 'screening', 'assurance', 'appearance', 'license'],
       tabKey: 'settingsTab',
     },
-    docs: { path: '/docs' },
+    // An article is a destination, so it has an address. The list is pinned to
+    // DOCS in public/app.js by test/docsPage.test.js — a new article without a
+    // route here fails the build rather than becoming unlinkable.
+    docs: {
+      path: '/docs',
+      tabs: [
+      'what-is', 'tour', 'assurance', 'assurance-monitors', 'agent-offline',
+      'site-unhealthy', 'latency-loss', 'interface', 'findings', 'situations',
+      'dependencies', 'blast-radius', 'topology-changes', 'flow-baselines', 'adhoc',
+      'assurance-worker', 'discovery', 'servicenow', 'cmdb', 'alerting', 'sso', 'enroll-key',
+      'retention',
+      ],
+      tabKey: 'docsTopic',
+    },
     about: { path: '/about' },
 
-    // UI-contract preview (admin only, removed once Changes and Probes are migrated).
-    uiPreviewChanges: { path: '/ui-preview/changes' },
-    uiPreviewProbes: { path: '/ui-preview/probes' },
-    // The component reference. Unlike the previews this one stays: it is the
+    // The component reference: it is the
     // visual reference for docs/ui-contract.md and a test surface for the
     // components, neither of which stops being useful after the migration.
     kitchenSink: { path: '/ui-kitchen-sink' },
@@ -110,7 +120,7 @@
     delta: 'operator', troubleshooting: 'operator', investigation: 'operator',
     enrollment: 'operator', serviceAssurance: 'operator',
     discovery: 'admin', logs: 'admin', userLogs: 'admin', users: 'admin', screening: 'admin',
-    uiPreviewChanges: 'admin', uiPreviewProbes: 'admin', kitchenSink: 'admin',
+    kitchenSink: 'admin',
   };
 
   function normalise(pathname) {

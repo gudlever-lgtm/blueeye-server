@@ -273,7 +273,7 @@ main#view { width: 100%; max-width: var(--content-max); margin-inline: auto;
 /* The base .card is 320px with 28px padding — sized for the centered login form
    (which lives in its own #login shell, not here). Inside a page, cards are
    content panels: they must fill the available width and share one padding scale
-   with the other panels (.nic-card, .settings-card, …) instead of a much roomier
+   with the other panels (.settings-card, …) instead of a much roomier
    320px column (Discovery, Investigation, agent detail, the Overview cards …). */
 main#view .card { width: auto; padding: 18px 20px; box-shadow: var(--shadow); }
 .section-head { display: flex; align-items: center; gap: 12px; margin: 0 0 14px; }
@@ -315,8 +315,6 @@ main#view .card { width: auto; padding: 18px 20px; box-shadow: var(--shadow); }
    shared status palette below.) */
 .bad-text { color: var(--bad); font-weight: 600; }
 .warn-text { color: var(--warn); font-weight: 600; }
-.iface-table .util { display: flex; align-items: center; gap: 8px; }
-.iface-table .util .usagebar { flex: 1; min-width: 80px; max-width: 160px; margin: 0; }
 .probe-hops { width: 100%; border-collapse: collapse; margin-top: 10px; }
 .probe-hops th { text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); padding: 4px 10px; }
 .probe-hops td { padding: 4px 10px; }
@@ -479,28 +477,6 @@ main#view .card { width: auto; padding: 18px 20px; box-shadow: var(--shadow); }
 /* Delta / Changes view: change-type filter + shared global filter bar. */
 
 /* NICs view: firmware-drift card + inventory list. */
-.nics-summary { margin: 0 0 14px; }
-.nic-card { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px 18px; margin: 0 0 16px; }
-.nic-card h3 { margin: 0 0 10px; font-size: 15px; }
-.drift-card { border-color: var(--warn); }
-.drift-model { padding: 10px 0; border-top: 1px solid var(--border); }
-.drift-model:first-of-type { border-top: none; }
-.drift-head { margin-bottom: 6px; }
-.fw-row { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 5px 0; }
-.fw-row .fw-ver { font-family: var(--mono, monospace); font-size: 13px; }
-.fw-outlier { background: var(--panel-2); border-radius: var(--radius-sm); padding: 6px 8px; }
-.nic-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-left: 4px; }
-.nic-model-row { display: flex; justify-content: space-between; gap: 16px; padding: 7px 0; border-top: 1px solid var(--border); }
-.nic-model-row:first-of-type { border-top: none; }
-.nics-controls { display: flex; align-items: center; gap: 10px; margin: 0 0 14px; }
-.nic-filter { flex: 0 1 320px; max-width: 320px; }
-.seg { display: inline-flex; border: 1px solid var(--border); border-radius: var(--radius-sm); overflow: hidden; }
-.seg-btn { font: inherit; font-size: 13px; padding: 4px 12px; border: none; background: var(--panel); color: var(--muted); cursor: pointer; }
-.seg-btn + .seg-btn { border-left: 1px solid var(--border); }
-.seg-btn.on { background: var(--panel-2); color: var(--text); }
-.nic-agent-row { padding: 12px 0; border-top: 1px solid var(--border); }
-.nic-agent-row:first-of-type { border-top: none; }
-.nic-agent-head { margin-bottom: 6px; }
 .linklike { font: inherit; background: none; border: none; padding: 0; color: var(--accent); cursor: pointer; }
 .linklike:hover { text-decoration: underline; }
 
@@ -710,14 +686,6 @@ label.check { display: flex; align-items: center; gap: 8px; padding: 3px 0; font
 label.check input { width: auto; }
 .section-head h2 { margin: 0; font-size: 18px; }
 
-/* Hero: short per-page explanation under the section head. */
-.hero { display: flex; align-items: flex-start; gap: 10px; background: var(--panel);
-  border: 1px solid var(--border); border-left: 3px solid var(--accent);
-  border-radius: var(--radius-sm); padding: 10px 14px; margin: 0 0 16px; color: var(--muted); }
-.hero .hero-text { flex: 1; }
-.hero .hero-text b { color: var(--text); }
-.hero button { white-space: nowrap; }
-
 /* Slide-in info drawer from the right. */
 .drawer-backdrop { position: fixed; inset: 0; background: var(--scrim); backdrop-filter: blur(2px); opacity: 0;
   transition: opacity .2s ease; z-index: var(--z-scrim); }
@@ -786,8 +754,6 @@ table.matrix td:not(:first-child), table.matrix th:not(:first-child) { text-alig
 table.matrix .active { background: var(--accent-weak); font-weight: 600; }
 
 /* Table filter toolbar (e.g. Agents tab) + sortable column headers. */
-.table-toolbar { display: flex; justify-content: flex-end; margin: 0 0 12px; }
-.table-filter { min-width: 260px; max-width: 360px; }
 th.sortable { cursor: pointer; user-select: none; white-space: nowrap; }
 th.sortable:hover { color: var(--text); }
 th.sortable.sorted { color: var(--accent); }
@@ -1366,7 +1332,11 @@ button.active-btn { outline: 2px solid var(--accent); }
 .badge.inc-status-resolved { background: var(--ok-weak); color: var(--sev-ok); }
 .badge.inc-status-closed { background: var(--surface-alt); color: var(--text-muted); }
 /* Cross-agent situation (cluster) badges: confidence tier + root-cause layer. */
-.badge.conf-high { background: var(--crit-weak); color: var(--sev-crit); }
+/* Confidence is not severity. It says how much to trust the grouping, so high
+   reads ok and low reads muted — the scale the Situations list and the detail
+   header already use. It used to read high = crit, which put a red "High" two
+   inches under a green "High confidence" on the same screen. */
+.badge.conf-high { background: var(--ok-weak); color: var(--sev-ok); }
 .badge.conf-medium { background: var(--warn-weak); color: var(--sev-warn); }
 .badge.conf-low { background: var(--surface-alt); color: var(--text-muted); }
 .badge.rc-network-layer { background: var(--info-weak); color: var(--sev-info); }
@@ -1549,11 +1519,6 @@ li.guide-step.done .guide-step-title { text-decoration: line-through; opacity: 0
 .fmr-dir.dir-both { color: var(--muted); }
 
 /* ---- Agent page: cards side by side on the full width -------------------- */
-/* The global .card is a fixed 320px (login); inside the agent grid the cards
-   fill their track instead of stranding in a narrow column. */
-.agent-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
-  gap: 14px; align-items: start; margin: 0 0 14px; }
-.agent-cards .card { width: auto; margin: 0; box-shadow: var(--shadow); }
 
 /* ---- Location drill-down page -------------------------------------------- */
 .location-detail .loc-kpis { margin-bottom: 16px; }
@@ -1631,7 +1596,9 @@ li.guide-step.done .guide-step-title { text-decoration: line-through; opacity: 0
 .wl-composer textarea { width: 100%; resize: vertical; }
 .wl-kinds { border: 0; padding: 0; margin: 10px 0 0; display: grid; gap: 4px; }
 .wl-kinds legend { padding: 0; font-weight: 600; }
-.wl-kind-choice { display: flex; gap: 8px; align-items: baseline; }
+/* A radio and its two lines read across, not down — the global `label` rule
+   sets flex-direction: column, which this has to undo. */
+.wl-kind-choice { display: flex; flex-direction: row; gap: 8px; align-items: baseline; }
 .wl-note { margin: 10px 0 0; font-style: italic; }
 
 /* --- Universal search results (Fase 1) -------------------------------------- */
@@ -1730,10 +1697,10 @@ ul.timeline-list li.tl .chg-open { margin-left: auto; flex: 0 0 auto; }
 }
 
 /* Resting elevation for every content surface. */
-.overview-chart, .nic-card, .settings-card, .stat,
+.overview-chart, .settings-card, .stat,
 .kpi, .metric-card, .agent-health, .assistant,
 details.sec, .theme-card, .nis2-cat, .nis2-readiness, .blast-panel,
-.pathmap, .pv-timeline, .topo-graph, .netpath, .fleet-summary .fs-chip, .hero {
+.pathmap, .pv-timeline, .topo-graph, .netpath, .fleet-summary .fs-chip {
   box-shadow: var(--shadow);
 }
 /* …except where the "surface" is really a transparent block nested inside
@@ -1754,7 +1721,7 @@ details.sec .history,
 }
 
 /* Dividers inside a surface are hairlines; the surface's own edge is not. */
-.nic-model-row, .nic-agent-row, .drift-model, .blast-tier,
+.blast-tier,
 .settings-card table.kv td,
 .adv-table td, .storage-sep, .history,
 .settings-help, .agent-health .ah-quality, .mw-form, .settings-nav {
@@ -2145,25 +2112,19 @@ button.ghost.small:has(> .icon-glyph) {
   .crumb .crumb-step, .crumb .crumb-sep { display: none; }
 }
 /* ---- About: the build line + the dated feature history --------------------
-   Reached from the account menu (top right). The month heading is the spine:
-   entries hang off it with their version badge in a fixed-width column, so the
-   eye runs down the versions without re-reading the titles. */
-.about-build { display: flex; align-items: baseline; flex-wrap: wrap; gap: 10px;
-  background: var(--panel); border: 1px solid var(--border); border-left: 3px solid var(--accent);
-  border-radius: var(--radius); padding: 11px 14px; margin: 0 0 12px; }
-.about-build-name { font-weight: 600; }
-.about-build-ver { font-variant-numeric: tabular-nums; }
-.about-lead { max-width: 74ch; margin: 0 0 14px; line-height: 1.55; }
-.about-filters { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0 0 6px; }
-.about-filters .chip { display: inline-flex; align-items: center; gap: 6px; }
-.about-filters .chip.active { background: var(--panel-2); color: var(--text); border-color: var(--accent); }
-.about-filters .chip-count { font-size: 11px; opacity: .7; font-variant-numeric: tabular-nums; }
-.about-count { font-size: 12px; margin: 0 0 14px; }
-.about-month { margin: 22px 0 8px; font-size: 13px; text-transform: uppercase; letter-spacing: .05em;
-  color: var(--muted); border-bottom: 1px solid var(--border); padding-bottom: 6px; }
-.about-month:first-of-type { margin-top: 6px; }
+   Reached from the account menu (top right). On the UI contract: the header
+   carries the build, the area counts are a StatStrip, and a month is a Panel.
+   Inside a month, entries hang off a fixed-width version column, so the eye
+   runs down the versions without re-reading the titles. */
+.about-build { font-variant-numeric: tabular-nums; }
+/* Six areas in the strip: the shared auto-fit grid lays them out 5 + 1 at a
+   desk width, and a card alone on its own row reads as a mistake. Two rows of
+   three, one column on a phone. */
+.ui .about-filters .statstrip { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+@media (max-width: 720px) { .ui .about-filters .statstrip { grid-template-columns: 1fr; } }
+.about-timeline { display: flex; flex-direction: column; gap: var(--s-4); }
 .about-items { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
-.about-item { display: flex; gap: 14px; padding: 11px 2px; border-bottom: 1px solid var(--hairline, var(--border)); }
+.about-item { display: flex; gap: 14px; padding: 11px 0; border-bottom: 1px solid var(--hairline, var(--border)); }
 .about-item:last-child { border-bottom: 0; }
 .about-item-meta { flex: 0 0 132px; display: flex; flex-direction: column; align-items: flex-start; gap: 4px; }
 .about-ver { font-variant-numeric: tabular-nums; }
@@ -2171,7 +2132,7 @@ button.ghost.small:has(> .icon-glyph) {
 .about-item-body { flex: 1 1 auto; min-width: 0; }
 .about-item-title { font-weight: 600; margin-bottom: 2px; }
 .about-item-sum { font-size: 13px; line-height: 1.5; max-width: 82ch; }
-.about-foot { font-size: 12px; margin: 20px 0 0; max-width: 82ch; }
+.about-foot { margin: 0; max-width: 82ch; }
 @media (max-width: 720px) {
   .about-item { flex-direction: column; gap: 4px; }
   .about-item-meta { flex: 0 0 auto; flex-direction: row; align-items: center; gap: 8px; }

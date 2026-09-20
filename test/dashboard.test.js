@@ -43,8 +43,11 @@ test('dashboard exposes settings (users+license) tab, auto-refresh and traffic c
   assert.match(js, /monitor_config/); // source selection sent to the API
   assert.match(js, /showLocationTraffic/); // live per-location correlated traffic
   assert.match(js, /\/traffic/); // calls the location traffic endpoint
-  assert.match(js, /agentHealthCell/); // agent health derived from last report
   assert.match(js, /newAgent/); // operator "+ New agent" (enrollment code)
+  // Agent health is derived from the last report on the screen that shows it
+  // (public/views/agents.js) — app.js kept two copies of the rule, one for the
+  // cell and one for the sort.
+  assert.doesNotMatch(js, /function agentHealthCell/);
   assert.match(js, /function openDrawer/); // slide-in info drawer
   assert.match(js, /PAGE_INFO/); // per-page hero/info content
   assert.match(js, /refreshLicense/); // "Re-validate now" on the license page
@@ -74,8 +77,11 @@ test('interface + traffic views are flow-source aware (sflow/netflow have no per
   // agent has no per-interface rows, instead of the misleading generic message.
   assert.match(js, /function interfaceTable\(interfaces, source/);
   assert.match(js, /interfaceTable\(data\.interfaces, data\.source\)/); // callers pass the source through
-  assert.match(js, /reports sampled flow records/); // the source-aware empty state
-  assert.match(js, /Traffic source/); // points the user at the source switch
+  // The source-aware empty state itself lives on the screen that draws the
+  // table (public/views/interfaces.js) — app.js only passes the source through.
+  const view = (await request(makeApp()).get('/views/interfaces.js')).text;
+  assert.match(view, /iface\.flowSource\.title/); // "reports flows, not interface counters"
+  assert.match(view, /openAgents/); // and offers the switch that would fix it
   // The RX/TX bandwidth chart is skipped for flow sources (no rx/txBytesPerSec).
   assert.match(js, /const flowSource = t && \(t\.source === 'sflow' \|\| t\.source === 'netflow'\)/);
 });

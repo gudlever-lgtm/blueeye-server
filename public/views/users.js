@@ -67,7 +67,14 @@
         // Why the invite button is missing, said where the button would be
         // rather than in a grey sentence three lines down.
         var notes = [];
-        if (!avail.available && avail.ssoActive) {
+        // "Could not tell" is not the same as "SSO is on", and an admin can act
+        // on the difference — the first is something to fix, the second is how
+        // the install is meant to work. The API separates them; so does this.
+        if (!avail.available && avail.ssoIndeterminate) {
+          notes.push(el('p', { class: 'inline-note is-warn' },
+            t('usr.ssoUnknown', { method: avail.ssoMethod || t('usr.ssoUnknownMethod') }), ' ',
+            deps.docsLink('auth-lockout', t('usr.ssoUnknownLink'))));
+        } else if (!avail.available && avail.ssoActive) {
           notes.push(ui.inlineNote(t('usr.sso'), 'info'));
         } else if (!avail.available && !avail.mailerReady) {
           notes.push(el('p', { class: 'inline-note is-info' },

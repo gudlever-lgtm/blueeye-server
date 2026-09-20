@@ -9,6 +9,12 @@ in — in the order you should try them.
 It also names the one change that *would* create a real lockout, so nobody makes
 it by accident.
 
+> **Operators want the in-app version.** The same guidance — what still works,
+> and the four ways back in — is in the dashboard under **Documentation →
+> Administration & setup → "Directory logins stopped working"** (`/docs/auth-lockout`,
+> admin-only, en/da). Settings → Users links straight to it when the check cannot
+> be answered. This page is the engineering account of *why* it holds.
+
 ## What "fails closed" means here
 
 `ssoOrLdapActive()` in `src/routes/users.js` answers one question: *is any
@@ -168,6 +174,11 @@ path at all. If somebody gates `POST /users`, that file fails first.
 throwing provider refuses rather than allows, and that the refusal names the
 method and what to do about it.
 
+`test/usersPage.test.js` pins the screen telling the two cases apart: an
+unanswerable check is a **warning** that names the method, says local sign-in is
+unaffected and links the article; a genuine "SSO is on" stays the calm info note.
+`test/docsPage.test.js` opens every article, so the new one cannot ship broken.
+
 ## Where the code lives
 
 | Piece | File |
@@ -177,7 +188,8 @@ method and what to do about it.
 | LDAP enable check + config-read logging | `src/auth/ldap.js` (`isEnabled`) |
 | OIDC / SAML enable checks (sync, in-memory) | `src/auth/oidc.js`, `src/auth/saml.js` |
 | Licence gate that can throw | `src/license/features.js`, `src/license/planService.js` |
-| Which buttons the UI shows | `public/views/users.js` |
+| Which buttons the UI shows, and the indeterminate note | `public/views/users.js` |
+| In-app article (`/docs/auth-lockout`) | `DOCS` in `public/app.js`, `docs.lockout.*` keys in `public/i18n.js`, id in `public/routes.js` |
 | Break-glass admin | `scripts/seed-superadmin.js`, `src/migrate.js` (`seedAdminIfNeeded`) |
 
 See also [ldap-auth.md](ldap-auth.md), [sso-oidc.md](sso-oidc.md),

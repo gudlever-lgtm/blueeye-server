@@ -208,10 +208,39 @@ finding never claims anything the dashboard verdict doesn't:
 
 - `probe.reachability` (CRIT) — targets not responding;
 - `probe.loss` (WARN ≥2 % / CRIT ≥20 %);
-- `probe.latency` (ANOMALY, z-score vs. the target's own baseline);
+- `probe.latency` (ANOMALY, z-score vs. the target's own baseline — **but only
+  once the latency actually moved**, see below);
 - `probe.jitter` (WARN ≥30 ms / CRIT ≥100 ms);
 - `probe.cert` (WARN ≤14 d / CRIT ≤3 d) — TLS certificate expiry from the **http**
   probe, judged independently of reachability.
+
+### Latency needs a floor, not just a z-score
+
+A z-score answers "is this unusual for this target". It does not answer "is this
+worth waking somebody for", and on a stable LAN the two come apart badly.
+
+A LAN target sits at 0.5 ms with a MAD of a few tens of **microseconds**. Divide
+an ordinary 0.4 ms wobble by a 54 µs sigma and the answer is z = 7.4 — past
+`Z_BAD`, so *critical*, on a link nobody would call slow. In the field that
+produced **30 003 criticals out of 184 668 findings**, which is the same as
+having none: a backlog nobody can read is one everybody stops reading.
+
+So elevated latency has to clear two bars before the z-score is consulted at all
+(`health/probeHealth.js`):
+
+| bar | value | why |
+| --- | --- | --- |
+| `LAT_MIN_DELTA_MS` | 5 ms | a sub-5 ms move is never news, however many sigmas it is |
+| `LAT_MIN_FRACTION` | 20 % | and on a 200 ms WAN path, 5 ms is not news either |
+
+Both, not either. `0.5 → 2 ms` is +300 % and still a tiny change; `118 → 124 ms`
+is +6 ms and still inside normal variation. `118 → 309 ms` clears both, and stays
+critical exactly as before.
+
+The floor gates **latency only**. Loss, jitter and unreachability always had
+absolute thresholds and are untouched — a quiet-latency target that is dropping
+packets is still reported, which is the whole reason the fix is a pre-condition
+on one signal rather than a global sensitivity knob.
 
 Findings are de-duplicated within a 30-min cooldown (per metric+target) so
 frequent probes don't spam the list or the alert channels. Gated by the analysis

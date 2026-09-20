@@ -2434,6 +2434,26 @@ function makeFindingStore(overrides = {}) {
       return out;
     }),
     ack: overrides.ack || (async (id) => { const f = rows.find((x) => x.id === id); if (!f) return false; f.acked = true; return true; }),
+    // Counts what THIS call changed, like the real store: `acked = 0` is part
+    // of the predicate there, so a row already accepted is not counted again
+    // and "accepted 40 000" means forty thousand actually moved.
+    ackMany: overrides.ackMany || (async ({ ids = null, filter = null } = {}) => {
+      const match = Array.isArray(ids)
+        ? (f) => ids.includes(f.id)
+        : (f) => (!filter || (
+          (!filter.hostId || f.hostId === filter.hostId)
+          && (!filter.severity || f.severity === filter.severity)
+          && (!filter.metric || f.metric === filter.metric)
+          && (!filter.deviceId || Number(f.deviceId) === Number(filter.deviceId))
+          && (!filter.interfaceId || Number(f.interfaceId) === Number(filter.interfaceId))
+          && (!filter.since || new Date(f.createdAt || 0) >= new Date(filter.since))
+          && (!filter.until || new Date(f.createdAt || 0) <= new Date(filter.until))));
+      let n = 0;
+      for (const f of rows) {
+        if (!f.acked && match(f)) { f.acked = true; n += 1; }
+      }
+      return n;
+    }),
     setCorrelations: overrides.setCorrelations || (async (id, ids) => { const f = rows.find((x) => x.id === id); if (!f) return false; f.correlatedWith = Array.isArray(ids) ? ids : []; return true; }),
     setEventCase: overrides.setEventCase || (async (id, eventCaseId) => { const f = rows.find((x) => x.id === id); if (!f) return false; f.eventCaseId = eventCaseId ?? null; return true; }),
   };

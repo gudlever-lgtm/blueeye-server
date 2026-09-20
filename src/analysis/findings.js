@@ -418,6 +418,44 @@ class FindingStore {
     return result.affectedRows > 0;
   }
 
+  // "I have seen these and I accept them" — for a SET of findings, or for
+  // everything matching a filter.
+  //
+  // One at a time is not an option at the scale this reaches. A fleet that
+  // produced 184 668 findings needs to clear them in one action, and 184 668
+  // round trips is not that action.
+  //
+  // Two shapes, deliberately:
+  //   ackMany({ ids })      the rows somebody ticked on screen
+  //   ackMany({ filter })   everything matching what they are LOOKING at, which
+  //                         is the only way to accept a backlog nobody will
+  //                         scroll through
+  //
+  // Already-acked rows are not counted: `acked = 0` in the WHERE means the
+  // number that comes back is what THIS call changed, so "accepted 40 000" is
+  // true rather than a restatement of how many matched.
+  async ackMany({ ids = null, filter = null } = {}) {
+    if (Array.isArray(ids)) {
+      if (!ids.length) return 0;
+      const placeholders = ids.map(() => '?').join(', ');
+      const [result] = await this.pool.query(
+        `UPDATE findings SET acked = 1 WHERE acked = 0 AND id IN (${placeholders})`,
+        ids,
+      );
+      return Number(result.affectedRows || 0);
+    }
+
+    // The filter form reuses the SAME predicates the list and summary reads
+    // build, so "accept everything I can see" accepts exactly what was on
+    // screen — not a wider set that happened to be easier to write.
+    const { where, params } = buildFilter(filter || {});
+    const [result] = await this.pool.query(
+      `UPDATE findings SET acked = 1 WHERE acked = 0${where.length ? ` AND ${where.join(' AND ')}` : ''}`,
+      params,
+    );
+    return Number(result.affectedRows || 0);
+  }
+
   // Persists the correlation links for a finding (the ids of the other findings
   // the correlator grouped it with). Stored as JSON. Returns true if a row was
   // updated, false if no finding has that id.

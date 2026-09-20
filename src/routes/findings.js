@@ -14,6 +14,11 @@ const SEVERITIES = ['INFO', 'WARN', 'CRIT'];
 // Parses the shared list/summary filters (hostId/severity/metric/since) off the
 // query string. Returns { filters } on success or { error } (a 400 message) so
 // both endpoints validate identically.
+// How many ids one selection may carry. Past this the honest answer is a
+// filter, not a list: the browser is not sending ten thousand UUIDs, and a
+// query that did would be slower than the UPDATE it is asking for.
+const MAX_ACK_IDS = 1000;
+
 function parseListFilters(query) {
   const filters = {};
   if (query.hostId) filters.hostId = String(query.hostId);
@@ -47,7 +52,11 @@ function parseListFilters(query) {
 // Analysis findings API (staff, user-JWT). Reuses the existing auth middleware.
 // Mounted at /api/findings. `timelineService` is optional: when absent the
 // "what changed before this" endpoint is simply not mounted.
-function createFindingsRouter({ findingStore, timelineService = null }) {
+// `auditLogger` is optional so an older wiring keeps working, but a bulk accept
+// is exactly the action that needs a record: one request can retire a hundred
+// thousand findings, and afterwards the only evidence it was deliberate is the
+// hash-chained log.
+function createFindingsRouter({ findingStore, timelineService = null, auditLogger = null }) {
   const router = express.Router();
 
   // GET /api/findings?hostId=&since= — list findings (viewer+).
@@ -170,6 +179,73 @@ function createFindingsRouter({ findingStore, timelineService = null }) {
         return res.status(404).json({ error: 'Finding not found' });
       }
       res.json({ id, acked: true });
+    })
+  );
+
+  // POST /api/findings/ack — "I have seen these and I accept them", for many
+  // findings at once (operator/admin).
+  //
+  // One at a time does not survive contact with the numbers this produces. A
+  // fleet sitting on 184 668 findings cannot be cleared by 184 668 requests,
+  // and a backlog nobody can clear is a backlog everybody stops reading.
+  //
+  // Two shapes:
+  //   { ids: [...] }        the rows ticked on screen
+  //   { all: true, ...f }   everything matching the CURRENT filters — the same
+  //                         ones the list and summary use, so "accept what I am
+  //                         looking at" accepts exactly that and nothing wider
+  //
+  // `all` has to be explicit. An empty body meaning "acknowledge the entire
+  // history" is the kind of default that gets discovered the hard way.
+  router.post(
+    '/ack',
+    requireAuth,
+    requireRole(ROLES.OPERATOR, ROLES.ADMIN),
+    asyncHandler(async (req, res) => {
+      const body = req.body || {};
+      const wantsAll = body.all === true;
+      const hasIds = Array.isArray(body.ids);
+      if (wantsAll === hasIds) {
+        return res.status(400).json({ error: 'Send either { ids: [...] } or { all: true } with filters, not both' });
+      }
+
+      if (hasIds) {
+        if (!body.ids.length) return res.status(400).json({ error: 'ids must not be empty' });
+        if (body.ids.length > MAX_ACK_IDS) {
+          return res.status(400).json({ error: `ids must hold at most ${MAX_ACK_IDS} findings — use { all: true } with filters instead` });
+        }
+        // Finding ids are UUIDs, so they are strings; anything else is a
+        // mistake worth refusing rather than silently matching nothing.
+        if (!body.ids.every((id) => typeof id === 'string' && id.length && id.length <= 64)) {
+          return res.status(400).json({ error: 'ids must be finding id strings' });
+        }
+        const acked = await findingStore.ackMany({ ids: body.ids });
+        if (auditLogger) {
+          await auditLogger.record(req, {
+            category: 'analysis', action: 'findings_ack_bulk',
+            target: `ids:${body.ids.length}`, detail: `acked=${acked} of ${body.ids.length} selected`,
+          });
+        }
+        return res.json({ acked, requested: body.ids.length });
+      }
+
+      const parsed = parseListFilters(req.query);
+      if (parsed.error) {
+        return res.status(400).json({ error: 'Validation failed', details: parsed.error });
+      }
+      const acked = await findingStore.ackMany({ filter: parsed.filters });
+      if (auditLogger) {
+        // The FILTER is the record. "Accepted 184 632" without saying which
+        // 184 632 is not something an auditor can check afterwards.
+        const scope = Object.keys(parsed.filters).length
+          ? Object.entries(parsed.filters).map(([k, v]) => `${k}=${v instanceof Date ? v.toISOString() : v}`).join(' ')
+          : '(everything)';
+        await auditLogger.record(req, {
+          category: 'analysis', action: 'findings_ack_bulk',
+          target: 'filter', detail: `acked=${acked} scope=${scope}`,
+        });
+      }
+      return res.json({ acked, filter: parsed.filters });
     })
   );
 

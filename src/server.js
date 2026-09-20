@@ -68,6 +68,15 @@ const { createLldpGraphService } = require('./topology/lldpGraphService');
 const { createServiceDependenciesRepository } = require('./repositories/serviceDependenciesRepository');
 const { createHostConnectionsRepository } = require('./repositories/hostConnectionsRepository');
 const { createArpEntriesRepository } = require('./repositories/arpEntriesRepository');
+const { createDeviceEventsRepository } = require('./repositories/deviceEventsRepository');
+const { createDeviceEventsTsdbRepository } = require('./repositories/deviceEventsTsdbRepository');
+const { createDeviceEventIngest } = require('./devices/deviceEventIngest');
+const { createSnmpDevicesRepository } = require('./repositories/snmpDevicesRepository');
+const { createFdbEntriesRepository } = require('./repositories/fdbEntriesRepository');
+const { createSnmpNeighborsRepository } = require('./repositories/snmpNeighborsRepository');
+const { createSnmpTopologyIngest } = require('./devices/snmpTopologyIngest');
+const { createBurstRunsRepository } = require('./repositories/burstRunsRepository');
+const { createBurstService } = require('./probes/burstService');
 const { createInterfaceStatesRepository } = require('./repositories/interfaceStatesRepository');
 const { createInterfaceStateService } = require('./health/interfaceStateService');
 const { createServiceDependencyJob } = require('./topology/serviceDependencyJob');
@@ -590,6 +599,40 @@ function start() {
   const serviceDependenciesRepo = createServiceDependenciesRepository(db);
   const hostConnectionsRepo = createHostConnectionsRepository(db);
   const arpEntriesRepo = createArpEntriesRepository(db);
+  // Device events (syslog now, SNMP traps from stage 03). HIGH-volume telemetry
+  // by the classification in docs/storage-split-audit.md, so it follows the
+  // same dual-store rule as `results`: TimescaleDB when TSDB is configured,
+  // MySQL otherwise. One interface, two implementations, the caller never asks.
+  const deviceEventsRepo = tsdb
+    ? createDeviceEventsTsdbRepository(tsdb)
+    : createDeviceEventsRepository(db);
+  const deviceEventIngest = createDeviceEventIngest({
+    deviceEventsRepo,
+    agentsRepo,
+    arpEntriesRepo,
+    logger,
+  });
+
+  // The SNMP device inventory and what an agent reads off it. The community
+  // string is AES-256-GCM at rest, so the repository takes the same secretBox
+  // `cmdb_config` and `integrations` use; without one, a device simply has no
+  // stored credential rather than an unencrypted one.
+  const snmpDevicesRepo = createSnmpDevicesRepository(db, { secretBox });
+  const fdbEntriesRepo = createFdbEntriesRepository(db);
+  const snmpNeighborsRepo = createSnmpNeighborsRepository(db);
+  const snmpTopologyIngest = createSnmpTopologyIngest({
+    snmpDevicesRepo,
+    fdbEntriesRepo,
+    snmpNeighborsRepo,
+    logger,
+  });
+
+  // Burst mode. The commander is a stable object built at startup (it looks the
+  // live socket up per call), so the service can be built here and handed BOTH
+  // to createApp and to the WebSocket hub — the hub needs it to record the
+  // samples that come back, the routes need it to dispatch.
+  const burstRunsRepo = createBurstRunsRepository(db);
+  const burstService = createBurstService({ burstRunsRepo, agentCommander, logger });
   const interfaceStatesRepo = createInterfaceStatesRepository(db);
   // Interface transitions are recorded at the results-ingest seam — the one place
   // that sees every observation — not reconstructed by polling current state.
@@ -979,6 +1022,14 @@ function start() {
     serviceDependenciesRepo,
     hostConnectionsRepo,
     arpEntriesRepo,
+    deviceEventsRepo,
+    deviceEventIngest,
+    snmpDevicesRepo,
+    fdbEntriesRepo,
+    snmpNeighborsRepo,
+    snmpTopologyIngest,
+    burstRunsRepo,
+    burstService,
     interfaceStatesRepo,
     interfaceStateService,
     serviceDependencyJob,
@@ -1111,6 +1162,7 @@ function start() {
     agentsRepo,
     auditRepo,
     auditEventsRepo,
+    burstService,
     logger,
     path: config.ws.path,
     heartbeatMs: config.ws.heartbeatIntervalMs,

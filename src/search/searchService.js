@@ -26,6 +26,7 @@ function createSearchService({
   locationsRepo = null,
   flowsRepo = null,
   arpEntriesRepo = null,
+  fdbEntriesRepo = null,
   lldpNeighborsRepo = null,
   discoveredDevicesRepo = null,
   cmdbSearch = null,
@@ -50,6 +51,7 @@ function createSearchService({
 
   const agentLabel = (a) => a.display_name || a.hostname || `agent ${a.id}`;
   const agentTarget = (id) => `agent:${id}`;
+  const snmpDeviceTarget = (id) => `snmp-device:${id}`;
 
   // --- resolvers -------------------------------------------------------------
   // Each takes (ctx) and returns an array of hits. Each may throw; the caller
@@ -144,6 +146,42 @@ function createSearchService({
             // A recently-moved binding is exactly the thing a technician chasing
             // an intermittent fault wants flagged, not buried.
             r.macChangedAt ? `binding changed ${r.macChangedAt}` : null,
+          ].filter(Boolean).join(' · ') || null,
+        }));
+      }
+    }
+
+    // The forwarding table: which SWITCH PORT this MAC is on. The only hit that
+    // gives a PHYSICAL address, which is why it exists — everything else on
+    // this screen tells a technician what the device is, and this one tells
+    // them where to walk.
+    //
+    // `port_mac_count` is carried into the detail line deliberately: one MAC on
+    // a port means an end device and a patch panel; forty means an uplink and
+    // one more hop to go. Without it the hit is a lead, not an answer.
+    if (fdbEntriesRepo && typeof fdbEntriesRepo.findByMac === 'function') {
+      const rows = await fdbEntriesRepo.findByMac(mac, { limit: 25 });
+      for (const r of rows) {
+        const where = r.ifName || `bridge port ${r.bridgePort}`;
+        const switchName = r.deviceName || r.deviceHost || `device ${r.deviceId}`;
+        hits.push(makeHit({
+          type: 'port',
+          display_name: `${switchName} ${where}`,
+          target: snmpDeviceTarget(r.deviceId),
+          confidence: 'exact',
+          source: 'fdb_entries (snmp)',
+          last_seen: r.lastSeen,
+          detail: [
+            // 0 means the device reported no VLAN (BRIDGE-MIB only), never a
+            // real id, so it is omitted rather than shown as "VLAN 0".
+            r.vlan ? `VLAN ${r.vlan}` : null,
+            r.portMacCount === 1
+              ? 'one MAC on this port — an end device'
+              : `${r.portMacCount} MACs on this port — likely an uplink`,
+            // An unresolved bridge port is stated, not hidden: the switch said
+            // a port number the bridge-port table could not name, and a
+            // technician deserves to know the name is missing rather than wrong.
+            r.ifName ? null : 'the switch did not name this port',
           ].filter(Boolean).join(' · ') || null,
         }));
       }

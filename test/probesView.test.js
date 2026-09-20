@@ -82,13 +82,13 @@ test('Probes is a FormPage shell: PageHeader with (?), SubTabs, and no info bann
   assert.equal(doc.querySelectorAll('#view .section-head').length, 0, 'the legacy page heading survived');
 });
 
-test('the three tabs are one strip, built by tabStrip, with one tab stop', async (t) => {
+test('the four tabs are one strip, built by tabStrip, with one tab stop', async (t) => {
   const { doc } = boot({ t, routes: SESSION() });
   await settle();
   const strip = doc.querySelector('#view .subtabs[role="tablist"]');
   assert.ok(strip, 'the tabs are not a tablist');
   const tabs = [...strip.querySelectorAll('.subtab')];
-  assert.deepEqual(tabs.map((b) => b.dataset.tab), ['run', 'connection', 'packages']);
+  assert.deepEqual(tabs.map((b) => b.dataset.tab), ['run', 'connection', 'burst', 'packages']);
   assert.equal(tabs.filter((b) => b.getAttribute('aria-selected') === 'true').length, 1);
   assert.equal(tabs.filter((b) => b.tabIndex === 0).length, 1, 'the strip has one tab stop');
   assert.equal(doc.querySelectorAll('#view .seg-btn').length, 0, 'a second tab pattern survived');

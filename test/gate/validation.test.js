@@ -48,6 +48,14 @@ const ACCEPTS_EMPTY = new Set([
   // the button did before it could select a subset. An empty body is the
   // normal case, not a mistake.
   'validateDiagnoseRun',
+  // The device log opens with no filter at all — "the last two hours, every
+  // device, every severity" — which is exactly what a technician wants before
+  // they know what they are looking for. Every field IS optional here; the
+  // dedicated rule below still pins each one's bounds.
+  'validateDeviceEventQuery',
+  // The burst list opens unfiltered — every recent run, newest first — which
+  // is what somebody wants before they know which run they are looking for.
+  'validateBurstQuery',
 ]);
 
 test('every exported validator survives garbage input and rejects an empty object where it has required fields', () => {
@@ -77,6 +85,188 @@ test('every exported validator survives garbage input and rejects an empty objec
     }
   }
   assert.ok(checked >= 35, `only ${checked} validator functions found`);
+});
+
+test('deviceEventValidation: untrusted device input is bounded at the boundary', () => {
+  const {
+    validateDeviceEvent, validateDeviceEventBatch, validateDeviceEventQuery, MAX_EVENTS_PER_BATCH,
+  } = require('../../src/validation/deviceEventValidation');
+
+  // Every field in a device event originated on network equipment anyone on the
+  // customer's LAN can send UDP to. This is a real boundary, not a formality.
+  const ok = {
+    sourceIp: '10.14.0.11',
+    receivedAt: '2026-09-20T09:41:12.418Z',
+    severity: 2,
+    eventType: 'link.down',
+    summary: 'Interface Gi0/1 changed state to down',
+  };
+  assert.ok(validateDeviceEvent(ok), 'a well-formed event is accepted');
+
+  // A row missing what cannot be guessed is rejected outright.
+  assert.equal(validateDeviceEvent({ ...ok, sourceIp: undefined }), null);
+  assert.equal(validateDeviceEvent({ ...ok, sourceIp: 'sw-core-1' }), null, 'a hostname is not an IP');
+  assert.equal(validateDeviceEvent({ ...ok, receivedAt: 'yesterday' }), null);
+  assert.equal(validateDeviceEvent({ ...ok, severity: 9 }), null);
+  assert.equal(validateDeviceEvent({ ...ok, severity: '2' }), null, 'severity is never coerced');
+
+  // An unknown event_type SHAPE degrades to syslog.raw rather than failing the
+  // row: the line is still evidence.
+  assert.equal(validateDeviceEvent({ ...ok, eventType: 'NOT A TYPE' }).eventType, 'syslog.raw');
+  // But a well-formed type this server has never heard of is KEPT, because the
+  // agent ships the classifier and may be newer than the server.
+  assert.equal(validateDeviceEvent({ ...ok, eventType: 'future.thing' }).eventType, 'future.thing');
+
+  // Strings are bounded, so a device cannot write a megabyte into a column.
+  const huge = validateDeviceEvent({ ...ok, summary: 'x'.repeat(100_000), raw: 'y'.repeat(100_000) });
+  assert.ok(huge.summary.length <= 512);
+  assert.ok(huge.raw.length <= 2048);
+
+  // Clock skew is bounded, so a device claiming 1970 cannot overflow the column.
+  assert.equal(validateDeviceEvent({ ...ok, deviceTime: '1970-01-01T00:00:00Z' }).clockSkewMs, null);
+  assert.equal(
+    validateDeviceEvent({ ...ok, deviceTime: '2026-09-20T09:41:09.418Z' }).clockSkewMs,
+    3000,
+  );
+
+  // The batch is capped, and one bad row costs only itself.
+  assert.ok(rejected(validateDeviceEventBatch({}, {})));
+  assert.ok(rejected(validateDeviceEventBatch(new Array(MAX_EVENTS_PER_BATCH + 1).fill(ok), {})));
+  const mixed = validateDeviceEventBatch([ok, { junk: true }, ok], {});
+  assert.equal(mixed.events.length, 2);
+  assert.equal(mixed.skipped, 1);
+
+  // The read query rejects out-of-range rather than silently clamping.
+  assert.ok(rejected(validateDeviceEventQuery({ minutes: 999_999 }, {})));
+  assert.ok(rejected(validateDeviceEventQuery({ limit: 0 }, {})));
+  assert.ok(rejected(validateDeviceEventQuery({ maxSeverity: 8 }, {})));
+  assert.ok(rejected(validateDeviceEventQuery({ transport: 'carrier-pigeon' }, {})));
+  assert.ok(rejected(validateDeviceEventQuery({ deviceId: 'all' }, {})));
+  assert.deepEqual(validateDeviceEventQuery({}, {}), { minutes: 120, limit: 100, offset: 0 });
+});
+
+test('snmpDeviceValidation: an address the server must never poll, and a table off a switch', () => {
+  const {
+    validateSnmpDevice, validateSnmpTopologyBatch, validateFdbEntry,
+    MIN_INTERVAL_SEC, MAX_FDB_PER_DEVICE,
+  } = require('../../src/validation/snmpDeviceValidation');
+
+  // --- the admin's inventory ------------------------------------------------
+  assert.ok(rejected(validateSnmpDevice({})), 'host is required');
+  assert.ok(rejected(validateSnmpDevice({ host: 'http://10.0.0.1' })), 'a host is not a URL');
+  assert.ok(rejected(validateSnmpDevice({ host: '10.0.0.1', port: 0 })));
+  assert.ok(rejected(validateSnmpDevice({ host: '10.0.0.1', port: 99999 })));
+  // v3 is deliberately not offered yet: it needs an auth/priv credential pair
+  // and a key-management story, and half-supporting it is worse than saying so.
+  assert.ok(rejected(validateSnmpDevice({ host: '10.0.0.1', version: '3' })));
+  assert.ok(rejected(validateSnmpDevice({ host: '10.0.0.1', community: 'x'.repeat(500) })));
+  assert.ok(rejected(validateSnmpDevice({ host: '10.0.0.1', collect: ['if', 'nope'] })));
+  // An explicitly empty collect list is refused rather than silently meaning
+  // "everything": a device somebody meant to stop polling should be disabled.
+  assert.ok(rejected(validateSnmpDevice({ host: '10.0.0.1', collect: [] })));
+  // The interval is floored with an ERROR, not clamped: an admin who typed 5
+  // should be told why, not discover later that it became 60.
+  assert.ok(rejected(validateSnmpDevice({ host: '10.0.0.1', intervalSec: 5 })));
+  assert.deepEqual(
+    validateSnmpDevice({ host: '10.14.0.11', intervalSec: MIN_INTERVAL_SEC }).errors,
+    undefined,
+  );
+  // A patch may omit everything, including the otherwise-required host.
+  assert.deepEqual(validateSnmpDevice({ displayName: 'Core' }, { partial: true }).errors, undefined);
+  // Omitting the community leaves the stored one alone; null clears it. An
+  // edit of a display name must never silently wipe a credential.
+  assert.equal(validateSnmpDevice({ displayName: 'x' }, { partial: true }).value.community, undefined);
+  assert.equal(validateSnmpDevice({ community: null }, { partial: true }).value.community, null);
+
+  // --- a forwarding-table row off a switch ---------------------------------
+  const ok = { mac: '00:1b:44:11:3a:b7', bridgePort: 2, vlan: 20, ifIndex: 10002, ifName: 'Gi0/2' };
+  assert.ok(validateFdbEntry(ok));
+  // Normalised through the SAME function the ARP ingest uses, so five
+  // spellings of one MAC resolve identically across both identity sources.
+  assert.equal(validateFdbEntry({ ...ok, mac: '00-1B-44-11-3A-B7' }).mac, '00:1b:44:11:3a:b7');
+  assert.equal(validateFdbEntry({ ...ok, mac: 'not a mac' }), null);
+  // Bridge port 0 means "known but not located"; storing it as a port would
+  // send somebody to a patch panel that does not exist.
+  assert.equal(validateFdbEntry({ ...ok, bridgePort: 0 }), null);
+  // The boundary does not take the agent's filtering on trust: a `self` row
+  // would claim the switch is plugged into itself.
+  assert.equal(validateFdbEntry({ ...ok, status: 'self' }), null);
+  assert.equal(validateFdbEntry({ ...ok, status: 'invalid' }), null);
+  // An out-of-range VLAN degrades to 0 ("the device did not say") rather than
+  // failing the row — the port is still the answer.
+  assert.equal(validateFdbEntry({ ...ok, vlan: 9999 }).vlan, 0);
+
+  // --- the submitted batch --------------------------------------------------
+  // `devices` is required: a body without it is a malformed submission, not a
+  // successful empty cycle.
+  assert.ok(rejected(validateSnmpTopologyBatch({}, {})));
+  assert.ok(rejected(validateSnmpTopologyBatch({ devices: 'lots' }, {})));
+  assert.ok(rejected(validateSnmpTopologyBatch({ devices: new Array(201).fill({ deviceId: 1 }) }, {})));
+
+  const batch = validateSnmpTopologyBatch({
+    devices: [
+      { deviceId: 7, fdb: [ok, { junk: true }], supported: ['fdb', 'nonsense'] },
+      { deviceId: 'not an id', fdb: [] },
+    ],
+    errors: [{ deviceId: 8, error: 'Timeout', code: 'SNMP_TIMEOUT' }],
+  }, {});
+  assert.equal(batch.devices.length, 1, 'the device with no usable id was skipped');
+  assert.equal(batch.skipped, 1);
+  assert.equal(batch.devices[0].fdb.length, 1, 'one bad row costs only itself');
+  assert.equal(batch.devices[0].fdbSkipped, 1);
+  assert.deepEqual(batch.devices[0].supported, ['fdb'], 'an unknown kind is dropped, not stored');
+  assert.equal(batch.failures.length, 1);
+  assert.equal(batch.failures[0].code, 'SNMP_TIMEOUT');
+
+  // A device reporting nothing has NOT said it supports nothing.
+  const quiet = validateSnmpTopologyBatch({ devices: [{ deviceId: 7, fdb: [] }] }, {});
+  assert.equal(quiet.devices[0].supported, null, 'absent is not zero');
+
+  // The per-device FDB cap matches the agent's own; the boundary refuses to be
+  // told otherwise.
+  const huge = validateSnmpTopologyBatch({
+    devices: [{ deviceId: 7, fdb: new Array(MAX_FDB_PER_DEVICE + 500).fill(ok) }],
+  }, {});
+  assert.ok(huge.devices[0].fdb.length <= MAX_FDB_PER_DEVICE);
+});
+
+test('burstValidation: a packet generator is bounded at the boundary', () => {
+  const {
+    validateBurstRequest, validateBurstQuery, MAX_SECONDS, MIN_SECONDS, MAX_HZ,
+  } = require('../../src/validation/burstValidation');
+
+  // A burst makes an agent emit traffic at a rate nothing else here does. The
+  // server REFUSES out of range where the AGENT clamps — deliberate asymmetry:
+  // a person filling in a form should be told 3600 is too long, while an agent
+  // handed a bad number mid-fault should still measure something.
+  assert.deepEqual(validateBurstRequest({ agentId: 9, target: '10.14.0.11' }).errors, undefined);
+  assert.ok(rejected(validateBurstRequest({})));
+  assert.ok(rejected(validateBurstRequest({ target: '10.14.0.11' })), 'agentId is required');
+  assert.ok(rejected(validateBurstRequest({ agentId: 9 })), 'target is required');
+  assert.ok(rejected(validateBurstRequest({ agentId: 9, target: 'http://10.14.0.11' })), 'a target is not a URL');
+  assert.ok(rejected(validateBurstRequest({ agentId: 9, target: '10.14.0.11', seconds: MAX_SECONDS + 1 })));
+  assert.ok(rejected(validateBurstRequest({ agentId: 9, target: '10.14.0.11', seconds: MIN_SECONDS - 1 })));
+  assert.ok(rejected(validateBurstRequest({ agentId: 9, target: '10.14.0.11', hz: MAX_HZ + 1 })));
+  assert.ok(rejected(validateBurstRequest({ agentId: 9, target: '10.14.0.11', hz: 0 })));
+
+  // Only probes that FIT in one tick: a traceroute or a page load takes longer
+  // than the interval, so every tick would overlap the last.
+  assert.ok(rejected(validateBurstRequest({ agentId: 9, target: '10.14.0.11', probe: 'traceroute' })));
+  assert.ok(rejected(validateBurstRequest({ agentId: 9, target: '10.14.0.11', probe: 'pageload' })));
+
+  // A tcp burst without a port is refused rather than defaulted: guessing would
+  // measure a port nobody asked about and report the answer as if they had.
+  assert.ok(rejected(validateBurstRequest({ agentId: 9, target: '10.14.0.11', probe: 'tcp' })));
+  assert.deepEqual(
+    validateBurstRequest({ agentId: 9, target: '10.14.0.11', probe: 'tcp', port: 443 }).errors,
+    undefined,
+  );
+
+  // The read query rejects out of range rather than clamping.
+  assert.ok(rejected(validateBurstQuery({ limit: 0 }, {})));
+  assert.ok(rejected(validateBurstQuery({ limit: 1000 }, {})));
+  assert.ok(rejected(validateBurstQuery({ agentId: 'all' }, {})));
+  assert.deepEqual(validateBurstQuery({}, {}), { limit: 25, offset: 0 });
 });
 
 test('every src/validation module is named in this suite', () => {

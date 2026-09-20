@@ -38,12 +38,13 @@
     interfaces: { path: '/interfaces' },
     nics: { path: '/nics', tabs: ['models', 'agents'], tabKey: 'nicsTab' },
 
-    probes: { path: '/probes', tabs: ['run', 'connection', 'packages'], tabKey: 'probesTab' },
+    probes: { path: '/probes', tabs: ['run', 'connection', 'burst', 'packages'], tabKey: 'probesTab' },
     transactions: { path: '/transaction-tests', tabs: ['list', 'matrix'], tabKey: 'txTab' },
     flows: { path: '/flows' },
     topology: { path: '/topology' },
     delta: { path: '/topology-delta' },
     diagnose: { path: '/diagnose' },
+    deviceLog: { path: '/device-log' },
     troubleshooting: { path: '/troubleshooting' },
     investigation: { path: '/investigate' },
 
@@ -83,7 +84,7 @@
       path: '/settings',
       tabs: ['users', 'auth', 'apitokens', 'agentkey', 'analyse', 'alerting', 'severity', 'runbooks',
         'integrations', 'cmdb', 'ai', 'maintenance', 'database', 'retention', 'types', 'map',
-        'updates', 'agents', 'screening', 'assurance', 'appearance', 'license'],
+        'updates', 'agents', 'snmp', 'screening', 'assurance', 'appearance', 'license'],
       tabKey: 'settingsTab',
     },
     // An article is a destination, so it has an address. The list is pinned to

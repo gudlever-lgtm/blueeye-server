@@ -11,9 +11,11 @@ const {
   fromServiceAssuranceIncidents,
   fromInterfaceTransitions,
   fromPlaybookRuns,
+  fromDeviceEvents,
   fromConfigSnapshots,
   agentHealthRows,
 } = require('./changeFeed');
+const { severityBand } = require('../devices/deviceEventCatalog');
 
 // Fan-out for the changes landing page (Fase 2).
 //
@@ -52,6 +54,8 @@ function createChangesService({
   // deployment without the module simply contributes nothing.
   serviceAssuranceIncidentsRepo = null,
   configSnapshotsRepo = null,
+  // Device events (syslog, and SNMP traps from stage 03).
+  deviceEventsRepo = null,
   serverAgentVersion = null,
   heartbeatStaleMs = DEFAULT_HEARTBEAT_STALE_MS,
   logger = null,
@@ -122,6 +126,15 @@ function createChangesService({
     return fromConfigSnapshots(await configSnapshotsRepo.listBetween({ from, to, limit: PER_SOURCE_LIMIT }), ctx);
   }
 
+  // Device events — warning and above only. See the note on fromDeviceEvents:
+  // the landing page is what CHANGED, and a fleet's notice-level chatter is not
+  // that. maxSeverity is syslog-numeric, so 4 means "warning and worse".
+  async function fetchDeviceEvents({ from, to }, ctx) {
+    if (!deviceEventsRepo || typeof deviceEventsRepo.listBetween !== 'function') return [];
+    const rows = await deviceEventsRepo.listBetween({ from, to, limit: PER_SOURCE_LIMIT, maxSeverity: 4 });
+    return fromDeviceEvents(rows, { ...ctx, severityBand });
+  }
+
   // --- fan-out ---------------------------------------------------------------
 
   // Returns
@@ -144,6 +157,7 @@ function createChangesService({
       ['service_assurance', () => fetchServiceAssuranceIncidents(window)],
       ['playbooks', () => fetchPlaybookRuns(window)],
       ['config', () => fetchConfigSnapshots(window, ctx)],
+      ['device_events', () => fetchDeviceEvents(window, ctx)],
     ];
 
     const settled = await Promise.allSettled(sources.map(([, run]) => run()));

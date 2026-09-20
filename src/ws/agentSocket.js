@@ -35,6 +35,9 @@ function attachAgentWebSocket({
   // and agent-reported operational errors (`agent.error`) so operators see them
   // (and why) under Reporting → Audit.
   auditEventsRepo = null,
+  // Optional: burst mode. The samples stream in live and the finished series
+  // arrives with the command result.
+  burstService = null,
   logger = silentLogger,
   path = '/ws/agent',
   heartbeatMs = 30000,
@@ -213,6 +216,34 @@ function attachAgentWebSocket({
           clearTimeout(waiter.timer);
           waiter.resolve({ delivered: waiter.delivered, acked: true, reply: msg });
         }
+      }
+      // agent -> server: one burst sample, as it happens. Forwarded straight to
+      // the dashboard so the chart draws WHILE the measurement runs rather than
+      // appearing whole at the end.
+      //
+      // Deliberately NOT stored per sample: the authoritative series arrives
+      // with the command result, and a dropped frame here costs one point on a
+      // chart rather than a hole in the record.
+      if (msg.type === 'burst_sample' && typeof notifyDashboard === 'function') {
+        try {
+          notifyDashboard({
+            type: 'burst-sample',
+            payload: {
+              agentId: ws.agentId,
+              runId: msg.id,
+              sample: msg.sample,
+              index: msg.index,
+              total: msg.total,
+            },
+          });
+        } catch { /* the chart is a courtesy */ }
+      }
+      // agent -> server: a finished burst. The whole series, analysed once and
+      // stored with its verdict.
+      if (msg.type === 'command-result' && msg.burst && burstService
+          && typeof burstService.recordResult === 'function') {
+        Promise.resolve(burstService.recordResult(ws.agentId, msg.id, msg.burst))
+          .catch(() => { /* best-effort: a storage failure must not break the hub */ });
       }
       // agent -> server: hsflowd exporter status (the enable/disable feedback loop).
       if (msg.type === 'sflow.status') {

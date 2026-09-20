@@ -45,6 +45,7 @@ const { createSnmpDevicesRepository } = require(path.join(ROOT, 'src/repositorie
 const { createDeviceInterfacesRepository } = require(path.join(ROOT, 'src/repositories/deviceInterfacesRepository'));
 const { createDeviceCounterSamplesRepository } = require(path.join(ROOT, 'src/repositories/deviceCounterSamplesRepository'));
 const { createSnmpCredentialProfilesRepository } = require(path.join(ROOT, 'src/repositories/snmpCredentialProfilesRepository'));
+const { AUTH_PROTOS, PRIV_PROTOS } = require(path.join(ROOT, 'src/validation/snmpProfileValidation'));
 
 // A stand-in for the real secretBox. The encryption itself is tested
 // elsewhere; what these checks need is a value that goes into a BLOB column
@@ -262,13 +263,34 @@ check('snmp credential profiles: create, resolve, and never hand back a secret',
   // v3, which migration 112 added to the ENUM. An ENUM value the table does
   // not have is exactly the failure a scripted pool cannot see: MySQL either
   // refuses it or, in a non-strict mode, stores an empty string.
+  // EVERY protocol the validator accepts must be one the column has. This is
+  // the exact drift a scripted pool cannot see: the validator says yes, the
+  // INSERT says "Data truncated for column", and an admin gets a 500 for a
+  // setting the form offered them. Asserted against information_schema rather
+  // than a copy of the list, so the schema stays the authority.
+  const enumValues = async (column) => {
+    const [[row]] = await pool.query(
+      `SELECT COLUMN_TYPE AS t FROM information_schema.COLUMNS
+        WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'snmp_credential_profiles'
+          AND COLUMN_NAME = ?`,
+      [column],
+    );
+    return [...String(row.t).matchAll(/'([^']+)'/g)].map((m) => m[1]);
+  };
+  const sorted = (a) => [...a].sort();
+  assert.deepStrictEqual(sorted(await enumValues('v3_auth_proto')), sorted(AUTH_PROTOS),
+    'the auth protocols the validator accepts are not the ones the column has');
+  assert.deepStrictEqual(sorted(await enumValues('v3_priv_proto')), sorted(PRIV_PROTOS),
+    'the priv protocols the validator accepts are not the ones the column has');
+
   const v3 = await repo.create({
     name: 'Site v3', version: '3', v3User: 'blueeye',
     v3AuthProto: 'sha256', v3AuthKey: 'authauthauth',
-    v3PrivProto: 'aes128', v3PrivKey: 'privprivpriv',
+    v3PrivProto: 'aes', v3PrivKey: 'privprivpriv',
   });
   assert.strictEqual(v3.version, '3', 'the version ENUM did not keep 3');
   assert.strictEqual(v3.v3AuthProto, 'sha256');
+  assert.strictEqual(v3.v3PrivProto, 'aes');
 
   const resolved = await repo.resolveWithSecret(v3.id);
   assert.strictEqual(resolved.v3AuthKey, 'authauthauth', 'the one read that decrypts did not');

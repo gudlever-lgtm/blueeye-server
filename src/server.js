@@ -639,12 +639,9 @@ function start() {
   const counterSamplesRepo = tsdb
     ? createDeviceCounterSamplesTsdbRepository(tsdb)
     : createDeviceCounterSamplesRepository(db);
-  const snmpCounterIngest = createSnmpCounterIngest({
-    snmpDevicesRepo,
-    deviceInterfacesRepo,
-    counterSamplesRepo,
-    logger,
-  });
+  // The counter ingest is built AFTER the analysis pipeline (further down),
+  // because it feeds samples straight into it and a getter here would be
+  // evaluated at destructuring time.
 
   // Burst mode. The commander is a stable object built at startup (it looks the
   // live socket up per call), so the service can be built here and handed BOTH
@@ -783,6 +780,18 @@ function start() {
     licensed: () => featureGate.isFeatureEnabled('analysis'),
     // Push findings to connected dashboards (browsers), not to agents.
     publishFinding: (hostId, message) => (dashboardWs ? dashboardWs.broadcast(message) : 0),
+    logger,
+  });
+
+  // Interface counters into the SAME detector the agent metrics go through.
+  // Per-port errors, discards and utilisation have been collected, stored and
+  // shown on a screen, and until now nothing evaluated them: there was no MAD,
+  // no z-score and no flatline on a single interface counter anywhere.
+  const snmpCounterIngest = createSnmpCounterIngest({
+    snmpDevicesRepo,
+    deviceInterfacesRepo,
+    counterSamplesRepo,
+    analysisPipeline,
     logger,
   });
   // Offline GeoIP/ASN provider (EU-sourced range DB; config.geo.dbPath). Created

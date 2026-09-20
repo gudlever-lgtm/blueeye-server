@@ -1,6 +1,7 @@
 'use strict';
 
 const { extractSamples } = require('./ingest');
+const { extractCycleSamples } = require('./deviceIngest');
 
 const silentLogger = { info() {}, warn() {}, error() {}, debug() {} };
 
@@ -17,6 +18,7 @@ function createAnalysisPipeline({
   config,
   publishFinding = () => {},
   extract = extractSamples,
+  extractDevice = extractCycleSamples,
   correlator = null,
   correlationWindowMs = 60000,
   eventCaseService = null,
@@ -100,43 +102,45 @@ function createAnalysisPipeline({
   // publishes any findings. Resilient: a failure on one finding doesn't abort
   // the rest, and analysis errors never break ingestion (the caller persists
   // first). Returns the findings produced.
-  async function processResults(hostId, payloads) {
-    // Gated by BOTH the license (may the customer use it) and the config flag
-    // (has the customer switched it on).
-    if (!config || !config.analysisEnabled || !licensed()) return [];
+  // Evaluates a list of MetricSamples and stores what comes out. Shared by the
+  // agent path and the device path: where a sample CAME FROM is the extractor's
+  // business, and everything after it — detect, save, publish, group, correlate,
+  // alert — is identical, which is the point of having one findings model
+  // rather than a second one for switches.
+  async function evaluateSamples(samples) {
     const produced = [];
-    const batch = Array.isArray(payloads) ? payloads : [];
-    for (const payload of batch) {
-      let samples = [];
+    for (const sample of Array.isArray(samples) ? samples : []) {
+      let finding = null;
       try {
-        samples = extract(hostId, payload);
+        finding = detector.evaluate(sample);
       } catch (err) {
-        logger.warn(`analysis: could not extract samples (${err.message})`);
+        logger.error(`analysis: detector threw on ${sample.metric} (${err.message})`);
         continue;
       }
-      for (const sample of samples) {
-        let finding = null;
+      if (!finding) continue;
+      try {
+        await findingStore.save(finding);
+        produced.push(finding);
+        // Push to UI over the SAME WebSocket as a 'finding' event.
         try {
-          finding = detector.evaluate(sample);
+          publishFinding(finding.hostId, { type: 'finding', payload: finding });
         } catch (err) {
-          logger.error(`analysis: detector threw on ${sample.metric} (${err.message})`);
-          continue;
+          logger.warn(`analysis: publish failed (${err.message})`);
         }
-        if (!finding) continue;
-        try {
-          await findingStore.save(finding);
-          produced.push(finding);
-          // Push to UI over the SAME WebSocket as a 'finding' event.
-          try {
-            publishFinding(finding.hostId, { type: 'finding', payload: finding });
-          } catch (err) {
-            logger.warn(`analysis: publish failed (${err.message})`);
-          }
-        } catch (err) {
-          logger.error(`analysis: could not save finding (${err.message})`);
-        }
+      } catch (err) {
+        logger.error(`analysis: could not save finding (${err.message})`);
       }
     }
+    return produced;
+  }
+
+  // Everything that happens to a batch of findings AFTER they are stored:
+  // event grouping, root-cause correlation, alerting, outbound integrations.
+  // Shared by the agent path and the device path — a finding about a switch
+  // port is grouped, correlated and alerted on exactly like one about a host,
+  // which is the whole argument for extending `findings` rather than giving
+  // devices a second table.
+  async function finishBatch(produced) {
     // Event cases: place each produced finding into an open event on its
     // device (grouping within the window) or open a new one. Sequential so that
     // same-batch findings on one host land in the same event. Best-effort —
@@ -185,7 +189,43 @@ function createAnalysisPipeline({
     return produced;
   }
 
-  return { processResults };
+  async function processResults(hostId, payloads) {
+    // Gated by BOTH the license (may the customer use it) and the config flag
+    // (has the customer switched it on).
+    if (!config || !config.analysisEnabled || !licensed()) return [];
+    const produced = [];
+    const batch = Array.isArray(payloads) ? payloads : [];
+    for (const payload of batch) {
+      let samples = [];
+      try {
+        samples = extract(hostId, payload);
+      } catch (err) {
+        logger.warn(`analysis: could not extract samples (${err.message})`);
+        continue;
+      }
+      produced.push(...await evaluateSamples(samples));
+    }
+    return finishBatch(produced);
+  }
+
+  // The DEVICE path. Counter samples from a polled switch, already stored, run
+  // through the same detector and the same batch handling as an agent's own
+  // metrics. `hostId` is the polling agent, so every per-agent read still finds
+  // these; the finding also carries the device and the port (migration 110).
+  async function processDeviceSamples(hostId, rows) {
+    if (!config || !config.analysisEnabled || !licensed()) return [];
+    let samples = [];
+    try {
+      samples = extractDevice(rows, { hostId });
+    } catch (err) {
+      logger.warn(`analysis: could not extract device samples (${err.message})`);
+      return [];
+    }
+    const produced = await evaluateSamples(samples);
+    return finishBatch(produced);
+  }
+
+  return { processResults, processDeviceSamples, evaluateSamples };
 }
 
 module.exports = { createAnalysisPipeline };

@@ -48,6 +48,12 @@ function createDetector({ baselines, config = loadConfig(), intervalMs = DEFAULT
     const base = {
       id: crypto.randomUUID(),
       hostId: sample.hostId,
+      // Carried straight through from the sample when it has them (migration
+      // 110). A sample from an agent has neither and the finding keeps the
+      // shape it has always had; a sample from a switch port has both, so the
+      // finding can say WHICH port rather than only which agent polled it.
+      deviceId: sample.deviceId ?? null,
+      interfaceId: sample.interfaceId ?? null,
       metric: sample.metric,
       observed: sample.value,
       baseline: baseline.median,

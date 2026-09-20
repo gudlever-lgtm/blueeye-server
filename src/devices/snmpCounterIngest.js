@@ -28,6 +28,10 @@ function createSnmpCounterIngest({
   snmpDevicesRepo,
   deviceInterfacesRepo,
   counterSamplesRepo,
+  // The analysis pipeline. Optional: without it the samples are stored and
+  // nothing evaluates them, which is exactly the state per-interface counters
+  // were in before this — collected, shown, never analysed.
+  analysisPipeline = null,
   logger = null,
   now = () => new Date(),
 }) {
@@ -43,6 +47,7 @@ function createSnmpCounterIngest({
 
     let stored = 0;
     let samples = 0;
+    let findings = 0;
     let refused = 0;
     let unresolved = 0;
     const discontinuities = {};
@@ -64,6 +69,7 @@ function createSnmpCounterIngest({
         const previous = await counterSamplesRepo.latestForDevice(d.deviceId);
         const ports = await deviceInterfacesRepo.listForDevice(d.deviceId, { limit: 4096 });
         const speedById = new Map(ports.map((p) => [p.id, p.speedMbps]));
+        const nameById = new Map(ports.map((p) => [p.id, p.ifName]));
         // Ports whose ifIndex moved on THIS cycle's topology poll. The
         // interface ingest reported them; a rate across that boundary is two
         // different ports subtracted from each other.
@@ -114,7 +120,23 @@ function createSnmpCounterIngest({
           rows.push({ ts: readAt, deviceId: d.deviceId, interfaceId, ...sample });
         }
 
-        if (rows.length) samples += await counterSamplesRepo.insertMany(rows);
+        if (rows.length) {
+          samples += await counterSamplesRepo.insertMany(rows);
+          // Run the detector over the rates. Best-effort and AFTER the write,
+          // like the agent path: the measurement is the record, and an analysis
+          // failure must never cost it.
+          if (analysisPipeline && typeof analysisPipeline.processDeviceSamples === 'function') {
+            try {
+              // Decorated with the port name so an explanation reads as a place
+              // rather than as an id.
+              const named = rows.map((r) => ({ ...r, ifName: nameById.get(r.interfaceId) || null }));
+              const found = await analysisPipeline.processDeviceSamples(String(agentId), named);
+              findings += found.length;
+            } catch (err) {
+              if (logger) logger.warn(`snmp-counters: analysis failed for device ${d.deviceId} (${err.message})`);
+            }
+          }
+        }
 
         // The device clock, for the NEXT cycle's reboot check. Written after
         // the samples so a failed insert does not move the reference forward.
@@ -142,7 +164,7 @@ function createSnmpCounterIngest({
       }
     }
 
-    return { stored, samples, unresolved, refused, failuresRecorded, discontinuities, deviceErrors };
+    return { stored, samples, findings, unresolved, refused, failuresRecorded, discontinuities, deviceErrors };
   }
 
   return { ingest };

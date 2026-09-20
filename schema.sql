@@ -148,6 +148,8 @@ CREATE TABLE IF NOT EXISTS `results` (
 CREATE TABLE IF NOT EXISTS `findings` (
   `id` CHAR(36) NOT NULL,
   `host_id` VARCHAR(255) NOT NULL,
+  `device_id` INT UNSIGNED NULL DEFAULT NULL,
+  `interface_id` BIGINT UNSIGNED NULL DEFAULT NULL,
   `metric` VARCHAR(255) NOT NULL,
   `severity` ENUM('INFO', 'WARN', 'CRIT') NOT NULL,
   `original_severity` ENUM('INFO','WARN','CRIT') DEFAULT NULL,
@@ -169,7 +171,9 @@ CREATE TABLE IF NOT EXISTS `findings` (
   KEY idx_findings_created (created_at),
   KEY idx_findings_event_case (event_case_id),
   CONSTRAINT fk_findings_event_case FOREIGN KEY (event_case_id) REFERENCES event_cases (id) ON DELETE SET NULL,
-  CONSTRAINT fk_findings_severity_rule FOREIGN KEY (severity_rule_id) REFERENCES event_severity_rules(id) ON DELETE SET NULL
+  CONSTRAINT fk_findings_severity_rule FOREIGN KEY (severity_rule_id) REFERENCES event_severity_rules(id) ON DELETE SET NULL,
+  KEY idx_findings_device_created (`device_id`, `created_at`),
+  KEY idx_findings_interface_created (`interface_id`, `created_at`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- 010 — geo-enriched flow records. One row per reported flow. The external

@@ -2202,10 +2202,14 @@ function makeFindingStore(overrides = {}) {
       return { matched: hits.length, changed: hits.length };
     }),
     list: overrides.list || (async (hostId, since, limit, until, filters = {}) => {
-      const { severity, metric } = filters || {};
+      const { severity, metric, deviceId, interfaceId } = filters || {};
       let out = rows.filter((f) => (!hostId || f.hostId === hostId)
         && (!severity || f.severity === severity)
         && (!metric || f.metric === metric)
+        // A finding about a switch port carries the POLLING agent in hostId as
+        // well, so the device filter NARROWS rather than replaces.
+        && (!deviceId || Number(f.deviceId) === Number(deviceId))
+        && (!interfaceId || Number(f.interfaceId) === Number(interfaceId))
         && (!since || new Date(f.createdAt || 0) >= new Date(since))
         && (!until || new Date(f.createdAt || 0) <= new Date(until)));
       out = out.sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0)); // newest-first, like the real store
@@ -3146,7 +3150,12 @@ function makeApp(overrides = {}) {
   // wrong answer is invisible until somebody acts on it.
   const snmpCounterIngest = overrides.snmpCounterIngest === undefined
     ? ((snmpDevicesRepo && deviceInterfacesRepo && counterSamplesRepo)
-      ? createSnmpCounterIngest({ snmpDevicesRepo, deviceInterfacesRepo, counterSamplesRepo })
+      ? createSnmpCounterIngest({
+        snmpDevicesRepo, deviceInterfacesRepo, counterSamplesRepo,
+        // The REAL pipeline too when one is wired, so a port's errors reaching
+        // the detector is exercised end-to-end rather than assumed.
+        analysisPipeline: overrides.analysisPipeline || null,
+      })
       : null)
     : overrides.snmpCounterIngest;
   // The REAL ingest over the fake repositories, so sender resolution and the

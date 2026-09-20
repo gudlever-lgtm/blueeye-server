@@ -173,6 +173,48 @@ a moment later on its own ingest path.
 
 ## What is stored, and what is not
 
+### `device_interfaces` — the ports, and why the NAME is the identity
+
+Migration 108. One row per port per device, keyed `UNIQUE (device_id, if_name)`.
+
+The agent had been sending this list on every poll since the feature shipped,
+and the validator had been accepting it — nothing stored it, so the
+ifIndex→ifName table crossed the wire and was thrown away every cycle. It is the
+join every per-port measurement needs.
+
+**ifIndex is not the identity, and that is the whole design.** The MIB only
+guarantees ifIndex is stable *between re-initialisations of the network
+management system*. A reboot may renumber; inserting a module into a chassis
+almost always renumbers everything after it. Key a time series on ifIndex and
+the 18th's numbers for `Gi1/0/12` sit beside the 19th's for a `Gi1/0/12` that is
+now a different physical port — and nothing in the data says so.
+
+So `if_index` is a mutable **attribute** of the row, `if_index_changed_at`
+records when it last moved, and `upsertMany()` **reports** the move:
+
+```js
+const { upserted, renumbered } = await deviceInterfacesRepo.upsertMany(deviceId, interfaces);
+// renumbered: [{ ifName: 'GigabitEthernet1/0/12', from: 10012, to: 10060 }]
+```
+
+The poll that notices the move is the poll whose counter delta spans two
+different ports, so the caller marks that cycle discontinuous rather than
+storing a fabricated number.
+
+**`name_source` says which OID the name came from** — `ifName`, `ifDescr` or
+`ifIndex`. Not every switch implements ifName; some only have ifDescr, which is
+less stable, and a few name a port with neither. A row built from the weaker one
+says so rather than leaving it to be assumed.
+
+The `ifIndex.<n>` fallback is an identity for a row in **this device's own port
+list**. It is deliberately kept out of the forwarding table: `fdb.ifName` stays
+`null` when the switch did not name the port, because that answer sends somebody
+walking to a patch panel, and `ifIndex.7` is not a place.
+
+Retention is **180 days** (`RETENTION_DEVICE_INTERFACE_DAYS`) — the longest of
+the SNMP dimensions, because a counter sample points at one of these rows and
+purging the row early would strand the measurements that reference it.
+
 ### `fdb_entries` — ageing, not history
 
 Rows are upserted on `last_seen` and aged out by retention (**30 days**,
@@ -239,6 +281,7 @@ recently-seen port hit lands at the top on its own.
 |---|---|
 | `GET /api/snmp-devices` | viewer+ — the inventory, with the polling agent's name |
 | `GET /api/snmp-devices/:id` | viewer+ — the device, its port table and its neighbours. A failing port table still lets the page open: the poll state and the error are worth seeing |
+| `GET /api/snmp-devices/:id/interfaces` | viewer+ — the PORTS on the device (migration 108), without the forwarding table beside them. 404 for an unknown device rather than an empty list: "this switch has no ports" and "there is no such switch" are different answers |
 | `POST /api/snmp-devices` | **admin** — 201, or **409** for a duplicate address+port, or **400** for an address the server must never poll |
 | `PATCH /api/snmp-devices/:id` | **admin** |
 | `DELETE /api/snmp-devices/:id` | **admin** — 204; the port table and neighbours cascade |

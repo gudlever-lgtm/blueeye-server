@@ -22,6 +22,7 @@ const { createAuditLogger } = require('../src/services/complianceLogger');
 const { createInterfaceStateService } = require('../src/health/interfaceStateService');
 const { createDeviceEventIngest } = require('../src/devices/deviceEventIngest');
 const { createSnmpTopologyIngest } = require('../src/devices/snmpTopologyIngest');
+const { createSnmpCounterIngest } = require('../src/devices/snmpCounterIngest');
 const { createBurstService } = require('../src/probes/burstService');
 const { createSnapshotService } = require('../src/evidence/snapshotService');
 const { createBlastRadiusService } = require('../src/topology/blastRadiusService');
@@ -451,7 +452,7 @@ function makeDeviceEventsRepo(overrides = {}) {
 // never return a community, and only `listForAgentWithSecret` does. A fake that
 // leaked it everywhere would let a route accidentally return one and still pass
 // its test.
-function makeSnmpDevicesRepo(overrides = {}) {
+function makeSnmpDevicesRepo(overrides = {}, { credentialProfilesRepo = null } = {}) {
   const rows = [];
   let seq = 0;
   const iso = (v) => (v == null ? null : (v instanceof Date ? v.toISOString() : new Date(v).toISOString()));
@@ -465,10 +466,14 @@ function makeSnmpDevicesRepo(overrides = {}) {
     locationId: r.location_id,
     collect: r.collect,
     intervalSec: r.interval_sec,
+    counterIntervalSec: r.counter_interval_sec ?? null,
+    credentialProfileId: r.credential_profile_id ?? null,
     enabled: !!r.enabled,
     lastPolledAt: iso(r.last_polled_at),
     lastOkAt: iso(r.last_ok_at),
     lastError: r.last_error,
+    lastUptimeTicks: r.last_uptime_ticks ?? null,
+    lastUptimeAt: iso(r.last_uptime_at),
     supported: r.supported,
     createdAt: iso(r.created_at),
     updatedAt: iso(r.updated_at),
@@ -489,9 +494,36 @@ function makeSnmpDevicesRepo(overrides = {}) {
       return r ? safe(r) : null;
     }),
     // The ONE read that carries the credential, and only for the polling agent.
-    listForAgentWithSecret: overrides.listForAgentWithSecret || (async (agentId) => rows
-      .filter((r) => r.agent_id === Number(agentId) && r.enabled)
-      .map((r) => ({ ...safe(r), community: r.community ?? null }))),
+    //
+    // It runs the REAL resolution chain when a profiles repo is wired — device
+    // override, then the profile the device names, then its site's, then the
+    // global default — because that chain is the behaviour under test, and a
+    // fake that skipped it would let a broken resolution pass.
+    listForAgentWithSecret: overrides.listForAgentWithSecret || (async (agentId) => {
+      const mine = rows.filter((r) => r.agent_id === Number(agentId) && r.enabled);
+      const out = [];
+      for (const r of mine) {
+        const device = safe(r);
+        if (r.community) {
+          out.push({
+            ...device,
+            community: r.community,
+            credential: { version: device.version, community: r.community, source: 'device' },
+          });
+          continue;
+        }
+        let credential = null;
+        if (credentialProfilesRepo) {
+          const profileId = await credentialProfilesRepo.resolveProfileIdFor({
+            profileId: device.credentialProfileId, locationId: device.locationId,
+          });
+          const resolved = profileId ? await credentialProfilesRepo.resolveWithSecret(profileId) : null;
+          if (resolved) credential = { ...resolved, source: 'profile' };
+        }
+        out.push({ ...device, community: credential ? (credential.community ?? null) : null, credential });
+      }
+      return out;
+    }),
     create: overrides.create || (async (v) => {
       const now = new Date();
       const row = {
@@ -505,8 +537,11 @@ function makeSnmpDevicesRepo(overrides = {}) {
         location_id: v.locationId ?? null,
         collect: v.collect ?? ['if', 'fdb', 'lldp', 'vlan'],
         interval_sec: v.intervalSec ?? 300,
+        counter_interval_sec: v.counterIntervalSec ?? null,
+        credential_profile_id: v.credentialProfileId ?? null,
         enabled: v.enabled === undefined ? true : !!v.enabled,
         last_polled_at: null, last_ok_at: null, last_error: null, supported: null,
+        last_uptime_ticks: null, last_uptime_at: null,
         created_at: now, updated_at: now,
       };
       rows.push(row);
@@ -518,7 +553,8 @@ function makeSnmpDevicesRepo(overrides = {}) {
       const map = {
         agentId: 'agent_id', host: 'host', port: 'port', version: 'version',
         displayName: 'display_name', locationId: 'location_id', collect: 'collect',
-        intervalSec: 'interval_sec', community: 'community',
+        intervalSec: 'interval_sec', counterIntervalSec: 'counter_interval_sec',
+        credentialProfileId: 'credential_profile_id', community: 'community',
       };
       for (const [k, col] of Object.entries(map)) {
         if (patch[k] !== undefined) r[col] = patch[k];
@@ -547,6 +583,13 @@ function makeSnmpDevicesRepo(overrides = {}) {
         r.last_error = error == null ? null : String(error).slice(0, 255);
       }
     }),
+    // The device clock a counter cycle read, for the NEXT cycle's reboot check.
+    recordCounterPoll: overrides.recordCounterPoll || (async (id, { uptimeTicks = null, at = new Date() } = {}) => {
+      const r = rows.find((x) => x.id === Number(id));
+      if (!r) return;
+      r.last_uptime_ticks = uptimeTicks;
+      r.last_uptime_at = at;
+    }),
   };
 }
 
@@ -556,7 +599,9 @@ function makeFdbEntriesRepo(overrides = {}) {
   const iso = (v) => (v == null ? null : (v instanceof Date ? v.toISOString() : new Date(v).toISOString()));
   const mapOut = (r) => ({
     id: r.id, deviceId: r.device_id, mac: r.mac, vlan: r.vlan,
-    bridgePort: r.bridge_port, ifIndex: r.if_index, ifName: r.if_name,
+    bridgePort: r.bridge_port, prevBridgePort: r.prev_bridge_port ?? null,
+    moveCount: r.move_count || 0, lastMoveAt: iso(r.last_move_at),
+    ifIndex: r.if_index, ifName: r.if_name,
     status: r.status, portMacCount: r.port_mac_count,
     firstSeen: iso(r.first_seen), lastSeen: iso(r.last_seen),
   });
@@ -572,6 +617,14 @@ function makeFdbEntriesRepo(overrides = {}) {
         const existing = rows.find((r) => r.device_id === Number(deviceId)
           && r.vlan === (e.vlan ?? 0) && r.mac === e.mac);
         if (existing) {
+          // A MAC that MOVED is the loop signature (migration 111), and the
+          // fake has to record it or a detector test would pass against a
+          // store that silently overwrote the evidence.
+          if (existing.bridge_port !== e.bridgePort) {
+            existing.prev_bridge_port = existing.bridge_port;
+            existing.move_count = (existing.move_count || 0) + 1;
+            existing.last_move_at = at;
+          }
           existing.bridge_port = e.bridgePort;
           existing.if_index = e.ifIndex ?? null;
           existing.if_name = e.ifName ?? null;
@@ -581,7 +634,8 @@ function makeFdbEntriesRepo(overrides = {}) {
         } else {
           rows.push({
             id: (seq += 1), device_id: Number(deviceId), mac: e.mac, vlan: e.vlan ?? 0,
-            bridge_port: e.bridgePort, if_index: e.ifIndex ?? null, if_name: e.ifName ?? null,
+            bridge_port: e.bridgePort, prev_bridge_port: null, move_count: 0, last_move_at: null,
+            if_index: e.ifIndex ?? null, if_name: e.ifName ?? null,
             status: e.status || 'learned', port_mac_count: e.portMacCount ?? 1,
             first_seen: at, last_seen: at,
           });
@@ -599,6 +653,11 @@ function makeFdbEntriesRepo(overrides = {}) {
       .filter((r) => r.device_id === Number(deviceId) && (!ifName || r.if_name === ifName))
       .sort((a, b) => a.port_mac_count - b.port_mac_count || a.bridge_port - b.bridge_port)
       .slice(0, limit).map(mapOut)),
+    movingMacs: overrides.movingMacs || (async (deviceId, { since, limit = 500 } = {}) => rows
+      .filter((r) => r.device_id === Number(deviceId) && r.last_move_at
+        && new Date(r.last_move_at) >= new Date(since))
+      .sort((a, b) => b.move_count - a.move_count)
+      .slice(0, limit).map(mapOut)),
     listForPort: overrides.listForPort || (async (deviceId, bridgePort, { limit = 200 } = {}) => rows
       .filter((r) => r.device_id === Number(deviceId) && r.bridge_port === Number(bridgePort))
       .slice(0, limit).map(mapOut)),
@@ -608,6 +667,249 @@ function makeFdbEntriesRepo(overrides = {}) {
       const before = rows.length;
       for (let i = rows.length - 1; i >= 0; i -= 1) {
         if (new Date(rows[i].last_seen) < cutoff) rows.splice(i, 1);
+      }
+      return before - rows.length;
+    }),
+  };
+}
+
+function makeSnmpProfilesRepo(overrides = {}) {
+  const rows = [];
+  let seq = 0;
+  const iso = (v) => (v == null ? null : (v instanceof Date ? v.toISOString() : new Date(v).toISOString()));
+  // The SAFE shape: whether a secret is set, never what it is.
+  const safe = (r) => ({
+    id: r.id, name: r.name, locationId: r.location_id, version: r.version,
+    v3AuthProto: r.v3_auth_proto ?? null, v3PrivProto: r.v3_priv_proto ?? null,
+    v3Context: r.v3_context ?? null,
+    hasCommunity: !!r.community, v3User: r.v3_user ?? null,
+    hasV3AuthKey: !!r.v3_auth_key, hasV3PrivKey: !!r.v3_priv_key,
+    createdAt: iso(r.created_at), updatedAt: iso(r.updated_at),
+  });
+
+  return {
+    rows,
+    list: overrides.list || (async () => rows
+      .sort((a, b) => (a.location_id == null ? 0 : 1) - (b.location_id == null ? 0 : 1)
+        || String(a.name).localeCompare(String(b.name)))
+      .map(safe)),
+    findById: overrides.findById || (async (id) => {
+      const r = rows.find((x) => x.id === Number(id));
+      return r ? safe(r) : null;
+    }),
+    findByName: overrides.findByName || (async (name) => {
+      const r = rows.find((x) => x.name === name);
+      return r ? { id: r.id, name: r.name } : null;
+    }),
+    findGlobalDefault: overrides.findGlobalDefault || (async () => {
+      const r = rows.filter((x) => x.location_id == null).sort((a, b) => a.id - b.id)[0];
+      return r ? safe(r) : null;
+    }),
+    create: overrides.create || (async (v) => {
+      const now = new Date();
+      const row = {
+        id: (seq += 1), name: v.name, location_id: v.locationId ?? null,
+        version: v.version || '2c', community: v.community ?? null,
+        v3_user: v.v3User ?? null, v3_auth_proto: v.v3AuthProto ?? null,
+        v3_auth_key: v.v3AuthKey ?? null, v3_priv_proto: v.v3PrivProto ?? null,
+        v3_priv_key: v.v3PrivKey ?? null, v3_context: v.v3Context ?? null,
+        created_at: now, updated_at: now,
+      };
+      rows.push(row);
+      return safe(row);
+    }),
+    update: overrides.update || (async (id, patch) => {
+      const r = rows.find((x) => x.id === Number(id));
+      if (!r) return null;
+      const map = {
+        name: 'name', locationId: 'location_id', version: 'version',
+        community: 'community', v3User: 'v3_user', v3AuthProto: 'v3_auth_proto',
+        v3AuthKey: 'v3_auth_key', v3PrivProto: 'v3_priv_proto',
+        v3PrivKey: 'v3_priv_key', v3Context: 'v3_context',
+      };
+      for (const [k, col] of Object.entries(map)) {
+        if (patch[k] !== undefined) r[col] = patch[k];
+      }
+      r.updated_at = new Date();
+      return safe(r);
+    }),
+    remove: overrides.remove || (async (id) => {
+      const i = rows.findIndex((x) => x.id === Number(id));
+      if (i < 0) return false;
+      rows.splice(i, 1);
+      return true;
+    }),
+    deviceCount: overrides.deviceCount || (async () => 0),
+    // THE ONE READ THAT DECRYPTS, mirrored here so a test can exercise the
+    // resolution chain end-to-end.
+    resolveWithSecret: overrides.resolveWithSecret || (async (id) => {
+      const r = rows.find((x) => x.id === Number(id));
+      if (!r) return null;
+      const level = !r.v3_user ? null
+        : (r.v3_auth_key && r.v3_priv_key ? 'authPriv' : (r.v3_auth_key ? 'authNoPriv' : 'noAuthNoPriv'));
+      return {
+        profileId: r.id, profileName: r.name, version: r.version,
+        community: r.community ?? null, v3User: r.v3_user ?? null,
+        v3AuthProto: r.v3_auth_proto ?? null, v3AuthKey: r.v3_auth_key ?? null,
+        v3PrivProto: r.v3_priv_proto ?? null, v3PrivKey: r.v3_priv_key ?? null,
+        v3Context: r.v3_context ?? null, securityLevel: level,
+      };
+    }),
+    // device override -> site profile -> global default.
+    resolveProfileIdFor: overrides.resolveProfileIdFor || (async ({ profileId = null, locationId = null } = {}) => {
+      if (profileId) return Number(profileId);
+      if (locationId) {
+        const site = rows.filter((r) => r.location_id === Number(locationId)).sort((a, b) => a.id - b.id)[0];
+        if (site) return site.id;
+      }
+      const global = rows.filter((r) => r.location_id == null).sort((a, b) => a.id - b.id)[0];
+      return global ? global.id : null;
+    }),
+  };
+}
+
+function makeDeviceInterfacesRepo(overrides = {}) {
+  const rows = [];
+  let seq = 0;
+  const iso = (v) => (v == null ? null : (v instanceof Date ? v.toISOString() : new Date(v).toISOString()));
+  const mapOut = (r) => ({
+    id: r.id, deviceId: r.device_id, ifName: r.if_name, nameSource: r.name_source,
+    ifIndex: r.if_index, ifIndexChangedAt: iso(r.if_index_changed_at),
+    ifAlias: r.if_alias, ifDescr: r.if_descr, ifType: r.if_type,
+    speedMbps: r.speed_mbps, adminStatus: r.admin_status, operStatus: r.oper_status,
+    physAddress: r.phys_address, firstSeen: iso(r.first_seen), lastSeen: iso(r.last_seen),
+  });
+
+  return {
+    rows,
+    // Implements the (device, ifName) upsert for real, INCLUDING the renumber
+    // report: a port whose ifIndex moved is the case the counter path depends
+    // on, and a fake that silently overwrote it would let a broken delta pass.
+    upsertMany: overrides.upsertMany || (async (deviceId, interfaces, { at = new Date() } = {}) => {
+      let upserted = 0;
+      const renumbered = [];
+      for (const i of interfaces || []) {
+        if (!i || !i.ifName) continue;
+        const next = i.ifIndex == null ? null : Number(i.ifIndex);
+        const existing = rows.find((r) => r.device_id === Number(deviceId) && r.if_name === i.ifName);
+        if (existing) {
+          if (existing.if_index != null && next != null && existing.if_index !== next) {
+            renumbered.push({ ifName: i.ifName, from: existing.if_index, to: next });
+            existing.if_index_changed_at = at;
+          }
+          existing.if_index = next;
+          existing.name_source = i.nameSource || 'ifName';
+          existing.if_alias = i.ifAlias ?? null;
+          existing.if_descr = i.ifDescr ?? null;
+          existing.if_type = i.ifType ?? null;
+          existing.speed_mbps = i.speedMbps ?? null;
+          existing.admin_status = i.adminStatus ?? null;
+          existing.oper_status = i.operStatus ?? null;
+          existing.phys_address = i.physAddress ?? null;
+          existing.last_seen = at;
+        } else {
+          rows.push({
+            id: (seq += 1), device_id: Number(deviceId), if_name: i.ifName,
+            name_source: i.nameSource || 'ifName', if_index: next, if_index_changed_at: null,
+            if_alias: i.ifAlias ?? null, if_descr: i.ifDescr ?? null, if_type: i.ifType ?? null,
+            speed_mbps: i.speedMbps ?? null, admin_status: i.adminStatus ?? null,
+            oper_status: i.operStatus ?? null, phys_address: i.physAddress ?? null,
+            first_seen: at, last_seen: at,
+          });
+        }
+        upserted += 1;
+      }
+      return { upserted, renumbered };
+    }),
+    idMapForDevice: overrides.idMapForDevice || (async (deviceId) => {
+      const byName = new Map();
+      const byIndex = new Map();
+      for (const r of rows.filter((x) => x.device_id === Number(deviceId))) {
+        byName.set(r.if_name, r.id);
+        if (r.if_index != null) byIndex.set(Number(r.if_index), r.id);
+      }
+      return { byName, byIndex };
+    }),
+    listForDevice: overrides.listForDevice || (async (deviceId, { limit = 1000 } = {}) => rows
+      .filter((r) => r.device_id === Number(deviceId))
+      .sort((a, b) => (a.if_index == null) - (b.if_index == null)
+        || (a.if_index - b.if_index) || String(a.if_name).localeCompare(String(b.if_name)))
+      .slice(0, limit).map(mapOut)),
+    findById: overrides.findById || (async (id) => {
+      const r = rows.find((x) => x.id === Number(id));
+      return r ? mapOut(r) : null;
+    }),
+    countForDevice: overrides.countForDevice || (async (deviceId) => rows
+      .filter((r) => r.device_id === Number(deviceId)).length),
+    purgeBefore: overrides.purgeBefore || (async (cutoff) => {
+      const before = rows.length;
+      for (let i = rows.length - 1; i >= 0; i -= 1) {
+        if (new Date(rows[i].last_seen) < cutoff) rows.splice(i, 1);
+      }
+      return before - rows.length;
+    }),
+  };
+}
+
+function makeCounterSamplesRepo(overrides = {}) {
+  const rows = [];
+  const iso = (v) => (v == null ? null : (v instanceof Date ? v.toISOString() : new Date(v).toISOString()));
+  const mapOut = (r) => ({ ...r, ts: iso(r.ts) });
+
+  return {
+    rows,
+    insertMany: overrides.insertMany || (async (list) => {
+      let n = 0;
+      for (const r of list || []) {
+        // The real store has UNIQUE (interface_id, ts) and INSERT IGNORE, so a
+        // retried submit must not double-count here either.
+        const dup = rows.some((x) => x.interfaceId === r.interfaceId
+          && new Date(x.ts).getTime() === new Date(r.ts).getTime());
+        if (dup) continue;
+        rows.push({ ...r });
+        n += 1;
+      }
+      return n;
+    }),
+    // The REAL reads are bounded in time — without the bound they scan every
+    // sample the device has ever produced, once per cycle. The fake honours it
+    // so a test cannot pass against behaviour the store does not have.
+    latestForDevice: overrides.latestForDevice || (async (deviceId, { since = null } = {}) => {
+      const from = since || new Date(Date.now() - 60 * 60 * 1000);
+      const byInterface = new Map();
+      for (const r of rows.filter((x) => Number(x.deviceId) === Number(deviceId)
+        && new Date(x.ts) >= new Date(from))) {
+        const cur = byInterface.get(r.interfaceId);
+        if (!cur || new Date(r.ts) > new Date(cur.ts)) byInterface.set(r.interfaceId, mapOut(r));
+      }
+      return byInterface;
+    }),
+    latestWithNames: overrides.latestWithNames || (async (deviceId, { since = null } = {}) => {
+      const from = since || new Date(Date.now() - 60 * 60 * 1000);
+      const byInterface = new Map();
+      for (const r of rows.filter((x) => Number(x.deviceId) === Number(deviceId)
+        && new Date(x.ts) >= new Date(from))) {
+        const cur = byInterface.get(r.interfaceId);
+        if (!cur || new Date(r.ts) > new Date(cur.ts)) byInterface.set(r.interfaceId, mapOut(r));
+      }
+      return [...byInterface.values()];
+    }),
+    series: overrides.series || (async (interfaceId, { from, to, maxPoints = 500 } = {}) => {
+      const picked = rows
+        .filter((r) => Number(r.interfaceId) === Number(interfaceId)
+          && new Date(r.ts) >= new Date(from) && new Date(r.ts) <= new Date(to))
+        .sort((a, b) => new Date(a.ts) - new Date(b.ts));
+      const step = picked.length > maxPoints ? Math.ceil(picked.length / maxPoints) : 1;
+      return {
+        total: picked.length,
+        step,
+        samples: (step === 1 ? picked : picked.filter((_, i) => i % step === 0)).map(mapOut),
+      };
+    }),
+    purgeBefore: overrides.purgeBefore || (async (cutoff) => {
+      const before = rows.length;
+      for (let i = rows.length - 1; i >= 0; i -= 1) {
+        if (new Date(rows[i].ts) < cutoff) rows.splice(i, 1);
       }
       return before - rows.length;
     }),
@@ -2049,10 +2351,14 @@ function makeFindingStore(overrides = {}) {
       return { matched: hits.length, changed: hits.length };
     }),
     list: overrides.list || (async (hostId, since, limit, until, filters = {}) => {
-      const { severity, metric } = filters || {};
+      const { severity, metric, deviceId, interfaceId } = filters || {};
       let out = rows.filter((f) => (!hostId || f.hostId === hostId)
         && (!severity || f.severity === severity)
         && (!metric || f.metric === metric)
+        // A finding about a switch port carries the POLLING agent in hostId as
+        // well, so the device filter NARROWS rather than replaces.
+        && (!deviceId || Number(f.deviceId) === Number(deviceId))
+        && (!interfaceId || Number(f.interfaceId) === Number(interfaceId))
         && (!since || new Date(f.createdAt || 0) >= new Date(since))
         && (!until || new Date(f.createdAt || 0) <= new Date(until)));
       out = out.sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0)); // newest-first, like the real store
@@ -2971,9 +3277,12 @@ function makeApp(overrides = {}) {
   const hostConnectionsRepo = overrides.hostConnectionsRepo || makeHostConnectionsRepo();
   const arpEntriesRepo = overrides.arpEntriesRepo === undefined ? makeArpEntriesRepo() : overrides.arpEntriesRepo;
   const deviceEventsRepo = overrides.deviceEventsRepo === undefined ? makeDeviceEventsRepo() : overrides.deviceEventsRepo;
-  const snmpDevicesRepo = overrides.snmpDevicesRepo === undefined ? makeSnmpDevicesRepo() : overrides.snmpDevicesRepo;
+  const snmpProfilesRepo = overrides.snmpProfilesRepo === undefined ? makeSnmpProfilesRepo() : overrides.snmpProfilesRepo;
+  const snmpDevicesRepo = overrides.snmpDevicesRepo === undefined ? makeSnmpDevicesRepo({}, { credentialProfilesRepo: snmpProfilesRepo }) : overrides.snmpDevicesRepo;
   const fdbEntriesRepo = overrides.fdbEntriesRepo === undefined ? makeFdbEntriesRepo() : overrides.fdbEntriesRepo;
   const snmpNeighborsRepo = overrides.snmpNeighborsRepo === undefined ? makeSnmpNeighborsRepo() : overrides.snmpNeighborsRepo;
+  const deviceInterfacesRepo = overrides.deviceInterfacesRepo === undefined ? makeDeviceInterfacesRepo() : overrides.deviceInterfacesRepo;
+  const counterSamplesRepo = overrides.counterSamplesRepo === undefined ? makeCounterSamplesRepo() : overrides.counterSamplesRepo;
   const burstRunsRepo = overrides.burstRunsRepo === undefined ? makeBurstRunsRepo() : overrides.burstRunsRepo;
   // The REAL service over the fakes, so the dispatch, the ownership check on a
   // returning result and the stored verdict are exercised end-to-end.
@@ -2984,8 +3293,26 @@ function makeApp(overrides = {}) {
   // write the devices assigned to it — is exercised end-to-end rather than
   // stubbed. It is the security property of this feature.
   const snmpTopologyIngest = overrides.snmpTopologyIngest === undefined
-    ? (snmpDevicesRepo ? createSnmpTopologyIngest({ snmpDevicesRepo, fdbEntriesRepo, snmpNeighborsRepo }) : null)
+    ? (snmpDevicesRepo ? createSnmpTopologyIngest({
+      snmpDevicesRepo, fdbEntriesRepo, snmpNeighborsRepo, deviceInterfacesRepo,
+      // Loop detection runs off the back of a topology cycle, so a test that
+      // wires one gets it exercised end-to-end rather than stubbed.
+      l2LoopService: overrides.l2LoopService || null,
+    }) : null)
     : overrides.snmpTopologyIngest;
+  // The REAL counter ingest over the fakes, so the delta arithmetic, the reboot
+  // check and the port resolution are exercised end-to-end. They are where a
+  // wrong answer is invisible until somebody acts on it.
+  const snmpCounterIngest = overrides.snmpCounterIngest === undefined
+    ? ((snmpDevicesRepo && deviceInterfacesRepo && counterSamplesRepo)
+      ? createSnmpCounterIngest({
+        snmpDevicesRepo, deviceInterfacesRepo, counterSamplesRepo,
+        // The REAL pipeline too when one is wired, so a port's errors reaching
+        // the detector is exercised end-to-end rather than assumed.
+        analysisPipeline: overrides.analysisPipeline || null,
+      })
+      : null)
+    : overrides.snmpCounterIngest;
   // The REAL ingest over the fake repositories, so sender resolution and the
   // bucketed dedup key are exercised end-to-end rather than stubbed — they are
   // the two things in this feature most worth testing.
@@ -3065,6 +3392,10 @@ function makeApp(overrides = {}) {
     fdbEntriesRepo,
     snmpNeighborsRepo,
     snmpTopologyIngest,
+    snmpCounterIngest,
+    snmpProfilesRepo,
+    deviceInterfacesRepo,
+    counterSamplesRepo,
     burstRunsRepo,
     burstService,
     interfaceStatesRepo,
@@ -3239,6 +3570,9 @@ module.exports = {
   makeSnmpDevicesRepo,
   makeFdbEntriesRepo,
   makeSnmpNeighborsRepo,
+  makeDeviceInterfacesRepo,
+  makeCounterSamplesRepo,
+  makeSnmpProfilesRepo,
   makeBurstRunsRepo,
   makeInterfaceStatesRepo,
   makeAlertDispatchLogRepo,

@@ -12,6 +12,10 @@
  * @property {number} value    Numeric value of the sample.
  * @property {Date}   ts       Timestamp of the observation.
  * @property {Object} labels   Free-form key/value labels (e.g. { iface: 'eth0' }).
+ * @property {number} [deviceId]     An `snmp_devices` id, when the sample came
+ *   off a polled switch rather than an agent (migration 110).
+ * @property {number} [interfaceId]  A `device_interfaces` id — the PORT. Never
+ *   an ifIndex: that is not an identity (migration 108).
  */
 
 /**
@@ -20,6 +24,8 @@
  * @typedef {Object} Finding
  * @property {string} id                Unique id (crypto.randomUUID()).
  * @property {string} hostId            Host the finding concerns.
+ * @property {number|null} deviceId      Switch the finding concerns, or null.
+ * @property {number|null} interfaceId   Port the finding concerns, or null.
  * @property {string} metric            Metric the finding concerns.
  * @property {'INFO'|'WARN'|'CRIT'} severity
  * @property {'ANOMALY'|'THRESHOLD'|'FLATLINE'|'CORRELATED'} kind

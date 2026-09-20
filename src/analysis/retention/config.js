@@ -33,6 +33,19 @@ function loadRetentionConfig(env = process.env) {
     // of a fault, and its verdict gets quoted in a report weeks later. There
     // are a handful of rows a week, not a stream, so keeping them is cheap.
     burstRunRetentionDays: toInt(env.RETENTION_BURST_DAYS, 90),
+    // The port inventory on a polled switch. LONGEST of the SNMP dimensions,
+    // deliberately: counter samples reference an interface row, and purging the
+    // row while its measurements are still stored would orphan them. It has to
+    // outlive the longest retention of anything pointing at it, and a port that
+    // stops being reported is a handful of bytes, not a stream.
+    deviceInterfaceRetentionDays: toInt(env.RETENTION_DEVICE_INTERFACE_DAYS, 180),
+    // Interface counter samples. The second-largest write stream in the
+    // product after flow_records: ~1.4 million rows a day for twenty switches.
+    // On a TSDB deployment this is a no-op (TimescaleDB expires and compresses
+    // the chunks itself, 90 days); the number here is the MySQL fallback, kept
+    // SHORTER because 180 bytes x 1.4 million a day is ~10 GB a month in
+    // InnoDB with no compression to lean on.
+    deviceCounterRetentionDays: toInt(env.RETENTION_DEVICE_COUNTER_DAYS, 14),
     rollupIntervalMinutes: toInt(env.RETENTION_ROLLUP_INTERVAL_MINUTES, 60), // bucket granularity
     intervalHours: toInt(env.RETENTION_JOB_INTERVAL_HOURS, 24), // how often the job runs
     batchSize: toInt(env.RETENTION_BATCH_SIZE, 5000), // rows fetched per rollup page

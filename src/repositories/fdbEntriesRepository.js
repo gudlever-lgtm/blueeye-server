@@ -7,7 +7,8 @@
 // search reads both, and both carry provenance and an age, so a three-week-old
 // answer is visibly stale rather than confidently wrong.
 
-const BASE_COLUMNS = `id, device_id, mac, vlan, bridge_port, if_index, if_name,
+const BASE_COLUMNS = `id, device_id, mac, vlan, bridge_port, prev_bridge_port,
+  move_count, last_move_at, if_index, if_name,
   status, port_mac_count, first_seen, last_seen`;
 
 function toIso(v) {
@@ -24,6 +25,12 @@ function mapRow(row) {
     // 0 means the device reported no VLAN (BRIDGE-MIB only), never a real id.
     vlan: Number(row.vlan),
     bridgePort: Number(row.bridge_port),
+    // Where it was before, how many times it has moved, and when last. A MAC
+    // bouncing between two ports is the signature of a forwarding loop, and
+    // before migration 111 the upsert overwrote the evidence every sweep.
+    prevBridgePort: row.prev_bridge_port == null ? null : Number(row.prev_bridge_port),
+    moveCount: row.move_count == null ? 0 : Number(row.move_count),
+    lastMoveAt: toIso(row.last_move_at),
     ifIndex: row.if_index == null ? null : Number(row.if_index),
     ifName: row.if_name ?? null,
     status: row.status,
@@ -57,26 +64,38 @@ function createFdbEntriesRepository(db) {
     const placeholders = [];
     const params = [];
     for (const e of rows) {
-      placeholders.push('(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
+      placeholders.push('(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
       params.push(
         deviceId, e.mac, e.vlan ?? 0, e.bridgePort,
         e.ifIndex ?? null, e.ifName ?? null,
-        e.status || 'learned', e.portMacCount ?? 1, at, at,
+        e.status || 'learned', e.portMacCount ?? 1, at, at, at,
       );
     }
 
+    // THE MOVE IS RECORDED IN THE UPSERT ITSELF. Doing it in SQL rather than
+    // reading the rows first keeps the sweep one statement — a big chassis is
+    // five thousand rows, and a read-compare-write per MAC would turn one
+    // round trip into ten thousand.
+    //
+    // The CASE is the whole of it: bridge_port changing is a move; everything
+    // else is the same MAC on the same port and must leave the counters alone.
+    // `last_move_at` is COALESCEd so a sweep where nothing moved does not erase
+    // the time of the move before it.
     const [res] = await pool.query(
       `INSERT INTO fdb_entries
          (device_id, mac, vlan, bridge_port, if_index, if_name, status,
-          port_mac_count, first_seen, last_seen)
+          port_mac_count, first_seen, last_seen, last_move_at)
        VALUES ${placeholders.join(', ')}
        ON DUPLICATE KEY UPDATE
-         bridge_port    = VALUES(bridge_port),
-         if_index       = VALUES(if_index),
-         if_name        = VALUES(if_name),
-         status         = VALUES(status),
-         port_mac_count = VALUES(port_mac_count),
-         last_seen      = VALUES(last_seen)`,
+         prev_bridge_port = IF(bridge_port <> VALUES(bridge_port), bridge_port, prev_bridge_port),
+         move_count       = move_count + IF(bridge_port <> VALUES(bridge_port), 1, 0),
+         last_move_at     = IF(bridge_port <> VALUES(bridge_port), VALUES(last_move_at), last_move_at),
+         bridge_port      = VALUES(bridge_port),
+         if_index         = VALUES(if_index),
+         if_name          = VALUES(if_name),
+         status           = VALUES(status),
+         port_mac_count   = VALUES(port_mac_count),
+         last_seen        = VALUES(last_seen)`,
       params,
     );
     return Number(res.affectedRows || 0);
@@ -127,6 +146,22 @@ function createFdbEntriesRepository(db) {
     return rows.map(mapRow);
   }
 
+  // The MACs on one device that have moved recently. The ONLY query the loop
+  // detector makes against this table: a count and the two ports, never a
+  // history.
+  async function movingMacs(deviceId, { since, limit = 500 } = {}) {
+    const [rows] = await pool.query(
+      `SELECT ${BASE_COLUMNS} FROM fdb_entries
+        WHERE device_id = ? AND last_move_at IS NOT NULL AND last_move_at >= ?
+        ORDER BY move_count DESC, last_move_at DESC
+        LIMIT ?`,
+      [deviceId, since, limit],
+    );
+    return rows.map(mapRow);
+  }
+
+  // The first row inserted for a device has no move to record; this makes the
+  // insert-time defaults explicit for a caller that wants them.
   async function countForDevice(deviceId) {
     const [rows] = await pool.query(
       'SELECT COUNT(*) AS n FROM fdb_entries WHERE device_id = ?', [deviceId],
@@ -156,6 +191,7 @@ function createFdbEntriesRepository(db) {
     findByMac,
     listForDevice,
     listForPort,
+    movingMacs,
     countForDevice,
     purgeBefore,
   };

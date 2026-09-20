@@ -6572,6 +6572,16 @@ PAGE_INFO.burst = {
   ],
 };
 
+PAGE_INFO.snmpDevice = {
+  get hero() { return t('snmpdev.info.hero'); },
+  get title() { return t('snmpdev.info.title'); },
+  body: () => [
+    el('p', {}, t('snmpdev.info.p1')),
+    el('p', {}, t('snmpdev.info.p2')),
+    el('p', { class: 'muted' }, t('snmpdev.info.p3')),
+  ],
+};
+
 PAGE_INFO.deviceLog = {
   get hero() { return t('devlog.info.hero'); },
   get title() { return t('devlog.info.title'); },
@@ -8097,6 +8107,37 @@ async function probeRunnerView() {
 let selectedAgentId = null;
 function openAgent(id) { selectedAgentId = id; currentView = 'agent'; render(); }
 
+// SNMP device drill-down (MIGRATED — see public/views/snmpDevice.js).
+//
+// No tab of its own: reached from the device list in Settings, from a port hit
+// in universal search, or from a loop finding. A switch is not a fleet member —
+// it has no token, no heartbeat and no version — so it does not belong in the
+// nav beside the agents.
+let selectedSnmpDeviceId = null;
+let snmpDeviceView = null;
+function openSnmpDevice(id) { selectedSnmpDeviceId = id; currentView = 'snmpDevice'; render(); }
+
+function getSnmpDeviceView() {
+  if (snmpDeviceView) return snmpDeviceView;
+  if (typeof window === 'undefined' || !window.SnmpDeviceView || !ui) return null;
+  snmpDeviceView = window.SnmpDeviceView.create({
+    el, t, ui, errText,
+    help: () => (PAGE_INFO.snmpDevice && PAGE_INFO.snmpDevice.body ? PAGE_INFO.snmpDevice.body() : []),
+    fetchDevice: (id) => api(`/api/snmp-devices/${id}`),
+    fetchCounters: (id) => api(`/api/snmp-devices/${id}/counters`),
+    fetchSeries: (id, interfaceId, minutes) =>
+      api(`/api/snmp-devices/${id}/interfaces/${interfaceId}/series?minutes=${minutes}`),
+  });
+  return snmpDeviceView;
+}
+
+views.snmpDevice = async () => {
+  const v = getSnmpDeviceView();
+  if (!v) return el('div', { class: 'empty error' }, t('snmpdev.err.title'));
+  if (selectedSnmpDeviceId == null) return el('div', { class: 'empty' }, t('snmpdev.none'));
+  return v.view(selectedSnmpDeviceId);
+};
+
 // Location drill-down (no tab of its own — reached by clicking a location on
 // the agent page, the Locations list or a site pin on a traffic map).
 let selectedLocationId = null;
@@ -8185,6 +8226,9 @@ function searchTargetAction(hit) {
   let m;
   if ((m = t.match(/^agent:(\d+)$/))) return () => openAgent(Number(m[1]));
   if ((m = t.match(/^location:(\d+)$/))) return () => openLocation(Number(m[1]));
+  // A port hit is the only one that gives a PHYSICAL address, and it opens the
+  // switch it is on rather than the agent that polled it.
+  if ((m = t.match(/^snmp-device:(\d+)$/))) return () => openSnmpDevice(Number(m[1]));
   if ((m = t.match(/^flows:port:(\d+)$/))) return () => openFlows(null, { port: Number(m[1]) });
   if ((m = t.match(/^flows:(\d+):port:(\d+)$/))) return () => openFlows(Number(m[1]), { port: Number(m[2]) });
   if ((m = t.match(/^flows:(\d+):(.+)$/))) return () => openFlows(Number(m[1]), { peer: m[2] });
@@ -12379,7 +12423,13 @@ async function settingsSnmpDevicesView() {
         el('th', {}, t('snmpdev.col.state')),
         el('th', {}, ''))),
       el('tbody', {}, devices.map((d) => el('tr', {},
-        el('td', {}, el('strong', {}, d.displayName || d.host),
+        // The name opens the switch's own page — the ports, their counters and
+        // their history. Everything else in this panel is inventory admin.
+        el('td', {},
+          el('button', {
+            class: 'linklike',
+            onclick: () => openSnmpDevice(d.id),
+          }, el('strong', {}, d.displayName || d.host)),
           d.displayName ? el('span', { class: 'meta-xs' }, ` ${d.host}`) : null),
         el('td', {}, d.agentName || el('span', { class: 'muted' }, t('snmpdev.agent.none'))),
         el('td', {}, supportedCell(d)),

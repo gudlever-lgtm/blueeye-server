@@ -135,6 +135,20 @@ function createRetentionRepo(db) {
     return deleteInBatches('DELETE FROM burst_runs WHERE started_at < ? ORDER BY started_at LIMIT ?', [ts]);
   }
 
+  // Ports on a polled switch that stopped being reported. Kept longest of the
+  // SNMP dimensions: a counter sample points at one of these rows, so removing
+  // it early strands the measurements that reference it.
+  async function purgeDeviceInterfacesBefore(ts) {
+    return deleteInBatches('DELETE FROM device_interfaces WHERE last_seen < ? ORDER BY last_seen LIMIT ?', [ts]);
+  }
+
+  // Interface counter samples. A no-op on a TSDB deployment: the hypertable
+  // expires its own chunks with a retention policy, and the repository reports
+  // nothing removed rather than pretending it swept.
+  async function purgeDeviceCountersBefore(ts) {
+    return deleteInBatches('DELETE FROM device_counter_samples WHERE ts < ? ORDER BY ts LIMIT ?', [ts]);
+  }
+
   // Interface state transitions + the current-state snapshot rows of interfaces
   // that stopped being reported entirely. The snapshot cutoff is deliberately
   // longer-lived logic than the history: dropping a state row we still have
@@ -162,6 +176,8 @@ function createRetentionRepo(db) {
     purgeFdbEntriesBefore,
     purgeSnmpNeighborsBefore,
     purgeBurstRunsBefore,
+    purgeDeviceInterfacesBefore,
+    purgeDeviceCountersBefore,
     purgeInterfaceTransitionsBefore,
     purgeInterfaceStatesBefore,
   };

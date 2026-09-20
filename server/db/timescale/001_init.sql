@@ -460,3 +460,87 @@ SELECT add_continuous_aggregate_policy(
 -- =====================================================================
 
 -- End of migration 001.
+
+-- =====================================================================
+-- device_counter_samples — interface counters from polled switches.
+--
+-- Mirrors MySQL migration 109. The largest per-row write stream this schema
+-- has after flow_records: 20 switches x 48 ports at 60 s is ~1.4 million rows
+-- a day, so this is the one table here that is compressed as well as expired.
+--
+-- Both the RAW counter and the DERIVED rate are stored. The raw value is the
+-- evidence — without it a rate can never be recomputed, a counter reset can
+-- never be recognised after the fact, and a missing cycle cannot be told apart
+-- from a cycle that measured zero.
+--
+-- `interface_id` points at a MySQL `device_interfaces` row whose identity is the
+-- port NAME, not its ifIndex. There is no foreign key (there cannot be, across
+-- stores), and the inventory is purged on a longer window than these samples so
+-- the reference stays resolvable.
+-- =====================================================================
+CREATE TABLE IF NOT EXISTS device_counter_samples (
+  ts                   TIMESTAMPTZ NOT NULL,
+  device_id            INTEGER     NOT NULL,
+  interface_id         BIGINT      NOT NULL,
+
+  in_octets            BIGINT,
+  out_octets           BIGINT,
+  in_ucast_pkts        BIGINT,
+  out_ucast_pkts       BIGINT,
+  in_mcast_pkts        BIGINT,
+  in_bcast_pkts        BIGINT,
+  out_mcast_pkts       BIGINT,
+  out_bcast_pkts       BIGINT,
+  in_errors            BIGINT,
+  out_errors           BIGINT,
+  in_discards          BIGINT,
+  out_discards         BIGINT,
+  fcs_errors           BIGINT,
+  alignment_errors     BIGINT,
+  late_collisions      BIGINT,
+  carrier_sense_errors BIGINT,
+
+  delta_sec            INTEGER,
+  in_bps               DOUBLE PRECISION,
+  out_bps              DOUBLE PRECISION,
+  in_err_pps           DOUBLE PRECISION,
+  out_err_pps          DOUBLE PRECISION,
+  in_disc_pps          DOUBLE PRECISION,
+  out_disc_pps         DOUBLE PRECISION,
+  fcs_pps              DOUBLE PRECISION,
+  in_bcast_pps         DOUBLE PRECISION,
+  in_util_pct          DOUBLE PRECISION,
+  out_util_pct         DOUBLE PRECISION,
+
+  -- first | reboot | renumber | gap | wrap. NULL means the delta is real.
+  discontinuity        TEXT
+);
+
+SELECT create_hypertable(
+  'device_counter_samples', 'ts',
+  chunk_time_interval => INTERVAL '1 day',
+  if_not_exists       => TRUE
+);
+
+CREATE INDEX IF NOT EXISTS idx_devctr_iface_ts  ON device_counter_samples (interface_id, ts DESC);
+CREATE INDEX IF NOT EXISTS idx_devctr_device_ts ON device_counter_samples (device_id, ts DESC);
+
+-- COMPRESSION. The first compression policy in this schema, and this is the
+-- table that earns one: counter columns are monotonically rising BIGINTs
+-- (delta-encodes well) and the error columns are zero most of the time on a
+-- healthy network (run-length-encodes well). Segmenting by interface_id keeps
+-- one port's history in one place, which is also how it is read back.
+--
+-- Seven days uncompressed: long enough that the screens people open daily read
+-- from raw chunks, short enough that the bulk of the table is compressed.
+ALTER TABLE device_counter_samples SET (
+  timescaledb.compress,
+  timescaledb.compress_segmentby = 'interface_id',
+  timescaledb.compress_orderby   = 'ts DESC'
+);
+SELECT add_compression_policy('device_counter_samples', INTERVAL '7 days', if_not_exists => TRUE);
+
+-- 90 days. Longer than results (30) because a port's error history is what an
+-- investigation into an intermittent fault reaches for, and compressed it costs
+-- a fraction of what the raw telemetry does.
+SELECT add_retention_policy('device_counter_samples', INTERVAL '90 days', if_not_exists => TRUE);

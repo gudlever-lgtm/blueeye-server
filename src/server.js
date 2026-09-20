@@ -75,6 +75,12 @@ const { createDeviceEventIngest } = require('./devices/deviceEventIngest');
 const { createSnmpDevicesRepository } = require('./repositories/snmpDevicesRepository');
 const { createFdbEntriesRepository } = require('./repositories/fdbEntriesRepository');
 const { createSnmpNeighborsRepository } = require('./repositories/snmpNeighborsRepository');
+const { createDeviceInterfacesRepository } = require('./repositories/deviceInterfacesRepository');
+const { createSnmpCredentialProfilesRepository } = require('./repositories/snmpCredentialProfilesRepository');
+const { createDeviceCounterSamplesRepository } = require('./repositories/deviceCounterSamplesRepository');
+const { createDeviceCounterSamplesTsdbRepository } = require('./repositories/deviceCounterSamplesTsdbRepository');
+const { createSnmpCounterIngest } = require('./devices/snmpCounterIngest');
+const { createL2LoopService } = require('./analysis/l2LoopService');
 const { createSnmpTopologyIngest } = require('./devices/snmpTopologyIngest');
 const { createBurstRunsRepository } = require('./repositories/burstRunsRepository');
 const { createBurstService } = require('./probes/burstService');
@@ -624,15 +630,56 @@ function start() {
   // string is AES-256-GCM at rest, so the repository takes the same secretBox
   // `cmdb_config` and `integrations` use; without one, a device simply has no
   // stored credential rather than an unencrypted one.
-  const snmpDevicesRepo = createSnmpDevicesRepository(db, { secretBox });
+  // Credential profiles first: the device repository resolves through them
+  // (device override -> profile -> site -> global default) so the agent gets
+  // ONE credential per device and never tries alternatives.
+  const snmpProfilesRepo = createSnmpCredentialProfilesRepository(db, { secretBox });
+  const snmpDevicesRepo = createSnmpDevicesRepository(db, {
+    secretBox,
+    credentialProfilesRepo: snmpProfilesRepo,
+  });
   const fdbEntriesRepo = createFdbEntriesRepository(db);
   const snmpNeighborsRepo = createSnmpNeighborsRepository(db);
+  const deviceInterfacesRepo = createDeviceInterfacesRepository(db);
+  const counterSamplesRepo = tsdb
+    ? createDeviceCounterSamplesTsdbRepository(tsdb)
+    : createDeviceCounterSamplesRepository(db);
+
+  // Layer-2 loop detection. Built here and handed to the topology ingest,
+  // which is what calls it: the moment a forwarding table is re-read is the
+  // moment a flapping MAC becomes visible.
+  //
+  // A loop finding is an ordinary finding and goes to the same place every
+  // other one does. The dashboard socket is the one thing that does not exist
+  // yet here, so the publish is a closure over `dashboardWs` rather than the
+  // socket itself — reading it at call time, when it is there.
+  const l2LoopService = createL2LoopService({
+    fdbEntriesRepo,
+    counterSamplesRepo,
+    deviceEventsRepo,
+    deviceInterfacesRepo,
+    snmpDevicesRepo,
+    findingStore,
+    eventCaseService,
+    publishFinding: (hostId, message) => (dashboardWs ? dashboardWs.broadcast(message) : 0),
+    logger,
+  });
   const snmpTopologyIngest = createSnmpTopologyIngest({
     snmpDevicesRepo,
     fdbEntriesRepo,
     snmpNeighborsRepo,
+    deviceInterfacesRepo,
+    l2LoopService,
     logger,
   });
+  // Interface counters. The second-largest write stream in the product after
+  // flow_records, so it follows the same dual-store rule as `results` and
+  // `device_events`: TimescaleDB when configured, MySQL otherwise, one
+  // interface and the caller never asks which answered.
+  // The counter INGEST is built after the analysis pipeline (further down),
+  // because it feeds samples straight into it and a getter here would be
+  // evaluated at destructuring time. The repository above is needed earlier,
+  // by the loop detector.
 
   // Burst mode. The commander is a stable object built at startup (it looks the
   // live socket up per call), so the service can be built here and handed BOTH
@@ -775,6 +822,18 @@ function start() {
     licensed: () => featureGate.isFeatureEnabled('analysis'),
     // Push findings to connected dashboards (browsers), not to agents.
     publishFinding: (hostId, message) => (dashboardWs ? dashboardWs.broadcast(message) : 0),
+    logger,
+  });
+
+  // Interface counters into the SAME detector the agent metrics go through.
+  // Per-port errors, discards and utilisation have been collected, stored and
+  // shown on a screen, and until now nothing evaluated them: there was no MAD,
+  // no z-score and no flatline on a single interface counter anywhere.
+  const snmpCounterIngest = createSnmpCounterIngest({
+    snmpDevicesRepo,
+    deviceInterfacesRepo,
+    counterSamplesRepo,
+    analysisPipeline,
     logger,
   });
   // Offline GeoIP/ASN provider (EU-sourced range DB; config.geo.dbPath). Created
@@ -1039,6 +1098,10 @@ function start() {
     fdbEntriesRepo,
     snmpNeighborsRepo,
     snmpTopologyIngest,
+    snmpCounterIngest,
+    snmpProfilesRepo,
+    deviceInterfacesRepo,
+    counterSamplesRepo,
     burstRunsRepo,
     burstService,
     interfaceStatesRepo,

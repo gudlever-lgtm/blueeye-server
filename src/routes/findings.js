@@ -24,6 +24,18 @@ function parseListFilters(query) {
     filters.severity = String(query.severity);
   }
   if (query.metric !== undefined && query.metric !== '') filters.metric = String(query.metric);
+  // A switch, and a port on it (migration 110). Both NARROW the host filter
+  // rather than replacing it: a finding about a port carries the polling agent
+  // in hostId too, so "everything on this agent" still includes the switches
+  // it polls.
+  for (const key of ['deviceId', 'interfaceId']) {
+    if (query[key] === undefined || query[key] === '') continue;
+    const n = Number(query[key]);
+    if (!Number.isInteger(n) || n < 1) {
+      return { error: { [key]: `${key} must be a positive integer` } };
+    }
+    filters[key] = n;
+  }
   if (query.since) {
     const d = new Date(query.since);
     if (Number.isNaN(d.getTime())) return { error: { since: 'since must be a valid date' } };
@@ -48,7 +60,7 @@ function createFindingsRouter({ findingStore, timelineService = null }) {
       if (parsed.error) {
         return res.status(400).json({ error: 'Validation failed', details: parsed.error });
       }
-      const { hostId, since, severity, metric } = parsed.filters;
+      const { hostId, since, severity, metric, deviceId, interfaceId } = parsed.filters;
       let limit = 500;
       if (req.query.limit !== undefined) {
         const n = Number.parseInt(req.query.limit, 10);
@@ -57,7 +69,9 @@ function createFindingsRouter({ findingStore, timelineService = null }) {
         }
         limit = Math.min(n, 500);
       }
-      res.json(await findingStore.list(hostId, since, limit, undefined, { severity, metric }));
+      res.json(await findingStore.list(hostId, since, limit, undefined, {
+        severity, metric, deviceId, interfaceId,
+      }));
     })
   );
 

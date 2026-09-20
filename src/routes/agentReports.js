@@ -8,7 +8,7 @@ const { validateCapabilities } = require('../validation/agentValidation');
 const { validateProbeResults } = require('../validation/probeValidation');
 const { normalizeReportedArp } = require('../identity/arpTable');
 const { validateDeviceEventBatch } = require('../validation/deviceEventValidation');
-const { validateSnmpTopologyBatch } = require('../validation/snmpDeviceValidation');
+const { validateSnmpTopologyBatch, validateSnmpCounterBatch } = require('../validation/snmpDeviceValidation');
 
 // Endpoints agents call themselves, authenticated with their opaque token
 // (NOT a user JWT). `agentAuth` is the agent-token middleware. The agent id is
@@ -17,7 +17,7 @@ const { validateSnmpTopologyBatch } = require('../validation/snmpDeviceValidatio
 //
 // Paths use the `/me/...` prefix so they don't collide with the user-JWT agents
 // router's `/:id` routes mounted under the same /agents path.
-function createAgentReportsRouter({ agentAuth, resultsRepo, resultsTsdbRepo = null, agentsRepo, auditEventsRepo = null, analysisPipeline = null, flowPipeline = null, probeResultsRepo = null, probePipeline = null, probeOutageService = null, installToolService = null, lldpNeighborsRepo = null, topologyChangeService = null, hostConnectionsRepo = null, arpEntriesRepo = null, deviceEventIngest = null, snmpDevicesRepo = null, snmpTopologyIngest = null, interfaceStateService = null, discoveredDevicesRepo = null, auditLogger = null, logger = null }) {
+function createAgentReportsRouter({ agentAuth, resultsRepo, resultsTsdbRepo = null, agentsRepo, auditEventsRepo = null, analysisPipeline = null, flowPipeline = null, probeResultsRepo = null, probePipeline = null, probeOutageService = null, installToolService = null, lldpNeighborsRepo = null, topologyChangeService = null, hostConnectionsRepo = null, arpEntriesRepo = null, deviceEventIngest = null, snmpDevicesRepo = null, snmpTopologyIngest = null, snmpCounterIngest = null, interfaceStateService = null, discoveredDevicesRepo = null, auditLogger = null, logger = null }) {
   const router = express.Router();
 
   // Each probe-results POST re-reads the agent's recent rows for probe-finding
@@ -244,10 +244,33 @@ function createAgentReportsRouter({ agentAuth, resultsRepo, resultsTsdbRepo = nu
               deviceId: d.id,
               host: d.host,
               port: d.port,
-              version: d.version,
+              // The credential the server RESOLVED (migration 112): the
+              // device's own, else its profile, else its site's, else the
+              // global default. Its version wins over the device row's,
+              // because a v3 profile against a row still saying 2c would
+              // otherwise authenticate with a community that does not exist.
+              //
+              // The agent gets ONE credential per device and never learns that
+              // profiles exist — the secret surface on the agent stays exactly
+              // the size it already was.
+              version: (d.credential && d.credential.version) || d.version,
               community: d.community,
+              v3: d.credential && d.credential.v3User ? {
+                user: d.credential.v3User,
+                authProto: d.credential.v3AuthProto,
+                authKey: d.credential.v3AuthKey,
+                privProto: d.credential.v3PrivProto,
+                privKey: d.credential.v3PrivKey,
+                context: d.credential.v3Context,
+                level: d.credential.securityLevel,
+              } : undefined,
               collect: d.collect,
               intervalSec: d.intervalSec,
+              // The counter cadence, when the device asked for counters at all.
+              // Its own setting because a counter series' interval IS its
+              // resolution, while a forwarding-table sweep every five minutes
+              // is generous.
+              counterIntervalSec: d.counterIntervalSec,
             }));
           }
         } catch (err) {
@@ -381,9 +404,41 @@ function createAgentReportsRouter({ agentAuth, resultsRepo, resultsTsdbRepo = nu
         return res.status(503).json({ error: 'SNMP topology ingest is not configured' });
       }
       if (!batch.devices.length && !batch.failures.length) {
-        return res.status(202).json({ stored: 0, fdbRows: 0, neighbourRows: 0, refused: 0, failuresRecorded: 0, skipped: batch.skipped });
+        return res.status(202).json({ stored: 0, fdbRows: 0, neighbourRows: 0, interfaceRows: 0, renumbered: [], loops: 0, refused: 0, failuresRecorded: 0, skipped: batch.skipped });
       }
       const result = await snmpTopologyIngest.ingest(req.agent.agentId, batch);
+      return res.status(202).json({ ...result, skipped: batch.skipped });
+    })
+  );
+
+  // POST /agents/me/snmp-counters { devices, errors } — one counter cycle of
+  // the switches assigned to this agent: a snapshot of every interface counter,
+  // turned into rates against the previous snapshot.
+  //
+  // Its own endpoint rather than folded into the topology POST, because the two
+  // run at different cadences (a counter series' interval IS its resolution)
+  // and a counter batch is an order of magnitude larger.
+  //
+  // The ownership check lives in the ingest, like the topology path's.
+  router.post(
+    '/me/snmp-counters',
+    agentAuth,
+    asyncHandler(async (req, res) => {
+      const errors = {};
+      const batch = validateSnmpCounterBatch(req.body, errors);
+      if (!batch) {
+        return res.status(400).json({ error: 'Validation failed', details: errors });
+      }
+      if (!snmpCounterIngest) {
+        return res.status(503).json({ error: 'SNMP counter ingest is not configured' });
+      }
+      if (!batch.devices.length && !batch.failures.length) {
+        return res.status(202).json({
+          stored: 0, samples: 0, findings: 0, unresolved: 0, refused: 0, failuresRecorded: 0,
+          discontinuities: {}, skipped: batch.skipped,
+        });
+      }
+      const result = await snmpCounterIngest.ingest(req.agent.agentId, batch);
       return res.status(202).json({ ...result, skipped: batch.skipped });
     })
   );

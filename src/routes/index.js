@@ -46,6 +46,7 @@ const { createThresholdsRouter } = require('./thresholds');
 const { createInterfacesRouter } = require('./interfaces');
 const { createDeviceEventsRouter } = require('./deviceEvents');
 const { createSnmpDevicesRouter } = require('./snmpDevices');
+const { createSnmpProfilesRouter } = require('./snmpProfiles');
 const { createBurstRouter } = require('./burst');
 const { createFleetRouter } = require('./fleet');
 const { createDashboardRouter } = require('./dashboard');
@@ -151,6 +152,10 @@ function createApiRouter({
   snmpNeighborsRepo = null,
   fdbEntriesRepo = null,
   snmpTopologyIngest = null,
+  deviceInterfacesRepo = null,
+  snmpCounterIngest = null,
+  snmpProfilesRepo = null,
+  counterSamplesRepo = null,
   burstRunsRepo = null,
   burstService = null,
   interfaceStatesRepo = null,
@@ -419,12 +424,21 @@ function createApiRouter({
   // server's polling at an address); "poll now" is operator+.
   if (snmpDevicesRepo) {
     router.use('/api/snmp-devices', createSnmpDevicesRouter({
-      snmpDevicesRepo, fdbEntriesRepo, snmpNeighborsRepo, agentsRepo, agentCommander, auditLogger, logger,
+      snmpDevicesRepo, fdbEntriesRepo, snmpNeighborsRepo, deviceInterfacesRepo, counterSamplesRepo,
+      agentsRepo, agentCommander, auditLogger, logger,
     }));
   }
   // Burst mode — one target, once a second, for up to two minutes. Read
   // viewer+ (a finished burst is a measurement); starting one is operator+,
   // because it makes an agent emit traffic at a rate nothing else here does.
+  // SNMP credential profiles. ADMIN for everything, including the read: a list
+  // of profiles says which sites share a secret and which use v3, which is a
+  // map of where to attack first.
+  if (snmpProfilesRepo) {
+    router.use('/api/snmp-profiles', createSnmpProfilesRouter({
+      snmpProfilesRepo, locationsRepo, auditLogger, logger,
+    }));
+  }
   if (burstRunsRepo) {
     router.use('/api/burst', createBurstRouter({ burstRunsRepo, burstService, agentsRepo, logger }));
   }
@@ -661,7 +675,7 @@ function createApiRouter({
   // Unified audit log (license feature `audit_log`) + API tokens (`api_access`).
   if (auditLogRepo) router.use('/api/audit-log', createAuditLogRouter({ auditLogRepo, featureGate, planService }));
   if (apiTokensRepo) router.use('/api/api-tokens', createApiTokensRouter({ apiTokensRepo, featureGate, planService, auditLogger }));
-  router.use('/agents', createAgentReportsRouter({ agentAuth, resultsRepo, resultsTsdbRepo, agentsRepo, auditEventsRepo, analysisPipeline, flowPipeline, probeResultsRepo, probePipeline, probeOutageService, installToolService, lldpNeighborsRepo, topologyChangeService, hostConnectionsRepo, arpEntriesRepo, deviceEventIngest, snmpDevicesRepo, snmpTopologyIngest, interfaceStateService, discoveredDevicesRepo, auditLogger, logger }));
+  router.use('/agents', createAgentReportsRouter({ agentAuth, resultsRepo, resultsTsdbRepo, agentsRepo, auditEventsRepo, analysisPipeline, flowPipeline, probeResultsRepo, probePipeline, probeOutageService, installToolService, lldpNeighborsRepo, topologyChangeService, hostConnectionsRepo, arpEntriesRepo, deviceEventIngest, snmpDevicesRepo, snmpTopologyIngest, snmpCounterIngest, interfaceStateService, discoveredDevicesRepo, auditLogger, logger }));
   router.use('/agents', createAgentEnrollRouter({ enrollmentStore, notifyDashboard, integrationTrigger: integrationsDispatcher, auditEventsRepo, settingsService, rateLimit: enrollRateLimiter }));
 
   return router;

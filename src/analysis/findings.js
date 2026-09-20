@@ -6,7 +6,7 @@ const { Severity, FindingKind } = require('./constants');
 
 // Columns selected when reading findings back.
 const COLUMNS =
-  'id, host_id, metric, severity, original_severity, severity_rule_id, kind, ' +
+  'id, host_id, device_id, interface_id, metric, severity, original_severity, severity_rule_id, kind, ' +
   'observed, baseline, deviation, ' +
   'window_from, window_to, explanation, evidence, correlated_with, event_case_id, acked, created_at';
 
@@ -27,12 +27,24 @@ const ID_CHUNK = 1000;
 // Builds the shared WHERE fragment (+ ordered params) used by both list() and
 // summary(), so the aggregate overview and the row list always scope to the
 // exact same filter set. Only defined keys contribute a clause.
-function buildFilter({ hostId, severity, metric, since, until } = {}) {
+function buildFilter({ hostId, deviceId, interfaceId, severity, metric, since, until } = {}) {
   const where = [];
   const params = [];
   if (hostId) {
     where.push('host_id = ?');
     params.push(hostId);
+  }
+  // A finding about a switch port carries the POLLING agent in host_id as well,
+  // so the two filters narrow rather than exclude each other: "everything on
+  // this agent" still includes the switches it polls, and "this device" is the
+  // narrower question.
+  if (deviceId) {
+    where.push('device_id = ?');
+    params.push(Number(deviceId));
+  }
+  if (interfaceId) {
+    where.push('interface_id = ?');
+    params.push(Number(interfaceId));
   }
   if (severity) {
     where.push('severity = ?');
@@ -76,6 +88,11 @@ function mapRow(row) {
   return {
     id: row.id,
     hostId: row.host_id,
+    // NULL on a finding about an agent. A finding about a switch port carries
+    // both, AND the polling agent in hostId, so a per-agent read still finds it
+    // (migration 110).
+    deviceId: row.device_id == null ? null : Number(row.device_id),
+    interfaceId: row.interface_id == null ? null : Number(row.interface_id),
     metric: row.metric,
     severity: row.severity,
     // Non-null only when a severity rule changed this. The pair travels with
@@ -161,13 +178,17 @@ class FindingStore {
 
     await this.pool.query(
       `INSERT INTO findings
-         (id, host_id, metric, severity, original_severity, severity_rule_id, kind,
+         (id, host_id, device_id, interface_id, metric, severity, original_severity, severity_rule_id, kind,
           observed, baseline, deviation,
           window_from, window_to, explanation, evidence, correlated_with, acked, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         id,
         finding.hostId,
+        // NULL for a finding about an agent, which is every finding that
+        // existed before migration 110 and most of the ones after it.
+        finding.deviceId ?? null,
+        finding.interfaceId ?? null,
         finding.metric,
         decision.severity,
         decision.original_severity,

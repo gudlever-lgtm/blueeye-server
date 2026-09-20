@@ -45,6 +45,7 @@
     delta: { path: '/topology-delta' },
     diagnose: { path: '/diagnose' },
     deviceLog: { path: '/device-log' },
+    snmpDevice: { path: '/snmp-devices', param: true },
     troubleshooting: { path: '/troubleshooting' },
     investigation: { path: '/investigate' },
 

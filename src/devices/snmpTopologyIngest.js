@@ -24,6 +24,16 @@ function createSnmpTopologyIngest({
   // Reusing it would attribute a switch's neighbours to whichever agent shared
   // the number, which does not throw — it just draws the wrong network.
   snmpNeighborsRepo = null,
+  // The ports themselves. The agent has been sending this list since stage 02
+  // and the validator has been accepting it; until now nothing stored it, so
+  // the ifIndex->ifName table crossed the wire on every poll and was thrown
+  // away. It is the join every per-port measurement needs.
+  deviceInterfacesRepo = null,
+  // Loop detection runs HERE, after the forwarding table has just been
+  // re-read, because that is the moment the MAC move counters have moved. On a
+  // timer it would either check a table nothing has touched or miss the window
+  // where a loop is visible at all.
+  l2LoopService = null,
   logger = null,
   now = () => new Date(),
 }) {
@@ -44,8 +54,17 @@ function createSnmpTopologyIngest({
     let stored = 0;
     let fdbRows = 0;
     let neighbourRows = 0;
+    let interfaceRows = 0;
     let refused = 0;
     const deviceErrors = [];
+    // Ports whose ifIndex moved since the last poll. Reported back to the
+    // caller because a counter delta that spans a renumbering is two different
+    // ports subtracted from each other — see migration 108.
+    const renumbered = [];
+    // Devices whose forwarding table this cycle actually wrote. Only those are
+    // worth a loop check — a device that failed or was refused has no new
+    // evidence either way.
+    const storedDeviceIds = [];
 
     for (const d of devices) {
       if (!owned.has(d.deviceId)) {
@@ -56,6 +75,19 @@ function createSnmpTopologyIngest({
         continue;
       }
       try {
+        // Interfaces FIRST: the forwarding table and the neighbours both name
+        // ports, and a port that does not exist in the inventory yet cannot be
+        // joined to. Best-effort like the neighbours — an inventory failure
+        // must not cost the forwarding table somebody is waiting for.
+        if (deviceInterfacesRepo && d.interfaces && d.interfaces.length) {
+          try {
+            const out = await deviceInterfacesRepo.upsertMany(d.deviceId, d.interfaces, { at });
+            interfaceRows += out.upserted;
+            for (const r of out.renumbered) renumbered.push({ deviceId: d.deviceId, ...r });
+          } catch (err) {
+            if (logger) logger.warn(`snmp-topology: interface ingest failed for device ${d.deviceId} (${err.message})`);
+          }
+        }
         if (d.fdb.length) {
           fdbRows += await fdbEntriesRepo.upsertMany(d.deviceId, d.fdb, { at });
         }
@@ -75,6 +107,7 @@ function createSnmpTopologyIngest({
         }
         await snmpDevicesRepo.recordPoll(d.deviceId, { ok: true, supported: d.supported, at });
         stored += 1;
+        if (d.fdb.length) storedDeviceIds.push(d.deviceId);
       } catch (err) {
         deviceErrors.push({ deviceId: d.deviceId, error: String(err.message).slice(0, 255) });
         if (logger) logger.warn(`snmp-topology: could not store device ${d.deviceId} (${err.message})`);
@@ -101,7 +134,23 @@ function createSnmpTopologyIngest({
       }
     }
 
-    return { stored, fdbRows, neighbourRows, refused, failuresRecorded, deviceErrors };
+    // Loop detection over the devices whose forwarding tables just changed.
+    // Best-effort and last: a detector that throws must never cost the sweep
+    // that was going to feed it.
+    let loops = 0;
+    if (l2LoopService && storedDeviceIds.length) {
+      try {
+        const found = await l2LoopService.checkDevices(storedDeviceIds, { agentId });
+        loops = found.length;
+      } catch (err) {
+        if (logger) logger.warn(`snmp-topology: loop detection failed (${err.message})`);
+      }
+    }
+
+    return {
+      stored, fdbRows, neighbourRows, interfaceRows, renumbered, loops,
+      refused, failuresRecorded, deviceErrors,
+    };
   }
 
   return { ingest };

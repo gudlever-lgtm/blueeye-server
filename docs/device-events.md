@@ -78,6 +78,11 @@ iptables -t nat -A PREROUTING -p udp --dport 514 -j REDIRECT --to-port 1514
 | `BLUEEYE_SYSLOG_FLUSH_MS` | `syslogFlushIntervalMs` | `30000` | independent of the traffic report: a link-down should not wait on a traffic sample |
 | `BLUEEYE_SYSLOG_MAX_EVENTS` | `syslogMaxEvents` | `5000` | buffered rows before new ones are dropped |
 | `BLUEEYE_SYSLOG_RATE` | `syslogRatePerSec` | `200` | per sender |
+| `BLUEEYE_TRAPS_ENABLED` | `trapsEnabled` | `false` | SNMP traps; shares the device-event flush, so it needs no interval of its own |
+| `BLUEEYE_TRAP_PORT` | `trapPort` | `1162` | |
+| `BLUEEYE_TRAP_BIND` | `trapBindAddress` | `0.0.0.0` | |
+| `BLUEEYE_TRAP_MAX_EVENTS` | `trapMaxEvents` | `2000` | |
+| `BLUEEYE_TRAP_RATE` | `trapRatePerSec` | `50` | per sender |
 
 ---
 
@@ -334,10 +339,79 @@ Two things the agent deliberately does **not** do:
 
 ---
 
-## Next
+## SNMP traps (stage 03)
 
-Stage 03 adds **SNMP traps** on the same rails: `transport: 'trap'`, the same
-table, the same route, the same screen with a source filter. That is why
-`transport` is an ENUM with both values from migration 103 rather than a column
-added later — a trap and a syslog line are the same thing arriving over a
-different socket.
+Traps landed on exactly these rails: **no new table, no new route, no new
+screen.** `transport: 'trap'`, the same `device_events`, the same
+`POST /agents/me/device-events`, the same Device log with a source filter. That
+is what migration 103's two-value ENUM was for.
+
+**Port 1162, not 162** — same reasoning as 1514. Off by default
+(`BLUEEYE_TRAPS_ENABLED`).
+
+### The sender allowlist is not optional
+
+An SNMPv2c trap is **unauthenticated**: anyone who can route a UDP packet to
+the port can claim to be any switch. The source address is all there is, so a
+trap is accepted **only from an address this agent actually polls** — its
+`snmpTargets` from stage 02. Everything else is counted as `refused` and
+dropped, *before any decoding*, so a hostile sender cannot make the process do
+work by sending malformed packets.
+
+That is a weak check. It is the strongest one v2c permits. SNMPv3 traps, which
+can be authenticated, are separate work.
+
+`refused` is counted apart from `dropped` on purpose: *"a switch nobody added is
+shouting at us"* and *"a device we poll is shouting too fast"* are different
+problems with different fixes.
+
+### A table, not a MIB compiler
+
+`traps/translate.js` maps ~40 well-known trap OIDs — SNMPv2-MIB, BRIDGE-MIB,
+OSPF-MIB, BGP4-MIB, UPS-MIB, ENTITY-SENSOR, POWER-ETHERNET, plus Cisco, HPE and
+Juniper. Parsing MIB files at runtime would mean shipping a parser, a MIB
+repository and a resolution order, and getting all three right for every vendor,
+to answer a question those OIDs already cover. They do not change.
+
+**An unknown trap is kept as its OID**, with its varbinds, and shown raw — never
+mapped to its nearest neighbour. Same rule the syslog classifier and the
+diagnose module follow.
+
+### Three things a trap gets right that syslog cannot
+
+**It arrives first.** A trap usually beats the syslog line about the same event
+by a second or two, because the device emits it from a different code path. And
+plenty of equipment — UPSes, older APs, PDUs — sends traps and no syslog at all.
+
+**A trap has no wall clock.** It carries `sysUpTime`, which is an uptime, not a
+date. `device_time` and `clock_skew_ms` are **null**, which is correct: there is
+no device clock to compare against. Deriving a timestamp from uptime would put a
+fabricated number in the column the skew check reads. The uptime itself is kept
+in `detail.upTimeTicks`.
+
+**`link.admin_down`.** A `linkDown` whose `ifAdminStatus` is also down is an
+administrative shutdown — *somebody turned this port off*. That is a different
+fault from a port that fell over, and it sends a technician somewhere else, so
+it gets its own type at notice severity. It is also classified as a **change**
+rather than a symptom on the timeline, because a person did it.
+
+The interface is named from what **stage 02's poll already read** off that
+device, so a trap saying "ifIndex 1" shows as "GigabitEthernet0/1". A device the
+resolver does not know shows the index — an honest `ifIndex 1` beats a confident
+wrong name.
+
+### One vocabulary, two translators
+
+`syslog/classify.js` reads a log line and `traps/translate.js` reads a trap OID,
+and they deliberately produce the **same** `event_type` strings. A link that went
+down is `link.down` whichever socket said so, which is what lets the device log,
+the timeline and the changes feed treat both without knowing the difference.
+
+A trap and the syslog line about the same event do **not** fold together:
+`transport` is part of the dedup key. They are two observations of one fault
+from two code paths, and folding them would hide that the trap arrived first —
+the entire argument for collecting both.
+
+Both receivers drain into **one** batch: same kind of row, and sending them
+separately would double the requests for no benefit. A receiver that throws
+costs its own rows, not the other's.

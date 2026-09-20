@@ -7,6 +7,13 @@
 // GET /api/device-events/catalog rather than carrying its own copy, so the
 // filter list and the stored data can never drift apart.
 //
+// ONE VOCABULARY FOR SYSLOG AND TRAPS. The types below are produced by two
+// different agent modules — src/syslog/classify.js reads a log line,
+// src/traps/translate.js reads a trap OID — and they deliberately produce the
+// SAME strings. A link that went down is `link.down` whichever socket said so,
+// which is what lets the device log, the timeline and the changes feed treat
+// both without knowing the difference.
+//
 // THE SERVER'S TABLE IS ALLOWED TO BE BEHIND THE AGENT'S. The agent ships the
 // classifier (blueeye-agent src/syslog/classify.js) and a newer agent will send
 // types this catalogue has not heard of. That is not an error: describeEventType
@@ -34,6 +41,9 @@ const EVENT_TYPE_GROUPS = Object.freeze([
       { type: 'duplex.mismatch', label: 'Duplex-mismatch' },
       { type: 'port.err_disabled', label: 'Port err-disabled' },
       { type: 'port.security_violation', label: 'Portsikkerhed udløst' },
+      { type: 'link.admin_down', label: 'Port slukket administrativt' },
+      { type: 'poe.port_changed', label: 'PoE-port skiftede tilstand' },
+      { type: 'poe.budget_exceeded', label: 'PoE-budget overskredet' },
     ],
   },
   {
@@ -43,6 +53,7 @@ const EVENT_TYPE_GROUPS = Object.freeze([
       { type: 'stp.root_changed', label: 'Spanning-tree rod skiftede' },
       { type: 'stp.loop_detected', label: 'Spanning-tree loop opdaget' },
       { type: 'mac.flapping', label: 'MAC flapper mellem porte' },
+      { type: 'vlan.trunk_changed', label: 'VLAN-trunk ændret' },
     ],
   },
   {
@@ -53,6 +64,8 @@ const EVENT_TYPE_GROUPS = Object.freeze([
       { type: 'bgp.session_down', label: 'BGP-session nede' },
       { type: 'bgp.session_up', label: 'BGP-session oppe' },
       { type: 'hsrp.state_changed', label: 'HSRP/VRRP-tilstand skiftede' },
+      { type: 'routing.neighbor_lost', label: 'Routing-nabo tabt' },
+      { type: 'ospf.config_error', label: 'OSPF-konfigurationsfejl' },
     ],
   },
   {
@@ -80,6 +93,10 @@ const EVENT_TYPE_GROUPS = Object.freeze([
       { type: 'temperature.alarm', label: 'Temperaturalarm' },
       { type: 'ups.on_battery', label: 'UPS på batteri' },
       { type: 'resource.exhausted', label: 'Ressourcer opbrugt' },
+      { type: 'ups.alarm', label: 'UPS-alarm' },
+      { type: 'sensor.threshold', label: 'Sensor-grænse overskredet' },
+      { type: 'resource.threshold', label: 'Måle-grænse overskredet' },
+      { type: 'device.hardware_changed', label: 'Hardware ændret' },
     ],
   },
   {

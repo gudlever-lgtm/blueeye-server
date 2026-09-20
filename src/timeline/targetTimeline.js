@@ -247,6 +247,10 @@ const CHANGE_DEVICE_EVENT_TYPES = new Set([
   'device.rebooted',
   'port.err_disabled',
   'stp.root_changed',
+  // Somebody shut this port. A linkDown trap whose ifAdminStatus is also down
+  // is not the fault showing itself — it is a person, and "what changed before
+  // this finding" should say so.
+  'link.admin_down',
 ]);
 
 function classifyEvent(event) {

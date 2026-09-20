@@ -84,8 +84,15 @@ const get = (app, path, role = 'viewer') => request(app).get(path).set('Authoriz
 // read is a window that ends at the current time, so a hard-coded timestamp
 // ages out of it during the day and the test starts failing by the clock
 // rather than by the code.
-const T0 = new Date(Date.now() - 5 * 60 * 1000).toISOString();
-const T1 = new Date(Date.now() - 4 * 60 * 1000).toISOString();
+//
+// BOTH FROM ONE `Date.now()`. Two calls are two readings of a clock that may
+// tick between them, which makes the interval 60.001 seconds — and every rate
+// asserted against it comes out a hair low (100 000 bps reads as 99 998.333).
+// Intermittent, roughly one run in six, and it looks exactly like a rounding
+// bug in the delta code rather than a fixture racing the clock.
+const NOW = Date.now();
+const T0 = new Date(NOW - 5 * 60 * 1000).toISOString();
+const T1 = new Date(NOW - 4 * 60 * 1000).toISOString();
 
 // ================================================================== the ingest
 test('the first cycle stores raw counters and no rates', async () => {

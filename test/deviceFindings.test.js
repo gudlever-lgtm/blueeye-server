@@ -266,8 +266,13 @@ test('counters arriving through the ingest reach the detector', async () => {
     .set('Authorization', 'Bearer agent-tok')
     .send({ devices: [{ deviceId: 1, readAt, sysUpTimeTicks: ticks, hc: true, interfaces: [{ ifIndex: 1, ifName: 'Gi0/1', inOctets: 1_000_000, inDiscards: 0, ...over }] }] });
 
-  const t0 = new Date(Date.now() - 120_000).toISOString();
-  const t1 = new Date(Date.now() - 60_000).toISOString();
+  // One `Date.now()` for both. Two calls are two readings of a clock that can
+  // tick between them, which makes the interval 60.001 seconds and every rate
+  // computed from it a hair off — the same intermittent failure this pattern
+  // already caused in snmpCountersApi.test.js.
+  const now = Date.now();
+  const t0 = new Date(now - 120_000).toISOString();
+  const t1 = new Date(now - 60_000).toISOString();
   await post(t0, 500_000, {});
   const res = await post(t1, 506_000, { inOctets: 1_750_000, inDiscards: 240 });
 

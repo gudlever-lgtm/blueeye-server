@@ -10,6 +10,9 @@ const { dominantFindingTypes, buildRecommendedActions } = require('../remediatio
 // A cluster is still "live" (a playbook can be run against it) while open or
 // acknowledged; resolved/closed clusters are done.
 const LIVE_STATUSES = new Set(['open', 'acknowledged']);
+// How many situations one bulk resolve may carry. Each is a read, a guarded
+// write and an audit row.
+const MAX_BULK_CLUSTERS = 500;
 
 // Cross-agent event CLUSTERS (event_clusters) — findings from ≥2 agents that
 // fired together, grouped by the clustering engine (src/analysis/crossAgent*).
@@ -339,6 +342,69 @@ function createEventClustersRouter({
 
   // POST /api/event-clusters/:id/resolve — resolve with a REQUIRED free-text
   // note (operator+). Audited.
+  // POST /api/event-clusters/bulk-resolve — resolve many situations at once.
+  //
+  // The note stays REQUIRED, and it is the same note for the whole batch. That
+  // is the honest reading of the action: somebody looked at these together and
+  // reached one conclusion about them. Letting a bulk resolve skip the note
+  // would make it the easy path, and then every situation in the history would
+  // be resolved with no reason recorded.
+  //
+  // Per-situation outcome, same as the events fan-out:
+  //   resolved    it moved
+  //   not_found   no such situation
+  //   conflict    already resolved/closed, or changed underneath us
+  router.post('/bulk-resolve', requireAuth, writer, asyncHandler(async (req, res) => {
+    const body = req.body || {};
+    if (!Array.isArray(body.ids) || !body.ids.length) {
+      return res.status(400).json({ error: 'ids must be a non-empty array' });
+    }
+    if (body.ids.length > MAX_BULK_CLUSTERS) {
+      return res.status(400).json({ error: `ids must hold at most ${MAX_BULK_CLUSTERS} situations` });
+    }
+    const ids = [];
+    for (const raw of body.ids) {
+      const id = parseId(raw);
+      if (id === null) return res.status(400).json({ error: 'ids must be positive integers' });
+      if (!ids.includes(id)) ids.push(id);
+    }
+
+    const note = typeof body.note === 'string' ? body.note.trim() : '';
+    if (note === '') {
+      return res.status(400).json({ error: 'Validation failed', details: { note: 'a resolution note is required' } });
+    }
+
+    const by = (req.user && req.user.id) || null;
+    const at = new Date();
+    const results = [];
+    for (const id of ids) {
+      // eslint-disable-next-line no-await-in-loop
+      const existing = await clustersRepo.findById(id);
+      if (!existing) { results.push({ id, outcome: 'not_found' }); continue; }
+      // eslint-disable-next-line no-await-in-loop
+      const ok = await clustersRepo.resolve(id, { by, note, at });
+      if (!ok) { results.push({ id, outcome: 'conflict', status: existing.status }); continue; }
+      results.push({ id, outcome: 'resolved', from: existing.status });
+
+      if (auditLogger) {
+        // One row per situation: the audit log answers "what happened to
+        // situation 12", which a single batch row cannot.
+        // eslint-disable-next-line no-await-in-loop
+        await auditLogger.record(req, {
+          category: 'event', action: 'cluster_resolve', target: String(id),
+          detail: `${existing.status}→resolved (bulk): ${note.slice(0, 200)}`,
+        });
+      }
+    }
+
+    // NO resolution alerts for a bulk resolve. One notification per situation
+    // would mean a operator clearing forty of them pages everybody forty times,
+    // which is how a channel gets muted — and a muted channel is worse than a
+    // quiet one. The audit log still has every row.
+    const resolved = results.filter((r) => r.outcome === 'resolved').length;
+    return res.status(200).json({ resolved, requested: ids.length, results });
+  }));
+
   router.post('/:id/resolve', requireAuth, writer, asyncHandler(async (req, res) => {
     const id = parseId(req.params.id);
     if (id === null) return res.status(400).json({ error: 'id must be a positive integer' });

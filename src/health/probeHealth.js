@@ -21,6 +21,28 @@ const JITTER_WARN = 30; // ms
 const JITTER_BAD = 100;
 const Z_WARN = 3; // robust z-score of latest RTT vs. the target's own baseline
 const Z_BAD = 6;
+
+// HOW FAR THE LATENCY ACTUALLY MOVED, which the z-score on its own does not say.
+//
+// A stable LAN target has a baseline like 0.5 ms with a MAD of a few tens of
+// MICROSECONDS. Divide an ordinary 0.4 ms wobble by a 54 us sigma and the answer
+// is z=7.4 — past Z_BAD, so "critical", on a link nobody would call slow. That is
+// not a broken statistic, it is a correct statistic answering the wrong question:
+// "is this unusual for this target" instead of "is this worth waking someone for".
+// In the field it produced 30 003 criticals out of 184 668 findings, which is the
+// same as having none.
+//
+// So elevated latency has to clear BOTH bars before the z-score is consulted:
+//
+//   at least LAT_MIN_DELTA_MS above baseline   — a sub-5 ms move is never news,
+//                                                however many sigmas it is;
+//   at least LAT_MIN_FRACTION above baseline   — and on a 200 ms WAN path, 5 ms
+//                                                is not news either.
+//
+// Loss and jitter already work this way (LOSS_WARN, JITTER_WARN are absolute).
+// Latency was the one signal judged on nothing but its own variance.
+const LAT_MIN_DELTA_MS = 5;
+const LAT_MIN_FRACTION = 0.2;
 const MIN_BASELINE = 8; // samples before a latency baseline is trusted
 const STALE_MS = 15 * 60 * 1000; // newest probe older than this ⇒ data is stale
 const MAD_TO_SIGMA = 1.4826; // MAD ⇒ std-dev for a normal distribution
@@ -77,6 +99,15 @@ function summarizeTarget(samples) {
   };
 }
 
+// Did the latency move far enough to be worth a verdict at all? Both bars, for
+// the reasons at LAT_MIN_DELTA_MS. A target with no usable baseline has nothing
+// to have moved FROM, so it does not qualify — the z-score is already 0 there.
+function latencyMoved(t) {
+  if (!t || !Number.isFinite(t.rttMs) || !Number.isFinite(t.baselineMs)) return false;
+  const delta = t.rttMs - t.baselineMs;
+  return delta >= LAT_MIN_DELTA_MS && delta >= t.baselineMs * LAT_MIN_FRACTION;
+}
+
 // Reduce one agent's recent probe rows to a health verdict. `rows` are this
 // agent's rows, newest-first; each { ts, type, target, ok, rttMs, jitterMs, lossPct }.
 function computeAgentHealth(rows, { now = Date.now() } = {}) {
@@ -121,8 +152,11 @@ function computeAgentHealth(rows, { now = Date.now() } = {}) {
     if (unreachable.length) { status = worse(status, 'bad'); note('reachability', unreachable[0], { ok: false, of: targets.length, unreachable: unreachable.length }); }
     if (worstLoss && worstLoss.lossPct >= LOSS_BAD) { status = worse(status, 'bad'); note('loss', worstLoss, { lossPct: round1(worstLoss.lossPct) }); }
     else if (worstLoss && worstLoss.lossPct >= LOSS_WARN) { status = worse(status, 'warn'); note('loss', worstLoss, { lossPct: round1(worstLoss.lossPct) }); }
-    if (worstLat && worstLat.z >= Z_BAD) { status = worse(status, 'bad'); note('latency', worstLat, { rttMs: round1(worstLat.rttMs), baselineMs: round1(worstLat.baselineMs), z: round1(worstLat.z) }); }
-    else if (worstLat && worstLat.z >= Z_WARN) { status = worse(status, 'warn'); note('latency', worstLat, { rttMs: round1(worstLat.rttMs), baselineMs: round1(worstLat.baselineMs), z: round1(worstLat.z) }); }
+    // `latencyMoved` is the gate described at LAT_MIN_DELTA_MS: a z-score on a
+    // target that barely moved says nothing worth reporting.
+    const latMoved = worstLat ? latencyMoved(worstLat) : false;
+    if (latMoved && worstLat.z >= Z_BAD) { status = worse(status, 'bad'); note('latency', worstLat, { rttMs: round1(worstLat.rttMs), baselineMs: round1(worstLat.baselineMs), z: round1(worstLat.z) }); }
+    else if (latMoved && worstLat.z >= Z_WARN) { status = worse(status, 'warn'); note('latency', worstLat, { rttMs: round1(worstLat.rttMs), baselineMs: round1(worstLat.baselineMs), z: round1(worstLat.z) }); }
     if (worstJit && worstJit.jitterMs >= JITTER_BAD) { status = worse(status, 'bad'); note('jitter', worstJit, { jitterMs: round1(worstJit.jitterMs) }); }
     else if (worstJit && worstJit.jitterMs >= JITTER_WARN) { status = worse(status, 'warn'); note('jitter', worstJit, { jitterMs: round1(worstJit.jitterMs) }); }
   }
@@ -299,5 +333,5 @@ module.exports = {
   mergeConnection,
   robustStats,
   // exported for tests / tuning visibility
-  THRESHOLDS: { LOSS_WARN, LOSS_BAD, JITTER_WARN, JITTER_BAD, Z_WARN, Z_BAD, MIN_BASELINE, STALE_MS },
+  THRESHOLDS: { LOSS_WARN, LOSS_BAD, JITTER_WARN, JITTER_BAD, Z_WARN, Z_BAD, MIN_BASELINE, STALE_MS, LAT_MIN_DELTA_MS, LAT_MIN_FRACTION },
 };

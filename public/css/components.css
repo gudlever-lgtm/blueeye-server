@@ -561,3 +561,12 @@
    figure it is a percentage of instead of spanning two of them. */
 .ui .lic-bars { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
   gap: var(--s-3); margin-top: calc(var(--s-5) * -1 + var(--s-2)); }
+
+/* ---- DataTable row selection ---- */
+/* The checkbox column is fixed and narrow: it is a control, not data, so it
+   must not take width from the columns that carry meaning. */
+.ui .dt .dt-check-cell { text-align: center; padding-left: var(--s-2); padding-right: 0; }
+.ui .dt .dt-check { width: 15px; height: 15px; margin: 0; cursor: pointer; accent-color: var(--accent); }
+/* A selected row is tinted, not outlined — an outline inside a table reads as a
+   cell border and makes the grid look broken. */
+.ui .dt tbody tr:has(.dt-check:checked) { background: var(--accent-weak); }

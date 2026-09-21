@@ -208,14 +208,140 @@ finding never claims anything the dashboard verdict doesn't:
 
 - `probe.reachability` (CRIT) — targets not responding;
 - `probe.loss` (WARN ≥2 % / CRIT ≥20 %);
-- `probe.latency` (ANOMALY, z-score vs. the target's own baseline);
+- `probe.latency` (ANOMALY, z-score vs. the target's own baseline — **but only
+  once the latency actually moved**, see below);
 - `probe.jitter` (WARN ≥30 ms / CRIT ≥100 ms);
 - `probe.cert` (WARN ≤14 d / CRIT ≤3 d) — TLS certificate expiry from the **http**
   probe, judged independently of reachability.
 
+### Latency needs a floor, not just a z-score
+
+A z-score answers "is this unusual for this target". It does not answer "is this
+worth waking somebody for", and on a stable LAN the two come apart badly.
+
+A LAN target sits at 0.5 ms with a MAD of a few tens of **microseconds**. Divide
+an ordinary 0.4 ms wobble by a 54 µs sigma and the answer is z = 7.4 — past
+`Z_BAD`, so *critical*, on a link nobody would call slow. In the field that
+produced **30 003 criticals out of 184 668 findings**, which is the same as
+having none: a backlog nobody can read is one everybody stops reading.
+
+So elevated latency has to clear two bars before the z-score is consulted at all
+(`health/probeHealth.js`):
+
+| bar | value | why |
+| --- | --- | --- |
+| `LAT_MIN_DELTA_MS` | 5 ms | a sub-5 ms move is never news, however many sigmas it is |
+| `LAT_MIN_FRACTION` | 20 % | and on a 200 ms WAN path, 5 ms is not news either |
+
+Both, not either. `0.5 → 2 ms` is +300 % and still a tiny change; `118 → 124 ms`
+is +6 ms and still inside normal variation. `118 → 309 ms` clears both, and stays
+critical exactly as before.
+
+The floor gates **latency only**. Loss, jitter and unreachability always had
+absolute thresholds and are untouched — a quiet-latency target that is dropping
+packets is still reported, which is the whole reason the fix is a pre-condition
+on one signal rather than a global sensitivity knob.
+
 Findings are de-duplicated within a 30-min cooldown (per metric+target) so
 frequent probes don't spam the list or the alert channels. Gated by the analysis
 license+flag; alerts go through the existing dispatcher (alerting flag).
+
+## The Analysis screen leads with places, not rows
+
+The page used to open with five totals and then five hundred raw findings. At
+184 668 findings that is a firehose with a header: nobody reads row 300, and the
+one finding that mattered is in there with the rest.
+
+So the screen leads with **what is wrong, and where** — one row per host, worst
+first (CRIT, then WARN, then volume: a host with one critical outranks a host
+with four hundred warnings, because that is the order somebody works in). Each
+row carries the metrics that are actually wrong on it, busiest first:
+
+```
+oslo-edge-01   CRIT 3   WARN 41   probe.latency ×28 · if.12.in.errPps ×12 · probe.loss ×4   4 min ago   [Accept]
+```
+
+Three metrics, then a count — a row listing forty is unreadable, and a host with
+forty distinct metrics has a different problem than the list can express.
+
+`GET /api/findings/summary` grew `byHost[].topMetrics` for this: one extra
+grouped read, not a query per host. Clicking a row filters the list below to that
+host, which is the natural next question after "this one is worst".
+
+**Accept** on a row bulk-acknowledges that host's findings through
+`POST /api/findings/ack`, scoped to the filters the screen is showing — so it
+accepts what the row says and nothing wider.
+
+### AI on the Analysis screen
+
+The assistant used to be a raw `<input>` and a `.small` button bolted onto the
+**bottom** of the page, below five hundred rows — which is to say, where nobody
+found it. It is a panel above the overview now, built from the same components
+as the rest of the page, with two ways in:
+
+- **Summarise what I am looking at** — `POST /api/assistant/findings-summary`,
+  carrying the screen's current filters as the query string. The answer
+  describes the page being looked at; a summary that ignored the filters would
+  quietly describe a different one.
+- **Explain**, on each overview row — reuses `POST /api/assistant/explain` for
+  that host, so "3 CRIT and 41 WARN, so what?" is answered where the question is
+  asked rather than making somebody retype the host name into a box.
+
+**The context is the AGGREGATE, never the rows.** A fleet can be sitting on six
+figures of findings; forwarding them would be impossible and pointless. The
+summary the server already computes — counts per host and per metric, each host
+carrying what is actually wrong on it — is the same shape a person reads off the
+screen, and it is capped at twelve places and six metrics because a model given
+eighty rows summarises the list rather than the situation. A test asserts that
+no per-finding field (`explanation`, `evidence`, `deviation`, `observed`)
+reaches the prompt.
+
+Nothing to describe means **no provider call at all** — the honest answer costs
+nothing. The panel does not render when the assistant is off or unlicensed, so a
+deployment without it has no AI on the page rather than a button that 403s.
+
+## Reporting: findings over time, and the executive document
+
+The Analysis screen answers **what is wrong now**. The two questions a report is
+opened for — *when did this happen* and *where should somebody be sent* — moved
+to **Reporting → Findings**, which is where the totals from the old Analysis
+header now live, with the graphs that make a total mean something.
+
+`GET /api/findings/trend` buckets by `hour` or `day` over the same filter set as
+the list and the summary. The bucket is **explicit, not inferred from the
+range**: hourly over ninety days is 2 160 points for a chart 760 pixels wide,
+and daily over one day is a single bar. The answer says which bucket it used, so
+a chart never silently redraws at a different resolution than its axis claims.
+Severity is charted as separate series rather than one total, because "300 a
+day" reads very differently when it is 3 CRIT and 297 INFO.
+
+### The executive report
+
+`GET /api/findings/report` builds *"fix these specific issues at these specific
+locations"* — JSON by default, or the print-ready document with `?format=html`.
+
+It is rendered through the **NIS2 document chrome** (`src/nis2/report.js`,
+`renderRegisterHtml`) rather than a second report engine: that module already
+solves print CSS, a per-request locale (two people can pull a report in two
+languages at once) and a section shape the renderer understands.
+
+**It is deterministic, and that is the point.** Every number is computed by the
+server and every sentence is assembled from those numbers — there is a test that
+strips the comments from `src/analysis/networkReport.js` and fails if the module
+ever reaches for a model. A document a manager forwards to an engineer has to be
+defensible line by line, and "the assistant said so" is not that. The AI on the
+Analysis screen is for interpretation at the desk; this is the record.
+
+Three editorial rules keep it readable:
+
+| rule | why |
+| --- | --- |
+| at most 10 places named | a report listing forty sites reads as "everything is broken", which says nothing |
+| a place needs a CRIT or ≥5 warnings to be named | one warning does not earn a row; the rest become a tail count |
+| fewer than 4 buckets → "too short to say" | two numbers are not a trend, and drawing a line through them is a lie |
+
+Where no single place clears the bar, it says so — *"a broad, thin spread rather
+than a concentrated fault"* — instead of naming an arbitrary host.
 
 ## AI: per-location summary
 

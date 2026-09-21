@@ -65,6 +65,47 @@ function buildFilter({ hostId, deviceId, interfaceId, severity, metric, since, u
   return { where, params };
 }
 
+// Findings over TIME, bucketed, for the reporting charts.
+//
+// The Analysis screen answers "what is wrong now". This answers "when, and is
+// it getting better" — which is a different question and belongs on a
+// different page. Both run through the same `buildFilter`, so a trend and a
+// list scoped the same way describe the same findings.
+//
+// The bucket is chosen by the caller, not guessed from the range: an hourly
+// bucket over ninety days is 2 160 points for a chart 760 pixels wide, and a
+// daily bucket over one day is a single bar. The route decides, and the
+// choice is visible in the answer.
+async function trendQuery(pool, { bucket, filters, limit }) {
+  // MySQL DATE_FORMAT, not a computed range join: the grouping key IS the
+  // bucket, so an empty hour is simply absent rather than costing a row.
+  const FORMAT = { hour: '%Y-%m-%d %H:00:00', day: '%Y-%m-%d' };
+  const fmt = FORMAT[bucket] || FORMAT.day;
+  const { where, params } = buildFilter(filters || {});
+  const clause = where.length ? `WHERE ${where.join(' AND ')}` : '';
+  const [rows] = await pool.query(
+    `SELECT DATE_FORMAT(created_at, ?) AS bucket,
+            COUNT(*) AS cnt,
+            SUM(severity = 'CRIT') AS crit,
+            SUM(severity = 'WARN') AS warn,
+            SUM(severity = 'INFO') AS info,
+            SUM(acked = 1) AS acked
+       FROM findings ${clause}
+      GROUP BY bucket
+      ORDER BY bucket ASC
+      LIMIT ?`,
+    [fmt, ...params, limit],
+  );
+  return rows.map((r) => ({
+    bucket: r.bucket,
+    count: Number(r.cnt) || 0,
+    crit: Number(r.crit) || 0,
+    warn: Number(r.warn) || 0,
+    info: Number(r.info) || 0,
+    acked: Number(r.acked) || 0,
+  }));
+}
+
 function parseJson(value, fallback) {
   if (value === null || value === undefined) return fallback;
   if (typeof value === 'string') {
@@ -321,6 +362,33 @@ class FindingStore {
       params
     );
 
+    // WHAT is wrong on each host, not just how much. "core-sw: 412 findings" is
+    // a number; "core-sw: discards on 3 ports, latency to 2 targets" is the
+    // thing somebody acts on. One extra grouped read rather than a query per
+    // host, and capped per host when rendered — a host with forty distinct
+    // metrics has a different problem than the list can express.
+    const [hostMetricRows] = await this.pool.query(
+      `SELECT host_id, metric,
+              COUNT(*) AS cnt,
+              SUM(severity = 'CRIT') AS crit,
+              MAX(created_at) AS last_at
+         FROM findings ${clause}
+        GROUP BY host_id, metric
+        ORDER BY host_id ASC, cnt DESC, metric ASC`,
+      params
+    );
+    const metricsByHost = new Map();
+    for (const r of hostMetricRows) {
+      const key = String(r.host_id);
+      if (!metricsByHost.has(key)) metricsByHost.set(key, []);
+      metricsByHost.get(key).push({
+        metric: r.metric,
+        count: Number(r.cnt) || 0,
+        crit: Number(r.crit) || 0,
+        lastAt: r.last_at,
+      });
+    }
+
     const bySeverity = { CRIT: 0, WARN: 0, INFO: 0 };
     let total = 0;
     let acked = 0;
@@ -352,6 +420,8 @@ class FindingStore {
         avgDeviation: r.avg_dev == null ? null : Number(r.avg_dev),
         maxDeviation: r.max_dev == null ? null : Number(r.max_dev),
         lastAt: r.last_at,
+        // Busiest metric first — already ordered by the query.
+        topMetrics: metricsByHost.get(String(r.host_id)) || [],
       })),
     };
   }
@@ -416,6 +486,51 @@ class FindingStore {
   async ack(id) {
     const [result] = await this.pool.query('UPDATE findings SET acked = 1 WHERE id = ?', [id]);
     return result.affectedRows > 0;
+  }
+
+  // "I have seen these and I accept them" — for a SET of findings, or for
+  // everything matching a filter.
+  //
+  // One at a time is not an option at the scale this reaches. A fleet that
+  // produced 184 668 findings needs to clear them in one action, and 184 668
+  // round trips is not that action.
+  //
+  // Two shapes, deliberately:
+  //   ackMany({ ids })      the rows somebody ticked on screen
+  //   ackMany({ filter })   everything matching what they are LOOKING at, which
+  //                         is the only way to accept a backlog nobody will
+  //                         scroll through
+  //
+  // Already-acked rows are not counted: `acked = 0` in the WHERE means the
+  // number that comes back is what THIS call changed, so "accepted 40 000" is
+  // true rather than a restatement of how many matched.
+  // See trendQuery above. `limit` bounds the answer even when the filters do
+  // not — a chart cannot draw more points than it has pixels, and an unbounded
+  // GROUP BY over the whole table is the read this feature must never become.
+  async trend({ bucket = 'day', limit = 400, ...filters } = {}) {
+    return trendQuery(this.pool, { bucket, filters, limit: Math.min(Math.max(Number(limit) || 400, 1), 2000) });
+  }
+
+  async ackMany({ ids = null, filter = null } = {}) {
+    if (Array.isArray(ids)) {
+      if (!ids.length) return 0;
+      const placeholders = ids.map(() => '?').join(', ');
+      const [result] = await this.pool.query(
+        `UPDATE findings SET acked = 1 WHERE acked = 0 AND id IN (${placeholders})`,
+        ids,
+      );
+      return Number(result.affectedRows || 0);
+    }
+
+    // The filter form reuses the SAME predicates the list and summary reads
+    // build, so "accept everything I can see" accepts exactly what was on
+    // screen — not a wider set that happened to be easier to write.
+    const { where, params } = buildFilter(filter || {});
+    const [result] = await this.pool.query(
+      `UPDATE findings SET acked = 1 WHERE acked = 0${where.length ? ` AND ${where.join(' AND ')}` : ''}`,
+      params,
+    );
+    return Number(result.affectedRows || 0);
   }
 
   // Persists the correlation links for a finding (the ids of the other findings

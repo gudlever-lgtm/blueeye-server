@@ -3,8 +3,8 @@
 // public/views/reporting.js — Reporting's page shell on the UI contract
 // (docs/ui-contract.md).
 //
-// A SHELL migration: the four section bodies (NIS2, the report generator, the
-// schedules and the audit trail) stay in public/app.js. What is tested here is
+// A SHELL migration: the five section bodies (the findings report, NIS2, the
+// report generator, the schedules and the audit trail) stay in public/app.js. What is tested here is
 // the page they sit on — the PageHeader that used to be a heading with the tab
 // strip wedged into it, the strip as the shared component under it, the section
 // in the URL, and the two states that used to be the same grey `.empty` box.
@@ -73,6 +73,12 @@ const SESSION = (over = {}) => Object.assign({
   'GET /auth/sso': { methods: [] },
   'GET /license': { plan: 'professional', features: {} },
   'GET /api/nis2/dashboard': DASH,
+  // Reporting now OPENS on the findings report, so its reads belong in every
+  // session: a section that 404s draws an ErrorState, which would hide the
+  // thing each of these tests is actually looking at.
+  'GET /api/findings/summary': { total: 0, bySeverity: [], byMetric: [], byHost: [] },
+  'GET /api/findings/trend': { bucket: 'day', points: [], filters: {} },
+  'GET /agents': [],
   'GET /api/nis2/custom-reports/sources': { sources: [] },
   'GET /api/report-schedules': [],
   'GET /locations': [],
@@ -112,8 +118,10 @@ test('the sections are the shared tab strip, under the header', async (t) => {
   const head = doc.querySelector('#view .page-head');
   assert.ok(head.compareDocumentPosition(bar) & 4, 'the strip does not follow the header');
   assert.ok(!head.contains(bar), 'the strip is inside the header');
-  assert.deepEqual(tabs(doc).map((b) => b.dataset.tab), ['nis2', 'generator', 'schedules', 'audit']);
-  assert.equal(active(doc).tab, 'nis2');
+  // Findings leads: it is the only section that answers something on a fresh
+  // install, where NIS2 and the generator both need to be set up first.
+  assert.deepEqual(tabs(doc).map((b) => b.dataset.tab), ['findings', 'nis2', 'generator', 'schedules', 'audit']);
+  assert.equal(active(doc).tab, 'findings');
   // One stop in the tab order; the arrows move within.
   assert.equal(tabs(doc).filter((b) => b.tabIndex === 0).length, 1);
 });
@@ -121,7 +129,7 @@ test('the sections are the shared tab strip, under the header', async (t) => {
 test('audit is admin-only and a viewer is not offered it', async (t) => {
   const { doc } = boot({ t, role: 'viewer', routes: SESSION({ 'GET /me': { id: 2, email: 'v@y.dk', role: 'viewer', preferences: {} } }) });
   await settle();
-  assert.deepEqual(tabs(doc).map((b) => b.dataset.tab), ['nis2', 'generator', 'schedules']);
+  assert.deepEqual(tabs(doc).map((b) => b.dataset.tab), ['findings', 'nis2', 'generator', 'schedules']);
 });
 
 test('a viewer deep-linking to /reporting/audit lands on a section they can read', async (t) => {
@@ -130,9 +138,9 @@ test('a viewer deep-linking to /reporting/audit lands on a section they can read
     routes: SESSION({ 'GET /me': { id: 2, email: 'v@y.dk', role: 'viewer', preferences: {} } }),
   });
   await settle();
-  assert.equal(active(doc).tab, 'nis2', 'a section the reader cannot reach was drawn empty');
+  assert.equal(active(doc).tab, 'findings', 'a section the reader cannot reach was drawn empty');
   // And the address follows, so a reload does not try it again.
-  assert.equal(window.location.pathname, '/reporting/nis2', 'the address still names a section they cannot open');
+  assert.equal(window.location.pathname, '/reporting/findings', 'the address still names a section they cannot open');
 });
 
 test('picking a section switches the body and puts the section in the URL', async (t) => {

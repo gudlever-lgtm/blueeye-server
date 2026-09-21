@@ -64,13 +64,17 @@
         var inc = data.event;
         var anomalies = data.anomalies || [];
 
-        // There is one move from any state, so it is the page's one primary
-        // rather than a row of loose buttons under the heading.
+        // At most ONE primary in a page header. `open` has two moves —
+        // "investigating" for picking it up, "resolved" for dismissing it when
+        // there is nothing to investigate — so the last one is the primary and
+        // the earlier ones are secondary, the same rule the bulk bar on the
+        // Events list uses.
         var moves = deps.canWrite() ? (deps.transitions(inc.status) || []) : [];
-        var actions = moves.map(function (to) {
-          return ui.button('primary', to === 'open' ? t('ev.reopen') : t('ev.markAs', { state: statusLabel(to) }), {
-            onclick: function () { deps.setStatus(id, inc.status, to); },
-          });
+        var actions = moves.map(function (to, i) {
+          return ui.button(i === moves.length - 1 ? 'primary' : 'secondary',
+            to === 'open' ? t('ev.reopen') : t('ev.markAs', { state: statusLabel(to) }), {
+              onclick: function () { deps.setStatus(id, inc.status, to); },
+            });
         });
         actions.push(back());
 

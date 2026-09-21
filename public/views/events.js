@@ -35,6 +35,21 @@
     var STATUS_TONE = { open: 'info', investigating: 'warn', resolved: 'ok', closed: 'neutral' };
     var SEV_RANK = { CRIT: 3, WARN: 2, INFO: 1 };
 
+    // The event state machine, mirrored for the UI. It lives in
+    // src/eventCases/stateMachine.js and the server enforces it; this copy only
+    // decides what to OFFER, so the page never proposes a move the API will
+    // refuse. A reopen is deliberately absent — it needs a comment, which is a
+    // per-event conversation rather than a bulk action.
+    //
+    // `open` has TWO next steps: most events are read and dismissed in one go,
+    // and making those walk through `investigating` recorded a step nobody
+    // performed.
+    var LEGAL_NEXT = {
+      open: ['investigating', 'resolved'],
+      investigating: ['resolved'],
+      resolved: ['closed'],
+    };
+
     function view() {
       var state = deps.state;
       if (!state.sort) state.sort = { key: 'last', dir: 'desc' };
@@ -43,8 +58,10 @@
       var page = ui.page();
       var stripHost = el('div', {});
       var toolbarHost = el('div', {});
+      var bulkHost = el('div', {});
       var tableHost = el('div', {});
       var loaded = [];
+      if (!Array.isArray(state.picked)) state.picked = [];
 
       var info = deps.help();
       page.append(ui.pageHeader({
@@ -54,7 +71,75 @@
         actions: [ui.button('secondary', t('events.openSituations'), {
           onclick: function () { deps.gotoView('clusters'); },
         })],
-      }), stripHost, toolbarHost, tableHost);
+      }), stripHost, toolbarHost, bulkHost, tableHost);
+
+      // The bulk bar only exists while something is selected — a permanently
+      // visible "0 selected" toolbar is furniture.
+      function drawBulk() {
+        var picked = state.picked || [];
+        if (!picked.length || !deps.canWrite()) { bulkHost.replaceChildren(); return; }
+
+        // Everything selected has to be going to the SAME next status, or the
+        // button cannot honestly say what it does. A mixed selection says so
+        // and offers nothing.
+        var statuses = {};
+        picked.forEach(function (id) {
+          var ev = loaded.find(function (e) { return String(e.id) === String(id); });
+          if (ev) statuses[ev.status] = true;
+        });
+        var from = Object.keys(statuses);
+        // A button PER legal next step. From `open` that is two — "investigating"
+        // for the ones somebody is picking up, "resolved" for the ones being
+        // dismissed — and naming both beats a dropdown nobody reads.
+        var targets = from.length === 1 ? (LEGAL_NEXT[from[0]] || []) : [];
+
+        var note = el('span', { class: 'meta' });
+        var acts = targets.map(function (to, i) {
+          return ui.button(i === targets.length - 1 ? 'primary' : 'secondary',
+            t('events.bulkMove', { n: picked.length, status: t('events.status.' + to) }),
+            { onclick: function () { run(to); } });
+        });
+
+        function run(status) {
+          acts.forEach(function (b) { b.disabled = true; });
+          note.className = 'meta';
+          note.textContent = t('events.bulkWorking');
+          deps.bulkStatus(picked.map(Number), status)
+            .then(function (r) {
+              var stuck = (r.results || []).filter(function (x) { return x.outcome !== 'moved'; });
+              if (stuck.length) {
+                note.className = 'inline-note is-warn';
+                // NAMED, not counted: "#41, #52 could not move" tells you what
+                // to do next; "2 failed" does not.
+                note.textContent = t('events.bulkPartial', {
+                  moved: r.moved, requested: r.requested,
+                  ids: stuck.map(function (x) { return '#' + x.id; }).join(', '),
+                });
+              } else {
+                note.textContent = t('events.bulkDone', { n: r.moved });
+              }
+              state.picked = [];
+              load();
+            })
+            .catch(function (e) {
+              note.className = 'inline-note is-crit';
+              note.textContent = deps.errText(e);
+              acts.forEach(function (b) { b.disabled = false; });
+            });
+        }
+
+        bulkHost.replaceChildren(ui.panel({
+          children: [el('div', { class: 'panel-body' },
+            ui.toolbar({
+              filters: [ui.filter('', ui.meta(t('events.bulkSelected', { n: picked.length })))],
+              actions: acts.concat([ui.button('secondary', t('events.bulkClear'), {
+                onclick: function () { state.picked = []; draw(); },
+              })]),
+            }),
+            targets.length ? null : ui.inlineNote(t('events.bulkMixed'), 'info'),
+            note)],
+        }));
+      }
 
       // Location is the one filter the server cannot do — events are keyed by
       // device, not by site — so it narrows what was loaded.
@@ -171,6 +256,12 @@
 
       function draw() {
         var rows = sortRows(shown());
+        // A row that filtering or a refresh removed cannot stay selected: a
+        // bulk action must only ever touch what the reader can see.
+        var visible = {};
+        rows.forEach(function (r) { visible[String(r.id)] = true; });
+        state.picked = (state.picked || []).filter(function (id) { return visible[String(id)]; });
+        drawBulk();
         if (!loaded.length) {
           tableHost.replaceChildren(ui.panel({
             title: t('events.panel'),
@@ -207,9 +298,19 @@
               { key: 'last', label: t('events.colLast'), sortable: true, time: true },
               deps.canWrite() ? { key: 'act', label: '', width: '104px' } : null,
             ].filter(Boolean),
+            // Selection is operator+, because the action behind it is.
+            select: deps.canWrite() ? {
+              selected: state.picked,
+              // Only rows that can actually move are tickable. Offering a
+              // checkbox on a closed event and then reporting "illegal" for it
+              // is a worse answer than not offering it.
+              isSelectable: function (row) { return !!LEGAL_NEXT[row.event.status]; },
+              onChange: function (keys) { state.picked = keys; drawBulk(); },
+            } : null,
             rows: rows.map(function (i) {
               return {
                 event: i,
+                key: i.id,
                 cells: {
                   severity: ui.badge(SEV_TONE[i.severity] || 'neutral', i.severity),
                   status: ui.badge(STATUS_TONE[i.status] || 'neutral', t('events.status.' + i.status)),

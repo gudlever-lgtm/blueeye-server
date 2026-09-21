@@ -3575,9 +3575,29 @@ function getAnalysisView() {
   if (analysisView) return analysisView;
   if (typeof window === 'undefined' || !window.AnalysisView || !ui) return null;
   analysisView = window.AnalysisView.create({
-    el, api, t, errText, ui, openAgent,
+    el, api, t, errText, ui, openAgent, canWrite,
+    // The assistant is opt-in and licence-gated. The page asks rather than
+    // assuming, so a deployment without it simply has no AI panel instead of
+    // one that 403s when pressed.
+    hasAssistant: () => featureEnabled('assistant'),
+    // "What is going on?" across the current filters — an aggregate, not the
+    // rows: a fleet can hold six figures of findings.
+    askScreen: (filters) => {
+      const qs = new URLSearchParams();
+      Object.entries(filters || {}).forEach(([k, val]) => { if (val) qs.set(k, String(val)); });
+      return api(`/api/assistant/findings-summary${qs.toString() ? `?${qs}` : ''}`, { method: 'POST', body: {} });
+    },
+    askHost: (question, hostId) => api('/api/assistant/explain', { method: 'POST', body: { question, hostId: hostId || undefined } }),
     state: findingsState,
     isAdmin: () => isAdmin(),
+    // "I have seen this host's problems and I accept them." Scoped to the
+    // filters the screen is showing, so it accepts what the row says and
+    // nothing wider — the server applies the same filter set the list uses.
+    acceptAll: (filters) => {
+      const qs = new URLSearchParams();
+      Object.entries(filters || {}).forEach(([k, v]) => { if (v !== undefined && v !== null && v !== '') qs.set(k, String(v)); });
+      return api(`/api/findings/ack${qs.toString() ? `?${qs}` : ''}`, { method: 'POST', body: { all: true } });
+    },
     help: () => {
       const info = PAGE_INFO.findings || {};
       return { lead: info.hero || '', title: info.title || t('analysis.title'), body: info.body || (() => []) };
@@ -3606,46 +3626,11 @@ function getAnalysisView() {
 views.findings = async () => {
   const v = getAnalysisView();
   if (!v) return el('div', { class: 'empty error' }, t('analysis.err.title'));
-  const node = await v.view();
-  // The assistant box is not part of the contract's components yet, so it is
-  // appended rather than composed — it migrates with the rest of Insights.
-  if (featureEnabled('assistant')) node.append(assistantBox(() => findingsState.hostId));
-  return node;
+  // The view composes the assistant itself now (it is built from ui.* like
+  // everything else on the page), so nothing is appended here.
+  return v.view();
 };
 
-// AI-assistant box. Posts to /api/assistant/explain; degrades gracefully when
-// the feature is disabled (403) so it never looks broken.
-function assistantBox(getHostId) {
-  const input = el('input', { type: 'text', placeholder: 'Ask e.g.: why is CPU high on this host?' });
-  const btn = el('button', { class: 'small' }, 'Ask assistant');
-  const out = el('div', { class: 'assistant-out muted' }, 'Ask a question about a host based on the latest findings.');
-  async function ask() {
-    const question = input.value.trim();
-    if (!question) { input.focus(); return; }
-    btn.disabled = true;
-    out.className = 'assistant-out muted';
-    out.textContent = 'Thinking…';
-    try {
-      const res = await api('/api/assistant/explain', { method: 'POST', body: { question, hostId: getHostId() || undefined } });
-      out.className = 'assistant-out';
-      out.replaceChildren(
-        el('div', {}, res.answer || '(empty response)'),
-        el('div', { class: 'assistant-meta muted' }, `${res.model || ''} · ${res.usedFindings ?? 0} findings in context`));
-    } catch (err) {
-      out.className = 'assistant-out muted';
-      out.textContent = err.status === 403
-        ? 'The AI assistant is disabled. An administrator can enable it under Settings → AI.'
-        : err.message;
-    } finally {
-      btn.disabled = false;
-    }
-  }
-  btn.addEventListener('click', ask);
-  input.addEventListener('keydown', (e) => { if (e.key === 'Enter') ask(); });
-  return el('div', { class: 'assistant' },
-    el('div', { class: 'assistant-row' }, input, btn),
-    out);
-}
 
 // ---- Events (stored in event_cases) -------------------------------------
 // An event is a correlated condition on ONE device, wrapping the anomalies that
@@ -3657,7 +3642,10 @@ let selectedEventId = null;
 function openEvent(id) { selectedEventId = id; currentView = 'event'; render(); }
 
 const INC_STATUS_LABEL = { open: 'Open', investigating: 'Investigating', resolved: 'Resolved', closed: 'Closed' };
-const INC_TRANSITIONS = { open: ['investigating'], investigating: ['resolved'], resolved: ['closed'], closed: ['open'] };
+// Mirrors src/eventCases/stateMachine.js, which is what actually enforces it.
+// `open` has two next steps: most events are read and dismissed in one go, and
+// making those walk through `investigating` recorded a step nobody performed.
+const INC_TRANSITIONS = { open: ['investigating', 'resolved'], investigating: ['resolved'], resolved: ['closed'], closed: ['open'] };
 const incStatusBadge = (s) => el('span', { class: `badge inc-status-${s}` }, INC_STATUS_LABEL[s] || s);
 const incSevBadge = (s) => el('span', { class: `badge inc-sev-${s}` }, s);
 
@@ -3697,7 +3685,7 @@ PAGE_INFO.events = {
   hero: 'Events group related anomalies on the same device into one thing you can track from open to closed — with a timeline, the config change that may have triggered it, similar past events, and an opt-in AI assistant. A connected ITSM opens its own event from an event.',
   title: 'Events — grouped anomalies, tracked end-to-end',
   body: () => [
-    el('p', {}, 'Each event wraps the analysis findings (anomalies) that fired close together on one device. Status moves open → investigating → resolved → closed; a closed event can be reopened with a comment (recorded in the audit trail).'),
+    el('p', {}, 'Each event wraps the analysis findings (anomalies) that fired close together on one device. Status moves open → investigating → resolved → closed, and an open event can go straight to resolved when there is nothing to investigate; a closed event can be reopened with a comment (recorded in the audit trail).'),
     el('p', {}, 'BlueEyes deliberately stops at the event. An event is a technical observation the monitoring owns; an ', el('strong', {}, 'event'), ' is a service-desk record with a number, an SLA and an owner, and it belongs in your ITSM. Connect one under Settings → Integrations and an event can open an event there.'),
     el('p', {}, 'The detail page shows the event timeline, the device-config change suspected to have triggered it, similar past events, and — when the EU AI assistant is enabled — a chat that answers questions using only masked, aggregated context.'),
     el('p', { class: 'muted' }, 'Status changes, config history and the AI chat are operator/admin only.'),
@@ -3732,6 +3720,10 @@ function getEventsPage() {
       const r = await api(`/api/events${qs.toString() ? `?${qs}` : ''}`);
       return r.events || [];
     },
+    // One transition, many events. The server applies the same state machine
+    // per event and answers with a per-event outcome, so the page can name the
+    // ones that did not move rather than just counting them.
+    bulkStatus: (ids, status) => api('/api/events/bulk-status', { method: 'POST', body: { ids, status } }),
   });
   return eventsPage;
 }
@@ -4259,7 +4251,7 @@ function getSituationsPage() {
   if (situationsPage) return situationsPage;
   if (typeof window === 'undefined' || !window.SituationsPage || !ui) return null;
   situationsPage = window.SituationsPage.create({
-    el, t, ui, errText, gotoView, openCluster,
+    el, t, ui, errText, gotoView, openCluster, canWrite,
     state: situationsPageState,
     help: () => {
       const info = PAGE_INFO.clusters || {};
@@ -4271,6 +4263,10 @@ function getSituationsPage() {
       const r = await api(`/api/event-clusters${qs.toString() ? `?${qs}` : ''}`);
       return r.clusters || [];
     },
+    // Many situations, ONE shared note — somebody looked at them together and
+    // reached one conclusion. The note stays required, as it is for a single
+    // resolve, so bulk never becomes the path that records no reason.
+    bulkResolve: (ids, note) => api('/api/event-clusters/bulk-resolve', { method: 'POST', body: { ids, note } }),
   });
   return situationsPage;
 }
@@ -6340,6 +6336,10 @@ function getDiscoveryPage() {
       ? Object.entries(e.data.details).map(([k, v]) => `${k}: ${v}`).join(' · ')
       : null),
     scan: (agentId) => api('/api/discovery/scan', { method: 'POST', body: agentId ? { agentId } : {} }),
+    // Several agents in one request. A sweep only reaches the segments the host
+    // running it sits on, so a routed site needs one per agent — and doing that
+    // a dropdown at a time is how a segment gets forgotten.
+    scanMany: (agentIds) => api('/api/discovery/scan', { method: 'POST', body: { agentIds } }),
     fetchCandidates: (status) => api(`/api/discovery/candidates${status ? `?status=${status}` : ''}`),
     fetchSweeps: () => api('/api/discovery/sweeps?limit=50'),
     promote: (c) => api(`/api/discovery/candidates/${c.id}/promote`, { method: 'POST' }),
@@ -14569,7 +14569,11 @@ const NIS2_FREQ = ['daily', 'weekly', 'monthly', 'quarterly', 'annually', 'ad-ho
 const NIS2_SEVERITY = ['low', 'medium', 'high', 'critical'];
 const NIS2_EVENT_STATUS = ['open', 'investigating', 'contained', 'resolved', 'closed'];
 
-const reportingState = { section: 'nis2' }; // 'nis2' (stationary) | 'generator' (custom)
+const reportingState = { section: 'findings' };
+// 'findings' (what the network did, no setup) | 'nis2' (stationary) | 'generator'
+// (custom) | 'schedules' | 'audit'. Findings opens by default: it is the one
+// section that says something on a fresh install, where NIS2 wants controls and
+// the generator wants a selection before either has an answer.
 const nis2State = { tab: 'dashboard' };
 
 // Maps a value to one of the shared badge palette classes (ok/warn/crit/INFO/neutral).
@@ -14648,10 +14652,142 @@ async function nis2Print(path) {
 let reportingPage = null;
 
 function reportingSections() {
+  // `findings` leads: "how much, of what, and is it getting better" is the
+  // question a reporting page is opened to answer, and it is the one the
+  // Analysis screen deliberately stopped answering when it became an overview
+  // of what is wrong NOW.
   // Audit is RBAC-gated: only admins may see who did what on the server.
   return role === 'admin'
-    ? ['nis2', 'generator', 'schedules', 'audit']
-    : ['nis2', 'generator', 'schedules'];
+    ? ['findings', 'nis2', 'generator', 'schedules', 'audit']
+    : ['findings', 'nis2', 'generator', 'schedules'];
+}
+
+// ---- Reporting → Findings over time ----------------------------------------
+// The totals that used to sit above the Analysis list, with the two things that
+// make a total mean something: WHEN it happened, and WHAT it was.
+const findingsReportState = { days: 30, bucket: 'day' };
+
+async function findingsReport() {
+  const st = findingsReportState;
+  const since = new Date(Date.now() - st.days * 24 * 60 * 60 * 1000).toISOString();
+  const qs = new URLSearchParams({ since });
+  const [summary, trend, agents] = await Promise.all([
+    api(`/api/findings/summary?${qs}`),
+    api(`/api/findings/trend?${qs}&bucket=${st.bucket}`),
+    // Names for the per-host bars. A chart axis reading "30, 31, 7" places
+    // nothing; the agent list is small and already cached by the API layer.
+    api('/agents').catch(() => []),
+  ]);
+  const agentName = (id) => {
+    const a = (agents || []).find((x) => String(x.id) === String(id));
+    return a ? (a.display_name || a.hostname) : `#${id}`;
+  };
+
+  const wrap = el('div', {});
+  const redraw = () => {
+    findingsReport().then((node) => wrap.replaceChildren(node)).catch(() => {});
+  };
+
+  // A day bucket over one day is a single bar; an hour bucket over ninety days
+  // is 2 160 points for a chart 760 pixels wide. The range picks the sensible
+  // default and the reader can still override it.
+  const rangePick = ui.select({
+    label: t('rep.find.range'),
+    value: String(st.days),
+    options: [[1, t('rep.find.day')], [7, t('rep.find.week')], [30, t('rep.find.month')], [90, t('rep.find.quarter')]]
+      .map(([v, label]) => [String(v), label]),
+    onchange: (e) => {
+      st.days = Number(e.target.value);
+      st.bucket = st.days <= 2 ? 'hour' : 'day';
+      redraw();
+    },
+  });
+  const bucketPick = ui.select({
+    label: t('rep.find.bucket'),
+    value: st.bucket,
+    options: [['hour', t('rep.find.hourly')], ['day', t('rep.find.daily')]],
+    onchange: (e) => { st.bucket = e.target.value; redraw(); },
+  });
+
+  const points = trend.points || [];
+  // The bucket label, not the raw key: "2026-09-20 14:00:00" on an axis is
+  // unreadable at any width.
+  const labelOf = (b) => (trend.bucket === 'hour' ? String(b).slice(11, 16) : String(b).slice(5, 10));
+  const sev = (key) => points.map((p) => ({ label: labelOf(p.bucket), y: p[key] }));
+
+  const sum = summary || {};
+  const bySev = sum.bySeverity || {};
+
+  wrap.append(
+    ui.panel({
+      title: t('rep.find.title'),
+      note: t('rep.find.note', { days: st.days }),
+      children: [
+        el('div', { class: 'panel-body' }, ui.toolbar({
+          filters: [ui.filter(t('rep.find.range'), rangePick), ui.filter(t('rep.find.bucket'), bucketPick)],
+          // The executive document: "fix these issues at these places", in the
+          // same print-ready chrome as the NIS2 reports. Deterministic — every
+          // sentence in it is assembled from the numbers on this page.
+          actions: [ui.button('secondary', t('rep.find.download'), {
+            onclick: () => {
+              const url = `/api/findings/report?format=html&days=${st.days}&locale=${encodeURIComponent(window.I18n && window.I18n.getLocale ? window.I18n.getLocale() : 'en')}`;
+              window.open(url, '_blank', 'noopener');
+            },
+          })],
+        })),
+        ui.statStrip([
+          { value: sum.total || 0, label: t('analysis.stat.total') },
+          { value: sum.unacked || 0, label: t('analysis.stat.unacked') },
+          { value: bySev.CRIT || 0, label: t('changes.group.CRIT'), tone: 'crit' },
+          { value: bySev.WARN || 0, label: t('changes.group.WARN'), tone: 'warn' },
+          { value: bySev.INFO || 0, label: t('changes.group.INFO'), tone: 'info' },
+        ]),
+      ],
+    }),
+    // WHEN. Severity as separate series rather than one total, because "300 a
+    // day" reads very differently when it is 3 CRIT and 297 INFO.
+    ui.panel({
+      title: t('rep.find.when'),
+      children: [ui.chart({
+        title: t('rep.find.when'),
+        form: points.length > 14 ? 'line' : 'bars',
+        series: [
+          { name: t('changes.group.CRIT'), points: sev('crit') },
+          { name: t('changes.group.WARN'), points: sev('warn') },
+          { name: t('changes.group.INFO'), points: sev('info') },
+        ],
+        emptyTitle: t('rep.find.noData'),
+      })],
+    }),
+    // WHAT. The metrics driving the volume, and the places carrying it.
+    ui.panelGrid(
+      ui.panel({
+        title: t('rep.find.whatMetric'),
+        children: [ui.chart({
+          title: t('rep.find.whatMetric'),
+          form: 'bars',
+          series: [{
+            name: t('analysis.col.count'),
+            points: (sum.byMetric || []).slice(0, 8).map((m) => ({ label: m.metric, y: m.count })),
+          }],
+          emptyTitle: t('rep.find.noData'),
+        })],
+      }),
+      ui.panel({
+        title: t('rep.find.whatHost'),
+        children: [ui.chart({
+          title: t('rep.find.whatHost'),
+          form: 'bars',
+          series: [{
+            name: t('analysis.col.count'),
+            points: (sum.byHost || []).slice(0, 8).map((h) => ({ label: agentName(h.hostId), y: h.count })),
+          }],
+          emptyTitle: t('rep.find.noData'),
+        })],
+      }),
+    ),
+  );
+  return wrap;
 }
 
 function getReportingPage() {
@@ -14666,10 +14802,11 @@ function getReportingPage() {
       const info = PAGE_INFO.reporting || {};
       return { lead: info.hero || '', title: info.title || t('rep.title'), body: info.body || (() => []) };
     },
-    render: (key) => (key === 'generator' ? reportGenerator()
-      : key === 'schedules' ? reportSchedulesPanel()
-        : key === 'audit' ? auditModule()
-          : nis2Module()),
+    render: (key) => (key === 'findings' ? findingsReport()
+      : key === 'generator' ? reportGenerator()
+        : key === 'schedules' ? reportSchedulesPanel()
+          : key === 'audit' ? auditModule()
+            : nis2Module()),
     errText,
   });
   return reportingPage;
@@ -15365,10 +15502,12 @@ function renderRgPreview(report) {
 }
 
 PAGE_INFO.reporting = {
-  hero: 'Reporting — the NIS2 readiness module plus a Report Generator for building your own reports.',
+  hero: 'Reporting — findings over time, the NIS2 readiness module, and a Report Generator for building your own reports.',
   title: 'Reporting',
   body: () => [
-    el('p', {}, 'Two ways to report:'),
+    el('p', {}, 'Three ways to report:'),
+    el('h4', {}, t('rep.tab.findings')),
+    el('p', {}, t('rep.find.help')),
     el('h4', {}, 'NIS2'),
     el('p', {}, 'A stationary module with fixed parameters: a readiness dashboard, risk register, control evidence, security events, generated management/executive reports and an audit trail.'),
     el('h4', {}, 'Report Generator'),

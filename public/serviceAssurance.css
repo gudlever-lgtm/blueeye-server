@@ -181,6 +181,16 @@
 .sa-pre {
   background: var(--surface-alt); padding: 10px; border-radius: 6px;
   overflow-x: auto; font-size: 0.8rem; margin-top: 8px;
+  /* WRAP, do not run off the card. A <pre> defaults to white-space: pre, so a
+     long line does not break — and inside a table cell that cell simply grows
+     to fit it, dragging the panel past the edge of the screen and giving the
+     whole page a horizontal scrollbar. The evidence in an incident is prose
+     ("The sending server took the message and reported success…"), which wants
+     wrapping; `anywhere` then catches the things prose rules cannot break, like
+     a 200-character URL or a base64 blob. */
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-width: 100%;
 }
 .sa-warn { color: var(--warn); font-size: 0.85rem; }
 .sa-warn-banner {

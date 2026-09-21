@@ -1,0 +1,90 @@
+'use strict';
+
+// Latency is only news when it actually MOVED.
+//
+// This file exists because of a real screen: 184 668 findings, 30 003 of them
+// CRIT, and the worst offender read
+//
+//   Latency 0.9 ms to 67.207.67.3 — ~0.5 ms normal (z=7.4).
+//
+// Work the arithmetic backwards and the baseline's sigma is 54 MICROSECONDS.
+// On a LAN that stable, any ordinary wobble clears z=6, so every wobble was a
+// critical incident. The statistic was right and the question was wrong: "is
+// this unusual for this target" is not "is this worth waking someone for".
+//
+// Loss and jitter always had absolute floors (LOSS_WARN, JITTER_WARN). Latency
+// did not, and these pin the two bars it now has to clear first.
+
+const { test } = require('node:test');
+const assert = require('node:assert/strict');
+
+const { computeAgentHealth, THRESHOLDS } = require('../src/health/probeHealth');
+
+// Newest-first rows for one target, as computeAgentHealth expects. The values
+// after the first are the baseline it will build.
+function rows(values, { target = '192.168.1.1', now = Date.now() } = {}) {
+  return values.map((rttMs, i) => ({
+    type: 'ping', target, ok: true, rttMs, lossPct: 0, jitterMs: 1,
+    ts: new Date(now - i * 60000).toISOString(),
+  }));
+}
+const STABLE_LAN = [0.52, 0.48, 0.51, 0.49, 0.50, 0.52, 0.48, 0.51, 0.49, 0.50, 0.51];
+const STABLE_WAN = [119, 118, 120, 117, 118, 119, 121, 118, 117, 119, 118];
+
+test('the screenshot case: 0.9 ms against a 0.5 ms baseline is NOT critical', () => {
+  const now = Date.now();
+  const health = computeAgentHealth(rows([0.9].concat(STABLE_LAN), { now }), { now });
+  assert.equal(health.status, 'ok', '0.4 ms of LAN jitter is not an incident');
+  assert.equal(health.evidence.filter((e) => e.metric === 'latency').length, 0);
+});
+
+test('a real WAN degradation is still critical', () => {
+  // The other row from the same screen: 309.8 ms where ~118.6 ms is normal.
+  // 191 ms is a genuine problem and must survive the floor untouched.
+  const now = Date.now();
+  const health = computeAgentHealth(rows([309.8].concat(STABLE_WAN), { target: 'mundtrold.dk', now }), { now });
+  assert.equal(health.status, 'bad');
+  const lat = health.evidence.find((e) => e.metric === 'latency');
+  assert.ok(lat, 'the latency evidence is what names the target');
+  assert.equal(lat.target, 'mundtrold.dk');
+});
+
+test('both bars have to be cleared, not either one', () => {
+  const now = Date.now();
+  // Clears the ABSOLUTE bar (>= 5 ms) but not the proportional one: on a 118 ms
+  // path, 6 ms is inside normal variation.
+  const wanSmall = computeAgentHealth(rows([124].concat(STABLE_WAN), { now }), { now });
+  assert.equal(wanSmall.status, 'ok', '5 ms on a 118 ms path is not a degradation');
+
+  // Clears the PROPORTIONAL bar (+300%) but not the absolute one: 0.5 → 2 ms is
+  // a big ratio and a tiny change.
+  const lanRatio = computeAgentHealth(rows([2].concat(STABLE_LAN), { now }), { now });
+  assert.equal(lanRatio.status, 'ok', 'a big ratio on a tiny number is still a tiny number');
+
+  // Clears both: a LAN target that went from half a millisecond to 40.
+  const lanReal = computeAgentHealth(rows([40].concat(STABLE_LAN), { now }), { now });
+  assert.equal(lanReal.status, 'bad', 'that is a real fault and must still fire');
+});
+
+test('the floor never suppresses loss, jitter or unreachability', () => {
+  // It gates ONE signal. A quiet-latency target that is dropping packets or
+  // unreachable must still be reported — otherwise the fix trades a flood of
+  // false criticals for a silence full of real ones.
+  const now = Date.now();
+  const lossy = rows([0.9].concat(STABLE_LAN), { now }).map((r, i) => (i === 0 ? { ...r, lossPct: 40 } : r));
+  assert.equal(computeAgentHealth(lossy, { now }).status, 'bad');
+
+  const jittery = rows([0.9].concat(STABLE_LAN), { now }).map((r, i) => (i === 0 ? { ...r, jitterMs: 150 } : r));
+  assert.equal(computeAgentHealth(jittery, { now }).status, 'bad');
+
+  const down = rows([0.9].concat(STABLE_LAN), { now }).map((r, i) => (i === 0 ? { ...r, ok: false, rttMs: null } : r));
+  assert.equal(computeAgentHealth(down, { now }).status, 'down');
+});
+
+test('the thresholds are published, so they can be argued with', () => {
+  assert.equal(THRESHOLDS.LAT_MIN_DELTA_MS, 5);
+  assert.equal(THRESHOLDS.LAT_MIN_FRACTION, 0.2);
+  // The floor is a PRE-condition on the z-score, not a replacement for it: a
+  // target that moved 50 ms but always moves 50 ms is still normal.
+  assert.ok(THRESHOLDS.Z_WARN > 0 && THRESHOLDS.Z_BAD > THRESHOLDS.Z_WARN);
+});

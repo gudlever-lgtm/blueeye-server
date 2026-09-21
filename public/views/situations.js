@@ -25,6 +25,9 @@
     var ui = deps.ui;
 
     var STATUSES = ['open', 'acknowledged', 'resolved', 'closed'];
+    // Still live, so still resolvable — the same pair the server calls
+    // LIVE_STATUSES in src/routes/eventClusters.js.
+    var LIVE = ['open', 'acknowledged'];
     var STATUS_TONE = { open: 'info', acknowledged: 'warn', resolved: 'ok', closed: 'neutral' };
     var CONF_TONE = { high: 'crit', medium: 'warn', low: 'neutral' };
     var CONF_RANK = { high: 3, medium: 2, low: 1 };
@@ -37,7 +40,9 @@
       var page = ui.page();
       var stripHost = el('div', {});
       var toolbarHost = el('div', {});
+      var bulkHost = el('div', {});
       var tableHost = el('div', {});
+      if (!Array.isArray(state.picked)) state.picked = [];
       var loaded = [];
 
       var info = deps.help();
@@ -48,7 +53,68 @@
         actions: [ui.button('secondary', t('sit.openEvents'), {
           onclick: function () { deps.gotoView('events'); },
         })],
-      }), stripHost, toolbarHost, tableHost);
+      }), stripHost, toolbarHost, bulkHost, tableHost);
+
+      // Resolving several situations at once. The NOTE is required and shared:
+      // one conclusion about the lot of them is the honest reading of the
+      // action, and making bulk the one path that skips the note would leave
+      // most of the history resolved for no recorded reason.
+      function drawBulk() {
+        var picked = state.picked || [];
+        if (!picked.length || !deps.canWrite()) { bulkHost.replaceChildren(); return; }
+
+        var note = deps.el('input', { type: 'text', placeholder: t('sit.bulkNotePlaceholder') });
+        var msg = el('span', { class: 'meta' });
+        var go = ui.button('primary', t('sit.bulkResolve', { n: picked.length }), {
+          onclick: function () { run(); },
+        });
+
+        function run() {
+          var text = (note.value || '').trim();
+          if (!text) {
+            msg.className = 'inline-note is-warn';
+            msg.textContent = t('sit.bulkNoteRequired');
+            return;
+          }
+          go.disabled = true;
+          msg.className = 'meta';
+          msg.textContent = t('sit.bulkWorking');
+          deps.bulkResolve(picked.map(Number), text)
+            .then(function (r) {
+              var stuck = (r.results || []).filter(function (x) { return x.outcome !== 'resolved'; });
+              if (stuck.length) {
+                msg.className = 'inline-note is-warn';
+                msg.textContent = t('sit.bulkPartial', {
+                  resolved: r.resolved, requested: r.requested,
+                  ids: stuck.map(function (x) { return '#' + x.id; }).join(', '),
+                });
+              } else {
+                msg.textContent = t('sit.bulkDone', { n: r.resolved });
+              }
+              state.picked = [];
+              load();
+            })
+            .catch(function (e) {
+              msg.className = 'inline-note is-crit';
+              msg.textContent = deps.errText(e);
+              go.disabled = false;
+            });
+        }
+
+        bulkHost.replaceChildren(ui.panel({
+          children: [el('div', { class: 'panel-body' },
+            ui.toolbar({
+              filters: [
+                ui.filter('', ui.meta(t('sit.bulkSelected', { n: picked.length }))),
+                ui.filter(t('sit.bulkNote'), note),
+              ],
+              actions: [go, ui.button('secondary', t('sit.bulkClear'), {
+                onclick: function () { state.picked = []; draw(); },
+              })],
+            }),
+            msg)],
+        }));
+      }
 
       function drawStrip() {
         var counts = {};
@@ -87,6 +153,11 @@
       }
 
       function draw() {
+        // Anything filtering or a refresh removed cannot stay selected.
+        var visibleIds = {};
+        (loaded || []).forEach(function (c) { visibleIds[String(c.id)] = true; });
+        state.picked = (state.picked || []).filter(function (id) { return visibleIds[String(id)]; });
+        drawBulk();
         if (!loaded.length) {
           tableHost.replaceChildren(ui.panel({
             title: t('sit.panel'),
@@ -131,9 +202,17 @@
               { key: 'first', label: t('sit.col.first'), sortable: true, time: true },
               { key: 'last', label: t('sit.col.last'), sortable: true, time: true },
             ],
+            select: deps.canWrite() ? {
+              selected: state.picked,
+              // Only a LIVE situation can be resolved. A resolved or closed one
+              // gets no checkbox rather than a checkbox and then a conflict.
+              isSelectable: function (row) { return LIVE.indexOf(row.cluster.status) !== -1; },
+              onChange: function (keys) { state.picked = keys; drawBulk(); },
+            } : null,
             rows: rows.map(function (c) {
               return {
                 cluster: c,
+                key: c.id,
                 cells: {
                   confidence: ui.badge(CONF_TONE[c.confidence] || 'neutral', t('sit.conf.' + c.confidence)),
                   status: ui.badge(STATUS_TONE[c.status] || 'neutral', t('sit.status.' + c.status)),

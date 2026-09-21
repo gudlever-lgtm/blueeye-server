@@ -118,6 +118,47 @@ function createAssistantRouter({ assistant, featureGate }) {
     })
   );
 
+  // POST /api/assistant/findings-summary — "what is going on?" across whatever
+  // the Analysis screen is currently showing.
+  //
+  // The filters come from the QUERY STRING, the same ones the list and the
+  // summary use, so the answer describes the page being looked at rather than a
+  // different one.
+  router.post(
+    '/findings-summary',
+    requireAuth,
+    requireRole(ROLES.VIEWER, ROLES.OPERATOR, ROLES.ADMIN),
+    asyncHandler(async (req, res) => {
+      if (featureGate && !featureGate.isFeatureEnabled('assistant')) {
+        return res.status(403).json({ error: 'This feature is not included in your license', feature: 'assistant', reason: 'license' });
+      }
+      if (typeof assistant.summarizeFindings !== 'function') {
+        return res.status(404).json({ error: 'Finding summaries are not available' });
+      }
+
+      const q = req.query || {};
+      const filters = {};
+      if (q.hostId) filters.hostId = String(q.hostId);
+      if (q.metric) filters.metric = String(q.metric);
+      if (q.severity) {
+        const sev = String(q.severity).toUpperCase();
+        if (!['INFO', 'WARN', 'CRIT'].includes(sev)) {
+          return res.status(400).json({ error: 'Validation failed', details: { severity: 'severity must be INFO, WARN or CRIT' } });
+        }
+        filters.severity = sev;
+      }
+
+      try {
+        return res.json(await assistant.summarizeFindings(filters));
+      } catch (err) {
+        if (err && err.name === 'FeatureDisabled') {
+          return res.status(403).json({ error: err.message });
+        }
+        throw err; // AssistantMisconfigured / AssistantUpstreamError -> 500
+      }
+    })
+  );
+
   return router;
 }
 

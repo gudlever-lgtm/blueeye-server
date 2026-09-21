@@ -2365,6 +2365,32 @@ function makeFindingStore(overrides = {}) {
       if (Number.isInteger(limit) && limit > 0) out = out.slice(0, limit);
       return out;
     }),
+    // Buckets by day or hour, like the real store's DATE_FORMAT grouping. An
+    // empty bucket is simply absent — the chart draws what happened, not a row
+    // per quiet hour.
+    trend: overrides.trend || (async ({ bucket = 'day', hostId, severity, metric, since, until } = {}) => {
+      const key = (d) => {
+        const iso = new Date(d || 0).toISOString();
+        return bucket === 'hour' ? `${iso.slice(0, 13)}:00:00` : iso.slice(0, 10);
+      };
+      const match = rows.filter((f) => (!hostId || f.hostId === hostId)
+        && (!severity || f.severity === severity)
+        && (!metric || f.metric === metric)
+        && (!since || new Date(f.createdAt || 0) >= new Date(since))
+        && (!until || new Date(f.createdAt || 0) <= new Date(until)));
+      const by = new Map();
+      for (const f of match) {
+        const k = key(f.createdAt);
+        if (!by.has(k)) by.set(k, { bucket: k, count: 0, crit: 0, warn: 0, info: 0, acked: 0 });
+        const b = by.get(k);
+        b.count += 1;
+        if (f.severity === 'CRIT') b.crit += 1;
+        else if (f.severity === 'WARN') b.warn += 1;
+        else if (f.severity === 'INFO') b.info += 1;
+        if (f.acked) b.acked += 1;
+      }
+      return [...by.values()].sort((a, b) => String(a.bucket).localeCompare(String(b.bucket)));
+    }),
     summary: overrides.summary || (async ({ hostId, severity, metric, since, until } = {}) => {
       const match = rows.filter((f) => (!hostId || f.hostId === hostId)
         && (!severity || f.severity === severity)
@@ -2407,6 +2433,16 @@ function makeFindingStore(overrides = {}) {
           acked: list.filter((f) => f.acked).length,
           ...agg(list),
           lastAt: list.reduce((mx, f) => (new Date(f.createdAt || 0) > new Date(mx || 0) ? f.createdAt : mx), null),
+          // WHAT is wrong on this host, busiest first — the difference between
+          // "412 findings" and "discards on 3 ports, latency to 2 targets".
+          topMetrics: [...list.reduce((m, f) => m.set(f.metric, (m.get(f.metric) || []).concat(f)), new Map()).entries()]
+            .map(([metric, fs]) => ({
+              metric,
+              count: fs.length,
+              crit: fs.filter((f) => f.severity === 'CRIT').length,
+              lastAt: fs.reduce((mx, f) => (new Date(f.createdAt || 0) > new Date(mx || 0) ? f.createdAt : mx), null),
+            }))
+            .sort((a, b) => b.count - a.count || String(a.metric).localeCompare(String(b.metric))),
         }))
         .sort((a, b) => b.count - a.count || String(a.hostId).localeCompare(String(b.hostId)));
       return { total: match.length, acked, unacked: match.length - acked, bySeverity, byMetric, byHost };
@@ -2434,6 +2470,26 @@ function makeFindingStore(overrides = {}) {
       return out;
     }),
     ack: overrides.ack || (async (id) => { const f = rows.find((x) => x.id === id); if (!f) return false; f.acked = true; return true; }),
+    // Counts what THIS call changed, like the real store: `acked = 0` is part
+    // of the predicate there, so a row already accepted is not counted again
+    // and "accepted 40 000" means forty thousand actually moved.
+    ackMany: overrides.ackMany || (async ({ ids = null, filter = null } = {}) => {
+      const match = Array.isArray(ids)
+        ? (f) => ids.includes(f.id)
+        : (f) => (!filter || (
+          (!filter.hostId || f.hostId === filter.hostId)
+          && (!filter.severity || f.severity === filter.severity)
+          && (!filter.metric || f.metric === filter.metric)
+          && (!filter.deviceId || Number(f.deviceId) === Number(filter.deviceId))
+          && (!filter.interfaceId || Number(f.interfaceId) === Number(filter.interfaceId))
+          && (!filter.since || new Date(f.createdAt || 0) >= new Date(filter.since))
+          && (!filter.until || new Date(f.createdAt || 0) <= new Date(filter.until))));
+      let n = 0;
+      for (const f of rows) {
+        if (!f.acked && match(f)) { f.acked = true; n += 1; }
+      }
+      return n;
+    }),
     setCorrelations: overrides.setCorrelations || (async (id, ids) => { const f = rows.find((x) => x.id === id); if (!f) return false; f.correlatedWith = Array.isArray(ids) ? ids : []; return true; }),
     setEventCase: overrides.setEventCase || (async (id, eventCaseId) => { const f = rows.find((x) => x.id === id); if (!f) return false; f.eventCaseId = eventCaseId ?? null; return true; }),
   };
@@ -2601,11 +2657,13 @@ function makeAssistant(overrides = {}) {
     isEnabled: overrides.isEnabled || (() => Boolean(
       overrides.explain || overrides.summarizeLocation ||
       overrides.explainDiagnostic || overrides.narrateInvestigation ||
-      overrides.askEvent || overrides.suggestRemediation || overrides.generateNis2Draft)),
+      overrides.askEvent || overrides.suggestRemediation || overrides.generateNis2Draft ||
+      overrides.summarizeFindings)),
     status: overrides.status || (() => ({ enabled: false, configured: false, baseUrl: 'https://api.mistral.ai/v1/chat/completions', model: 'mistral-small-latest' })),
     explain: overrides.explain || (async () => disabled()),
     explainDiagnostic: overrides.explainDiagnostic || (async () => disabled()),
     summarizeLocation: overrides.summarizeLocation || (async () => disabled()),
+    summarizeFindings: overrides.summarizeFindings || (async () => disabled()),
     narrateInvestigation: overrides.narrateInvestigation || (async () => disabled()),
     generateNis2Draft: overrides.generateNis2Draft || (async () => disabled()),
     askEvent: overrides.askEvent || (async () => disabled()),

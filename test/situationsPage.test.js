@@ -66,6 +66,22 @@ const SESSION = (over = {}) => Object.assign({
 const rows = (doc) => [...doc.querySelectorAll('#view .panel-ui table.dt tbody tr')];
 const cards = (doc) => [...doc.querySelectorAll('#view .statstrip .stat-card')];
 
+
+// Column lookup BY HEADER, not by position. These used to index children[2]
+// and cols[0], which meant adding a column anywhere to the left silently
+// re-pointed every assertion at the wrong data. The selection checkbox is
+// exactly such a column.
+function colIndex(doc, label) {
+  const ths = [...doc.querySelectorAll('#view table.dt thead th')];
+  const i = ths.findIndex((th) => new RegExp('^' + label).test(th.textContent.trim()));
+  if (i < 0) throw new Error(`no column headed "${label}" — headers: ${ths.map((x) => x.textContent.trim()).join(' | ')}`);
+  return i;
+}
+const cellIn = (row, doc, label) => row.children[colIndex(doc, label)];
+const colWidth = (doc, label) => parseInt(
+  [...doc.querySelectorAll('#view table.dt colgroup col')][colIndex(doc, label)].style.width, 10,
+);
+
 test('Situations is a ListPage: PageHeader, StatStrip, Toolbar, DataTable', async (t) => {
   const { doc, errors } = boot({ t, routes: SESSION() });
   await settle();
@@ -135,7 +151,7 @@ test('the table sorts from its header and the cause opens the situation', async 
   const header = [...doc.querySelectorAll('#view table.dt thead th')].find((th) => /^Members/.test(th.textContent));
   header.dispatchEvent(new window.Event('click', { bubbles: true }));
   await settle();
-  const members = rows(doc).map((r) => Number(r.children[2].textContent));
+  const members = rows(doc).map((r) => Number(cellIn(r, doc, 'Members').textContent));
   assert.deepEqual(members, [4, 2, 1]);
 
   rows(doc)[0].querySelector('a.hostlink').dispatchEvent(new window.MouseEvent('click', { bubbles: true, cancelable: true }));
@@ -147,15 +163,15 @@ test('a situation with no common cause says so instead of showing a dash', async
   const { doc } = boot({ t, routes: SESSION() });
   await settle();
   const none = rows(doc).find((r) => /Low/.test(r.textContent));
-  assert.match(none.children[3].textContent, /No common cause identified/i);
+  assert.match(cellIn(none, doc, 'Suspected cause').textContent, /No common cause identified/i);
 });
 
 test('confidence and status are badges that follow the palette', async (t) => {
   const { doc } = boot({ t, routes: SESSION() });
   await settle();
   const first = rows(doc)[0];
-  const conf = first.children[0].querySelector('.badge-ui');
-  const status = first.children[1].querySelector('.badge-ui');
+  const conf = cellIn(first, doc, 'Confidence').querySelector('.badge-ui');
+  const status = cellIn(first, doc, 'Status').querySelector('.badge-ui');
   assert.ok(conf && status, 'the badges are gone');
   assert.equal(doc.querySelectorAll('#view .badge.conf-high').length, 0, 'the legacy badge class survived');
   assert.equal(doc.querySelectorAll('#view .badge.inc-status-open').length, 0, 'the legacy status class survived');

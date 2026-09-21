@@ -13,14 +13,18 @@ const { makeEventCasesRepo } = require('../test-support/fakes');
 
 // ---- pure state machine ----------------------------------------------------
 
-test('the four documented transitions are allowed, everything else rejected', () => {
+test('the documented transitions are allowed, everything else rejected', () => {
   assert.equal(canTransition('open', 'investigating'), true);
   assert.equal(canTransition('investigating', 'resolved'), true);
   assert.equal(canTransition('resolved', 'closed'), true);
   assert.equal(canTransition('closed', 'open'), true);
+  // open → resolved, deliberately. Most events are read and dismissed in one
+  // go, and forcing them through `investigating` recorded a step nobody
+  // performed — an audit trail where everything was "investigated" says
+  // nothing about the ones that actually were.
+  assert.equal(canTransition('open', 'resolved'), true);
   // rejected
-  assert.equal(canTransition('open', 'resolved'), false);
-  assert.equal(canTransition('open', 'closed'), false);
+  assert.equal(canTransition('open', 'closed'), false, 'resolved is not skippable');
   assert.equal(canTransition('investigating', 'closed'), false);
   assert.equal(canTransition('resolved', 'open'), false);
   assert.equal(canTransition('open', 'open'), false);

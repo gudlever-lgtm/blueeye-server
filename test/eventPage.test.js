@@ -105,12 +105,18 @@ test('the where is the lead, and the agent is a link', async (t) => {
   assert.equal(window.location.pathname, '/agents/7');
 });
 
-test('there is one move from a state, so it is one primary', async (t) => {
+test('both moves from open are offered, and only one of them is primary', async (t) => {
+  // `open` has two: pick it up (investigating) or dismiss it (resolved), since
+  // most events are read and closed in one go. At most one primary in a page
+  // header, so the last is primary and the rest secondary.
   const { doc } = boot({ t, routes: SESSION() });
   await settle();
+  const labels = headBtns(doc).map((b) => b.textContent);
+  assert.ok(labels.some((l) => /Investigating/.test(l)), `no investigating move — ${labels.join(', ')}`);
+  assert.ok(labels.some((l) => /Resolved/.test(l)), `no resolved move — ${labels.join(', ')}`);
+
   const primaries = headBtns(doc).filter((b) => b.classList.contains('btn-primary'));
   assert.equal(primaries.length, 1, 'more than one primary on the record');
-  assert.match(primaries[0].textContent, /Investigating/);
   assert.ok(headBtns(doc).some((b) => /Events/.test(b.textContent)), 'no way back to the list');
 });
 
@@ -132,12 +138,27 @@ test('moving the state asks the server and says so', async (t) => {
     t, routes: SESSION({ 'PATCH /api/events/11': { ok: true } }),
   });
   await settle();
-  headBtns(doc).find((b) => b.classList.contains('btn-primary'))
+  // BY LABEL, not "the primary": `open` has two moves and which one is primary
+  // is a layout decision, not the thing this test is about.
+  headBtns(doc).find((b) => /Investigating/.test(b.textContent))
     .dispatchEvent(new window.Event('click', { bubbles: true }));
   await settle();
   const call = log.find((x) => x.key === 'PATCH /api/events/11');
   assert.ok(call, 'the move asked the server nothing');
   assert.equal(JSON.parse(call.body).status, 'investigating');
+});
+
+test('an open event can be resolved without being investigated first', async (t) => {
+  // Most events are read and dismissed in one go, and making those walk
+  // through `investigating` recorded a step nobody performed.
+  const { doc, window, log } = boot({
+    t, routes: SESSION({ 'PATCH /api/events/11': { ok: true } }),
+  });
+  await settle();
+  headBtns(doc).find((b) => /Resolved/.test(b.textContent))
+    .dispatchEvent(new window.Event('click', { bubbles: true }));
+  await settle();
+  assert.equal(JSON.parse(log.find((x) => x.key === 'PATCH /api/events/11').body).status, 'resolved');
 });
 
 test('reopening a closed case has to be justified', async (t) => {

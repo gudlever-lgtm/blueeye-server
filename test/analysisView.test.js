@@ -29,7 +29,14 @@ const SUMMARY = {
   total: 3, unacked: 2,
   bySeverity: { CRIT: 1, WARN: 1, INFO: 1 },
   byMetric: [{ metric: 'latency', count: 1, avgDeviation: 6.4, maxDeviation: 6.4 }, { metric: 'loss', count: 1, avgDeviation: 3.1, maxDeviation: 3.1 }],
-  byHost: [{ hostId: 7, count: 2, crit: 1, warn: 0, avgDeviation: 6.4 }],
+  byHost: [{
+    hostId: 7, count: 2, crit: 1, warn: 0, avgDeviation: 6.4,
+    lastAt: '2026-09-12T14:00:00.000Z',
+    topMetrics: [
+      { metric: 'probe.latency', count: 1, crit: 1, lastAt: '2026-09-12T14:00:00.000Z' },
+      { metric: 'probe.loss', count: 1, crit: 0, lastAt: '2026-09-12T13:00:00.000Z' },
+    ],
+  }],
 };
 
 function boot({ t, routes = {}, url = 'http://server.test/analysis', role = 'admin' } = {}) {
@@ -63,8 +70,22 @@ function boot({ t, routes = {}, url = 'http://server.test/analysis', role = 'adm
 const settle = () => new Promise((r) => setTimeout(r, 110));
 // The page carries three tables: the findings list, and the two breakdown
 // panels inside the panel grid. Anything about "the list" means the first.
-const listRows = (doc) => [...doc.querySelectorAll('#view .ui-page > div .panel-ui table.dt tbody tr')]
-  .filter((tr) => !tr.closest('.panel-grid'));
+// The FINDINGS list specifically. The page now leads with a "what is wrong,
+// where" overview, which is also a .panel-ui table.dt — a selector that takes
+// every table on the page silently counted those rows too.
+const panelByTitle = (doc, re) => [...doc.querySelectorAll('#view .panel-ui')]
+  .find((p) => {
+    const h = p.querySelector('.panel-head h2');
+    return h && re.test(h.textContent.trim());
+  });
+const listRows = (doc) => {
+  const panel = panelByTitle(doc, /^Findings$/);
+  return panel ? [...panel.querySelectorAll('table.dt tbody tr')] : [];
+};
+const overviewRows = (doc) => {
+  const panel = panelByTitle(doc, /^What is wrong/);
+  return panel ? [...panel.querySelectorAll('table.dt tbody tr')] : [];
+};
 const SESSION = (over = {}) => Object.assign({
   'GET /me': { id: 1, email: 'x@y.dk', role: 'admin', preferences: {} },
   'GET /auth/sso': { methods: [] },
@@ -176,12 +197,19 @@ test('a row opens the Drawer: the explanation, the numbers, and what changed jus
 test('a severity a rule changed says so, on the row, and the note is not truncated away', async (t) => {
   const { doc } = boot({ t, routes: SESSION() });
   await settle();
-  const warnRow = listRows(doc)[1];
-  const cell = warnRow.children[3];
+  const panel = panelByTitle(doc, /^Findings$/);
+  // BY HEADER, and inside the findings panel. Indexing children[3] of whatever
+  // .panel-ui came first broke the moment the page grew an overview above the
+  // list — and it would break again on the next column.
+  const heads = [...panel.querySelectorAll('thead th')].map((th) => th.textContent.trim());
+  const sevAt = heads.findIndex((h) => /^Severity/.test(h));
+  assert.ok(sevAt >= 0, `no severity column — headers: ${heads.join(' | ')}`);
+
+  const cell = listRows(doc)[1].children[sevAt];
   assert.match(cell.textContent, /WARN/);
   assert.match(cell.textContent, /CRIT/, 'a downgraded finding does not say what was detected');
   // The column has to hold the badge AND the note: "wa…" tells nobody anything.
-  const col = doc.querySelector('#view .panel-ui colgroup col:nth-child(4)');
+  const col = [...panel.querySelectorAll('colgroup col')][sevAt];
   assert.ok(parseInt(col.style.width, 10) >= 170,
     `severity column is ${col.style.width} — too narrow for the badge plus the rule note`);
 });
@@ -230,4 +258,65 @@ test('the breakdowns are panels, not chips, and their rows still pivot the filte
   await settle();
   const last = log.filter((c) => c.key === 'GET /api/findings').pop();
   assert.equal(new URL(last.url, 'http://server.test').searchParams.get('metric'), 'latency');
+});
+
+
+// ============================================== what is wrong, and where
+// The page used to open with five totals and then five hundred raw rows. At
+// 184 668 findings that is a firehose with a header — nobody reads row 300,
+// and the one finding that mattered is in there with the rest.
+
+test('the page LEADS with the places, not with the rows', async (t) => {
+  const { doc } = boot({ t, routes: SESSION() });
+  await settle();
+
+  const panels = [...doc.querySelectorAll('#view .panel-ui .panel-head h2')].map((h) => h.textContent.trim());
+  const overviewAt = panels.findIndex((p) => /^What is wrong/.test(p));
+  const listAt = panels.findIndex((p) => /^Findings$/.test(p));
+  assert.ok(overviewAt >= 0, `no overview panel — panels: ${panels.join(' | ')}`);
+  assert.ok(overviewAt < listAt, 'the raw list comes before the overview');
+});
+
+test('a place says WHAT is wrong on it, not just how much', async (t) => {
+  const { doc } = boot({ t, routes: SESSION() });
+  await settle();
+  const row = overviewRows(doc)[0];
+  assert.ok(row, 'no overview rows');
+
+  // The NAME, not the agent id — "host 7" is a number somebody looks up.
+  assert.match(row.textContent, /oslo-edge-01/);
+  // …and the metrics that are actually wrong on it.
+  assert.match(row.textContent, /probe\.latency/);
+  assert.match(row.textContent, /probe\.loss/);
+});
+
+test('a viewer sees the overview but is offered no Accept', async (t) => {
+  const admin = boot({ t, routes: SESSION() });
+  await settle();
+  assert.ok(overviewRows(admin.doc)[0].textContent.includes('Accept'), 'an admin can accept');
+
+  // `role` seeds localStorage, which is what the module reads at load — the
+  // page renders before GET /me lands, so overriding only the route is not
+  // enough to make it a viewer.
+  const viewer = boot({
+    t, role: 'viewer',
+    routes: SESSION({ 'GET /me': { id: 2, email: 'v@y.dk', role: 'viewer', preferences: {} } }),
+  });
+  await settle();
+  assert.ok(overviewRows(viewer.doc).length, 'a viewer still gets the overview');
+  assert.ok(!overviewRows(viewer.doc)[0].textContent.includes('Accept'), 'but cannot accept');
+});
+
+test('Accept scopes to that host and the screen re-reads', async (t) => {
+  const { doc, window, log } = boot({ t, routes: SESSION({ 'POST /api/findings/ack': { acked: 2 } }) });
+  await settle();
+  const btn = [...overviewRows(doc)[0].querySelectorAll('.btn')].find((b) => /Accept/.test(b.textContent));
+  btn.dispatchEvent(new window.Event('click', { bubbles: true }));
+  await settle();
+
+  const call = log.find((c) => /POST \/api\/findings\/ack/.test(c.key));
+  assert.ok(call, `no accept posted — calls: ${log.map((c) => c.key).join(', ')}`);
+  // Scoped to the row it was clicked on, so it accepts what the row says and
+  // nothing wider. `key` drops the query string, so the scope is on `url`.
+  assert.match(call.url, /hostId=7/);
 });

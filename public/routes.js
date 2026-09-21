@@ -62,7 +62,7 @@
     cluster: { path: '/situations', param: true },
     reporting: {
       path: '/reporting',
-      tabs: ['nis2', 'generator', 'schedules', 'audit'],
+      tabs: ['findings', 'nis2', 'generator', 'schedules', 'audit'],
       tabKey: 'reportingSection',
     },
 

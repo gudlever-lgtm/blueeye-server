@@ -187,17 +187,39 @@
     function filter(label, control) {
       return el('label', { class: 'field-inline' }, label, control);
     }
+    // `multiple: true` turns it into a multi-picker: pass `values` (an array)
+    // instead of `value`, give it a `size` so it does not render one row tall,
+    // and read the answer back with ui.selected(node).
     function select(opts) {
+      var many = !!opts.multiple;
+      var chosen = many
+        ? (opts.values || []).map(function (v) { return String(v); })
+        : null;
       return el('select', {
         'aria-label': opts.label || null, id: opts.id || null,
         onchange: opts.onchange || null,
+        multiple: many ? 'multiple' : null,
+        size: opts.size ? String(opts.size) : null,
       }, opts.options.map(function (o) {
         var value = Array.isArray(o) ? o[0] : o;
         var text = Array.isArray(o) ? o[1] : o;
         var attrs = { value: String(value) };
-        if (String(value) === String(opts.value)) attrs.selected = 'selected';
+        var on = many
+          ? chosen.indexOf(String(value)) !== -1
+          : String(value) === String(opts.value);
+        if (on) attrs.selected = 'selected';
         return el('option', attrs, text);
       }));
+    }
+
+    // The values a select currently holds, always as an array — so a caller
+    // does not branch on whether it was built `multiple` or not.
+    function selected(node) {
+      if (!node) return [];
+      if (node.multiple) {
+        return Array.prototype.map.call(node.selectedOptions || [], function (o) { return o.value; });
+      }
+      return node.value === '' || node.value == null ? [] : [node.value];
     }
 
     // ---- Panel ---------------------------------------------------------------
@@ -244,13 +266,40 @@
     }
 
     // ---- DataTable -----------------------------------------------------------
+    // `select` turns on row selection: pass { select: { onChange, isSelectable } }
+    // and each row gains a checkbox, with a select-all in the header. The chosen
+    // row KEYS come back through onChange and from ui.tableSelection(table).
+    //
+    // A row's key is `row.key` — its id, not its index — because the table is
+    // re-rendered on every poll and an index would silently move the selection
+    // to a different row underneath the reader.
     function dataTable(opts) {
       var sort = opts.sort;
+      var selectCfg = opts.select || null;
+      var chosen = selectCfg && selectCfg.selected ? new Set(selectCfg.selected.map(String)) : new Set();
       var table = el('table', { class: 'dt' });
-      table.append(el('colgroup', {}, opts.columns.map(function (c) {
-        return el('col', c.width ? { style: 'width:' + c.width } : {});
-      })));
-      table.append(el('thead', {}, el('tr', {}, opts.columns.map(function (c) {
+      var boxes = [];
+      var headBox = null;
+
+      function announce() {
+        // Only rows still ON SCREEN count. A poll that drops a row must drop it
+        // from the selection too, or a bulk action would act on something the
+        // reader can no longer see.
+        var live = boxes.filter(function (b) { return b.checked; }).map(function (b) { return b.value; });
+        chosen = new Set(live);
+        if (headBox) {
+          headBox.checked = boxes.length > 0 && live.length === boxes.length;
+          headBox.indeterminate = live.length > 0 && live.length < boxes.length;
+        }
+        if (selectCfg && selectCfg.onChange) selectCfg.onChange(live);
+      }
+
+      table.append(el('colgroup', {}, (selectCfg ? [el('col', { style: 'width:36px' })] : []).concat(
+        opts.columns.map(function (c) {
+          return el('col', c.width ? { style: 'width:' + c.width } : {});
+        })
+      )));
+      var headCells = opts.columns.map(function (c) {
         var attrs = { class: c.num ? 'col-num' : null, scope: 'col' };
         if (!c.sortable || !opts.onSort) return el('th', attrs, c.label || '');
         if (sort && sort.key === c.key) attrs['aria-sort'] = sort.dir === 'asc' ? 'ascending' : 'descending';
@@ -258,12 +307,41 @@
         attrs.title = t('ui.sortBy');
         return el('th', attrs, c.label, el('span', { class: 'sort' },
           sort && sort.key === c.key ? (sort.dir === 'asc' ? '↑' : '↓') : '↕'));
-      }))));
+      });
+      if (selectCfg) {
+        headBox = el('input', {
+          type: 'checkbox', class: 'dt-check',
+          'aria-label': t('ui.selectAll'),
+          onchange: function () {
+            var on = headBox.checked;
+            boxes.forEach(function (b) { b.checked = on; });
+            announce();
+          },
+        });
+        headCells = [el('th', { scope: 'col', class: 'dt-check-cell' }, headBox)].concat(headCells);
+      }
+      table.append(el('thead', {}, el('tr', {}, headCells)));
       var body = el('tbody', {});
       opts.rows.forEach(function (row) {
         var tr = el('tr', { 'aria-selected': 'false' });
         if (row.dimmed) tr.classList.add('is-dimmed');
         else if (opts.onOpen) tr.setAttribute('tabindex', '0');
+        if (selectCfg) {
+          var selectable = !row.dimmed
+            && row.key != null
+            && (!selectCfg.isSelectable || selectCfg.isSelectable(row));
+          var box = selectable ? el('input', {
+            type: 'checkbox', class: 'dt-check', value: String(row.key),
+            'aria-label': t('ui.selectRow'),
+            checked: chosen.has(String(row.key)) ? 'checked' : null,
+            // The checkbox is not the row: ticking it must not also open the
+            // drawer the row click opens.
+            onclick: function (e) { e.stopPropagation(); },
+            onchange: announce,
+          }) : null;
+          if (box) boxes.push(box);
+          tr.append(el('td', { class: 'dt-check-cell' }, box));
+        }
         opts.columns.forEach(function (c) {
           tr.append(el('td', { class: c.num ? 'col-num' : (c.time ? 'col-time' : null) }, row.cells[c.key]));
         });
@@ -282,8 +360,14 @@
         body.append(tr);
       });
       table.append(body);
+      if (selectCfg) announce(); // the header box starts in the right state
       var wrap = el('div', { class: 'table-wrap-ui' }, table);
       if (opts.dense) wrap.classList.add('dense');
+      // The chosen keys, readable straight off the returned node, so a caller
+      // that did not keep the onChange values can still ask.
+      wrap.selectedKeys = function () {
+        return boxes.filter(function (b) { return b.checked; }).map(function (b) { return b.value; });
+      };
       return wrap;
     }
 
@@ -735,6 +819,7 @@
       toolbar: toolbar,
       filter: filter,
       select: select,
+      selected: selected,
       panel: panel,
       panelGrid: panelGrid,
       button: button,

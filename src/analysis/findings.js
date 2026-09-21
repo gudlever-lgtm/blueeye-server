@@ -348,6 +348,12 @@ class FindingStore {
          FROM findings ${clause} GROUP BY metric ORDER BY cnt DESC, metric ASC`,
       params
     );
+    // The open counts are the ones a screen called "what is wrong, and where"
+    // can act on, and they are counted separately from the totals on purpose:
+    // accepting a host's findings used to change nothing anybody could see,
+    // because CRIT/WARN were COUNT(*) over accepted rows too. The totals stay —
+    // a report that says "412 findings, 400 accepted" is a different, useful
+    // sentence — but "what is wrong NOW" is open_crit/open_warn.
     const [hostRows] = await this.pool.query(
       `SELECT host_id,
               COUNT(*) AS cnt,
@@ -355,6 +361,10 @@ class FindingStore {
               SUM(severity = 'WARN') AS warn,
               SUM(severity = 'INFO') AS info,
               SUM(acked = 1) AS acked,
+              SUM(acked = 0) AS open_total,
+              SUM(severity = 'CRIT' AND acked = 0) AS open_crit,
+              SUM(severity = 'WARN' AND acked = 0) AS open_warn,
+              SUM(severity = 'INFO' AND acked = 0) AS open_info,
               AVG(deviation) AS avg_dev,
               MAX(deviation) AS max_dev,
               MAX(created_at) AS last_at
@@ -417,6 +427,10 @@ class FindingStore {
         warn: Number(r.warn) || 0,
         info: Number(r.info) || 0,
         acked: Number(r.acked) || 0,
+        open: Number(r.open_total) || 0,
+        openCrit: Number(r.open_crit) || 0,
+        openWarn: Number(r.open_warn) || 0,
+        openInfo: Number(r.open_info) || 0,
         avgDeviation: r.avg_dev == null ? null : Number(r.avg_dev),
         maxDeviation: r.max_dev == null ? null : Number(r.max_dev),
         lastAt: r.last_at,

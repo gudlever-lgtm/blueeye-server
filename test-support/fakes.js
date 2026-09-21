@@ -2529,6 +2529,12 @@ function makeFindingStore(overrides = {}) {
           warn: list.filter((f) => f.severity === 'WARN').length,
           info: list.filter((f) => f.severity === 'INFO').length,
           acked: list.filter((f) => f.acked).length,
+          // The counts the "what is wrong, and where" screen acts on: totals
+          // include accepted findings, these do not.
+          open: list.filter((f) => !f.acked).length,
+          openCrit: list.filter((f) => !f.acked && f.severity === 'CRIT').length,
+          openWarn: list.filter((f) => !f.acked && f.severity === 'WARN').length,
+          openInfo: list.filter((f) => !f.acked && f.severity === 'INFO').length,
           ...agg(list),
           lastAt: list.reduce((mx, f) => (new Date(f.createdAt || 0) > new Date(mx || 0) ? f.createdAt : mx), null),
           // WHAT is wrong on this host, busiest first — the difference between

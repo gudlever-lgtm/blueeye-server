@@ -104,3 +104,46 @@ test('a store failure is a 500, not a cheerful zero', async () => {
   const res = await post(app, { ids: ['a'] });
   assert.equal(res.status, 500);
 });
+
+// ---------------------------------------------------- what the screen shows
+//
+// "I press Accept, the button fades, and nothing changes." The accept worked —
+// thousands of rows were written — but the overview counted every finding on a
+// host whether or not it had been accepted, so the numbers never moved and the
+// row never left. An action whose whole result is invisible is indistinguishable
+// from one that does nothing.
+
+test('accepting a host empties its OPEN counts, while the totals keep the history', async () => {
+  const findingStore = await seeded();
+  const app = makeApp({ findingStore });
+
+  const before = await findingStore.summary({});
+  const host9 = (h) => h.find((x) => String(x.hostId) === '9');
+  assert.equal(host9(before.byHost).open, 2, 'a and b are open; d was already accepted');
+  assert.equal(host9(before.byHost).openCrit, 1);
+  assert.equal(host9(before.byHost).count, 3, 'the total still counts the accepted one');
+
+  const res = await post(app, { all: true }, 'operator', '?hostId=9');
+  assert.equal(res.status, 200);
+  assert.equal(res.body.acked, 2);
+
+  const after = await findingStore.summary({});
+  assert.equal(host9(after.byHost).open, 0, 'nothing is left to act on');
+  assert.equal(host9(after.byHost).openCrit, 0);
+  assert.equal(host9(after.byHost).openWarn, 0);
+  // The history is not rewritten: the host still had three findings.
+  assert.equal(host9(after.byHost).count, 3);
+  assert.equal(host9(after.byHost).acked, 3);
+
+  // The other host is untouched — "accept what I am looking at" means that.
+  const host11 = after.byHost.find((x) => String(x.hostId) === '11');
+  assert.equal(host11.open, 1);
+});
+
+test('accepting twice is honest about the second time', async () => {
+  const findingStore = await seeded();
+  const app = makeApp({ findingStore });
+  assert.equal((await post(app, { all: true }, 'operator', '?hostId=9')).body.acked, 2);
+  // Nothing left: the dashboard says so rather than claiming another success.
+  assert.equal((await post(app, { all: true }, 'operator', '?hostId=9')).body.acked, 0);
+});

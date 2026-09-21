@@ -131,15 +131,34 @@
       // action somebody actually wants to take.
       var MAX_METRICS_SHOWN = 3;
 
+      // What is still open on a host: the count the screen acts on. `which` is
+      // 'Crit'/'Warn'/'' (everything). Falls back to the totals when talking to
+      // a server that predates the open counts.
+      function openOf(h, which) {
+        var open = which ? h['open' + which] : h.open;
+        if (open !== undefined) return open;
+        return which ? (h[which.toLowerCase()] || 0) : (h.count || 0);
+      }
+
       function drawOverview() {
         if (!summary || !summary.total) { overviewHost.replaceChildren(); return; }
-        var hosts = (summary.byHost || []).slice();
+        // OPEN findings only. A host whose findings have all been accepted is
+        // not a place where something is wrong — and listing it anyway is what
+        // made Accept look broken: the button worked, thousands of rows were
+        // accepted, and the row sat there with the same numbers.
+        // `open*` is absent on an older server; fall back to the totals so the
+        // page still draws rather than showing every host as clean.
+        var hosts = (summary.byHost || []).filter(function (h) {
+          return h.open === undefined ? h.count > 0 : h.open > 0;
+        });
         if (!hosts.length) { overviewHost.replaceChildren(); return; }
 
         // CRIT first, then volume. A host with one critical outranks a host
         // with four hundred warnings — that is the order somebody works in.
         hosts.sort(function (a, b) {
-          return (b.crit - a.crit) || (b.warn - a.warn) || (b.count - a.count);
+          return (openOf(b, 'Crit') - openOf(a, 'Crit'))
+            || (openOf(b, 'Warn') - openOf(a, 'Warn'))
+            || (openOf(b) - openOf(a));
         });
 
         var note = el('span', { class: 'meta' });
@@ -183,12 +202,20 @@
             metric: state.metric || undefined,
           })
             .then(function (r) {
-              note.textContent = t('analysis.acceptDone', { n: r.acked, host: agentName(h.hostId) });
+              // A toast, not the note: reload() rebuilds this panel, which used
+              // to wipe the only confirmation the click ever produced — so the
+              // button faded, came back, and appeared to have done nothing.
+              // Say plainly when a click changed nothing, too: a host whose
+              // findings were already accepted is not a failure, but it is not
+              // silence either.
+              if (r.acked) ui.toast(t('analysis.acceptDone', { n: r.acked, host: agentName(h.hostId) }));
+              else ui.toast(t('analysis.acceptNone', { host: agentName(h.hostId) }));
               reload();
             })
             .catch(function (e) {
               note.className = 'inline-note is-crit';
               note.textContent = deps.errText(e);
+              ui.toast(t('analysis.acceptFailed'), deps.errText(e), { bad: true });
               btn.disabled = false;
             });
         }
@@ -232,8 +259,8 @@
                   // The NAME, not the agent id — "host 30" is a number somebody
                   // then has to go and look up.
                   host: ui.hostLink(agentName(h.hostId), function () { deps.openAgent(Number(h.hostId)); }),
-                  crit: h.crit ? ui.badge('crit', String(h.crit)) : ui.meta('0'),
-                  warn: h.warn ? ui.badge('warn', String(h.warn)) : ui.meta('0'),
+                  crit: openOf(h, 'Crit') ? ui.badge('crit', String(openOf(h, 'Crit'))) : ui.meta('0'),
+                  warn: openOf(h, 'Warn') ? ui.badge('warn', String(openOf(h, 'Warn'))) : ui.meta('0'),
                   // What is actually wrong, busiest first. Three is enough to
                   // recognise the shape of the problem; the rest is a count,
                   // because a row listing forty metrics is unreadable.

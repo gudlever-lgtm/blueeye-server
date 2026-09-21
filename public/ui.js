@@ -212,9 +212,91 @@
       }));
     }
 
+    // A multi-select you can actually read.
+    //
+    // The native <select multiple> shows a scrolling box three to eight rows
+    // tall: the chosen entries are a blue block you cannot scan, most options
+    // are off-screen, and on a fleet with forty agents it is unusable. This is
+    // the same data as removable pills plus a filterable list you can tick
+    // — no dependency, no new idiom, and the value is still read with
+    // ui.selected().
+    //
+    // The DOM keeps a real (hidden) <select multiple> underneath, so
+    // ui.selected(), form serialisation and every existing caller keep working
+    // unchanged; the visible half only ever writes back into it.
+    function multiSelect(opts) {
+      var options = (opts.options || []).map(function (o) {
+        return Array.isArray(o) ? { value: String(o[0]), text: String(o[1]) } : { value: String(o), text: String(o) };
+      });
+      var chosen = {};
+      (opts.values || []).forEach(function (v) { chosen[String(v)] = true; });
+
+      var hidden = select({
+        id: opts.id || null, label: opts.label || null, multiple: true,
+        options: options.map(function (o) { return [o.value, o.text]; }),
+        values: Object.keys(chosen),
+      });
+      hidden.classList.add('ms-value');
+
+      var chips = el('div', { class: 'ms-picks' });
+      var list = el('div', { class: 'ms-list', role: 'listbox', 'aria-multiselectable': 'true' });
+      var search = el('input', {
+        type: 'search', class: 'ms-search', autocomplete: 'off',
+        placeholder: opts.searchPlaceholder || 'Filter…',
+        'aria-label': opts.searchPlaceholder || 'Filter the options',
+      });
+      var summary = el('span', { class: 'ms-summary' });
+
+      function apply() {
+        Array.prototype.forEach.call(hidden.options, function (o) { o.selected = !!chosen[o.value]; });
+        if (opts.onchange) opts.onchange(Object.keys(chosen));
+      }
+
+      function draw() {
+        var picked = options.filter(function (o) { return chosen[o.value]; });
+        chips.replaceChildren.apply(chips, picked.length
+          ? picked.map(function (o) {
+            return el('button', {
+              type: 'button', class: 'ms-pick', title: opts.removeTitle || 'Remove',
+              onclick: function () { delete chosen[o.value]; apply(); draw(); },
+            }, o.text, el('span', { class: 'ms-x', 'aria-hidden': 'true' }, '\u00d7'));
+          })
+          : [el('span', { class: 'ms-none' }, opts.emptyText || 'None selected')]);
+
+        var q = search.value.trim().toLowerCase();
+        var visible = options.filter(function (o) { return !q || o.text.toLowerCase().indexOf(q) !== -1; });
+        list.replaceChildren.apply(list, visible.length
+          ? visible.map(function (o) {
+            var on = !!chosen[o.value];
+            return el('button', {
+              type: 'button', role: 'option', 'aria-selected': on ? 'true' : 'false',
+              class: 'ms-opt' + (on ? ' is-on' : ''),
+              onclick: function () {
+                if (chosen[o.value]) delete chosen[o.value]; else chosen[o.value] = true;
+                apply(); draw();
+              },
+            }, el('span', { class: 'ms-tick', 'aria-hidden': 'true' }, on ? '\u2713' : ''), o.text);
+          })
+          : [el('div', { class: 'ms-none' }, opts.noMatchText || 'Nothing matches')]);
+
+        summary.textContent = picked.length + ' / ' + options.length;
+      }
+
+      search.addEventListener('input', draw);
+      draw();
+
+      var box = el('div', { class: 'ms' }, hidden, chips,
+        el('div', { class: 'ms-head' }, search, summary), list);
+      // The caller may still want the <select> itself (ui.selected(node)).
+      box.valueNode = hidden;
+      return box;
+    }
+
     // The values a select currently holds, always as an array — so a caller
     // does not branch on whether it was built `multiple` or not.
     function selected(node) {
+      // A multiSelect box: read the real <select> it keeps underneath.
+      if (node && node.valueNode) return selected(node.valueNode);
       if (!node) return [];
       if (node.multiple) {
         return Array.prototype.map.call(node.selectedOptions || [], function (o) { return o.value; });
@@ -819,6 +901,7 @@
       toolbar: toolbar,
       filter: filter,
       select: select,
+      multiSelect: multiSelect,
       selected: selected,
       panel: panel,
       panelGrid: panelGrid,

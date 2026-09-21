@@ -70,7 +70,13 @@
         actions: [ui.button('secondary', t('tshoot.openTopology'), {
           onclick: function () { deps.gotoView('topology'); },
         })],
-      }), toolbarHost, noteHost, stripHost, topoHost, causeHost, faultsHost, timelineHost);
+      // ROOT CAUSES BEFORE THE TOPOLOGY. The page used to open on the graph,
+      // which meant the screen led with a picture and put the answer below the
+      // fold: on a fleet whose switches are not in the graph yet, that is most
+      // of the window spent on two dots and a dotted line, while "9 root
+      // causes" sat in a number tile nobody can act on. What is failing and why
+      // is the reason somebody opened this tab; the map is how they confirm it.
+      }), toolbarHost, noteHost, stripHost, causeHost, topoHost, faultsHost, timelineHost);
 
       // ---- Toolbar -----------------------------------------------------------
       var refreshBtn = null;
@@ -133,8 +139,14 @@
                   el('strong', {}, n.label),
                   ui.badge(n.state === 'down' ? 'crit' : n.state === 'ok' ? 'ok' : 'neutral', TV.stateLabel(n.state))),
                 ui.metaXs(n.lastSeen ? t('tshoot.lastSeen', { when: ui.fmt.abs(n.lastSeen) }) : t('tshoot.neverSeen')),
-                ui.button('secondary', t('tshoot.openAgent'), {
-                  size: 'xs', onclick: function () { deps.openAgent(n.id); },
+                // A switch and an agent open different pages, and the button
+                // has to say which one it is about to open.
+                ui.button('secondary', n.kind === 'device' ? t('tshoot.openDevice') : t('tshoot.openAgent'), {
+                  size: 'xs',
+                  onclick: function () {
+                    if (deps.openNode) deps.openNode(n.id);
+                    else deps.openAgent(n.id);
+                  },
                 }));
             },
           });
@@ -148,7 +160,14 @@
           el('span', { class: 'ui-legend-item' }, el('span', { class: 'ui-legend-dot health-bad' }),
             t('tshoot.state.down', { n: counts.down || 0 })),
           el('span', { class: 'ui-legend-item' }, el('span', { class: 'ui-legend-dot health-warn' }),
-            t('tshoot.state.unreachable', { n: counts.unreachable_downstream || 0 })));
+            t('tshoot.state.unreachable', { n: counts.unreachable_downstream || 0 })),
+          // Only when something IS unknown. A legend entry that always reads 0
+          // is a legend entry nobody reads, and an agent can never be in this
+          // state — it belongs to a polled switch that has not answered yet.
+          counts.unknown
+            ? el('span', { class: 'ui-legend-item' }, el('span', { class: 'ui-legend-dot health-unknown' }),
+              t('tshoot.state.unknown', { n: counts.unknown }))
+            : null);
 
         var discovered = (topo.discovered || []).length;
         topoHost.replaceChildren(ui.panel({

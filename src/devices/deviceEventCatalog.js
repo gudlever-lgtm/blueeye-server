@@ -14,6 +14,14 @@
 // which is what lets the device log, the timeline and the changes feed treat
 // both without knowing the difference.
 //
+// THE LABELS HERE ARE A FALLBACK, NOT THE UI'S TEXT. The dashboard translates
+// each type through `devevt.type.<type>` in public/i18n.js and only falls back
+// to the label below when it has no key for that type — which is the case the
+// paragraph after this one is about. They are English for the same reason every
+// other default in this repo is: it is the language the code is written in, and
+// a Danish string served to an English dashboard is a bug the language switch
+// cannot fix.
+//
 // THE SERVER'S TABLE IS ALLOWED TO BE BEHIND THE AGENT'S. The agent ships the
 // classifier (blueeye-agent src/syslog/classify.js) and a newer agent will send
 // types this catalogue has not heard of. That is not an error: describeEventType
@@ -36,73 +44,73 @@ const EVENT_TYPE_GROUPS = Object.freeze([
   {
     key: 'link',
     types: [
-      { type: 'link.down', label: 'Link nede' },
-      { type: 'link.up', label: 'Link oppe' },
-      { type: 'duplex.mismatch', label: 'Duplex-mismatch' },
+      { type: 'link.down', label: 'Link down' },
+      { type: 'link.up', label: 'Link up' },
+      { type: 'duplex.mismatch', label: 'Duplex mismatch' },
       { type: 'port.err_disabled', label: 'Port err-disabled' },
-      { type: 'port.security_violation', label: 'Portsikkerhed udløst' },
-      { type: 'link.admin_down', label: 'Port slukket administrativt' },
-      { type: 'poe.port_changed', label: 'PoE-port skiftede tilstand' },
-      { type: 'poe.budget_exceeded', label: 'PoE-budget overskredet' },
+      { type: 'port.security_violation', label: 'Port security triggered' },
+      { type: 'link.admin_down', label: 'Port shut down administratively' },
+      { type: 'poe.port_changed', label: 'PoE port changed state' },
+      { type: 'poe.budget_exceeded', label: 'PoE budget exceeded' },
     ],
   },
   {
     key: 'l2',
     types: [
-      { type: 'stp.topology_change', label: 'Spanning-tree topologiændring' },
-      { type: 'stp.root_changed', label: 'Spanning-tree rod skiftede' },
-      { type: 'stp.loop_detected', label: 'Spanning-tree loop opdaget' },
-      { type: 'mac.flapping', label: 'MAC flapper mellem porte' },
-      { type: 'vlan.trunk_changed', label: 'VLAN-trunk ændret' },
+      { type: 'stp.topology_change', label: 'Spanning-tree topology change' },
+      { type: 'stp.root_changed', label: 'Spanning-tree root changed' },
+      { type: 'stp.loop_detected', label: 'Spanning-tree loop detected' },
+      { type: 'mac.flapping', label: 'MAC flapping between ports' },
+      { type: 'vlan.trunk_changed', label: 'VLAN trunk changed' },
     ],
   },
   {
     key: 'routing',
     types: [
-      { type: 'ospf.adjacency_lost', label: 'OSPF-naboskab tabt' },
-      { type: 'ospf.adjacency_up', label: 'OSPF-naboskab etableret' },
-      { type: 'bgp.session_down', label: 'BGP-session nede' },
-      { type: 'bgp.session_up', label: 'BGP-session oppe' },
-      { type: 'hsrp.state_changed', label: 'HSRP/VRRP-tilstand skiftede' },
-      { type: 'routing.neighbor_lost', label: 'Routing-nabo tabt' },
-      { type: 'ospf.config_error', label: 'OSPF-konfigurationsfejl' },
+      { type: 'ospf.adjacency_lost', label: 'OSPF adjacency lost' },
+      { type: 'ospf.adjacency_up', label: 'OSPF adjacency established' },
+      { type: 'bgp.session_down', label: 'BGP session down' },
+      { type: 'bgp.session_up', label: 'BGP session up' },
+      { type: 'hsrp.state_changed', label: 'HSRP/VRRP state changed' },
+      { type: 'routing.neighbor_lost', label: 'Routing neighbour lost' },
+      { type: 'ospf.config_error', label: 'OSPF configuration error' },
     ],
   },
   {
     key: 'addressing',
     types: [
-      { type: 'dhcp.pool_exhausted', label: 'DHCP-pulje opbrugt' },
-      { type: 'dhcp.conflict', label: 'Adressekonflikt' },
+      { type: 'dhcp.pool_exhausted', label: 'DHCP pool exhausted' },
+      { type: 'dhcp.conflict', label: 'Address conflict' },
     ],
   },
   {
     key: 'security',
     types: [
-      { type: 'auth.failure', label: 'Loginfejl' },
-      { type: 'acl.denied', label: 'ACL afviste trafik' },
-      { type: 'vpn.negotiation_failed', label: 'VPN-forhandling mislykkedes' },
+      { type: 'auth.failure', label: 'Login failure' },
+      { type: 'acl.denied', label: 'ACL denied traffic' },
+      { type: 'vpn.negotiation_failed', label: 'VPN negotiation failed' },
     ],
   },
   {
     key: 'health',
     types: [
-      { type: 'device.rebooted', label: 'Enhed genstartede' },
-      { type: 'config.changed', label: 'Konfiguration ændret' },
-      { type: 'power.supply_failed', label: 'Strømforsyning fejlede' },
-      { type: 'fan.failed', label: 'Blæser fejlede' },
-      { type: 'temperature.alarm', label: 'Temperaturalarm' },
-      { type: 'ups.on_battery', label: 'UPS på batteri' },
-      { type: 'resource.exhausted', label: 'Ressourcer opbrugt' },
-      { type: 'ups.alarm', label: 'UPS-alarm' },
-      { type: 'sensor.threshold', label: 'Sensor-grænse overskredet' },
-      { type: 'resource.threshold', label: 'Måle-grænse overskredet' },
-      { type: 'device.hardware_changed', label: 'Hardware ændret' },
+      { type: 'device.rebooted', label: 'Device rebooted' },
+      { type: 'config.changed', label: 'Configuration changed' },
+      { type: 'power.supply_failed', label: 'Power supply failed' },
+      { type: 'fan.failed', label: 'Fan failed' },
+      { type: 'temperature.alarm', label: 'Temperature alarm' },
+      { type: 'ups.on_battery', label: 'UPS on battery' },
+      { type: 'resource.exhausted', label: 'Resources exhausted' },
+      { type: 'ups.alarm', label: 'UPS alarm' },
+      { type: 'sensor.threshold', label: 'Sensor threshold exceeded' },
+      { type: 'resource.threshold', label: 'Resource threshold exceeded' },
+      { type: 'device.hardware_changed', label: 'Hardware changed' },
     ],
   },
   {
     key: 'other',
     types: [
-      { type: 'syslog.raw', label: 'Ikke klassificeret' },
+      { type: 'syslog.raw', label: 'Not classified' },
     ],
   },
 ]);

@@ -6949,6 +6949,15 @@ function getTroubleshootingView() {
   if (typeof window === 'undefined' || !window.TroubleshootingPage || !ui) return null;
   troubleshootingView = window.TroubleshootingPage.create({
     el, t, ui, errText, openAgent, openCluster, gotoView,
+    // A node on this map is an agent OR a polled switch, and they open two
+    // different pages. The id says which: a switch is `d:<id>` (see
+    // src/topology/snmpTopologyMerge.js), because a polled switch is not an
+    // agent and one shared numeric space would collide.
+    openNode: (id) => {
+      const device = /^d:(\d+)$/.exec(String(id));
+      if (device) openSnmpDevice(Number(device[1]));
+      else openAgent(id);
+    },
     state: troubleshootingState,
     TV: window.TroubleshootingView,
     topologySvg: tshootTopologySvg,
@@ -12427,19 +12436,39 @@ const SNMP_COLLECT_KINDS = ['if', 'fdb', 'lldp', 'vlan'];
 async function settingsSnmpDevicesView() {
   const host = el('div', { class: 'settings-grid' });
 
+  let locations = [];
+
   async function refresh() {
     let data;
     let agents = [];
     try {
-      [data, agents] = await Promise.all([
+      let locs;
+      [data, agents, locs] = await Promise.all([
         api('/api/snmp-devices'),
         api('/agents').catch(() => []),
+        api('/locations').catch(() => []),
       ]);
+      locations = Array.isArray(locs) ? locs : (locs.locations || []);
     } catch (e) {
       host.replaceChildren(el('div', { class: 'error' }, errText(e)));
       return;
     }
-    host.replaceChildren(addCard(agents), listCard(data.devices || []));
+    host.replaceChildren(addCard(agents), listCard(data.devices || [], agents));
+  }
+
+  // THE SITE IS WHAT CONNECTS A SWITCH TO ITS SITE'S COMMUNITIES. Without one,
+  // a device resolves its credential from its own community or the global
+  // fallback and never from the communities assigned to a location — which
+  // made the whole Settings → SNMP communities site assignment unreachable for
+  // every switch added here, because this form had no way to say where the
+  // switch is.
+  function siteOptions(selected) {
+    return [['', t('snmpdev.site.none')]].concat(locations.map((l) => [String(l.id), l.name]))
+      .map(([v, label]) => {
+        const opt = el('option', { value: v }, label);
+        if (String(selected ?? '') === v) opt.selected = true;
+        return opt;
+      });
   }
 
   function agentOptions(agents) {
@@ -12461,6 +12490,16 @@ async function settingsSnmpDevicesView() {
     const versionSel = el('select', { id: 'snmpdev-version' },
       el('option', { value: '2c' }, 'v2c'), el('option', { value: '1' }, 'v1'));
     const intervalIn = el('input', { type: 'number', id: 'snmpdev-interval', value: '300', min: '60', max: '86400' });
+    const siteSel = el('select', { id: 'snmpdev-site' }, ...siteOptions(''));
+    // A switch polled by the Aarhus agent is almost certainly at Aarhus, so the
+    // agent's own site is offered as the starting point — offered, not imposed:
+    // an agent can reach across a WAN link, and the server must not guess where
+    // a switch is. Only fills a site the operator has not already chosen.
+    agentSel.addEventListener('change', () => {
+      if (siteSel.value) return;
+      const agent = agents.find((a) => String(a.id) === agentSel.value);
+      if (agent && agent.location_id != null) siteSel.value = String(agent.location_id);
+    });
     const err = el('p', { class: 'error' });
     const btn = el('button', { class: 'btn btn-primary' }, t('snmpdev.add.submit'));
 
@@ -12475,6 +12514,7 @@ async function settingsSnmpDevicesView() {
             agentId: agentSel.value ? Number(agentSel.value) : null,
             community: communityIn.value || null,
             version: versionSel.value,
+            locationId: siteSel.value ? Number(siteSel.value) : null,
             intervalSec: Number(intervalIn.value) || 300,
           },
         });
@@ -12498,8 +12538,33 @@ async function settingsSnmpDevicesView() {
       field(t('snmpdev.field.agent'), agentSel, t('snmpdev.field.agent.hint')),
       field(t('snmpdev.field.community'), communityIn, t('snmpdev.field.community.hint')),
       field(t('snmpdev.field.version'), versionSel, t('snmpdev.field.version.hint')),
+      field(t('snmpdev.field.site'), siteSel, t('snmpdev.field.site.hint')),
       field(t('snmpdev.field.interval'), intervalIn, t('snmpdev.field.interval.hint')),
       err, el('div', { class: 'actions' }, btn));
+  }
+
+  // The site, as a select that saves on change. A column that only DISPLAYS
+  // the site would leave every existing row stuck without one, because this
+  // screen has no other edit.
+  function siteCell(d) {
+    const sel = el('select', {}, ...siteOptions(d.locationId));
+    sel.addEventListener('change', async () => {
+      sel.disabled = true;
+      try {
+        await api(`/api/snmp-devices/${d.id}`, {
+          method: 'PATCH',
+          body: { locationId: sel.value ? Number(sel.value) : null },
+        });
+        toast(t('snmpdev.site.saved'));
+        await refresh();
+      } catch (e) {
+        toast(errText(e));
+        sel.value = d.locationId == null ? '' : String(d.locationId);
+      } finally {
+        sel.disabled = false;
+      }
+    });
+    return sel;
   }
 
   function supportedCell(d) {
@@ -12534,7 +12599,7 @@ async function settingsSnmpDevicesView() {
       el('span', { class: 'meta-xs' }, ` ${fmtTimeShort(new Date(d.lastOkAt).getTime())}`));
   }
 
-  function listCard(devices) {
+  function listCard(devices, agents) {
     const card = el('section', { class: 'card' },
       el('h3', {}, t('snmpdev.list.title')),
       el('p', { class: 'muted' }, t('snmpdev.list.lead')));
@@ -12546,6 +12611,7 @@ async function settingsSnmpDevicesView() {
       el('thead', {}, el('tr', {},
         el('th', {}, t('snmpdev.col.device')),
         el('th', {}, t('snmpdev.col.agent')),
+        el('th', {}, t('snmpdev.col.site')),
         el('th', {}, t('snmpdev.col.collects')),
         el('th', {}, t('snmpdev.col.state')),
         el('th', {}, ''))),
@@ -12559,6 +12625,13 @@ async function settingsSnmpDevicesView() {
           }, el('strong', {}, d.displayName || d.host)),
           d.displayName ? el('span', { class: 'meta-xs' }, ` ${d.host}`) : null),
         el('td', {}, d.agentName || el('span', { class: 'muted' }, t('snmpdev.agent.none'))),
+        // Settable here rather than only at creation: every switch added before
+        // this field existed has no site, and a device with no site never
+        // reaches the communities assigned to a location.
+        el('td', {}, isAdmin() ? siteCell(d) : (
+          locations.find((l) => Number(l.id) === d.locationId)
+            ? locations.find((l) => Number(l.id) === d.locationId).name
+            : el('span', { class: 'muted' }, t('snmpdev.site.none')))),
         el('td', {}, supportedCell(d)),
         el('td', {}, stateCell(d)),
         el('td', {},

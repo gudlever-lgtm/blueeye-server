@@ -155,7 +155,11 @@ test('events come back newest first, named and labelled', async () => {
   assert.equal(linkDown.deviceName, 'Core switch', 'the display name wins over the hostname');
   assert.equal(linkDown.agentName, 'be-aarhus-01', 'the agent falls back to its hostname');
   assert.equal(linkDown.severityName, 'crit');
-  assert.equal(linkDown.typeLabel, 'Link nede');
+  // The catalogue's label is the FALLBACK the dashboard shows for a type it
+  // has no key for, so it is English like every other default here. What a
+  // person reads comes from `devevt.type.*` in public/i18n.js and follows
+  // the language switch.
+  assert.equal(linkDown.typeLabel, 'Link down');
   assert.equal(linkDown.clockSkewMs, 3000);
 });
 

@@ -856,6 +856,13 @@ tr.acked td { opacity: .55; }
 .settings-help li { margin: 4px 0; }
 .settings-env { background: var(--surface-alt); border: 1px solid var(--border); border-radius: var(--radius-xs); padding: 8px 10px; margin: 6px 0; font-size: 12px; white-space: pre-wrap; overflow-x: auto; }
 .settings-grid:has(.form-grid) .settings-card:has(.form-grid) { grid-column: 1 / -1; }
+/* A settings card whose body is a WIDE TABLE takes the whole row.
+   `auto-fit, minmax(280px, 1fr)` gives it a third of the width on a desktop,
+   and a five-column table has nothing left over for the buttons in its last
+   column: "Delete" renders as "…". A control nobody can read is a control
+   nobody can use. */
+.settings-grid > .card:has(.table-wrap-ui),
+.settings-grid > .settings-card:has(.table-wrap-ui) { grid-column: 1 / -1; }
 
 /* Settings → Appearance: colour-theme picker. */
 .theme-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 12px; }
@@ -1550,6 +1557,10 @@ li.guide-step.done .guide-step-title { text-decoration: line-through; opacity: 0
 .ts-node.ts-ok circle { stroke: var(--ok); }
 .ts-node.ts-down circle { stroke: var(--bad); fill: var(--bad-weak); }
 .ts-node.ts-unreachable_downstream circle { stroke: var(--muted); fill: var(--muted-weak); stroke-dasharray: 3 2; }
+/* Never polled. Outlined rather than filled and dashed rather than solid: it is
+   not a fault and it is not health either, and it must not read as either. */
+.ts-node.ts-unknown circle { stroke: var(--muted); fill: none; stroke-dasharray: 2 3; }
+.ts-link.ts-unknown { stroke: var(--muted); stroke-dasharray: 2 3; }
 .ts-node.on-path circle { stroke: var(--accent); stroke-width: 5; }
 .ts-node:focus { outline: none; }
 .ts-node:focus circle { stroke: var(--accent); }

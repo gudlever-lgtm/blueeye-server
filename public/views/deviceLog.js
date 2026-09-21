@@ -29,6 +29,22 @@
     var t = deps.t;
     var ui = deps.ui;
 
+    // What a person reads for an event type.
+    //
+    // The vocabulary lives on the server (src/devices/deviceEventCatalog.js) so
+    // the filter and the stored data cannot drift apart, but the WORDS live in
+    // the catalogues here so they follow the language switch. The server's own
+    // label is the fallback, and it is the right one: a newer agent classifies
+    // types this dashboard has not heard of, and a readable English row beats
+    // `poe.budget_exceeded`. The raw type is the last resort.
+    function eventTypeLabel(type, serverLabel) {
+      if (!type) return serverLabel || '';
+      var key = 'devevt.type.' + type;
+      var label = t(key);
+      // t() hands the key back when it has no string for it.
+      return label === key ? (serverLabel || type) : label;
+    }
+
     // Syslog severity → badge tone. LOWER IS WORSE, which is the single most
     // confusing thing about syslog; the whole screen is built to make that
     // invisible to the reader rather than something they must remember.
@@ -171,7 +187,7 @@
           meta: (e.deviceName || e.deviceHostname || e.sourceIp) + ' · ' + fmtTime(e.receivedAt),
           sections: [
             ui.drawerSection(t('devlog.drawer.what'), ui.keyValues([
-              [t('devlog.field.type'), e.typeLabel || e.eventType],
+              [t('devlog.field.type'), eventTypeLabel(e.eventType, e.typeLabel)],
               e.ifname ? [t('devlog.field.iface'), e.ifname] : null,
               e.tag ? [t('devlog.field.tag'), e.tag] : null,
               [t('devlog.field.severity'), e.severityName + ' (' + e.severity + ')'],
@@ -284,10 +300,15 @@
       // The type filter's options come from the SERVER's catalogue, so the list
       // and the stored data can never drift apart. A catalogue that does not
       // load costs the dropdown, never the log.
+      //
+      // The catalogue serves the TYPES; what a person reads is chosen here, so
+      // this dropdown follows the language switch like the rest of the screen.
+      // It used to render the server's own label, which was written in one
+      // language and stayed in it whichever language the dashboard was set to.
       deps.fetchCatalog().then(function (cat) {
         var opts = [['', t('devlog.type.any')]];
         (cat.groups || []).forEach(function (g) {
-          (g.types || []).forEach(function (ty) { opts.push([ty.type, ty.label]); });
+          (g.types || []).forEach(function (ty) { opts.push([ty.type, eventTypeLabel(ty.type, ty.label)]); });
         });
         var current = typeSel.value;
         typeSel.replaceChildren();

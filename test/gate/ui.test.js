@@ -238,6 +238,42 @@ test('the static sidebar is fully translatable: every nav control carries a data
   assert.deepEqual(uniq(missing), []);
 });
 
+// The device-event vocabulary is a CONTRACT between the server and the
+// catalogues: the server names the types, `devevt.type.<type>` supplies the
+// words. A type with no key falls back to the server's own label, which is
+// written in one language and stays in it whichever language the dashboard is
+// set to — which is how a Danish list ended up in an English Device log.
+//
+// The generic t() sweep above cannot catch these: the key is built at runtime
+// from the type, so nothing in the source reads `t('devevt.type.link.down')`.
+// This sweeps the vocabulary itself instead.
+test('every device-event type has a label in BOTH locales', () => {
+  const { KNOWN_EVENT_TYPES } = require('../../src/devices/deviceEventCatalog');
+  assert.ok(KNOWN_EVENT_TYPES.length >= 35, `only ${KNOWN_EVENT_TYPES.length} types`);
+  const missing = [];
+  for (const type of KNOWN_EVENT_TYPES) {
+    for (const locale of I18n.LOCALES) {
+      if (!I18n.has(`devevt.type.${type}`, locale)) missing.push(`devevt.type.${type} (${locale})`);
+    }
+  }
+  assert.deepEqual(missing, [],
+    'add the key to BOTH catalogues in public/i18n.js — a type with none falls back to the server\'s label, in whichever language that was written');
+});
+
+test('the catalogue\'s own labels are the English fallback, not a second language', () => {
+  // They are what the dashboard shows for a type it has no key for, so a label
+  // that is not English makes that fallback a bug rather than a graceful one.
+  const { EVENT_TYPE_GROUPS } = require('../../src/devices/deviceEventCatalog');
+  const nonAscii = [];
+  for (const group of EVENT_TYPE_GROUPS) {
+    for (const ty of group.types) {
+      // eslint-disable-next-line no-control-regex
+      if (/[^\x00-\x7F]/.test(ty.label)) nonAscii.push(`${ty.type}: ${ty.label}`);
+    }
+  }
+  assert.deepEqual(nonAscii, []);
+});
+
 test('every API path app.js calls is mounted on the server', () => {
   const routesIndex = fs.readFileSync(path.join(ROOT, 'src', 'routes', 'index.js'), 'utf8');
   const mounted = [...routesIndex.matchAll(/router\.use\('(\/[\w/-]+)'/g)].map((m) => m[1]);

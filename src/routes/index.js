@@ -354,7 +354,11 @@ function createApiRouter({
     router.use('/api/troubleshooting', createTroubleshootingRouter({
       overviewService: createTroubleshootingOverviewService({
         clustersRepo: eventClustersRepo, findingStore, agentsRepo, blastRadiusService,
-        topologyChangesRepo, auditEventsRepo, discoveredDevicesRepo, logger,
+        topologyChangesRepo, auditEventsRepo, discoveredDevicesRepo,
+        // The switches on the map. The graph is agents and their LLDP; these
+        // put the polled network on it (src/topology/snmpTopologyMerge.js).
+        snmpDevicesRepo, snmpNeighborsRepo, deviceInterfacesRepo, lldpNeighborsRepo,
+        logger,
       }),
     }));
   }

@@ -1,0 +1,28 @@
+-- 114 — the Analysis page reads OPEN findings, and there is an index for that.
+--
+-- THE REPORT THIS FIXES: "Analysis still takes a very long time to load even
+-- though I have acked a lot." On a fleet that had been running a year: 184 780
+-- findings, 98 of them unacknowledged. Every load ran four GROUP BY passes
+-- (severity, metric, host, host+metric) with no WHERE clause at all, so each
+-- one scanned all 184 780 rows. Accepting findings could not help — an accepted
+-- finding is still a row — so the page got SLOWER the longer the server ran,
+-- and the one action offered to fix it was the one action that could not.
+--
+-- The screen's own question is "what is wrong, and where", which is about the
+-- rows nobody has accepted yet. Scoped to `acked = 0` those four passes read
+-- ninety-eight rows instead of a hundred and eighty-five thousand, and that is
+-- what this index is for: `acked` leads, so the open rows are one contiguous
+-- range, and the three columns after it are exactly what the groupings group by
+-- and in the order they group.
+--
+-- `created_at` is last for MAX(created_at) per group ("last seen").
+--
+-- WHY NOT A PARTIAL INDEX: MySQL has none. A generated column + index would
+-- work and buys nothing here — `acked` is already a one-byte column and the
+-- open rows are a small, self-maintaining head of the index.
+--
+-- The totals ("184 780 findings, 154 713 warnings") still cost a full pass;
+-- they are the honest price of a number that counts everything, and the page
+-- only asks for them when an operator asks to see accepted findings too.
+CREATE INDEX `idx_findings_open`
+  ON `findings` (`acked`, `host_id`, `metric`, `severity`, `created_at`);

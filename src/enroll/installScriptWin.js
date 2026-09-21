@@ -168,14 +168,80 @@ function Fetch-Or-Explain([string]$url, [string]$outFile) {
 // Scheduled Task also ignores a second Start while one instance is live
 // (MultipleInstances = IgnoreNew), so leaving it running means the new code lands
 // on disk but never runs — the dashboard would keep showing the old version.
+//
+// WHY THIS WAITS INSTEAD OF SLEEPING. "I have to run the update twice" was this:
+// the stop was fire-and-forget (Stop-ScheduledTask does not wait, Stop-Process
+// does not wait) followed by a flat two-second sleep. On a host where node took
+// longer than that to go, the old process still held its files, the delete below
+// failed SILENTLY (-ErrorAction SilentlyContinue), tar unpacked over a directory
+// that still had the old tree in it, and the scheduled task then refused the
+// Start because an instance was still live. Nothing failed loudly, so the script
+// printed "done" — and the second run worked only because the FIRST run's kill
+// had finally taken effect by then.
+//
+// So: ask, then WAIT until it is actually gone, and say so if it is not. A
+// process that will not die is a real failure and the operator needs to hear
+// about it before the code is replaced, not after.
 const PS_STOP_RUNNING = `Info "stopping any running '$ServiceName' before replacing the code ..."
 try { Stop-ScheduledTask -TaskName $ServiceName -ErrorAction SilentlyContinue | Out-Null } catch {}
-try {
-  Get-CimInstance Win32_Process -Filter "Name = 'node.exe'" -ErrorAction SilentlyContinue |
-    Where-Object { $_.CommandLine -and $_.CommandLine -like "*$InstallDir*" } |
-    ForEach-Object { try { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue } catch {} }
-} catch {}
-Start-Sleep -Seconds 2`;
+
+# Every node.exe belonging to THIS install: matched on the command line and on
+# the image path, because a process whose command line we may not read (access
+# denied) is exactly the one still holding the files.
+function Get-AgentProcs {
+  try {
+    Get-CimInstance Win32_Process -Filter "Name = 'node.exe'" -ErrorAction SilentlyContinue |
+      Where-Object {
+        ($_.CommandLine -and $_.CommandLine -like "*$InstallDir*") -or
+        ($_.ExecutablePath -and $_.ExecutablePath -like "$InstallDir*")
+      }
+  } catch { @() }
+}
+
+$deadline = (Get-Date).AddSeconds(45)
+while ($true) {
+  $procs = @(Get-AgentProcs)
+  $taskState = $null
+  try { $taskState = (Get-ScheduledTask -TaskName $ServiceName -ErrorAction SilentlyContinue).State } catch {}
+  if ($procs.Count -eq 0 -and $taskState -ne 'Running') { break }
+  if ((Get-Date) -gt $deadline) {
+    $ids = ($procs | ForEach-Object { $_.ProcessId }) -join ', '
+    Fail ("the running agent did not stop within 45s (task state '$taskState'" +
+      $(if ($ids) { ", node.exe PID $ids" } else { '' }) + ")." + [Environment]::NewLine +
+      'Its files are still locked, so replacing the code now would leave a half-updated agent.' + [Environment]::NewLine +
+      "Stop it by hand and run this again:  Stop-ScheduledTask -TaskName '$ServiceName'")
+  }
+  foreach ($p in $procs) {
+    try { Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue } catch {}
+  }
+  Start-Sleep -Milliseconds 500
+}
+Info 'the agent is stopped.'`;
+
+// Empties the install dir, and MEANS it. The old code swallowed every error
+// here, which is how a locked file turned into a silent half-update. A file
+// still in use right after the stop is usually an antivirus or an indexer with
+// the handle open for another moment, so this retries briefly and then reports
+// exactly which file is stuck rather than unpacking on top of it.
+const PS_CLEAR_INSTALL_DIR = `$clearDeadline = (Get-Date).AddSeconds(20)
+while ($true) {
+  $stuck = @()
+  # A plain foreach over a materialised list, not a ForEach-Object pipeline: the
+  # scoping of an assignment inside a pipeline script block is the kind of detail
+  # that decides whether this loop can ever terminate.
+  $entries = @(Get-ChildItem -Path $InstallDir -Force -ErrorAction SilentlyContinue)
+  foreach ($entry in $entries) {
+    try { Remove-Item -LiteralPath $entry.FullName -Recurse -Force -ErrorAction Stop }
+    catch { $stuck = $stuck + $entry.FullName }
+  }
+  if ($stuck.Count -eq 0) { break }
+  if ((Get-Date) -gt $clearDeadline) {
+    $names = ($stuck | Select-Object -First 5) -join ', '
+    Fail ("could not empty $InstallDir - still locked: $names" + [Environment]::NewLine +
+      'Something has the old agent open (antivirus, an editor, a second node.exe). Close it and run this again.')
+  }
+  Start-Sleep -Milliseconds 500
+}`;
 
 function renderInstallPs1({
   serverUrl,
@@ -272,7 +338,7 @@ try {
   # Lay the agent out fresh under the install dir (a re-run replaces the code but
   # keeps the token/config in the separate state dir, so it stays idempotent).
   New-Item -ItemType Directory -Force -Path $InstallDir, $StateDir, $LogDir | Out-Null
-  Get-ChildItem -Path $InstallDir -Force -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+  ${PS_CLEAR_INSTALL_DIR.split('\n').join('\n  ')}
 
   Info "extracting agent source to $InstallDir"
   & $tar.Source -xzf $Tarball -C $InstallDir
@@ -528,7 +594,7 @@ try {
   # Replace the code only. $StateDir (token + config) is a separate directory and
   # is deliberately left alone - that is what keeps this the SAME agent.
   New-Item -ItemType Directory -Force -Path $InstallDir, $LogDir | Out-Null
-  Get-ChildItem -Path $InstallDir -Force -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+  ${PS_CLEAR_INSTALL_DIR.split('\n').join('\n  ')}
 
   Info "extracting the new agent source to $InstallDir"
   & $tar.Source -xzf $Tarball -C $InstallDir
@@ -601,9 +667,31 @@ try {
     Fail "could not start scheduled task '$ServiceName': $($_.Exception.Message)"
   }
 
+  # Start-ScheduledTask reports success for a task the scheduler then IGNORES
+  # (MultipleInstances = IgnoreNew) and for an action that dies on the first
+  # line. Neither is an error it raises, so "updated" has to be something this
+  # script SEES rather than something it assumes: wait for the new process to
+  # actually appear.
+  $upDeadline = (Get-Date).AddSeconds(20)
+  $running = $false
+  while ((Get-Date) -lt $upDeadline) {
+    if (@(Get-AgentProcs).Count -gt 0) { $running = $true; break }
+    Start-Sleep -Milliseconds 500
+  }
+  if (-not $running) {
+    Info "the agent has not come up within 20s of starting '$ServiceName'."
+    if (Test-Path $AgentLog) {
+      Info 'last lines of the agent log:'
+      Get-Content $AgentLog -Tail 20 | ForEach-Object { Write-Host "  $_" }
+    }
+    Fail ("the new code is installed but the agent is not running." + [Environment]::NewLine +
+      "Check:  Get-ScheduledTask '$ServiceName' | Get-ScheduledTaskInfo   (LastTaskResult tells you why)" + [Environment]::NewLine +
+      "Log:    Get-Content '$AgentLog' -Tail 50")
+  }
+
   # Show what the agent logged right after the restart, so the operator sees it
   # come back up instead of a bare "updated OK".
-  Start-Sleep -Seconds 4
+  Start-Sleep -Seconds 2
   if (Test-Path $AgentLog) {
     Info 'latest lines from the agent log:'
     Get-Content $AgentLog -Tail 20 | ForEach-Object { Write-Host "  $_" }

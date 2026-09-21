@@ -190,7 +190,18 @@ function validateCapabilities(raw, errors) {
     errors.capabilities = 'capabilities.nic must be an array';
     return undefined;
   }
-  const value = Array.isArray(raw.nic) ? { ...raw, nic: normalizeNic(raw.nic) } : raw;
+  // The release key the agent PINS, as a fingerprint (agents from v0.36.3). A
+  // public-key digest, never a secret — it is what lets the dashboard say "this
+  // agent trusts a different key" instead of relaying "signature verification
+  // failed". Wrong shape is dropped rather than refused: a diagnostic must not
+  // be able to stop an agent reporting what it can actually do.
+  let value = Array.isArray(raw.nic) ? { ...raw, nic: normalizeNic(raw.nic) } : raw;
+  if (value.releaseKeyFingerprint !== undefined) {
+    const fp = value.releaseKeyFingerprint;
+    value = /^[0-9a-f]{64}$/i.test(String(fp || ''))
+      ? { ...value, releaseKeyFingerprint: String(fp).toLowerCase() }
+      : { ...value, releaseKeyFingerprint: null };
+  }
   let serialized;
   try {
     serialized = JSON.stringify(value);

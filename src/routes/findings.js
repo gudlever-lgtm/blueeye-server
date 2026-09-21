@@ -47,6 +47,20 @@ function parseListFilters(query) {
     if (Number.isNaN(d.getTime())) return { error: { since: 'since must be a valid date' } };
     filters.since = d;
   }
+  // open=1 — only what nobody has accepted yet. The Analysis screen's default,
+  // and the difference between reading ninety-eight rows and a hundred and
+  // eighty-five thousand (migration 114). Explicitly opt-IN so every existing
+  // caller, including a report that must count the accepted ones, is unchanged.
+  //
+  // It narrows the bulk-accept scope the same way it narrows the list, which is
+  // the property that matters there: "accept what I am looking at" cannot
+  // reach further than what was on screen.
+  if (query.open !== undefined && query.open !== '') {
+    if (!['0', '1', 'true', 'false'].includes(String(query.open))) {
+      return { error: { open: 'open must be 0 or 1' } };
+    }
+    if (['1', 'true'].includes(String(query.open))) filters.open = true;
+  }
   return { filters };
 }
 
@@ -70,7 +84,7 @@ function createFindingsRouter({ findingStore, timelineService = null, auditLogge
       if (parsed.error) {
         return res.status(400).json({ error: 'Validation failed', details: parsed.error });
       }
-      const { hostId, since, severity, metric, deviceId, interfaceId } = parsed.filters;
+      const { hostId, since, severity, metric, deviceId, interfaceId, open } = parsed.filters;
       let limit = 500;
       if (req.query.limit !== undefined) {
         const n = Number.parseInt(req.query.limit, 10);
@@ -80,7 +94,7 @@ function createFindingsRouter({ findingStore, timelineService = null, auditLogge
         limit = Math.min(n, 500);
       }
       res.json(await findingStore.list(hostId, since, limit, undefined, {
-        severity, metric, deviceId, interfaceId,
+        severity, metric, deviceId, interfaceId, open,
       }));
     })
   );

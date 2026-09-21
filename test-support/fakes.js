@@ -2449,8 +2449,10 @@ function makeFindingStore(overrides = {}) {
       return { matched: hits.length, changed: hits.length };
     }),
     list: overrides.list || (async (hostId, since, limit, until, filters = {}) => {
-      const { severity, metric, deviceId, interfaceId } = filters || {};
+      const { severity, metric, deviceId, interfaceId, open } = filters || {};
       let out = rows.filter((f) => (!hostId || f.hostId === hostId)
+        // Open only — the Analysis page's default scope.
+        && (!open || !f.acked)
         && (!severity || f.severity === severity)
         && (!metric || f.metric === metric)
         // A finding about a switch port carries the POLLING agent in hostId as
@@ -2489,8 +2491,9 @@ function makeFindingStore(overrides = {}) {
       }
       return [...by.values()].sort((a, b) => String(a.bucket).localeCompare(String(b.bucket)));
     }),
-    summary: overrides.summary || (async ({ hostId, severity, metric, since, until } = {}) => {
+    summary: overrides.summary || (async ({ hostId, severity, metric, since, until, open } = {}) => {
       const match = rows.filter((f) => (!hostId || f.hostId === hostId)
+        && (!open || !f.acked)
         && (!severity || f.severity === severity)
         && (!metric || f.metric === metric)
         && (!since || new Date(f.createdAt || 0) >= new Date(since))

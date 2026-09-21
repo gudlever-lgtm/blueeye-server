@@ -318,7 +318,12 @@ function createAssistant({
     }
     const hostLabel = (id) => names.get(String(id)) || String(id);
 
-    const summary = await findingStore.summary(filters || {});
+    // OPEN ONLY, unless the caller says otherwise. "What is going on?" is a
+    // question about what is still wrong, and a fleet with 184 000 accepted
+    // findings behind it would otherwise have the answer dominated by history
+    // — and pay four full-table scans to get it (see migration 114).
+    const scoped = { open: true, ...(filters || {}) };
+    const summary = await findingStore.summary(scoped);
     if (!summary || !summary.total) {
       // No provider call when there is nothing to describe. The honest answer
       // costs nothing and takes no time.
@@ -344,6 +349,9 @@ function createAssistant({
         host: filters.hostId ? hostLabel(filters.hostId) : 'all hosts',
         severity: filters.severity || 'all severities',
         metric: filters.metric || 'all metrics',
+        // Said out loud, so the model does not describe a backlog as if it were
+        // today's problem.
+        state: scoped.open ? 'not yet accepted' : 'accepted and open',
       },
       totals: {
         findings: summary.total,

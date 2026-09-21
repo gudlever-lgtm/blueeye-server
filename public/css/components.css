@@ -429,6 +429,10 @@
 .ui .path-stops li { display: flex; align-items: center; gap: var(--s-2);
   padding: var(--s-2) 0; border-bottom: 1px solid var(--hairline); font-size: var(--fs-sm); }
 .ui .path-stops li:last-child { border-bottom: 0; }
+/* A stop that opens its hops says so before it is clicked. The focus ring is
+   base.css's — [tabindex] already carries it — so only the hover wash is here. */
+.ui .path-stops li.is-clickable { cursor: pointer; border-radius: var(--radius-xs); }
+.ui .path-stops li.is-clickable:hover { background: var(--hover); }
 
 /* The popup sits inside Leaflet's own white card (see --popup-* in tokens.css),
    so it opts out of the theme's text colours rather than inheriting them. */

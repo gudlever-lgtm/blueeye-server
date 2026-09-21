@@ -213,19 +213,88 @@
         var worst = hops.reduce(function (w, n) {
           return (RANK[n.severity] || 0) > (RANK[w && w.severity] || 0) ? n : w;
         }, null);
+        // A STOP IS A PLACE ON THE ROUTE, not a flag. "DE" tells a reader the
+        // packet passed through Germany and nothing they can act on; the hop
+        // addresses, whose network they belong to and what the latency did are
+        // what turns a list of country codes into a route. The row carries as
+        // much of that as is known, and the rest is one click away rather than
+        // crammed in — a stop can cover five hops across two networks.
+        function networkOf(nodes) {
+          var names = [];
+          nodes.forEach(function (n) {
+            var name = n.asnName || (n.asn ? 'AS' + n.asn : null);
+            if (name && names.indexOf(name) < 0) names.push(name);
+          });
+          return names;
+        }
+
+        function stopRow(s) {
+          var isSrc = s.nodes.some(function (n) { return n.kind === 'source'; });
+          var place = isSrc ? (s.nodes[0].label || t('dest.path.origin')) : (s.nodes[0].country || '—');
+          var hopLabel = isSrc ? t('dest.path.origin')
+            : s.nodes.length > 1
+              ? t('dest.path.hops', { from: s.nodes[0].hop, to: s.nodes[s.nodes.length - 1].hop })
+              : t('dest.path.hop', { n: s.nodes[0].hop });
+          var nets = isSrc ? [] : networkOf(s.nodes);
+          // The slowest hop in the stop is the one worth showing: a stop that
+          // adds 80 ms says something the country code cannot.
+          var rtt = s.nodes.reduce(function (m, n) {
+            return typeof n.rttMs === 'number' && (m === null || n.rttMs > m) ? n.rttMs : m;
+          }, null);
+          var bits = [];
+          if (nets.length) bits.push(nets.slice(0, 2).join(', ') + (nets.length > 2 ? ' +' + (nets.length - 2) : ''));
+          if (rtt !== null) bits.push(Math.round(rtt) + ' ms');
+
+          var li = el('li', { class: isSrc ? null : 'is-clickable', tabindex: isSrc ? null : '0',
+            role: isSrc ? null : 'button' },
+          el('span', { class: 'ui-legend-dot sev-' + (s.severity || 'ok') }),
+          el('span', {}, String(place)),
+          bits.length ? ui.metaXs(bits.join(' · ')) : null,
+          ui.metaXs(hopLabel));
+          if (!isSrc) {
+            li.addEventListener('click', function () { openStop(s, li); });
+            li.addEventListener('keydown', function (e) {
+              if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openStop(s, li); }
+            });
+          }
+          return li;
+        }
+
+        // Every hop in this stop, with what was actually measured. This is the
+        // answer to "why is this row red" and to "which router is that" —
+        // questions a two-letter country code cannot be asked.
+        function openStop(s, row) {
+          var pairs = s.nodes.map(function (n) {
+            var where = [
+              n.asnName || (n.asn ? 'AS' + n.asn : null),
+              n.asnName && n.asn ? 'AS' + n.asn : null,
+              n.country || null,
+              n.private ? t('dest.path.privateAddr') : null,
+            ].filter(Boolean).join(' \u00b7 ');
+            var measured = [
+              typeof n.rttMs === 'number' ? Math.round(n.rttMs) + ' ms' : null,
+              typeof n.lossPct === 'number' && n.lossPct > 0 ? t('dest.path.lossN', { pct: Math.round(n.lossPct) }) : null,
+              typeof n.jitterMs === 'number' ? t('dest.path.jitterN', { ms: Math.round(n.jitterMs) }) : null,
+            ].filter(Boolean).join(' \u00b7 ');
+            return [
+              t('dest.path.hop', { n: n.hop }),
+              el('div', {},
+                el('div', { class: 'mono' }, n.ip || t('dest.path.silent')),
+                where ? ui.metaXs(where) : null,
+                measured ? ui.metaXs(measured) : null,
+                n.explain ? ui.metaXs(n.explain) : null),
+            ];
+          });
+          ui.openDrawer({
+            title: s.nodes[0].country || t('dest.path.stop'),
+            meta: t('dest.path.stopMeta', { hops: s.nodes.length }),
+            row: row,
+            sections: [ui.drawerSection(t('dest.path.stopHops'), ui.keyValues(pairs))],
+          });
+        }
+
         var body = stops.length
-          ? el('ul', { class: 'path-stops' }, stops.map(function (s) {
-            var isSrc = s.nodes.some(function (n) { return n.kind === 'source'; });
-            var place = isSrc ? (s.nodes[0].label || t('dest.path.origin')) : (s.nodes[0].country || '—');
-            var hopLabel = isSrc ? t('dest.path.origin')
-              : s.nodes.length > 1
-                ? t('dest.path.hops', { from: s.nodes[0].hop, to: s.nodes[s.nodes.length - 1].hop })
-                : t('dest.path.hop', { n: s.nodes[0].hop });
-            return el('li', {},
-              el('span', { class: 'ui-legend-dot sev-' + (s.severity || 'ok') }),
-              el('span', {}, String(place)),
-              ui.metaXs(hopLabel));
-          }))
+          ? el('ul', { class: 'path-stops' }, stops.map(stopRow))
           : ui.emptyState({ icon: '↯', title: t('dest.path.noStops'), body: t('dest.path.noStopsHint') });
 
         pathHost.replaceChildren(ui.panel({

@@ -3645,6 +3645,10 @@ function makeApp(overrides = {}) {
     investigationsRepo: overrides.investigationsRepo || makeInvestigationsRepo(),
     enrollConfig: overrides.enrollConfig || { publicUrl: '', certFingerprint: '' },
     notifyDashboard: overrides.notifyDashboard || (() => 0),
+    // Silent by default, so a test run is readable — but overridable, because
+    // "this failure is written to the system log" is a claim a test should be
+    // able to check rather than take on trust.
+    ...(overrides.logger ? { logger: overrides.logger } : {}),
   });
 }
 

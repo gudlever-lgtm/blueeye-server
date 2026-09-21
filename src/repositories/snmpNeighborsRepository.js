@@ -79,6 +79,20 @@ function createSnmpNeighborsRepository(db) {
     return rows.map(mapRow);
   }
 
+  // Every adjacency, fleet-wide. One read for the topology merge — a read per
+  // device would be a query per switch on a screen that already makes a dozen.
+  //
+  // The cap is a guard rather than a page: a fleet whose switches see more than
+  // this has a map nobody can read anyway, and the merge only draws the ends it
+  // recognises.
+  async function listAll({ limit = 20000 } = {}) {
+    const lim = Number.isInteger(limit) && limit > 0 && limit <= 200000 ? limit : 20000;
+    const [rows] = await pool.query(
+      `SELECT ${BASE_COLUMNS} FROM snmp_neighbors ORDER BY id ASC LIMIT ?`, [lim],
+    );
+    return rows.map(mapRow);
+  }
+
   async function purgeBefore(cutoff, { batchSize = 5000 } = {}) {
     let removed = 0;
     for (;;) {
@@ -93,7 +107,7 @@ function createSnmpNeighborsRepository(db) {
     return removed;
   }
 
-  return { upsertMany, listForDevice, purgeBefore };
+  return { upsertMany, listForDevice, listAll, purgeBefore };
 }
 
 module.exports = { createSnmpNeighborsRepository, mapRow };

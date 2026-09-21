@@ -167,6 +167,22 @@ function createDeviceInterfacesRepository(db) {
   // Ports not re-observed within the window. Longer-lived than the forwarding
   // table by design: a module pulled out over a holiday and put back should
   // recognise its own history rather than arriving as a brand-new port.
+  // Every port MAC we have read, fleet-wide — the join the topology merge
+  // resolves an LLDP chassis id through.
+  //
+  // Two columns rather than the whole row: this is a lookup table, and a full
+  // interface inventory to build it would be the largest read on that screen.
+  async function listMacs({ limit = 50000 } = {}) {
+    const lim = Number.isInteger(limit) && limit > 0 && limit <= 500000 ? limit : 50000;
+    const [rows] = await pool.query(
+      `SELECT device_id, phys_address FROM device_interfaces
+        WHERE phys_address IS NOT NULL AND phys_address <> ''
+        ORDER BY device_id ASC LIMIT ?`,
+      [lim],
+    );
+    return rows.map((r) => ({ deviceId: Number(r.device_id), physAddress: r.phys_address }));
+  }
+
   async function purgeBefore(cutoff, { batchSize = 2000 } = {}) {
     let removed = 0;
     for (;;) {
@@ -181,7 +197,7 @@ function createDeviceInterfacesRepository(db) {
     return removed;
   }
 
-  return { upsertMany, idMapForDevice, listForDevice, findById, countForDevice, purgeBefore };
+  return { upsertMany, idMapForDevice, listForDevice, listMacs, findById, countForDevice, purgeBefore };
 }
 
 module.exports = { createDeviceInterfacesRepository, mapRow };

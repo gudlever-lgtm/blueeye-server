@@ -1,6 +1,7 @@
 'use strict';
 
 const { computeBlastRadius } = require('../topology/blastRadius');
+const { mergeSnmpTopology } = require('../topology/snmpTopologyMerge');
 const { buildTargetTimeline } = require('../timeline/targetTimeline');
 const {
   buildRootCauses,
@@ -76,6 +77,15 @@ function createTroubleshootingOverviewService({
   topologyChangesRepo = null,
   auditEventsRepo = null,
   discoveredDevicesRepo = null,
+  // The polled switches, their LLDP and the port MACs that resolve it. The
+  // graph is built from agents and their neighbours; these are what put the
+  // NETWORK on the map. All three are best-effort like every other source
+  // here: a switch inventory that cannot be read costs the switches on the
+  // picture, never the page.
+  snmpDevicesRepo = null,
+  snmpNeighborsRepo = null,
+  deviceInterfacesRepo = null,
+  lldpNeighborsRepo = null,
   logger = console,
 } = {}) {
   // --- per-source fetchers (each rejects on its own backend failure) ---------
@@ -91,6 +101,40 @@ function createTroubleshootingOverviewService({
   async function fetchAgents() {
     if (!agentsRepo || typeof agentsRepo.findAll !== 'function') return [];
     return agentsRepo.findAll();
+  }
+
+  // --- the switches, for the map -------------------------------------------
+  async function fetchSnmpDevices() {
+    if (!snmpDevicesRepo || typeof snmpDevicesRepo.list !== 'function') return [];
+    return asArray(await snmpDevicesRepo.list({}));
+  }
+
+  async function fetchSnmpNeighbours() {
+    if (!snmpNeighborsRepo || typeof snmpNeighborsRepo.listAll !== 'function') return [];
+    return asArray(await snmpNeighborsRepo.listAll({}));
+  }
+
+  async function fetchDeviceMacs() {
+    if (!deviceInterfacesRepo || typeof deviceInterfacesRepo.listMacs !== 'function') return [];
+    return asArray(await deviceInterfacesRepo.listMacs({}));
+  }
+
+  // The chassis id each AGENT reports as its own, so a switch that sees an
+  // agent resolves to that agent rather than to nothing. It is the local side
+  // of the same rows `buildTopologyGraph` already reads.
+  async function fetchAgentChassis() {
+    if (!lldpNeighborsRepo || typeof lldpNeighborsRepo.listAll !== 'function') return [];
+    const rows = asArray(await lldpNeighborsRepo.listAll({}));
+    const out = [];
+    const seen = new Set();
+    for (const r of rows) {
+      if (!r || !r.localChassisId || r.localAgentId == null) continue;
+      const key = String(r.localChassisId);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push({ chassisId: r.localChassisId, agentId: Number(r.localAgentId) });
+    }
+    return out;
   }
 
   // ONE graph read, reused for both the topology panel and every blast radius.
@@ -213,6 +257,10 @@ function createTroubleshootingOverviewService({
       ['topologyChanges', () => fetchTopologyChanges({ from, to, limit: timelineLimit })],
       ['agentEvents', () => fetchAgentEvents({ from, to, limit: timelineLimit })],
       ['discovered', () => (includeDiscovery ? fetchDiscovered({ limit: DEFAULT_DISCOVERY_LIMIT }) : Promise.resolve([]))],
+      ['snmpDevices', () => fetchSnmpDevices()],
+      ['snmpNeighbours', () => fetchSnmpNeighbours()],
+      ['deviceMacs', () => fetchDeviceMacs()],
+      ['agentChassis', () => fetchAgentChassis()],
     ];
 
     const settled = await Promise.allSettled(sources.map(([, fn]) => fn()));
@@ -264,7 +312,19 @@ function createTroubleshootingOverviewService({
     const blastByNode = blastRadiusFor(got.graph, nodesOfInterest);
 
     const rootCauses = buildRootCauses(clusterDetails, { blastByNode });
-    const topology = buildTopologyView({ graph: got.graph, agents: got.agents, blastByNode });
+    // The agents and their adjacency, then the switches on top of it. The
+    // merge is of the VIEW only: blast radius keeps walking the agent graph,
+    // because every caller of it keys on a numeric agent id and moving the
+    // switches into THAT graph changes every blast-radius answer in the
+    // product. See src/topology/snmpTopologyMerge.js.
+    const topology = mergeSnmpTopology({
+      view: buildTopologyView({ graph: got.graph, agents: got.agents, blastByNode }),
+      devices: got.snmpDevices,
+      neighbours: got.snmpNeighbours,
+      deviceMacs: got.deviceMacs,
+      agents: got.agents,
+      agentChassis: got.agentChassis,
+    });
     const anomalies = buildAnomalies(got.anomalies);
 
     // Timeline: the SAME pure merge the per-target timeline uses, fed the

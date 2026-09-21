@@ -2735,6 +2735,8 @@
       'devevt.type.device.hardware_changed': 'Hardware changed',
       'devevt.type.syslog.raw': 'Not classified',
 
+      'tshoot.state.unknown': 'Not polled yet ({n})',
+      'tshoot.openDevice': 'Open switch',
       'snmpcom.add.title': 'Add an SNMP community',
       'snmpcom.add.lead': 'A community is a named credential. Assign it to the sites it is valid at, and to the agents allowed to use it — an agent only ever walks with a community assigned to it.',
       'snmpcom.add.submit': 'Add community',
@@ -6707,6 +6709,8 @@
       'devevt.type.device.hardware_changed': 'Hardware ændret',
       'devevt.type.syslog.raw': 'Ikke klassificeret',
 
+      'tshoot.state.unknown': 'Ikke pollet endnu ({n})',
+      'tshoot.openDevice': 'Åbn switch',
       'snmpcom.add.title': 'Tilføj en SNMP-community',
       'snmpcom.add.lead': 'En community er en navngivet legitimation. Tildel den de lokationer hvor den gælder, og de agenter der må bruge den — en agent walker kun med en community der er tildelt den.',
       'snmpcom.add.submit': 'Tilføj community',

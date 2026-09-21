@@ -10,11 +10,16 @@
 (function (root) {
   'use strict';
 
-  var STATES = { ok: 1, down: 1, unreachable_downstream: 1 };
+  // A polled switch that has NEVER answered is 'unknown' — not 'ok'. Nothing
+  // has been established about it yet and the poller may not have reached its
+  // first cycle, so drawing it green is a claim the data does not support, and
+  // green is the one colour nobody looks at twice.
+  var STATES = { ok: 1, down: 1, unreachable_downstream: 1, unknown: 1 };
   var STATE_LABELS = {
     ok: 'OK',
     down: 'Down',
     unreachable_downstream: 'Unreachable downstream',
+    unknown: 'Not polled yet',
   };
 
   function normalizeState(state) {

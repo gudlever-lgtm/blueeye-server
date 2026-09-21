@@ -6949,6 +6949,15 @@ function getTroubleshootingView() {
   if (typeof window === 'undefined' || !window.TroubleshootingPage || !ui) return null;
   troubleshootingView = window.TroubleshootingPage.create({
     el, t, ui, errText, openAgent, openCluster, gotoView,
+    // A node on this map is an agent OR a polled switch, and they open two
+    // different pages. The id says which: a switch is `d:<id>` (see
+    // src/topology/snmpTopologyMerge.js), because a polled switch is not an
+    // agent and one shared numeric space would collide.
+    openNode: (id) => {
+      const device = /^d:(\d+)$/.exec(String(id));
+      if (device) openSnmpDevice(Number(device[1]));
+      else openAgent(id);
+    },
     state: troubleshootingState,
     TV: window.TroubleshootingView,
     topologySvg: tshootTopologySvg,

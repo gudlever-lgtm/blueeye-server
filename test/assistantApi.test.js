@@ -51,14 +51,64 @@ test('POST /api/assistant/explain returns 200 with the answer when enabled', asy
   assert.equal(res.body.usedFindings, 2);
 });
 
-test('POST /api/assistant/explain returns 500 when the provider call fails', async () => {
+// A PROVIDER THAT DOES NOT ANSWER IS NOT AN INTERNAL ERROR OF THIS SERVER.
+//
+// It used to be reported as one: every assistant route rethrew anything that
+// was not FeatureDisabled, the error handler answered 500 and — in production —
+// stripped the message. An operator saw
+//
+//   POST /api/assistant/findings-summary  500  {"error":"Internal Server Error"}
+//
+// for a missing API key, an unreachable endpoint and a genuine bug alike. The
+// first two are theirs to fix and the message already said how.
+test('a provider that fails is a 502, and says so', async () => {
   const assistant = makeAssistant({
-    explain: async () => { const e = new Error('upstream blew up'); e.name = 'AssistantUpstreamError'; throw e; },
+    explain: async () => { const e = new Error('assistant provider returned status 429'); e.name = 'AssistantUpstreamError'; throw e; },
   });
   const res = await request(makeApp({ assistant }))
     .post('/api/assistant/explain').set('Authorization', viewer())
     .send({ question: 'q' });
+  assert.equal(res.status, 502);
+  assert.equal(res.body.code, 'ASSISTANT_UPSTREAM');
+  assert.match(res.body.error, /status 429/, 'the reason survives, in production too');
+});
+
+test('an assistant that is not configured is a 409 naming the fix', async () => {
+  const assistant = makeAssistant({
+    summarizeFindings: async () => {
+      const e = new Error('assistant is enabled but no API key is configured (set one in Settings → AI assistant)');
+      e.name = 'AssistantMisconfigured';
+      throw e;
+    },
+  });
+  const res = await request(makeApp({ assistant }))
+    .post('/api/assistant/findings-summary').set('Authorization', viewer()).send({});
+  assert.equal(res.status, 409);
+  assert.equal(res.body.code, 'ASSISTANT_NOT_CONFIGURED');
+  assert.match(res.body.error, /Settings/, 'the operator is told where to go');
+});
+
+test('a real bug is still a 500 — this does not swallow our own failures', async () => {
+  const assistant = makeAssistant({
+    summarizeFindings: async () => { throw new TypeError('cannot read properties of undefined'); },
+  });
+  const res = await request(makeApp({ assistant }))
+    .post('/api/assistant/findings-summary').set('Authorization', viewer()).send({});
   assert.equal(res.status, 500);
+});
+
+test('an assistant failure reaches the system log', async () => {
+  // The standing rule: an error the operator was shown and cannot find in the
+  // log afterwards is an error they cannot chase.
+  const lines = [];
+  const logger = { info() {}, error() {}, debug() {}, warn: (m) => lines.push(String(m)) };
+  const assistant = makeAssistant({
+    summarizeFindings: async () => { const e = new Error('assistant request failed: fetch failed'); e.name = 'AssistantUpstreamError'; throw e; },
+  });
+  const res = await request(makeApp({ assistant, logger }))
+    .post('/api/assistant/findings-summary').set('Authorization', viewer()).send({});
+  assert.equal(res.status, 502);
+  assert.ok(lines.some((l) => /assistant:.*findings-summary.*fetch failed/.test(l)), lines.join('\n'));
 });
 
 test('an unknown assistant sub-path returns 404', async () => {

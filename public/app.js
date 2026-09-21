@@ -1988,6 +1988,23 @@ function trustMismatchLine(a, serverFingerprint) {
     t('agentUpdate.trustMismatch', { agent: shortFp(agentFp), server: shortFp(serverFingerprint) }));
 }
 
+// The agent version that first understood a `rekey` command. Below it the
+// dashboard's one-click re-pin is a command the host does not recognise: the
+// server sends it, the agent ignores it, and the operator is told it was
+// "declined" — which sounds like a decision and is really a vocabulary gap.
+//
+// Those agents are not stuck, they just cannot be fixed from here: the
+// host-side one-liner re-pins them, and that is what the dialog shows instead.
+var REKEY_MIN_AGENT = '0.28.0';
+
+function agentCanRekey(a) {
+  var v = a && a.capabilities && a.capabilities.agentVersion;
+  // An agent that has not reported a version yet gets the benefit of the doubt:
+  // refusing to try is worse than trying and being told no.
+  if (!v) return true;
+  return compareVersions(v, REKEY_MIN_AGENT) >= 0;
+}
+
 async function showRepinCommand(a, detail, { retryUpdate = false } = {}) {
   const name = a.display_name || a.hostname;
   let data;
@@ -2008,7 +2025,8 @@ async function showRepinCommand(a, detail, { retryUpdate = false } = {}) {
       el('button', { class: 'small', onclick: () => { copyText(data.oneLiner); } }, t('agentUpdate.repin.copy'))),
     el('p', { class: 'muted small' }, t('agentUpdate.repin.run', { host: a.hostname })));
 
-  const go = el('button', {}, t('agentUpdate.repin.send'));
+  const canRekey = agentCanRekey(a);
+  const go = el('button', { disabled: canRekey ? null : 'disabled' }, t('agentUpdate.repin.send'));
   go.addEventListener('click', async () => {
     go.disabled = true;
     status.textContent = t('agentUpdate.repin.sending');
@@ -2051,6 +2069,9 @@ async function showRepinCommand(a, detail, { retryUpdate = false } = {}) {
     // the right fix.
     trustMismatchLine(a, data.fingerprint),
     data.canSign ? null : el('p', { class: 'muted small' }, t('agentUpdate.repin.cannotSign')),
+    canRekey ? null : el('p', { class: 'error small' }, t('agentUpdate.repin.tooOld', {
+      version: (a.capabilities && a.capabilities.agentVersion) || '?', min: REKEY_MIN_AGENT,
+    })),
     el('p', { class: 'muted small' }, t('agentUpdate.repin.keepsIdentity')),
     el('div', { class: 'form-actions' },
       go,
@@ -2058,6 +2079,9 @@ async function showRepinCommand(a, detail, { retryUpdate = false } = {}) {
       el('button', { class: 'ghost', onclick: closeModal }, t('agentUpdate.close'))),
     status,
     fallback);
+  // Nothing to send from here, so the way that DOES work is already open rather
+  // than hidden behind a "fallback" link the operator has no reason to click.
+  if (!canRekey) fallback.classList.remove('hidden');
   $('#modal').classList.remove('hidden');
 }
 

@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.185.0 — Errors that name their own fix
+
+**A failing AI provider was reported as a bug in this server.** Every assistant
+route rethrew anything that was not "feature disabled", the error handler
+answered 500, and in production it stripped the message — so a missing API key,
+an unreachable endpoint and a genuine bug all arrived as
+`500 {"error":"Internal Server Error"}`. The first two are the operator's to
+fix and the message already said how. Now: **409** when this server is not
+configured to ask anything (naming Settings → AI assistant), **502** when the
+provider did not answer, 500 only for ours — and every one of them goes to the
+system log. The findings summary is also scoped to open findings, so "what is
+going on?" is about what is still wrong rather than a year of accepted history.
+
+**The re-pin was offered to agents that cannot accept it.** The `rekey` command
+only exists from agent v0.28.0. Below that the dashboard sent it anyway and
+reported it "declined", which sounds like a decision and is really a vocabulary
+gap. Those agents now get the host-side one-liner, already expanded, and a line
+saying why.
+
+**A traceroute path stop was a two-letter country code.** "DE" says a packet
+passed through Germany and nothing an operator can act on. Each stop now shows
+the networks it crosses and its slowest hop, and clicking it opens every router
+in it — address, ASN, country, RTT, loss, jitter and why it was flagged.
+
+**Agent v0.37.1** fixes the Windows traceroute, which is why those paths were
+empty: see its changelog. A server on this version tells you the agent's actual
+reason instead of guessing "the traceroute command is missing".
+
 ## 0.184.0 — A refusal that names its own fix, and an Analysis page that stops re-reading history
 
 **"The agent refused the update — refused: command signature verification

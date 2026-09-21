@@ -8,8 +8,45 @@ const { ROLES } = require('../auth/roles');
 // AI assistant API (opt-in; staff, user-JWT). Mounted at /api/assistant. The
 // endpoint always exists when an assistant is wired, but answers 403 while the
 // feature is disabled — so the UI can tell "off" apart from "missing".
-function createAssistantRouter({ assistant, featureGate }) {
+function createAssistantRouter({ assistant, featureGate, logger = null }) {
   const router = express.Router();
+
+  // WHAT WENT WRONG, AND WHOSE PROBLEM IT IS. Every assistant route used to
+  // rethrow anything that was not FeatureDisabled, so a provider that is
+  // unreachable, a key that was never set and a genuine bug in this server all
+  // reached the operator as the same thing:
+  //
+  //   POST /api/assistant/findings-summary  500  {"error":"Internal Server Error"}
+  //
+  // In production the error handler strips the message too, so the one sentence
+  // that says what to do — "no API key is configured (set one in Settings -> AI
+  // assistant)" — was thrown away on the way out. Neither of those is an
+  // internal error of this server, and each has a different fix:
+  //
+  //   AssistantMisconfigured  409  this server is not set up to ask anything
+  //   AssistantUpstreamError  502  the provider did not answer, or answered badly
+  //   anything else           500  ours, and the error handler logs it
+  //
+  // Both messages are written for an operator and name no secret — the key is
+  // never in them, only whether one is set.
+  function assistantFailure(err, req, res) {
+    const name = err && err.name;
+    if (name === 'FeatureDisabled') return res.status(403).json({ error: err.message });
+    if (name === 'AssistantMisconfigured' || name === 'AssistantUpstreamError') {
+      const status = name === 'AssistantMisconfigured' ? 409 : 502;
+      // The system log gets it either way: a failure the operator was shown and
+      // cannot find in the log afterwards is a failure they cannot chase.
+      const log = req.log || logger;
+      if (log && typeof log.warn === 'function') {
+        log.warn(`assistant: ${req.method} ${req.originalUrl} failed — ${err.message}`);
+      }
+      return res.status(status).json({
+        error: err.message,
+        code: name === 'AssistantMisconfigured' ? 'ASSISTANT_NOT_CONFIGURED' : 'ASSISTANT_UPSTREAM',
+      });
+    }
+    throw err; // ours -> 500, logged by the error handler
+  }
 
   // POST /api/assistant/explain  { question, hostId? } — ask about a host
   // (viewer+). 400 empty question, 403 feature disabled, 500 on provider error.
@@ -34,13 +71,10 @@ function createAssistantRouter({ assistant, featureGate }) {
         const result = await assistant.explain(question, hostId);
         return res.json(result);
       } catch (err) {
-        if (err && err.name === 'FeatureDisabled') {
-          return res.status(403).json({ error: err.message });
-        }
         if (err && err.name === 'InvalidQuestion') {
           return res.status(400).json({ error: 'Validation failed', details: { question: 'question is required' } });
         }
-        throw err; // AssistantMisconfigured / AssistantUpstreamError / unknown -> 500
+        return assistantFailure(err, req, res);
       }
     })
   );
@@ -71,13 +105,10 @@ function createAssistantRouter({ assistant, featureGate }) {
         const result = await assistant.explainDiagnostic(diagnostic, hostId);
         return res.json(result);
       } catch (err) {
-        if (err && err.name === 'FeatureDisabled') {
-          return res.status(403).json({ error: err.message });
-        }
         if (err && err.name === 'InvalidQuestion') {
           return res.status(400).json({ error: 'Validation failed', details: { diagnostic: 'a diagnostic snapshot is required' } });
         }
-        throw err; // AssistantMisconfigured / AssistantUpstreamError / unknown -> 500
+        return assistantFailure(err, req, res);
       }
     })
   );
@@ -107,13 +138,10 @@ function createAssistantRouter({ assistant, featureGate }) {
         const result = await assistant.summarizeLocation(locationId);
         return res.json(result);
       } catch (err) {
-        if (err && err.name === 'FeatureDisabled') {
-          return res.status(403).json({ error: err.message });
-        }
         if (err && err.name === 'LocationNotFound') {
           return res.status(404).json({ error: 'Location not found' });
         }
-        throw err; // AssistantMisconfigured / AssistantUpstreamError / unknown -> 500
+        return assistantFailure(err, req, res);
       }
     })
   );
@@ -151,10 +179,7 @@ function createAssistantRouter({ assistant, featureGate }) {
       try {
         return res.json(await assistant.summarizeFindings(filters));
       } catch (err) {
-        if (err && err.name === 'FeatureDisabled') {
-          return res.status(403).json({ error: err.message });
-        }
-        throw err; // AssistantMisconfigured / AssistantUpstreamError -> 500
+        return assistantFailure(err, req, res);
       }
     })
   );

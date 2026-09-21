@@ -10962,7 +10962,7 @@ const SETTINGS_GROUPS = [
   ['Access & security', [['users', 'Users', true], ['auth', 'Authentication', true], ['apitokens', 'API tokens', true], ['agentkey', 'Agent key', true]]],
   ['Detection & alerts', [['analyse', 'Analysis', true], ['alerting', 'Alerting', true], ['severity', 'Severity rules', true], ['runbooks', 'Runbooks', true], ['integrations', 'ITSM', true], ['cmdb', 'CMDB', true], ['ai', 'AI', true], ['maintenance', 'Maintenance', true]]],
   ['Data', [['database', 'Database', true], ['retention', 'Retention', true], ['types', 'Traffic types', true], ['map', 'Map', true]]],
-  ['System', [['updates', 'Updates', true], ['agents', 'Agents', true], ['snmp', 'SNMP devices', true], ['screening', 'Test Settings', true], ['assurance', 'Service Assurance', true]]],
+  ['System', [['updates', 'Updates', true], ['agents', 'Agents', true], ['snmp', 'SNMP devices', true], ['snmpcommunities', 'SNMP communities', true], ['screening', 'Test Settings', true], ['assurance', 'Service Assurance', true]]],
   ['Personal', [['appearance', 'Appearance', false], ['license', 'License', false]]],
 ];
 // ---- Logs (admin-only operational + client-error view) ----------------------
@@ -11675,6 +11675,7 @@ const SETTINGS_SECTIONS = {
   agentkey: settingsAgentKeyView,
   agents: settingsAgentsView,
   snmp: settingsSnmpDevicesView,
+  snmpcommunities: settingsSnmpCommunitiesView,
   retention: settingsRetentionView,
   auth: settingsAuthView,
   apitokens: settingsApiTokensView,
@@ -12454,6 +12455,272 @@ async function settingsSnmpDevicesView() {
               } catch (e) { toast(errText(e)); }
             },
           }, t('snmpdev.action.delete')) : null)))));
+    card.append(el('div', { class: 'table-wrap-ui' }, table));
+    return card;
+  }
+
+  await refresh();
+  return host;
+}
+
+// ---- Settings → SNMP communities -------------------------------------------
+// A NAMED CREDENTIAL, and the two things it is assigned to.
+//
+//   * the SITES it is valid at — a site may have several, in its own order;
+//   * the AGENTS allowed to walk with it. That is the access rule: an agent
+//     polls nothing with a community it has not been assigned, and says so
+//     rather than guessing 'public'.
+//
+// The secret is write-only here, like every other credential in this product:
+// the list says WHETHER one is stored, never what it is, so a blank field on an
+// edit means "keep the one already there" rather than "clear it".
+//
+// WHAT THIS SCREEN DELIBERATELY DOES NOT OFFER: a way to make the agent try
+// several. The server resolves ONE credential per device and sends that one.
+// Trying them in order on the wire is credential spraying — it locks v3
+// accounts, and on v2c a wrong community usually just times out, so the polling
+// collapses before it finds anything.
+async function settingsSnmpCommunitiesView() {
+  const host = el('div', { class: 'settings-grid' });
+  let profiles = [];
+  let locations = [];
+  let agents = [];
+  let meta = { authProtocols: [], privProtocols: [], versions: ['1', '2c', '3'] };
+  let editingId = null;
+
+  const field = (label, control, hint) => el('label', { class: 'set-field' },
+    el('span', {}, label), control, hint ? el('span', { class: 'muted small' }, hint) : null);
+  const agentLabel = (a) => a.display_name || a.hostname || `#${a.id}`;
+  const nameOf = (list, id, label) => {
+    const hit = list.find((x) => Number(x.id) === Number(id));
+    return hit ? label(hit) : `#${id}`;
+  };
+
+  async function refresh() {
+    try {
+      const [data, locs, ags] = await Promise.all([
+        api('/api/snmp-profiles'),
+        api('/locations').catch(() => []),
+        api('/agents').catch(() => []),
+      ]);
+      meta = await api('/api/snmp-profiles/meta').catch(() => meta);
+      profiles = data.profiles || [];
+      locations = Array.isArray(locs) ? locs : (locs.locations || []);
+      agents = Array.isArray(ags) ? ags : (ags.agents || []);
+    } catch (e) {
+      host.replaceChildren(el('div', { class: 'error' }, errText(e)));
+      return;
+    }
+    const editing = editingId == null ? null : profiles.find((p) => p.id === editingId);
+    host.replaceChildren(formCard(editing), orderCard(), listCard());
+  }
+
+  // A multi-select rather than a row of checkboxes: a fleet has as many agents
+  // as it has agents, and twenty checkboxes is a wall.
+  function multi(id, items, label, selected) {
+    const sel = el('select', { id, multiple: 'multiple', size: String(Math.min(Math.max(items.length, 3), 8)) },
+      ...items.map((x) => {
+        const opt = el('option', { value: String(x.id) }, label(x));
+        if (selected.includes(Number(x.id))) opt.selected = true;
+        return opt;
+      }));
+    return sel;
+  }
+  const picked = (sel) => [...sel.selectedOptions].map((o) => Number(o.value));
+
+  // One form for create and edit. The difference is what it is prefilled with
+  // and where it PATCHes — not a second copy of eleven fields.
+  function formCard(profile) {
+    const p = profile || {};
+    const nameIn = el('input', { type: 'text', id: 'snmpcom-name', maxlength: '190', value: p.name || '' });
+    const versionSel = el('select', { id: 'snmpcom-version' },
+      ...(meta.versions || ['1', '2c', '3']).map((v) => {
+        const opt = el('option', { value: v }, v === '3' ? 'v3' : `v${v}`);
+        if (String(p.version || '2c') === v) opt.selected = true;
+        return opt;
+      }));
+    const communityIn = el('input', { type: 'password', id: 'snmpcom-community', maxlength: '255', autocomplete: 'new-password' });
+    const v3UserIn = el('input', { type: 'text', id: 'snmpcom-v3user', maxlength: '190', value: p.v3User || '' });
+    const protoSel = (id, list, current) => el('select', { id },
+      el('option', { value: '' }, '—'),
+      ...list.map((x) => {
+        const opt = el('option', { value: x }, x);
+        if (current === x) opt.selected = true;
+        return opt;
+      }));
+    const authProtoSel = protoSel('snmpcom-authproto', meta.authProtocols || [], p.v3AuthProto);
+    const privProtoSel = protoSel('snmpcom-privproto', meta.privProtocols || [], p.v3PrivProto);
+    const authKeyIn = el('input', { type: 'password', id: 'snmpcom-authkey', maxlength: '255', autocomplete: 'new-password' });
+    const privKeyIn = el('input', { type: 'password', id: 'snmpcom-privkey', maxlength: '255', autocomplete: 'new-password' });
+    const sitesSel = multi('snmpcom-sites', locations, (l) => l.name, p.locationIds || []);
+    const agentsSel = multi('snmpcom-agents', agents, agentLabel, p.agentIds || []);
+    const defaultIn = el('input', { type: 'checkbox', id: 'snmpcom-default' });
+    defaultIn.checked = !!p.isGlobalDefault;
+    const err = el('p', { class: 'error' });
+    const submit = el('button', { class: 'btn btn-primary' }, profile ? t('snmpcom.action.save') : t('snmpcom.add.submit'));
+
+    // v3 asks for a user and keys; v1/v2c for a community string. Showing both
+    // at once is how a profile ends up with half of each.
+    const v3Rows = el('div', {},
+      field(t('snmpcom.field.v3user'), v3UserIn),
+      field(t('snmpcom.field.v3authproto'), authProtoSel),
+      field(t('snmpcom.field.v3authkey'), authKeyIn),
+      field(t('snmpcom.field.v3privproto'), privProtoSel),
+      field(t('snmpcom.field.v3privkey'), privKeyIn, t('snmpcom.field.v3.hint')));
+    const v2Rows = field(t('snmpcom.field.community'), communityIn, t('snmpcom.field.community.hint'));
+    const syncVersion = () => {
+      const v3 = versionSel.value === '3';
+      v3Rows.hidden = !v3;
+      v2Rows.hidden = v3;
+    };
+    versionSel.addEventListener('change', syncVersion);
+    syncVersion();
+
+    submit.addEventListener('click', async () => {
+      err.textContent = '';
+      submit.disabled = true;
+      try {
+        const body = {
+          name: nameIn.value.trim(),
+          version: versionSel.value,
+          locationIds: picked(sitesSel),
+          agentIds: picked(agentsSel),
+          isGlobalDefault: defaultIn.checked,
+        };
+        // A blank secret on an EDIT keeps the stored one; on a create there is
+        // nothing to keep, so it is sent and the server refuses an empty one.
+        const secret = (input, key) => {
+          if (input.value) body[key] = input.value;
+          else if (!profile) body[key] = input.value;
+        };
+        if (versionSel.value === '3') {
+          body.v3User = v3UserIn.value.trim() || null;
+          body.v3AuthProto = authProtoSel.value || null;
+          body.v3PrivProto = privProtoSel.value || null;
+          secret(authKeyIn, 'v3AuthKey');
+          secret(privKeyIn, 'v3PrivKey');
+        } else {
+          secret(communityIn, 'community');
+        }
+        if (profile) await api(`/api/snmp-profiles/${profile.id}`, { method: 'PATCH', body });
+        else await api('/api/snmp-profiles', { method: 'POST', body });
+        editingId = null;
+        await refresh();
+      } catch (e) {
+        err.textContent = errText(e);
+      } finally {
+        submit.disabled = false;
+      }
+    });
+
+    const cancel = el('button', {
+      class: 'btn btn-ghost',
+      onclick: () => { editingId = null; refresh(); },
+    }, t('snmpcom.action.cancel'));
+
+    return el('section', { class: 'card' },
+      el('h3', {}, profile ? t('snmpcom.edit.title', { name: profile.name }) : t('snmpcom.add.title')),
+      el('p', { class: 'muted' }, t('snmpcom.add.lead')),
+      field(t('snmpcom.field.name'), nameIn, t('snmpcom.field.name.hint')),
+      field(t('snmpcom.field.version'), versionSel, t('snmpcom.field.version.hint')),
+      v2Rows, v3Rows,
+      field(t('snmpcom.field.sites'), sitesSel, t('snmpcom.field.sites.hint')),
+      field(t('snmpcom.field.agents'), agentsSel, t('snmpcom.field.agents.hint')),
+      field(t('snmpcom.field.default'), defaultIn, t('snmpcom.field.default.hint')),
+      err,
+      el('div', { class: 'actions' }, submit, profile ? cancel : null));
+  }
+
+  // The order of preference lives on the SITE, not on the community: "at
+  // Aarhus, the core community before the access one" is a sentence about the
+  // site. Only sites with more than one have anything to say.
+  function orderCard() {
+    const card = el('section', { class: 'card' },
+      el('h3', {}, t('snmpcom.order.title')),
+      el('p', { class: 'muted' }, t('snmpcom.order.lead')));
+
+    const bySite = new Map();
+    for (const l of locations) {
+      const mine = profiles.filter((p) => (p.locationIds || []).includes(Number(l.id)));
+      if (mine.length > 1) bySite.set(Number(l.id), mine);
+    }
+    if (!bySite.size) {
+      card.append(el('div', { class: 'empty' }, t('snmpcom.order.empty')));
+      return card;
+    }
+    for (const [locationId, list] of bySite) {
+      const rows = el('ol', { class: 'meta-xs' });
+      list.forEach((p, i) => {
+        rows.append(el('li', {},
+          el('span', {}, p.name),
+          i === 0 ? null : el('button', {
+            class: 'btn btn-ghost btn-xs',
+            title: t('snmpcom.order.up'),
+            onclick: async () => {
+              const ids = list.map((x) => x.id);
+              [ids[i - 1], ids[i]] = [ids[i], ids[i - 1]];
+              try {
+                await api(`/api/snmp-profiles/order/${locationId}`, { method: 'PUT', body: { profileIds: ids } });
+                toast(t('snmpcom.order.saved'));
+                await refresh();
+              } catch (e) { toast(errText(e)); }
+            },
+          }, '↑')));
+      });
+      card.append(el('div', {}, el('strong', {}, nameOf(locations, locationId, (l) => l.name)), rows));
+    }
+    return card;
+  }
+
+  function assignedCell(ids, list, label, emptyKey) {
+    if (!ids || !ids.length) return el('span', { class: 'muted' }, t(emptyKey));
+    return el('span', {}, ids.map((id) => nameOf(list, id, label)).join(' · '));
+  }
+
+  function listCard() {
+    const card = el('section', { class: 'card' },
+      el('h3', {}, t('snmpcom.list.title')),
+      el('p', { class: 'muted' }, t('snmpcom.list.lead')));
+    if (!profiles.length) {
+      card.append(el('div', { class: 'empty' }, t('snmpcom.list.empty')));
+      return card;
+    }
+    const table = el('table', { class: 'dt' },
+      el('thead', {}, el('tr', {},
+        el('th', {}, t('snmpcom.col.name')),
+        el('th', {}, t('snmpcom.col.sites')),
+        el('th', {}, t('snmpcom.col.agents')),
+        el('th', {}, t('snmpcom.col.devices')),
+        el('th', {}, ''))),
+      el('tbody', {}, profiles.map((p) => el('tr', {},
+        el('td', {},
+          el('strong', {}, p.name),
+          el('span', { class: 'meta-xs' }, ` v${p.version}`),
+          // Whether a secret is stored, never what it is. A community that
+          // looks configured and is not is worse than no community at all.
+          el('span', { class: 'meta-xs' }, ` · ${p.hasCommunity || p.v3User ? t('snmpcom.secret.set') : t('snmpcom.secret.unset')}`),
+          p.isGlobalDefault ? el('span', { class: 'badge-ui neutral' }, t('snmpcom.default.badge')) : null),
+        el('td', {}, assignedCell(p.locationIds, locations, (l) => l.name, 'snmpcom.sites.none')),
+        // No agent assigned is not a detail: nothing walks with this community
+        // at all until one is.
+        el('td', {}, assignedCell(p.agentIds, agents, agentLabel, 'snmpcom.agents.none')),
+        el('td', {}, t('snmpcom.devices.count', { n: p.devices || 0 })),
+        el('td', {},
+          el('button', {
+            class: 'btn btn-secondary btn-xs',
+            onclick: () => { editingId = p.id; refresh(); },
+          }, t('snmpcom.action.edit')),
+          el('button', {
+            class: 'btn btn-ghost btn-xs',
+            onclick: async () => {
+              if (!confirm(t('snmpcom.delete.confirm', { name: p.name }))) return;
+              try {
+                await api(`/api/snmp-profiles/${p.id}`, { method: 'DELETE' });
+                if (editingId === p.id) editingId = null;
+                await refresh();
+              } catch (e) { toast(errText(e)); }
+            },
+          }, t('snmpcom.action.delete')))))));
     card.append(el('div', { class: 'table-wrap-ui' }, table));
     return card;
   }

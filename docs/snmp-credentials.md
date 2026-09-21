@@ -1,26 +1,87 @@
-# SNMP credentials — profiles, and SNMPv3
+# SNMP communities — named credentials, sites, agents, and SNMPv3
 
 > A credential per switch is fine for three switches. For a hundred it is a
 > hundred places to change a community string, and no way to know which of them
 > you missed.
 
-**API:** `/api/snmp-profiles` (admin) · **Table:** `snmp_credential_profiles` (migration 112)
+**UI:** Settings → SNMP communities · **API:** `/api/snmp-profiles` (admin) ·
+**Tables:** `snmp_credential_profiles` (112), `snmp_profile_locations` and
+`snmp_profile_agents` (113)
 
 ---
 
 ## The model
 
+A **community** is a named credential. It is assigned to two things, and they
+answer different questions:
+
+| | |
+| --- | --- |
+| **Sites** (`snmp_profile_locations`) | which communities are valid on that network. A site may have **several**, in its own order of preference. |
+| **Agents** (`snmp_profile_agents`) | which of them **this host** is allowed to speak. This is the access rule. |
+
 ```
-device.community_encrypted        ← 1. the device's own, if it has one
-device.credential_profile_id      ← 2. the profile it names
-profile WHERE location_id = site  ← 3. the profile for its site
-profile WHERE location_id IS NULL ← 4. the global default
-                                    5. nothing — and the device says so
+device.community_encrypted             ← 1. the device's own, if it has one
+device.credential_profile_id           ← 2. the community it names
+site's communities, in the site's order ← 3. the first one this agent may use
+the global default community            ← 4. is_global_default
+                                          5. nothing — and the device says so
 ```
 
-Resolved **on the server**, in `snmpDevicesRepository.listForAgentWithSecret()`.
-The agent receives **one credential per device** and never learns that profiles
-exist.
+Steps 2–4 are all filtered by the polling agent's grants. Resolved **on the
+server**, in `snmpDevicesRepository.listForAgentWithSecret()`. The agent
+receives **one credential per device** and never learns the others exist.
+
+### An agent walks only with a community assigned to it
+
+That is the whole of the access rule, and it is a **grant**: a row in
+`snmp_profile_agents` is the only thing that lets an agent be handed a named
+community. An agent with none assigned polls nothing that needs one.
+
+A community the agent is not granted is **skipped as though it were not
+configured** — including one the device names explicitly, which does *not* then
+fall through to the site's list. The naming was deliberate, and a quiet
+substitution would poll the switch with a credential nobody chose.
+
+The device reports **which** of the two it is (`credentialBlockedByGrant`),
+because "this site has no community" and "this agent may not use the one it
+has" send an admin to two different screens.
+
+**A device's own community is not filtered.** It is not a named community: it
+belongs to one switch, it is shared with nothing, and there is nothing for an
+admin to assign. It is also why it still wins — a credential set on the device
+itself is the most specific statement there is about how to reach it.
+
+### Several per site is an ORDER, not a retry list
+
+The server walks the site's list in `priority` order and sends the **first**
+one the polling agent may also use. One credential goes out per device; the
+rest are never tried on the wire. The order belongs to the **site** — "at
+Aarhus, the core community before the access one" is a sentence about the site,
+not about any one community — so it is set with
+`PUT /api/snmp-profiles/order/:locationId { profileIds }`, which must name
+exactly the communities currently assigned there. A partial order leaves the
+rest somewhere nobody chose, and somewhere nobody chose is what would decide
+which credential a switch is polled with.
+
+### No credential is never 'public'
+
+The target is still sent to the agent — so the dashboard can say
+`sw-lager-1: no SNMP community assigned` instead of a switch that silently
+never appears — and the agent **refuses** it: `snmpPoller.credentialError()`
+fails the device before a session is opened, and `openSession()` throws
+`SNMP_NO_CREDENTIAL` rather than defaulting to `public`. Walking a production
+switch with a guessed community string is a scan, under a name the customer
+never configured.
+
+### Upgrading from migration 112
+
+Nothing changes on the deploy. The migration copies each profile's single
+`location_id` into `snmp_profile_locations`, turns the old "`location_id IS
+NULL` means global" into the `is_global_default` column, and grants **every
+existing community to every existing agent**. The rule starts restricting the
+moment an admin edits it, and not before — an access rule that breaks
+monitoring on the deploy that introduces it gets turned off, not obeyed.
 
 ---
 
@@ -30,9 +91,11 @@ The proposal was: a profile per site, an optional profile per subnet, an
 override per device, and **the agent tries them in order**, remembers what
 worked and reports `auth_failed` per device.
 
-The hierarchy is built. The ordered trying is not, and the reason is that
-trying credentials in sequence against an address is **credential spraying** —
-technically identical to an attack whatever the intent.
+The hierarchy is built — and 113 widened it to several per site and an explicit
+grant per agent. The ordered trying is still not, and the reason is that trying
+credentials in sequence against an address is **credential spraying** —
+technically identical to an attack whatever the intent. More communities
+assigned makes that worse, not better.
 
 - **Against v3 it is actively harmful.** v3 is authenticated. Failed authPriv
   attempts are logged as security events on most platforms, and some lock the
@@ -48,10 +111,10 @@ technically identical to an attack whatever the intent.
 The server already knows which credential a device should use. Having the agent
 guess is solving a problem that was never there.
 
-**The subnet tier is also left out.** `locations` exists and
-`snmp_devices.location_id` already points at it. A middle tier needing CIDR
-matching has to earn its place with a case that site + override cannot express,
-and none was given.
+**The subnet tier is still left out.** `locations` exists and
+`snmp_devices.location_id` already points at it, and a site may now hold several
+communities. A middle tier needing CIDR matching has to earn its place with a
+case that site + order + override cannot express, and none was given.
 
 ---
 
@@ -117,10 +180,11 @@ Every change is written to the hash-chained audit log, naming **which fields**
 changed and never their values — `redactBody` keeps secrets out of the audit
 body, and naming the fields is what makes the trail useful.
 
-Deleting a profile reports **how many devices fall back**. They drop to the
-resolution chain — their site's profile, then the global default — and a device
-with nothing left to resolve to reports that it has no credential rather than
-quietly polling with `public`.
+Deleting a community reports **how many devices fall back**. They drop to the
+resolution chain — the rest of their site's list, then the global default — and
+a device with nothing left to resolve to reports that it has no credential
+rather than quietly polling with `public`. The assignments go with it
+(`ON DELETE CASCADE`), so the agents that were granted it lose that grant.
 
 ---
 
@@ -128,8 +192,10 @@ quietly polling with `public`.
 
 | | |
 | --- | --- |
-| Storage | `src/repositories/snmpCredentialProfilesRepository.js`, migration 112 |
-| Resolution | `snmpDevicesRepository.listForAgentWithSecret()` |
+| Storage | `src/repositories/snmpCredentialProfilesRepository.js`, migrations 112 + 113 |
+| Resolution | `snmpCredentialProfilesRepository.resolveForAgent()`, called from `snmpDevicesRepository.listForAgentWithSecret()` |
 | Validation | `src/validation/snmpProfileValidation.js` |
 | Route | `src/routes/snmpProfiles.js` (admin) |
-| Agent | `blueeye-agent/src/snmp/session.js` (`openSession`) |
+| UI | Settings → SNMP communities (`settingsSnmpCommunitiesView` in `public/app.js`) |
+| Handed to the agent | `GET /agents/me/config` → `snmpTargets[]` (`src/routes/agentReports.js`) |
+| Agent | `blueeye-agent/src/snmpPoller.js` (`credentialError`) and `src/snmp/session.js` (`openSession`) |

@@ -244,15 +244,17 @@ function createAgentReportsRouter({ agentAuth, resultsRepo, resultsTsdbRepo = nu
               deviceId: d.id,
               host: d.host,
               port: d.port,
-              // The credential the server RESOLVED (migration 112): the
-              // device's own, else its profile, else its site's, else the
-              // global default. Its version wins over the device row's,
-              // because a v3 profile against a row still saying 2c would
-              // otherwise authenticate with a community that does not exist.
+              // The credential the server RESOLVED (migrations 112 and 113):
+              // the device's own, else the community it names, else its site's
+              // communities in the site's order, else the global default — and
+              // every named one filtered by what THIS AGENT is granted. Its
+              // version wins over the device row's, because a v3 community
+              // against a row still saying 2c would otherwise authenticate
+              // with a community string that does not exist.
               //
               // The agent gets ONE credential per device and never learns that
-              // profiles exist — the secret surface on the agent stays exactly
-              // the size it already was.
+              // named communities exist — the secret surface on the agent
+              // stays exactly the size it already was.
               version: (d.credential && d.credential.version) || d.version,
               community: d.community,
               v3: d.credential && d.credential.v3User ? {
@@ -271,6 +273,14 @@ function createAgentReportsRouter({ agentAuth, resultsRepo, resultsTsdbRepo = nu
               // resolution, while a forwarding-table sweep every five minutes
               // is generous.
               counterIntervalSec: d.counterIntervalSec,
+              // WHY there is no credential, when there is none. The target is
+              // still sent: the agent refuses to poll it and reports the
+              // reason, which is how "sw-lager-1: no SNMP credential" reaches
+              // the dashboard instead of a switch silently never appearing.
+              // An agent too old to read this key falls back to refusing on the
+              // missing community alone, which is the same outcome.
+              noCredential: d.credential ? undefined : true,
+              credentialBlocked: d.credentialBlockedByGrant ? true : undefined,
             }));
           }
         } catch (err) {

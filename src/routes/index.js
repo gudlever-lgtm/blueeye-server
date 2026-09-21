@@ -436,7 +436,7 @@ function createApiRouter({
   // map of where to attack first.
   if (snmpProfilesRepo) {
     router.use('/api/snmp-profiles', createSnmpProfilesRouter({
-      snmpProfilesRepo, locationsRepo, auditLogger, logger,
+      snmpProfilesRepo, locationsRepo, agentsRepo, auditLogger, logger,
     }));
   }
   if (burstRunsRepo) {

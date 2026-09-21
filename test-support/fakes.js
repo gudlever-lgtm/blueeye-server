@@ -509,18 +509,29 @@ function makeSnmpDevicesRepo(overrides = {}, { credentialProfilesRepo = null } =
             ...device,
             community: r.community,
             credential: { version: device.version, community: r.community, source: 'device' },
+            credentialBlockedByGrant: false,
           });
           continue;
         }
         let credential = null;
+        let blocked = null;
         if (credentialProfilesRepo) {
-          const profileId = await credentialProfilesRepo.resolveProfileIdFor({
-            profileId: device.credentialProfileId, locationId: device.locationId,
+          // The AGENT-aware chain: a community this agent is not granted is
+          // skipped as though it were not configured, and reported as blocked
+          // so the device can say which of the two it is.
+          const chain = await credentialProfilesRepo.resolveForAgent({
+            profileId: device.credentialProfileId, locationId: device.locationId, agentId: Number(agentId),
           });
-          const resolved = profileId ? await credentialProfilesRepo.resolveWithSecret(profileId) : null;
+          blocked = chain.blocked ?? null;
+          const resolved = chain.profileId ? await credentialProfilesRepo.resolveWithSecret(chain.profileId) : null;
           if (resolved) credential = { ...resolved, source: 'profile' };
         }
-        out.push({ ...device, community: credential ? (credential.community ?? null) : null, credential });
+        out.push({
+          ...device,
+          community: credential ? (credential.community ?? null) : null,
+          credential,
+          credentialBlockedByGrant: !credential && blocked != null,
+        });
       }
       return out;
     }),
@@ -673,13 +684,28 @@ function makeFdbEntriesRepo(overrides = {}) {
   };
 }
 
+// A site's order of preference across the communities assigned to it. Set by
+// `setLocationOrder`; 0 until it is, so the tie-break (lowest id) decides —
+// which is what the real `priority` column does.
+function siteRank(row, locationId) {
+  return (row.site_rank && row.site_rank[Number(locationId)]) || 0;
+}
+
 function makeSnmpProfilesRepo(overrides = {}) {
   const rows = [];
   let seq = 0;
   const iso = (v) => (v == null ? null : (v instanceof Date ? v.toISOString() : new Date(v).toISOString()));
   // The SAFE shape: whether a secret is set, never what it is.
   const safe = (r) => ({
-    id: r.id, name: r.name, locationId: r.location_id, version: r.version,
+    id: r.id,
+    name: r.name,
+    isGlobalDefault: !!r.is_global_default,
+    // The site order IS the resolution order, so the fake keeps the array's
+    // order rather than sorting it — a test that reorders a site's communities
+    // has to see the resolution change.
+    locationIds: [...r.location_ids],
+    agentIds: [...r.agent_ids],
+    version: r.version,
     v3AuthProto: r.v3_auth_proto ?? null, v3PrivProto: r.v3_priv_proto ?? null,
     v3Context: r.v3_context ?? null,
     hasCommunity: !!r.community, v3User: r.v3_user ?? null,
@@ -690,9 +716,52 @@ function makeSnmpProfilesRepo(overrides = {}) {
   return {
     rows,
     list: overrides.list || (async () => rows
-      .sort((a, b) => (a.location_id == null ? 0 : 1) - (b.location_id == null ? 0 : 1)
+      .sort((a, b) => (b.is_global_default ? 1 : 0) - (a.is_global_default ? 1 : 0)
         || String(a.name).localeCompare(String(b.name)))
       .map(safe)),
+    listForLocation: overrides.listForLocation || (async (locationId) => rows
+      .filter((r) => r.location_ids.includes(Number(locationId)))
+      .sort((a, b) => siteRank(a, locationId) - siteRank(b, locationId) || a.id - b.id)
+      .map(safe)),
+    listForAgent: overrides.listForAgent || (async (agentId) => rows
+      .filter((r) => r.agent_ids.includes(Number(agentId)))
+      .sort((a, b) => (b.is_global_default ? 1 : 0) - (a.is_global_default ? 1 : 0)
+        || String(a.name).localeCompare(String(b.name)))
+      .map(safe)),
+    setLocations: overrides.setLocations || (async (id, ids) => {
+      const r = rows.find((x) => x.id === Number(id));
+      if (!r) return [];
+      r.location_ids = [...new Set((ids || []).map(Number))];
+      return [...r.location_ids];
+    }),
+    setLocationOrder: overrides.setLocationOrder || (async (locationId, profileIds) => {
+      const site = Number(locationId);
+      const current = rows.filter((r) => r.location_ids.includes(site)).map((r) => r.id).sort((a, b) => a - b);
+      const wanted = [...new Set((profileIds || []).map(Number))];
+      const check = [...wanted].sort((a, b) => a - b);
+      if (check.length !== current.length || check.some((id, i) => id !== current[i])) {
+        const err = new Error('the order must name exactly the communities assigned to this site');
+        err.code = 'SNMP_ORDER_MISMATCH';
+        throw err;
+      }
+      // The fake stores the order the only way it can: by moving the site to
+      // the right position in each community's own list, which is what
+      // `listForLocation` and the resolver sort on.
+      for (const r of rows) {
+        if (!r.location_ids.includes(site)) continue;
+        const rank = wanted.indexOf(r.id);
+        r.location_ids = r.location_ids.filter((l) => l !== site);
+        r.location_ids.splice(Math.min(rank, r.location_ids.length), 0, site);
+        r.site_rank = { ...(r.site_rank || {}), [site]: rank };
+      }
+      return wanted;
+    }),
+    setAgents: overrides.setAgents || (async (id, ids) => {
+      const r = rows.find((x) => x.id === Number(id));
+      if (!r) return [];
+      r.agent_ids = [...new Set((ids || []).map(Number))];
+      return [...r.agent_ids];
+    }),
     findById: overrides.findById || (async (id) => {
       const r = rows.find((x) => x.id === Number(id));
       return r ? safe(r) : null;
@@ -702,13 +771,17 @@ function makeSnmpProfilesRepo(overrides = {}) {
       return r ? { id: r.id, name: r.name } : null;
     }),
     findGlobalDefault: overrides.findGlobalDefault || (async () => {
-      const r = rows.filter((x) => x.location_id == null).sort((a, b) => a.id - b.id)[0];
+      const r = rows.filter((x) => x.is_global_default).sort((a, b) => a.id - b.id)[0];
       return r ? safe(r) : null;
     }),
     create: overrides.create || (async (v) => {
       const now = new Date();
       const row = {
-        id: (seq += 1), name: v.name, location_id: v.locationId ?? null,
+        id: (seq += 1),
+        name: v.name,
+        is_global_default: !!v.isGlobalDefault,
+        location_ids: [...new Set((v.locationIds || []).map(Number))],
+        agent_ids: [...new Set((v.agentIds || []).map(Number))],
         version: v.version || '2c', community: v.community ?? null,
         v3_user: v.v3User ?? null, v3_auth_proto: v.v3AuthProto ?? null,
         v3_auth_key: v.v3AuthKey ?? null, v3_priv_proto: v.v3PrivProto ?? null,
@@ -721,8 +794,11 @@ function makeSnmpProfilesRepo(overrides = {}) {
     update: overrides.update || (async (id, patch) => {
       const r = rows.find((x) => x.id === Number(id));
       if (!r) return null;
+      if (patch.locationIds !== undefined) r.location_ids = [...new Set(patch.locationIds.map(Number))];
+      if (patch.agentIds !== undefined) r.agent_ids = [...new Set(patch.agentIds.map(Number))];
+      if (patch.isGlobalDefault !== undefined) r.is_global_default = !!patch.isGlobalDefault;
       const map = {
-        name: 'name', locationId: 'location_id', version: 'version',
+        name: 'name', version: 'version',
         community: 'community', v3User: 'v3_user', v3AuthProto: 'v3_auth_proto',
         v3AuthKey: 'v3_auth_key', v3PrivProto: 'v3_priv_proto',
         v3PrivKey: 'v3_priv_key', v3Context: 'v3_context',
@@ -755,15 +831,37 @@ function makeSnmpProfilesRepo(overrides = {}) {
         v3Context: r.v3_context ?? null, securityLevel: level,
       };
     }),
-    // device override -> site profile -> global default.
-    resolveProfileIdFor: overrides.resolveProfileIdFor || (async ({ profileId = null, locationId = null } = {}) => {
-      if (profileId) return Number(profileId);
-      if (locationId) {
-        const site = rows.filter((r) => r.location_id === Number(locationId)).sort((a, b) => a.id - b.id)[0];
-        if (site) return site.id;
+    // device override -> the site's communities, in the site's order -> the
+    // global default; every step filtered by what the AGENT is granted, and
+    // reporting a community it was refused rather than falling through to one
+    // nobody chose.
+    resolveForAgent: overrides.resolveForAgent || (async ({ profileId = null, locationId = null, agentId = null } = {}) => {
+      const none = { profileId: null, source: null, blocked: null };
+      if (!agentId) return none;
+      const granted = (r) => r && r.agent_ids.includes(Number(agentId));
+
+      if (profileId) {
+        const r = rows.find((x) => x.id === Number(profileId));
+        if (granted(r)) return { profileId: r.id, source: 'device', blocked: null };
+        return { profileId: null, source: null, blocked: r ? r.id : null };
       }
-      const global = rows.filter((r) => r.location_id == null).sort((a, b) => a.id - b.id)[0];
-      return global ? global.id : null;
+      if (locationId) {
+        const atSite = rows
+          .filter((r) => r.location_ids.includes(Number(locationId)))
+          .sort((a, b) => siteRank(a, locationId) - siteRank(b, locationId) || a.id - b.id);
+        const usable = atSite.find(granted);
+        if (usable) return { profileId: usable.id, source: 'site', blocked: null };
+        if (atSite.length) return { profileId: null, source: null, blocked: atSite[0].id };
+      }
+      const global = rows.filter((r) => r.is_global_default).sort((a, b) => a.id - b.id)[0];
+      if (!global) return none;
+      return granted(global)
+        ? { profileId: global.id, source: 'global', blocked: null }
+        : { profileId: null, source: null, blocked: global.id };
+    }),
+    resolveProfileIdFor: overrides.resolveProfileIdFor || (async function resolveProfileIdFor(opts = {}) {
+      const { profileId } = await this.resolveForAgent(opts);
+      return profileId;
     }),
   };
 }

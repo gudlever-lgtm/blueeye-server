@@ -104,18 +104,28 @@ function createSnmpDevicesRepository(db, { secretBox = null, credentialProfilesR
         WHERE agent_id = ? AND enabled = 1 ORDER BY id ASC`,
       [agentId],
     );
-    // THE RESOLUTION CHAIN (migration 112), run HERE on the server:
+    // THE RESOLUTION CHAIN (migrations 112 and 113), run HERE on the server:
     //
     //   1. the device's own credential
-    //   2. the profile the device names
-    //   3. the profile for the device's site
-    //   4. the global default profile
+    //   2. the named community the device names
+    //   3. the communities of the device's site, in the site's order
+    //   4. the global default community
     //   5. nothing — reported as such, never as a quiet fallback to 'public'
     //
-    // The agent receives ONE credential per device and never learns profiles
-    // exist. Trying several in order at the agent is credential spraying: it
-    // locks v3 accounts and, on v2c, times out three times per device per
+    // Steps 2-4 are filtered by what THIS AGENT is granted (migration 113): an
+    // agent walks only with a community assigned to it, and one that is not
+    // assigned is skipped as though it were not configured. A site's several
+    // communities are an ORDER OF PREFERENCE, not a list to try — the agent
+    // still receives ONE credential per device and never learns the others
+    // exist. Trying them in order at the agent is credential spraying: it locks
+    // v3 accounts and, on v2c, times out once per community per device per
     // cycle against a 60-second interval floor.
+    //
+    // A device's OWN community is not a named community and is not filtered:
+    // it belongs to that one switch, it is shared with nothing, and there is
+    // nothing for an admin to assign. Which is also why it still wins — a
+    // credential set on the device itself is the most specific statement there
+    // is about how to reach it.
     const out = [];
     for (const row of rows) {
       const device = mapRow(row);
@@ -130,12 +140,30 @@ function createSnmpDevicesRepository(db, { secretBox = null, credentialProfilesR
         } catch { credential = null; }
       }
 
+      // Why there is no credential, when there is none. "This site has no
+      // community" and "this agent may not use the one it has" send an admin to
+      // two different screens, so the device reports which.
+      let blockedProfileId = null;
+
       if (!credential && credentialProfilesRepo) {
         try {
-          const profileId = await credentialProfilesRepo.resolveProfileIdFor({
-            profileId: device.credentialProfileId,
-            locationId: device.locationId,
-          });
+          // `resolveForAgent` is the agent-aware chain; `resolveProfileIdFor`
+          // is kept for callers that only want the id.
+          const chain = typeof credentialProfilesRepo.resolveForAgent === 'function'
+            ? await credentialProfilesRepo.resolveForAgent({
+              profileId: device.credentialProfileId,
+              locationId: device.locationId,
+              agentId,
+            })
+            : {
+              profileId: await credentialProfilesRepo.resolveProfileIdFor({
+                profileId: device.credentialProfileId,
+                locationId: device.locationId,
+              }),
+              blocked: null,
+            };
+          const { profileId } = chain;
+          blockedProfileId = chain.blocked ?? null;
           const resolved = profileId ? await credentialProfilesRepo.resolveWithSecret(profileId) : null;
           if (resolved) {
             credential = {
@@ -164,6 +192,10 @@ function createSnmpDevicesRepository(db, { secretBox = null, credentialProfilesR
         // Kept for the agents and tests that read `community` directly.
         community: credential ? (credential.community ?? null) : null,
         credential,
+        // Set only when a community WOULD have answered and this agent is not
+        // granted it. An agent handed a target with no credential refuses to
+        // poll it and says so, rather than falling back to 'public'.
+        credentialBlockedByGrant: !credential && blockedProfileId != null,
       });
     }
     return out;

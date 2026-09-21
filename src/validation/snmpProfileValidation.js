@@ -2,7 +2,8 @@
 
 const { VERSIONS } = require('./snmpDeviceValidation');
 
-// Validation for an SNMP credential profile (migration 112).
+// Validation for a NAMED SNMP COMMUNITY — `snmp_credential_profiles`
+// (migrations 112 and 113).
 //
 // Written by an ADMIN, so the risk is not a hostile value — it is a
 // configuration that looks right and cannot work. The two that matter:
@@ -13,6 +14,12 @@ const { VERSIONS } = require('./snmpDeviceValidation');
 //     is an impossible one, and a device will refuse it.
 //
 // Both are refused here rather than discovered when a switch stops answering.
+//
+// The ASSIGNMENTS — `locationIds` (the sites this community is valid at, in the
+// site's order of preference) and `agentIds` (the agents allowed to walk with
+// it) — are lists of ids, capped and de-duplicated here. Whether those ids
+// exist is the route's question, because only the route has the repositories to
+// ask; whether they are integers at all is this file's.
 
 const NAME_MAX = 190;
 const SECRET_MAX = 255;
@@ -25,6 +32,11 @@ const PROFILE_VERSIONS = [...VERSIONS, '3'];
 // SNMPv3 keys have a protocol minimum of eight characters (RFC 3414). A device
 // will refuse a shorter one, so accepting it here only moves the failure.
 const V3_KEY_MIN = 8;
+
+// How many sites or agents one community may be assigned to in a single write.
+// Not a policy about how many are sensible — it is the bound that stops a body
+// from turning into a few thousand INSERTs.
+const ASSIGNMENT_MAX = 500;
 
 function str(v, max) {
   if (typeof v !== 'string') return null;
@@ -57,16 +69,40 @@ function validateSnmpProfile(raw, { partial = false, existing = null } = {}) {
     }
   }
 
-  if (has('locationId')) {
-    if (body.locationId === null) {
-      // Explicitly the GLOBAL default — the profile a device falls back to when
-      // its site has none of its own.
-      value.locationId = null;
+  if (has('isGlobalDefault')) {
+    // The community every site falls back to when it has none of its own. Its
+    // own flag rather than "assigned to no site" (migration 113): assigned
+    // nowhere and default everywhere are opposite intentions.
+    if (typeof body.isGlobalDefault !== 'boolean') {
+      errors.isGlobalDefault = 'isGlobalDefault must be true or false';
     } else {
-      const n = Number(body.locationId);
-      if (!Number.isInteger(n) || n < 1) errors.locationId = 'locationId must be a positive integer';
-      else value.locationId = n;
+      value.isGlobalDefault = body.isGlobalDefault;
     }
+  }
+
+  // An OMITTED list leaves the assignments alone; an explicit [] clears them —
+  // the same rule the secrets follow, so renaming a community cannot silently
+  // unassign it from every site that uses it.
+  for (const key of ['locationIds', 'agentIds']) {
+    if (!has(key)) continue;
+    const raw = body[key];
+    if (!Array.isArray(raw)) { errors[key] = `${key} must be an array of ids`; continue; }
+    if (raw.length > ASSIGNMENT_MAX) {
+      errors[key] = `${key} must name at most ${ASSIGNMENT_MAX} ids`;
+      continue;
+    }
+    const ids = [];
+    let bad = false;
+    for (const item of raw) {
+      const n = Number(item);
+      if (!Number.isInteger(n) || n < 1) { bad = true; break; }
+      // De-duplicated, and the FIRST occurrence keeps its place: for
+      // `locationIds` the order is the site's order of preference, and a
+      // silent reshuffle would change which community a device resolves to.
+      if (!ids.includes(n)) ids.push(n);
+    }
+    if (bad) errors[key] = `${key} must contain positive integers only`;
+    else value[key] = ids;
   }
 
   // A secret is OMITTED to leave it alone and explicitly null to clear it —
@@ -140,4 +176,5 @@ module.exports = {
   PRIV_PROTOS,
   PROFILE_VERSIONS,
   V3_KEY_MIN,
+  ASSIGNMENT_MAX,
 };

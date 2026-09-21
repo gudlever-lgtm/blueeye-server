@@ -70,7 +70,13 @@
         actions: [ui.button('secondary', t('tshoot.openTopology'), {
           onclick: function () { deps.gotoView('topology'); },
         })],
-      }), toolbarHost, noteHost, stripHost, topoHost, causeHost, faultsHost, timelineHost);
+      // ROOT CAUSES BEFORE THE TOPOLOGY. The page used to open on the graph,
+      // which meant the screen led with a picture and put the answer below the
+      // fold: on a fleet whose switches are not in the graph yet, that is most
+      // of the window spent on two dots and a dotted line, while "9 root
+      // causes" sat in a number tile nobody can act on. What is failing and why
+      // is the reason somebody opened this tab; the map is how they confirm it.
+      }), toolbarHost, noteHost, stripHost, causeHost, topoHost, faultsHost, timelineHost);
 
       // ---- Toolbar -----------------------------------------------------------
       var refreshBtn = null;

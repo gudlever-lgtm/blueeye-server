@@ -314,7 +314,33 @@
         if (acts.length) head.append(el('div', { class: 'panel-actions' }, acts));
         p.append(head);
       }
-      p.append.apply(p, (opts.children || []).filter(Boolean));
+      // CHILDREN HANDED IN BARE GET THE PANEL'S PADDING. This used to append
+      // them exactly as they came, and only `.panel-body` carries padding — so
+      // every caller that forgot to wrap put its content flat against the
+      // panel's own border. That is not a bug one screen has: it is a default
+      // that was missing, and it showed up on Diagnose, Investigate and
+      // anywhere else somebody built the children by hand.
+      //
+      // A child that is already structural — a body, a head, a foot, a scroll
+      // wrap or a nested panel — is left exactly where it is, so the 30-odd
+      // callers that do wrap are untouched. Consecutive bare children go into
+      // ONE body rather than one each, because `.form-sec + .form-sec` draws
+      // the separator between two sections and that selector needs them to
+      // stay siblings.
+      var STRUCTURAL = /(^|\s)(panel-body|panel-head|panel-foot|panel-ui|table-wrap-ui)(\s|$)/;
+      var kids = (opts.children || []).filter(Boolean);
+      var loose = null;
+      for (var i = 0; i < kids.length; i += 1) {
+        var kid = kids[i];
+        var cls = (kid && kid.getAttribute) ? (kid.getAttribute('class') || '') : '';
+        if (kid && kid.nodeType === 1 && !STRUCTURAL.test(cls)) {
+          if (!loose) { loose = el('div', { class: 'panel-body' }); p.append(loose); }
+          loose.append(kid);
+        } else {
+          loose = null;
+          p.append(kid);
+        }
+      }
       if (opts.foot) p.append(el('div', { class: 'panel-foot' }, opts.foot));
       return p;
     }

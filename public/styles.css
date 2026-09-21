@@ -856,6 +856,13 @@ tr.acked td { opacity: .55; }
 .settings-help li { margin: 4px 0; }
 .settings-env { background: var(--surface-alt); border: 1px solid var(--border); border-radius: var(--radius-xs); padding: 8px 10px; margin: 6px 0; font-size: 12px; white-space: pre-wrap; overflow-x: auto; }
 .settings-grid:has(.form-grid) .settings-card:has(.form-grid) { grid-column: 1 / -1; }
+/* A settings card whose body is a WIDE TABLE takes the whole row.
+   `auto-fit, minmax(280px, 1fr)` gives it a third of the width on a desktop,
+   and a five-column table has nothing left over for the buttons in its last
+   column: "Delete" renders as "…". A control nobody can read is a control
+   nobody can use. */
+.settings-grid > .card:has(.table-wrap-ui),
+.settings-grid > .settings-card:has(.table-wrap-ui) { grid-column: 1 / -1; }
 
 /* Settings → Appearance: colour-theme picker. */
 .theme-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 12px; }

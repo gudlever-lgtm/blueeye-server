@@ -148,7 +148,7 @@ test('a trap is readable by a viewer, like any other device event', async () => 
   assert.equal(e.transport, 'trap');
   assert.equal(e.deviceName, 'Core switch');
   assert.equal(e.severityName, 'crit');
-  assert.equal(e.typeLabel, 'Link nede');
+  assert.equal(e.typeLabel, 'Link down');
 });
 
 // ============================================================ the vocabulary
@@ -184,7 +184,7 @@ test('every catalogued type is a dotted identifier the validator accepts', () =>
 test('the catalogue grew with the trap types and stays deduped', () => {
   assert.ok(KNOWN_EVENT_TYPES.length >= 35, `only ${KNOWN_EVENT_TYPES.length}`);
   assert.equal(new Set(KNOWN_EVENT_TYPES).size, KNOWN_EVENT_TYPES.length);
-  assert.equal(describeEventType('link.admin_down'), 'Port slukket administrativt');
+  assert.equal(describeEventType('link.admin_down'), 'Port shut down administratively');
 });
 
 // ======================================================= somebody vs something

@@ -255,7 +255,9 @@ check('runs: the batched read returns each test\'s own newest runs', async (pool
 check('snmp credential profiles: create, resolve, and never hand back a secret', async (pool) => {
   const repo = createSnmpCredentialProfilesRepository({ pool }, { secretBox: fakeSecretBox });
 
-  const global = await repo.create({ name: 'Global default', version: '2c', community: 'globalsecret' });
+  const global = await repo.create({
+    name: 'Global default', version: '2c', community: 'globalsecret', isGlobalDefault: true,
+  });
   assert.ok(global.id, 'the profile was not created');
   assert.strictEqual(global.community, undefined, 'the safe shape must not carry a community');
   assert.strictEqual(global.hasCommunity, true, 'but WHETHER one is set must be visible');
@@ -296,10 +298,11 @@ check('snmp credential profiles: create, resolve, and never hand back a secret',
   assert.strictEqual(resolved.v3AuthKey, 'authauthauth', 'the one read that decrypts did not');
   assert.strictEqual(resolved.securityLevel, 'authPriv', 'the level is derived from the keys, never stated');
 
-  // At most one global default, enforced in code because MySQL treats NULLs as
-  // distinct and a unique index would allow twenty.
+  // At most one global default. Its own column since migration 113: assigned
+  // to no site and default for every site are opposite intentions, and the
+  // absent `location_id` said both.
   const byDefault = await repo.findGlobalDefault();
-  assert.strictEqual(byDefault.id, global.id, 'the oldest location-less profile is the default');
+  assert.strictEqual(byDefault.id, global.id, 'the flagged profile is the default');
 
   const listed = await repo.list();
   assert.ok(listed.length >= 2);
@@ -308,6 +311,70 @@ check('snmp credential profiles: create, resolve, and never hand back a secret',
   assert.strictEqual(await repo.deviceCount(global.id), 0);
   assert.strictEqual(await repo.remove(v3.id), true);
   assert.strictEqual(await repo.findById(v3.id), null);
+});
+
+check('snmp communities: assigned to SITES and to AGENTS, and the grant is what lets an agent walk', async (pool) => {
+  const repo = createSnmpCredentialProfilesRepository({ pool }, { secretBox: fakeSecretBox });
+
+  // Real rows on both sides: the link tables carry foreign keys, and a FK whose
+  // signedness does not match is exactly the failure that took a container down.
+  const [site] = await pool.query("INSERT INTO locations (name) VALUES ('Aarhus')");
+  const locationId = site.insertId;
+  const [agentRow] = await pool.query(
+    "INSERT INTO agents (hostname, platform, arch) VALUES ('be-aarhus-01', 'linux', 'x64')",
+  );
+  const agentId = agentRow.insertId;
+
+  const core = await repo.create({
+    name: 'Core RO', version: '2c', community: 'coresecret', locationIds: [locationId],
+  });
+  const access = await repo.create({
+    name: 'Access RO', version: '2c', community: 'accesssecret',
+    locationIds: [locationId], agentIds: [agentId],
+  });
+
+  const back = await repo.findById(access.id);
+  assert.deepStrictEqual(back.locationIds, [locationId], 'the site assignment did not round trip');
+  assert.deepStrictEqual(back.agentIds, [agentId], 'the agent grant did not round trip');
+
+  // AN AGENT WALKS ONLY WITH A COMMUNITY ASSIGNED TO IT. 'Core RO' is first in
+  // the site's order and would have answered — the agent is not granted it, so
+  // it is skipped as though it were not configured.
+  const chain = await repo.resolveForAgent({ locationId, agentId });
+  assert.strictEqual(chain.profileId, access.id, 'the first community this agent MAY use must win');
+  assert.strictEqual(chain.source, 'site');
+
+  // A community the agent is not granted is reported as blocked rather than
+  // falling through: "this site has none" and "this agent may not use it" send
+  // an admin to two different screens.
+  const blocked = await repo.resolveForAgent({ profileId: core.id, agentId });
+  assert.strictEqual(blocked.profileId, null);
+  assert.strictEqual(blocked.blocked, core.id);
+
+  // The SITE's order of preference, which must name exactly what is assigned.
+  await repo.setLocationOrder(locationId, [access.id, core.id]);
+  const ordered = await repo.listForLocation(locationId);
+  assert.deepStrictEqual(ordered.map((p) => p.id), [access.id, core.id], 'priority did not order the site');
+  await assert.rejects(
+    () => repo.setLocationOrder(locationId, [access.id]),
+    (err) => err.code === 'SNMP_ORDER_MISMATCH',
+  );
+
+  const forAgent = await repo.listForAgent(agentId);
+  assert.deepStrictEqual(forAgent.map((p) => p.id), [access.id], 'only what this agent is granted');
+
+  // An OMITTED list leaves the assignments alone; an explicit [] clears them.
+  await repo.update(access.id, { name: 'Access RO (renamed)' });
+  assert.deepStrictEqual((await repo.findById(access.id)).agentIds, [agentId]);
+  await repo.update(access.id, { agentIds: [] });
+  assert.deepStrictEqual((await repo.findById(access.id)).agentIds, []);
+
+  // ON DELETE CASCADE: the assignments go with the community they belong to.
+  await repo.remove(core.id);
+  const [[left]] = await pool.query(
+    'SELECT COUNT(*) AS n FROM snmp_profile_locations WHERE profile_id = ?', [core.id],
+  );
+  assert.strictEqual(Number(left.n), 0, 'a deleted community left its site assignments behind');
 });
 
 check('snmp devices: the credential chain resolves on the server, once per device', async (pool) => {

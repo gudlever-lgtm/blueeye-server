@@ -3,12 +3,20 @@
 process.env.NODE_ENV = 'test';
 process.env.JWT_SECRET = 'test-secret-do-not-use-in-prod';
 
-// Trin 6: SNMP credential profiles, and v3.
+// NAMED SNMP COMMUNITIES — what Settings calls "SNMP communities": a named
+// credential, assigned to the SITES it is valid at and to the AGENTS allowed to
+// walk with it (migration 113).
 //
-// The proposed model was a profile per site, one per subnet, an override per
-// device, and the AGENT trying them in order. The hierarchy is built; the
-// ordered trying is NOT, and these tests pin why: it is credential spraying,
-// technically identical to an attack, and the server can just resolve it.
+// The two rules these tests exist to pin:
+//
+//   * AN AGENT WALKS ONLY WITH A COMMUNITY ASSIGNED TO IT. One it is not
+//     granted is skipped as though it were not configured, and the device
+//     reports that it has no credential rather than polling with 'public'.
+//   * A SITE'S SEVERAL COMMUNITIES ARE AN ORDER, NOT A RETRY LIST. The server
+//     picks the first one the polling agent may use and sends THAT — one
+//     credential per device. Trying them in order on the wire is credential
+//     spraying: technically identical to an attack, it locks v3 accounts, and
+//     on v2c a wrong community usually just times out.
 
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
@@ -139,13 +147,77 @@ test('a duplicate name is 409, and an unknown id is 404', async () => {
   assert.equal((await admin(app, 'get', '/api/snmp-profiles/abc')).status, 400);
 });
 
-test('an unknown location is 404 rather than a profile nobody can reach', async () => {
+test('an unknown site or agent is 404 rather than an assignment nobody can reach', async () => {
+  // A grant to agent 41 when 41 was deleted last month reads, forever after,
+  // as a grant that is in force.
   const app = makeApp({
     snmpProfilesRepo: makeSnmpProfilesRepo(),
     locationsRepo: makeLocationsRepo({ findById: async () => null }),
+    agentsRepo: makeAgentsRepo({ findById: async () => null }),
   });
-  const res = await admin(app, 'post', '/api/snmp-profiles', { name: 'Site Z', community: 'x', locationId: 42 });
-  assert.equal(res.status, 404);
+  assert.equal((await admin(app, 'post', '/api/snmp-profiles', { name: 'Site Z', community: 'x', locationIds: [42] })).status, 404);
+  assert.equal((await admin(app, 'post', '/api/snmp-profiles', { name: 'Site Z', community: 'x', agentIds: [41] })).status, 404);
+});
+
+// ========================================================== the assignments
+const withSites = (ids) => makeApp({
+  snmpProfilesRepo: makeSnmpProfilesRepo(),
+  locationsRepo: makeLocationsRepo({ findById: async (id) => (ids.includes(Number(id)) ? { id: Number(id), name: `Site ${id}` } : null) }),
+  agentsRepo: makeAgentsRepo({ findById: async (id) => ({ id: Number(id), hostname: `be-${id}` }) }),
+});
+
+test('a community is assigned to SEVERAL sites and several agents, and reads back that way', async () => {
+  const app = withSites([3, 4]);
+  const created = await admin(app, 'post', '/api/snmp-profiles', {
+    name: 'Access stack', version: '2c', community: 'x', locationIds: [4, 3], agentIds: [9, 11],
+  });
+  assert.equal(created.status, 201);
+  // The SITE ORDER is kept as given: it is the order of preference, and a
+  // silent reshuffle would change which community a device resolves to.
+  assert.deepEqual(created.body.profile.locationIds, [4, 3]);
+  assert.deepEqual(created.body.profile.agentIds, [9, 11]);
+});
+
+test('an omitted assignment list is left alone; an explicit [] clears it', async () => {
+  // The same omitted-leaves-alone rule the secrets follow — otherwise renaming
+  // a community would unassign it from every site that uses it.
+  const app = withSites([3]);
+  await admin(app, 'post', '/api/snmp-profiles', { name: 'A', community: 'x', locationIds: [3], agentIds: [9] });
+  const renamed = await admin(app, 'patch', '/api/snmp-profiles/1', { name: 'A (renamed)' });
+  assert.deepEqual(renamed.body.profile.locationIds, [3]);
+  assert.deepEqual(renamed.body.profile.agentIds, [9]);
+
+  const cleared = await admin(app, 'patch', '/api/snmp-profiles/1', { agentIds: [] });
+  assert.deepEqual(cleared.body.profile.agentIds, [], 'an explicit empty list revokes every grant');
+  assert.deepEqual(cleared.body.profile.locationIds, [3], 'and touches nothing else');
+});
+
+test('the list narrows to one site or one agent', async () => {
+  const app = withSites([3, 4]);
+  await admin(app, 'post', '/api/snmp-profiles', { name: 'Aarhus', community: 'x', locationIds: [3], agentIds: [9] });
+  await admin(app, 'post', '/api/snmp-profiles', { name: 'Odense', community: 'y', locationIds: [4], agentIds: [11] });
+
+  const site = await admin(app, 'get', '/api/snmp-profiles?locationId=3');
+  assert.deepEqual(site.body.profiles.map((p) => p.name), ['Aarhus']);
+  const agent = await admin(app, 'get', '/api/snmp-profiles?agentId=11');
+  assert.deepEqual(agent.body.profiles.map((p) => p.name), ['Odense']);
+  assert.equal((await admin(app, 'get', '/api/snmp-profiles?locationId=abc')).status, 400);
+  assert.equal((await admin(app, 'get', '/api/snmp-profiles?agentId=-1')).status, 400);
+});
+
+test('a hostile assignment list is 400, never a 500', async () => {
+  const app = withSites([3]);
+  for (const body of [
+    { name: 'A', community: 'x', locationIds: 'three' },
+    { name: 'A', community: 'x', locationIds: [0] },
+    { name: 'A', community: 'x', agentIds: [{ id: 1 }] },
+    { name: 'A', community: 'x', agentIds: Array.from({ length: 501 }, (_, i) => i + 1) },
+    { name: 'A', community: 'x', isGlobalDefault: 'yes' },
+  ]) {
+    const res = await admin(app, 'post', '/api/snmp-profiles', body);
+    assert.equal(res.status, 400, JSON.stringify(body));
+    assert.equal(res.body.error, 'Validation failed');
+  }
 });
 
 test('deleting a profile reports how many devices fall back', async () => {
@@ -176,26 +248,45 @@ test('a credential change is audited, with the FIELDS and not the values', async
   assert.ok(!JSON.stringify(records).includes('newsecret'));
 });
 
+test("a site's ORDER of preference is set on the site, and decides which community wins", async () => {
+  const app = withSites([3]);
+  await admin(app, 'post', '/api/snmp-profiles', { name: 'Core', community: 'x', locationIds: [3], agentIds: [9] });
+  await admin(app, 'post', '/api/snmp-profiles', { name: 'Access', community: 'y', locationIds: [3], agentIds: [9] });
+
+  // Without an order, the tie-break (lowest id) decides.
+  let site = await admin(app, 'get', '/api/snmp-profiles?locationId=3');
+  assert.deepEqual(site.body.profiles.map((p) => p.name), ['Core', 'Access']);
+
+  const put = await admin(app, 'put', '/api/snmp-profiles/order/3', { profileIds: [2, 1] });
+  assert.equal(put.status, 200);
+  site = await admin(app, 'get', '/api/snmp-profiles?locationId=3');
+  assert.deepEqual(site.body.profiles.map((p) => p.name), ['Access', 'Core']);
+});
+
+test('a PARTIAL order is 400: the rest would land somewhere nobody chose', async () => {
+  const app = withSites([3]);
+  await admin(app, 'post', '/api/snmp-profiles', { name: 'Core', community: 'x', locationIds: [3] });
+  await admin(app, 'post', '/api/snmp-profiles', { name: 'Access', community: 'y', locationIds: [3] });
+
+  assert.equal((await admin(app, 'put', '/api/snmp-profiles/order/3', { profileIds: [2] })).status, 400);
+  assert.equal((await admin(app, 'put', '/api/snmp-profiles/order/3', { profileIds: [1, 2, 99] })).status, 400);
+  assert.equal((await admin(app, 'put', '/api/snmp-profiles/order/3', {})).status, 400);
+  assert.equal((await admin(app, 'put', '/api/snmp-profiles/order/abc', { profileIds: [1, 2] })).status, 400);
+  assert.equal((await admin(app, 'put', '/api/snmp-profiles/order/99', { profileIds: [] })).status, 404);
+});
+
 // ==================================================== the resolution chain
 async function fleet({ profiles = [], devices = [] } = {}) {
   const snmpProfilesRepo = makeSnmpProfilesRepo();
   for (const p of profiles) await snmpProfilesRepo.create(p);
-  const snmpDevicesRepo = makeSnmpDevicesRepo();
+  const snmpDevicesRepo = makeSnmpDevicesRepo({}, { credentialProfilesRepo: snmpProfilesRepo });
   for (const d of devices) await snmpDevicesRepo.create(d);
-  // The REAL resolution, over the fakes.
-  const resolved = async (agentId) => {
-    const list = await snmpDevicesRepo.listForAgentWithSecret(agentId);
-    const out = [];
-    for (const device of list) {
-      if (device.community) { out.push({ ...device, source: 'device' }); continue; }
-      const profileId = await snmpProfilesRepo.resolveProfileIdFor({
-        profileId: device.credentialProfileId, locationId: device.locationId,
-      });
-      const cred = profileId ? await snmpProfilesRepo.resolveWithSecret(profileId) : null;
-      out.push({ ...device, credential: cred, source: cred ? 'profile' : 'none' });
-    }
-    return out;
-  };
+  // The REAL resolution, over the fakes — including the agent's grants.
+  const resolved = async (agentId) => (await snmpDevicesRepo.listForAgentWithSecret(agentId))
+    .map((device) => ({
+      ...device,
+      source: device.credential ? device.credential.source : 'none',
+    }));
   return { snmpProfilesRepo, snmpDevicesRepo, resolved };
 }
 
@@ -209,11 +300,11 @@ test('a device with its OWN credential wins over every profile', async () => {
   assert.equal(device.source, 'device');
 });
 
-test('a device with no credential falls back to its SITE profile, then the global one', async () => {
+test('a device with no credential falls back to its SITE community, then the global one', async () => {
   const { resolved } = await fleet({
     profiles: [
-      { name: 'Global', version: '2c', community: 'globalsecret' },
-      { name: 'Aarhus', version: '2c', community: 'aarhussecret', locationId: 3 },
+      { name: 'Global', version: '2c', community: 'globalsecret', isGlobalDefault: true, agentIds: [9] },
+      { name: 'Aarhus', version: '2c', community: 'aarhussecret', locationIds: [3], agentIds: [9] },
     ],
     devices: [
       { agentId: 9, host: '10.14.0.11', locationId: 3 },
@@ -225,16 +316,54 @@ test('a device with no credential falls back to its SITE profile, then the globa
   assert.equal(elsewhere.credential.community, 'globalsecret');
 });
 
-test('a device naming a profile explicitly uses that one', async () => {
+test("a site's several communities are an ORDER: the first one this agent may use wins", async () => {
+  // Not a retry list. The server picks one and sends one — see the header.
   const { resolved } = await fleet({
     profiles: [
-      { name: 'Global', version: '2c', community: 'globalsecret' },
-      { name: 'Special', version: '2c', community: 'specialsecret' },
+      { name: 'Core', version: '2c', community: 'coresecret', locationIds: [3], agentIds: [] },
+      { name: 'Access', version: '2c', community: 'accesssecret', locationIds: [3], agentIds: [9] },
     ],
-    devices: [{ agentId: 9, host: '10.14.0.11', credentialProfileId: 2, locationId: 3 }],
+    devices: [{ agentId: 9, host: '10.14.0.11', locationId: 3 }],
   });
   const [device] = await resolved(9);
-  assert.equal(device.credential.community, 'specialsecret');
+  // 'Core' is first in the site's order and would have answered — but this
+  // agent is not granted it, so it is skipped as though it were not there.
+  assert.equal(device.credential.community, 'accesssecret');
+  assert.equal(device.credentialBlockedByGrant, false);
+});
+
+test('an agent with NO community assigned gets no credential, and the reason is reported', async () => {
+  // The access rule, in one test: a community the agent may not use is not a
+  // fallback to 'public', and "this site has none" and "this agent may not use
+  // the one it has" send an admin to two different screens.
+  const { resolved } = await fleet({
+    profiles: [{ name: 'Aarhus', version: '2c', community: 'aarhussecret', locationIds: [3], agentIds: [] }],
+    devices: [{ agentId: 9, host: '10.14.0.11', locationId: 3 }],
+  });
+  const [device] = await resolved(9);
+  assert.equal(device.credential, null);
+  assert.equal(device.community, null, 'never a quiet fallback to "public"');
+  assert.equal(device.credentialBlockedByGrant, true);
+});
+
+test('a device naming a community explicitly uses that one — or none, never a substitute', async () => {
+  const { resolved } = await fleet({
+    profiles: [
+      { name: 'Global', version: '2c', community: 'globalsecret', isGlobalDefault: true, agentIds: [9] },
+      { name: 'Special', version: '2c', community: 'specialsecret', agentIds: [9] },
+      { name: 'Forbidden', version: '2c', community: 'forbiddensecret', agentIds: [] },
+    ],
+    devices: [
+      { agentId: 9, host: '10.14.0.11', credentialProfileId: 2, locationId: 3 },
+      { agentId: 9, host: '10.14.0.12', credentialProfileId: 3, locationId: 3 },
+    ],
+  });
+  const [named, forbidden] = await resolved(9);
+  assert.equal(named.credential.community, 'specialsecret');
+  // The naming was deliberate: a device whose agent may not use the community
+  // it names does NOT quietly fall through to the global default.
+  assert.equal(forbidden.credential, null);
+  assert.equal(forbidden.credentialBlockedByGrant, true);
 });
 
 test('a device with NOTHING to resolve to says so, rather than polling with "public"', async () => {
@@ -264,8 +393,8 @@ test('the agent receives ONE credential per device — never a list to try', asy
   // usually just times out, so three profiles x 30 s per device per cycle
   // collapses the polling before it finds anything.
   const snmpProfilesRepo = makeSnmpProfilesRepo();
-  await snmpProfilesRepo.create({ name: 'Global', version: '2c', community: 'globalsecret' });
-  await snmpProfilesRepo.create({ name: 'Other', version: '2c', community: 'othersecret' });
+  await snmpProfilesRepo.create({ name: 'Global', version: '2c', community: 'globalsecret', isGlobalDefault: true, agentIds: [9] });
+  await snmpProfilesRepo.create({ name: 'Other', version: '2c', community: 'othersecret', agentIds: [9] });
   // Wired to the profiles repo, so the REAL resolution chain runs.
   const snmpDevicesRepo = makeSnmpDevicesRepo({}, { credentialProfilesRepo: snmpProfilesRepo });
   await snmpDevicesRepo.create({ agentId: 9, host: '10.14.0.11' });

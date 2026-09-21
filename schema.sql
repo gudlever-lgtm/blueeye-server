@@ -3124,7 +3124,7 @@ CREATE TABLE IF NOT EXISTS `device_counter_samples` (
 CREATE TABLE IF NOT EXISTS `snmp_credential_profiles` (
   `id` INT UNSIGNED NOT NULL AUTO_INCREMENT,
   `name` VARCHAR(190) NOT NULL,
-  `location_id` INT UNSIGNED NULL DEFAULT NULL,
+  `is_global_default` TINYINT(1) NOT NULL DEFAULT 0,
   `version` ENUM('1', '2c', '3') NOT NULL DEFAULT '2c',
   `community_encrypted` TEXT NULL DEFAULT NULL,
   `v3_user` VARCHAR(190) NULL DEFAULT NULL,
@@ -3136,9 +3136,38 @@ CREATE TABLE IF NOT EXISTS `snmp_credential_profiles` (
   `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   `updated_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (`id`),
-  UNIQUE KEY `uq_snmp_profile_name` (`name`),
-  KEY `idx_snmp_profile_location` (`location_id`),
-  CONSTRAINT `fk_snmp_profile_location` FOREIGN KEY (`location_id`) REFERENCES `locations` (`id`) ON DELETE SET NULL
+  UNIQUE KEY `uq_snmp_profile_name` (`name`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Which communities are valid at a site. Many-to-many in both directions: a
+-- site may have several (a core switch and an access stack under different
+-- strings), and one community may serve twenty sites.
+CREATE TABLE IF NOT EXISTS `snmp_profile_locations` (
+  `profile_id` INT UNSIGNED NOT NULL,
+  `location_id` INT UNSIGNED NOT NULL,
+  `priority` SMALLINT UNSIGNED NOT NULL DEFAULT 0,
+  `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`profile_id`, `location_id`),
+  KEY `idx_snmp_profile_loc_site` (`location_id`, `priority`, `profile_id`),
+  CONSTRAINT `fk_snmp_profile_loc_profile` FOREIGN KEY (`profile_id`) REFERENCES `snmp_credential_profiles` (`id`) ON DELETE CASCADE,
+  CONSTRAINT `fk_snmp_profile_loc_location` FOREIGN KEY (`location_id`) REFERENCES `locations` (`id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Which communities an AGENT may walk with. This is the access rule, and it is
+-- a grant rather than a filter: a row here is the only thing that lets an
+-- agent be handed this community for any device it polls.
+--
+-- Deliberately NOT derived from the agent's own `location_id`. An agent moves
+-- sites by an admin editing a dropdown, and a credential grant that follows a
+-- dropdown is a credential grant nobody decided to make.
+CREATE TABLE IF NOT EXISTS `snmp_profile_agents` (
+  `profile_id` INT UNSIGNED NOT NULL,
+  `agent_id` INT UNSIGNED NOT NULL,
+  `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`profile_id`, `agent_id`),
+  KEY `idx_snmp_profile_agent_agent` (`agent_id`, `profile_id`),
+  CONSTRAINT `fk_snmp_profile_agent_profile` FOREIGN KEY (`profile_id`) REFERENCES `snmp_credential_profiles` (`id`) ON DELETE CASCADE,
+  CONSTRAINT `fk_snmp_profile_agent_agent` FOREIGN KEY (`agent_id`) REFERENCES `agents` (`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 SET FOREIGN_KEY_CHECKS = 1;

@@ -243,6 +243,27 @@ test('the agent config carries the switches assigned to that agent', async () =>
   assert.deepEqual(res.body.monitorConfig, { source: 'proc' });
 });
 
+test('a target with no usable community is sent WITH the reason, never with "public"', async () => {
+  // The target is still handed over: "sw-lager-1: no SNMP community assigned"
+  // on the dashboard is worth far more than a switch that silently never
+  // appears. The agent refuses it — see blueeye-agent snmpPoller.credentialError.
+  const { makeSnmpProfilesRepo } = require('../test-support/fakes');
+  const snmpProfilesRepo = makeSnmpProfilesRepo();
+  // Valid at the site, but NOT granted to agent 9.
+  await snmpProfilesRepo.create({ name: 'Aarhus', version: '2c', community: 'aarhussecret', locationIds: [3], agentIds: [] });
+  const snmpDevicesRepo = makeSnmpDevicesRepo({}, { credentialProfilesRepo: snmpProfilesRepo });
+  await snmpDevicesRepo.create({ agentId: 9, host: '10.14.0.11', locationId: 3 });
+
+  const app = makeApp({ agentsRepo: agentsRepo(), agentTokensRepo: agentToken(9), snmpDevicesRepo, snmpProfilesRepo });
+  const res = await request(app).get('/agents/me/config').set('Authorization', 'Bearer agent-tok');
+  assert.equal(res.status, 200);
+  const [target] = res.body.snmpTargets;
+  assert.equal(target.community, null, 'never a quiet fallback to "public"');
+  assert.equal(target.noCredential, true);
+  assert.equal(target.credentialBlocked, true, 'this agent is not assigned the one its site has');
+  assert.ok(!JSON.stringify(res.body).includes('aarhussecret'));
+});
+
 test('an agent with no assigned switches gets no key at all', async () => {
   // An agent too old to understand it must see exactly what it saw before.
   const repo = makeSnmpDevicesRepo();

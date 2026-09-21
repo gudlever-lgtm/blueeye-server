@@ -17,7 +17,7 @@ const { validateSnmpTopologyBatch, validateSnmpCounterBatch } = require('../vali
 //
 // Paths use the `/me/...` prefix so they don't collide with the user-JWT agents
 // router's `/:id` routes mounted under the same /agents path.
-function createAgentReportsRouter({ agentAuth, resultsRepo, resultsTsdbRepo = null, agentsRepo, auditEventsRepo = null, analysisPipeline = null, flowPipeline = null, probeResultsRepo = null, probePipeline = null, probeOutageService = null, installToolService = null, lldpNeighborsRepo = null, topologyChangeService = null, hostConnectionsRepo = null, arpEntriesRepo = null, deviceEventIngest = null, snmpDevicesRepo = null, snmpTopologyIngest = null, snmpCounterIngest = null, interfaceStateService = null, discoveredDevicesRepo = null, auditLogger = null, logger = null }) {
+function createAgentReportsRouter({ agentAuth, resultsRepo, resultsTsdbRepo = null, agentsRepo, auditEventsRepo = null, analysisPipeline = null, flowPipeline = null, probeResultsRepo = null, probePipeline = null, probeOutageService = null, installToolService = null, lldpNeighborsRepo = null, topologyChangeService = null, hostConnectionsRepo = null, arpEntriesRepo = null, deviceEventIngest = null, snmpDevicesRepo = null, snmpTopologyIngest = null, snmpCounterIngest = null, interfaceStateService = null, discoveredDevicesRepo = null, snmpProfilesRepo = null, auditLogger = null, logger = null }) {
   const router = express.Router();
 
   // Each probe-results POST re-reads the agent's recent rows for probe-finding
@@ -215,6 +215,57 @@ function createAgentReportsRouter({ agentAuth, resultsRepo, resultsTsdbRepo = nu
     })
   );
 
+  // The agent's OWN traffic source, when that source is an SNMP device it polls
+  // itself. `monitor_config.snmp` may name a credential (`profileId`) instead of
+  // carrying a community string, and this is the one hop that turns the name
+  // into the secret — exactly as the device targets below already do.
+  //
+  // The grant is checked, not assumed: `resolveForAgent` refuses a profile this
+  // agent is not granted, and a refused one sends no community at all rather
+  // than falling back to something nobody chose. The stored config is never
+  // mutated; the resolved copy exists only in this response.
+  async function withResolvedSnmpCredential(agent) {
+    const mc = agent.monitor_config || { source: 'proc' };
+    const profileId = mc.source === 'snmp' && mc.snmp ? mc.snmp.profileId : null;
+    if (!profileId || !snmpProfilesRepo) return mc;
+    const out = { ...mc, snmp: { ...mc.snmp } };
+    try {
+      const { profileId: allowed, blocked } = await snmpProfilesRepo.resolveForAgent({
+        profileId, agentId: agent.id,
+      });
+      const cred = allowed ? await snmpProfilesRepo.resolveWithSecret(allowed) : null;
+      if (!cred) {
+        // WHY there is no credential, so the agent reports "no SNMP credential"
+        // instead of polling with a default nobody configured.
+        out.snmp.noCredential = true;
+        if (blocked) out.snmp.credentialBlocked = true;
+        if (logger) {
+          logger.warn(`agent ${agent.id}: SNMP credential ${profileId} is ${blocked ? 'not granted to this agent' : 'unavailable'}`);
+        }
+        return out;
+      }
+      out.snmp.version = cred.version || out.snmp.version;
+      if (cred.community) out.snmp.community = cred.community;
+      if (cred.v3User) {
+        out.snmp.v3 = {
+          user: cred.v3User,
+          authProto: cred.v3AuthProto,
+          authKey: cred.v3AuthKey,
+          privProto: cred.v3PrivProto,
+          privKey: cred.v3PrivKey,
+          context: cred.v3Context,
+          level: cred.securityLevel,
+        };
+      }
+    } catch (err) {
+      // The config's first job is telling an agent how to measure itself; a
+      // credential lookup that fails must not take that away.
+      out.snmp.noCredential = true;
+      if (logger) logger.warn(`agent ${agent.id}: SNMP credential lookup failed (${err && err.message})`);
+    }
+    return out;
+  }
+
   // GET /agents/me/config — the agent fetches its server-assigned monitoring
   // config. Defaults to the local /proc source when nothing is set.
   router.get(
@@ -227,7 +278,7 @@ function createAgentReportsRouter({ agentAuth, resultsRepo, resultsTsdbRepo = nu
       }
       const body = {
         agentId: agent.id,
-        monitorConfig: agent.monitor_config || { source: 'proc' },
+        monitorConfig: await withResolvedSnmpCredential(agent),
       };
       // The switches THIS agent polls, with their community strings decrypted
       // for the one hop that needs them. Best-effort: a device inventory that

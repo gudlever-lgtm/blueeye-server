@@ -2045,7 +2045,14 @@ async function updateAgent(a, target, { confirmed = false } = {}) {
     }
     if (r.reason === 'docker-managed') { toast(`${name} runs under Docker — update it by re-running the host installer.`, true); return; }
     if (r.reason === 'unmanaged') { toast(`${name} isn't service-managed — update it manually (re-run the installer).`, true); return; }
-    toast(`${name}: the agent did not accept the update.`, true);
+    // The agent said WHY it refused. Showing "the agent did not accept the
+    // update" instead threw that away and left the operator with a dead end —
+    // the one refusal that has a fix in this dashboard looked like every other.
+    if (r.commandSigned === false && /signed command/i.test(String(r.reason || ''))) {
+      toast(`${name}: ${t('agentUpdate.refused.unsignedCommand')}`, true);
+      return;
+    }
+    toast(`${name}: ${t('agentUpdate.refused.reason', { reason: r.reason || t('agentUpdate.refused.noReason') })}`, true);
   } catch (err) { toast(`${name}: ${err.message}`, true); }
 }
 
@@ -10261,9 +10268,33 @@ function agentSourceCell(a) {
       'hsflowd: ', el('span', { class: hsflowdBadgeClass(hs.state) }, hs.state)) : null);
 }
 
-function editAgent(a) {
+// The named SNMP communities (Settings -> SNMP communities), for the picker in
+// Edit agent. Admin-only on the server, so an operator simply gets none and
+// keeps the literal-community field they have always had.
+async function loadSnmpProfiles() {
+  try {
+    const rows = await api('/api/snmp-profiles');
+    return Array.isArray(rows) ? rows : [];
+  } catch {
+    return [];
+  }
+}
+
+async function editAgent(a) {
   const mc = a.monitor_config || {};
   const snmp = mc.snmp || {};
+  const profiles = await loadSnmpProfiles();
+  // Whether the credential is usable by THIS agent is the question an admin
+  // actually has, and the list already carries the grants — so say it in the
+  // option rather than letting the agent discover it on the wire.
+  const grantsThis = (p) => !Array.isArray(p.agentIds) || p.agentIds.includes(Number(a.id));
+  const profileOptions = profiles.length ? [
+    { value: '', label: t('ag.snmp.profile.none') },
+    ...profiles.map((p) => ({
+      value: String(p.id),
+      label: grantsThis(p) ? p.name : `${p.name} ${t('ag.snmp.profile.ungranted')}`,
+    })),
+  ] : null;
   const sflowHs = (mc.sflow && mc.sflow.hsflowd) || null;
   const hsObj = sflowHs && typeof sflowHs === 'object' ? sflowHs : {};
   const caps = a.capabilities && Array.isArray(a.capabilities.sources) ? a.capabilities.sources : [];
@@ -10276,7 +10307,14 @@ function editAgent(a) {
     { name: 'notes', label: 'Notes', type: 'textarea', value: a.notes || '' },
     { name: 'source', label: 'Traffic source', type: 'select', value: mc.source || 'proc', options: sourceOptions },
     { name: 'snmp_host', label: 'SNMP host (only for snmp)', value: snmp.host || '' },
-    { name: 'snmp_community', label: 'SNMP community', value: snmp.community || 'public' },
+    ...(profileOptions ? [{
+      name: 'snmp_profile_id', label: t('ag.snmp.profile'), type: 'select',
+      value: snmp.profileId ? String(snmp.profileId) : '',
+      options: profileOptions, hint: t('ag.snmp.profile.hint'),
+    }] : []),
+    { name: 'snmp_community', label: 'SNMP community',
+      value: snmp.community || (snmp.profileId ? '' : 'public'),
+      hint: profileOptions ? t('ag.snmp.community.hint') : undefined },
     { name: 'snmp_version', label: 'SNMP version', type: 'select', value: snmp.version || '2c',
       options: ['1', '2c'].map((s) => ({ value: s, label: s })) },
     { name: 'snmp_port', label: 'SNMP port', type: 'number', value: String(snmp.port || 161) },
@@ -10295,15 +10333,19 @@ function editAgent(a) {
     let monitor_config = null;
     if (v.source === 'snmp') {
       if (!v.snmp_host.trim()) throw new Error('SNMP host is required for source "snmp"');
-      monitor_config = {
-        source: 'snmp',
-        snmp: {
-          host: v.snmp_host.trim(),
-          community: v.snmp_community || 'public',
-          version: v.snmp_version,
-          port: Number(v.snmp_port) || 161,
-        },
+      // A named credential wins, and the literal field is then not stored at
+      // all — the secret lives in the profile and is resolved for the one hop
+      // that needs it. An operator who cannot see the picker keeps whatever
+      // credential the agent was already given.
+      const picked = profileOptions ? v.snmp_profile_id : (snmp.profileId ? String(snmp.profileId) : '');
+      const snmpCfg = {
+        host: v.snmp_host.trim(),
+        version: v.snmp_version,
+        port: Number(v.snmp_port) || 161,
       };
+      if (picked) snmpCfg.profileId = Number(picked);
+      else snmpCfg.community = v.snmp_community || 'public';
+      monitor_config = { source: 'snmp', snmp: snmpCfg };
     } else if (v.source === 'netflow') {
       const netflow = { port: Number(v.netflow_port) || 2055 };
       if (v.collector_bind && v.collector_bind.trim()) netflow.bindAddress = v.collector_bind.trim();
@@ -12515,24 +12557,36 @@ async function settingsSnmpCommunitiesView() {
     host.replaceChildren(formCard(editing), orderCard(), listCard());
   }
 
-  // A multi-select rather than a row of checkboxes: a fleet has as many agents
-  // as it has agents, and twenty checkboxes is a wall.
+  // A token picker, not a native <select multiple>: that one shows three to
+  // eight rows of a scrolling box where the chosen entries are an unreadable
+  // blue block and the rest are off-screen — which is exactly how it looked on
+  // a fleet with forty agents. ui.multiSelect keeps a real <select> underneath,
+  // so the value is still read the same way.
   function multi(id, items, label, selected) {
-    const sel = el('select', { id, multiple: 'multiple', size: String(Math.min(Math.max(items.length, 3), 8)) },
-      ...items.map((x) => {
-        const opt = el('option', { value: String(x.id) }, label(x));
-        if (selected.includes(Number(x.id))) opt.selected = true;
-        return opt;
-      }));
-    return sel;
+    const chosen = (selected || []).map(String);
+    return ui.multiSelect({
+      id,
+      options: items.map((x) => [String(x.id), label(x)]),
+      values: chosen,
+      searchPlaceholder: t('snmpcom.pick.filter'),
+      emptyText: t('snmpcom.pick.none'),
+      noMatchText: t('snmpcom.pick.noMatch'),
+      removeTitle: t('snmpcom.pick.remove'),
+    });
   }
-  const picked = (sel) => [...sel.selectedOptions].map((o) => Number(o.value));
+  const picked = (box) => ui.selected(box).map(Number);
 
   // One form for create and edit. The difference is what it is prefilled with
   // and where it PATCHes — not a second copy of eleven fields.
   function formCard(profile) {
     const p = profile || {};
-    const nameIn = el('input', { type: 'text', id: 'snmpcom-name', maxlength: '190', value: p.name || '' });
+    // autocomplete=off + a name that looks nothing like a credential: this form
+    // holds password inputs, and the browser was offering "Manage Passwords" on
+    // the plain NAME of the community — the one field here that is not secret.
+    const nameIn = el('input', {
+      type: 'text', id: 'snmpcom-name', name: 'snmp-profile-label', maxlength: '190',
+      autocomplete: 'off', value: p.name || '',
+    });
     const versionSel = el('select', { id: 'snmpcom-version' },
       ...(meta.versions || ['1', '2c', '3']).map((v) => {
         const opt = el('option', { value: v }, v === '3' ? 'v3' : `v${v}`);

@@ -188,6 +188,28 @@ rather than quietly polling with `public`. The assignments go with it
 
 ---
 
+## The agent's own traffic source
+
+An agent whose traffic source *is* an SNMP device (Agents → Edit → Traffic
+source `snmp`) used to carry the literal community string in its
+`monitor_config`, where every user who could read the agents API could read it
+too. It now picks a **named community** instead — the same list Settings
+manages — and only the id is stored:
+
+```json
+{ "source": "snmp", "snmp": { "host": "10.14.0.1", "profileId": 4, "port": 161 } }
+```
+
+`GET /agents/me/config` resolves it for the one hop that needs it, through the
+same chain and the same grant check as the device targets: a credential the
+agent is not granted sends **no** community at all (`noCredential`,
+`credentialBlocked`), never a fallback nobody chose. The free-text field is
+still there for an agent configured before this, and for an operator who
+cannot see the admin-only list of communities — pick a name and the literal is
+dropped, never kept beside it.
+
+---
+
 ## Where things are
 
 | | |
@@ -197,5 +219,5 @@ rather than quietly polling with `public`. The assignments go with it
 | Validation | `src/validation/snmpProfileValidation.js` |
 | Route | `src/routes/snmpProfiles.js` (admin) |
 | UI | Settings → SNMP communities (`settingsSnmpCommunitiesView` in `public/app.js`) |
-| Handed to the agent | `GET /agents/me/config` → `snmpTargets[]` (`src/routes/agentReports.js`) |
+| Handed to the agent | `GET /agents/me/config` → `snmpTargets[]`, and `monitorConfig.snmp` for the agent's own source (`src/routes/agentReports.js`) |
 | Agent | `blueeye-agent/src/snmpPoller.js` (`credentialError`) and `src/snmp/session.js` (`openSession`) |

@@ -437,3 +437,124 @@ test('a repository failure is a 500, and says nothing about the secret store', a
   // helper and the column it writes.
   assert.ok(!JSON.stringify(list.body).toLowerCase().includes('secretbox'));
 });
+
+// ============================================ the agent's OWN traffic source
+//
+// "SNMP community" in Edit agent used to be a free-text box: the literal
+// community string, stored in `monitor_config` and handed back by the agents
+// API to anyone who could read it. It can now NAME a credential instead, and
+// then only the id is stored — the secret stays encrypted in the profile and
+// is resolved for the one hop that needs it, exactly as the device targets
+// beside it already were.
+
+const agentTokenFor = (id) => makeAgentTokensRepo({ findActiveByHash: async () => ({ id: 1, agent_id: id }) });
+
+async function configFor({ profiles = [], snmp = {}, agentId = 9, snmpProfilesRepo = null } = {}) {
+  const repo = snmpProfilesRepo || makeSnmpProfilesRepo();
+  if (!snmpProfilesRepo) for (const p of profiles) await repo.create(p);
+  const agentsRepo = makeAgentsRepo({
+    findById: async () => ({ id: agentId, hostname: 'be-aarhus-01', monitor_config: { source: 'snmp', snmp } }),
+  });
+  const app = makeApp({ snmpProfilesRepo: repo, agentsRepo, agentTokensRepo: agentTokenFor(agentId) });
+  return request(app).get('/agents/me/config').set('Authorization', 'Bearer agent-tok');
+}
+
+test('an agent polling by NAME gets the community resolved for that one hop', async () => {
+  const res = await configFor({
+    profiles: [{ name: 'Site A', version: '2c', community: 'sup3rs3cret', agentIds: [9] }],
+    snmp: { host: '10.14.0.1', version: '1', port: 161, profileId: 1 },
+  });
+  assert.equal(res.status, 200);
+  assert.equal(res.body.monitorConfig.snmp.community, 'sup3rs3cret');
+  // The credential's version wins over the one left on the config: a v3
+  // credential against a row still saying 2c authenticates with a community
+  // string that does not exist.
+  assert.equal(res.body.monitorConfig.snmp.version, '2c');
+  assert.equal(res.body.monitorConfig.snmp.host, '10.14.0.1', 'the rest of the config is untouched');
+});
+
+test('a credential this agent is NOT granted sends no community at all', async () => {
+  // Not a fallback to the global default and not 'public': the agent refuses
+  // to poll and says why, which is how the grant reaches the dashboard.
+  const res = await configFor({
+    profiles: [
+      { name: 'Forbidden', version: '2c', community: 'forbiddensecret', agentIds: [] },
+      { name: 'Global', version: '2c', community: 'globalsecret', isGlobalDefault: true, agentIds: [9] },
+    ],
+    snmp: { host: '10.14.0.1', profileId: 1 },
+  });
+  assert.equal(res.status, 200);
+  assert.equal(res.body.monitorConfig.snmp.community, undefined);
+  assert.equal(res.body.monitorConfig.snmp.noCredential, true);
+  assert.equal(res.body.monitorConfig.snmp.credentialBlocked, true);
+  assert.ok(!JSON.stringify(res.body).includes('globalsecret'), 'and never a substitute nobody chose');
+});
+
+test('a v3 credential arrives as keys, not as a community string', async () => {
+  const res = await configFor({
+    profiles: [{
+      name: 'Core v3', version: '3', v3User: 'blueeye',
+      v3AuthProto: 'sha256', v3AuthKey: 'authsecret1',
+      v3PrivProto: 'aes', v3PrivKey: 'privsecret1', agentIds: [9],
+    }],
+    snmp: { host: '10.14.0.1', profileId: 1 },
+  });
+  assert.equal(res.body.monitorConfig.snmp.version, '3');
+  assert.equal(res.body.monitorConfig.snmp.v3.user, 'blueeye');
+  assert.equal(res.body.monitorConfig.snmp.v3.level, 'authPriv');
+  assert.equal(res.body.monitorConfig.snmp.community, undefined);
+});
+
+test('a credential lookup that fails is still a config, not a 500', async () => {
+  // The config's first and more important job is telling an agent how to
+  // measure ITSELF. A secret store that is down must not take that away — the
+  // agent gets its config and the reason it cannot poll.
+  const res = await configFor({
+    snmp: { host: '10.14.0.1', profileId: 1 },
+    snmpProfilesRepo: makeSnmpProfilesRepo({ resolveForAgent: throwingAsync() }),
+  });
+  assert.equal(res.status, 200);
+  assert.equal(res.body.monitorConfig.snmp.noCredential, true);
+  assert.equal(res.body.monitorConfig.snmp.community, undefined);
+});
+
+test('a config with no named credential is byte-for-byte what it always was', async () => {
+  // The agents in the field read this response; an extra key on the old path
+  // would be a change they never asked for.
+  const res = await configFor({ snmp: { host: '10.14.0.1', community: 'public', version: '2c', port: 161 } });
+  assert.deepEqual(res.body.monitorConfig, {
+    source: 'snmp', snmp: { host: '10.14.0.1', community: 'public', version: '2c', port: 161 },
+  });
+});
+
+test('a named credential replaces the literal one — never both, and never in the agents API', async () => {
+  let patch;
+  const agentsRepo = makeAgentsRepo({
+    findById: async () => ({ id: 9, hostname: 'be-aarhus-01' }),
+    updateManaged: async (id, p) => { patch = p; return { id, ...p }; },
+  });
+  const app = makeApp({ agentsRepo, snmpProfilesRepo: makeSnmpProfilesRepo() });
+  const put = (snmp) => request(app).put('/agents/9')
+    .set('Authorization', authHeader('operator'))
+    .send({ monitor_config: { source: 'snmp', snmp } });
+
+  const ok = await put({ host: '10.14.0.1', profileId: 4, community: 'typed-by-hand' });
+  assert.equal(ok.status, 200);
+  assert.equal(patch.monitor_config.snmp.profileId, 4);
+  assert.equal(patch.monitor_config.snmp.community, undefined, 'the literal is dropped, not kept beside it');
+
+  // A profile id is an id.
+  for (const bad of [0, -3, 'abc', 1.5]) {
+    // eslint-disable-next-line no-await-in-loop
+    const res = await put({ host: '10.14.0.1', profileId: bad });
+    assert.equal(res.status, 400, String(bad));
+  }
+});
+
+test('PUT /agents/:id with a named credential on an agent that does not exist is a 404', async () => {
+  const app = makeApp({ agentsRepo: makeAgentsRepo({ findById: async () => null }) });
+  const res = await request(app).put('/agents/4242')
+    .set('Authorization', authHeader('operator'))
+    .send({ monitor_config: { source: 'snmp', snmp: { host: '10.14.0.1', profileId: 1 } } });
+  assert.equal(res.status, 404);
+});

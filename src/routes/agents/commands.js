@@ -195,6 +195,12 @@ function createAgentCommandsRouter(ctx) {
         targetVersion,
         signed: !!release,
         signedReason,
+        // Whether the COMMAND itself went out signed. Separate from `signed`
+        // above, which is about the release payload: an agent from v0.35 that
+        // pins a release key refuses an unsigned privileged command outright,
+        // before any payload is considered. A refusal with this false has one
+        // cause and the dashboard must be able to name it.
+        commandSigned: canSignCommands(),
         auditId: auditId || null,
       });
     })

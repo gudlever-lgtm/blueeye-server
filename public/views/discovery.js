@@ -132,16 +132,20 @@
         // agent, and doing that one dropdown at a time is how a segment gets
         // forgotten. The server stays in the same list — it is just another
         // vantage point — and picking it alongside agents is allowed.
-        var from = ui.select({
+        // A token picker rather than a native <select multiple>: the chosen
+        // vantage points are readable as removable pills, and the list is
+        // filterable — on a fleet where the answer is "these four of forty",
+        // a three-row scrolling box is where a segment gets forgotten.
+        var from = ui.multiSelect({
           label: t('disc.from'),
-          multiple: true,
-          // Tall enough to show the choice without scrolling on a small fleet,
-          // capped so a big one does not push the button off the panel.
-          size: Math.min(Math.max(online.length + 1, 3), 8),
           values: [''],
           options: [['', t('disc.fromServer')]].concat(online.map(function (a) {
             return [String(a.id), t('disc.fromAgent', { name: a.display_name || a.hostname })];
           })),
+          searchPlaceholder: t('disc.fromFilter'),
+          emptyText: t('disc.fromNone'),
+          noMatchText: t('disc.fromNoMatch'),
+          removeTitle: t('disc.fromRemove'),
         });
         var note = el('span', { class: 'meta' });
         var go = ui.button('primary', t('disc.run'), { onclick: function () { return run(); } });

@@ -570,3 +570,37 @@
 /* A selected row is tinted, not outlined — an outline inside a table reads as a
    cell border and makes the grid look broken. */
 .ui .dt tbody tr:has(.dt-check:checked) { background: var(--accent-weak); }
+
+/* ---- MultiSelect ---- */
+/* The native <select multiple> is a scrolling box where the selection is an
+   unreadable blue block and most options are off-screen. This is the same data
+   as removable chips plus a filterable, ticked list. Colour comes from tokens
+   only, so it follows every theme without a second definition. */
+.ui .ms { display: grid; gap: var(--s-2); }
+/* The real <select> lives underneath: every existing reader (ui.selected, form
+   serialisation) keeps working, and it stays reachable to assistive tech. */
+.ui .ms .ms-value { position: absolute; width: 1px; height: 1px; overflow: hidden;
+  clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap; }
+.ui .ms-picks { display: flex; flex-wrap: wrap; gap: var(--s-2); min-height: 26px; align-items: center; }
+.ui .ms-pick { display: inline-flex; align-items: center; gap: var(--s-2);
+  padding: var(--s-1) var(--s-2); border: 1px solid var(--border); border-radius: 999px;
+  background: var(--accent-weak); color: var(--fg); font: inherit; font-size: var(--fs-xs); cursor: pointer; }
+.ui .ms-pick:hover { border-color: var(--accent); }
+.ui .ms-pick .ms-x { color: var(--fg-muted); font-size: var(--fs-md); line-height: 1; }
+.ui .ms-pick:hover .ms-x { color: var(--fg); }
+.ui .ms-none { color: var(--fg-muted); font-size: var(--fs-xs); }
+.ui .ms-head { display: flex; align-items: center; gap: var(--s-2); }
+.ui .ms-search { flex: 1 1 auto; min-width: 0; }
+.ui .ms-summary { color: var(--fg-muted); font-size: var(--fs-xs); white-space: nowrap; }
+/* Tall enough to show that scrolling exists, short enough not to own the form. */
+.ui .ms-list { max-height: 220px; overflow-y: auto; border: 1px solid var(--border);
+  border-radius: var(--radius); background: var(--surface); display: grid; }
+.ui .ms-opt { display: flex; align-items: center; gap: var(--s-2); width: 100%;
+  padding: var(--s-2) var(--s-3); border: 0; background: transparent; color: var(--fg);
+  font: inherit; font-size: var(--fs-sm); text-align: left; cursor: pointer; }
+.ui .ms-opt + .ms-opt { border-top: 1px solid var(--border-weak, var(--border)); }
+.ui .ms-opt:hover { background: var(--row-hover, var(--accent-weak)); }
+.ui .ms-opt.is-on { background: var(--accent-weak); font-weight: 600; }
+/* The tick keeps its width when empty, so rows do not shift as they are picked. */
+.ui .ms-tick { width: 1em; color: var(--accent); }
+.ui .ms-list .ms-none { padding: var(--s-3); }

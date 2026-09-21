@@ -38,6 +38,18 @@ function validateMonitorConfig(raw, errors) {
       return undefined;
     }
     const snmp = { host: s.host.trim() };
+    // A NAMED community (Settings -> SNMP communities) instead of a literal
+    // one. The id is all that is stored: the secret stays encrypted in the
+    // profile and is resolved for one hop, on GET /agents/me/config, so the
+    // agents list stops carrying a community string that every viewer can read.
+    if (s.profileId !== undefined && s.profileId !== null && s.profileId !== '') {
+      const id = Number(s.profileId);
+      if (!Number.isInteger(id) || id < 1) {
+        errors.monitor_config = 'monitor_config.snmp.profileId must be a positive integer';
+        return undefined;
+      }
+      snmp.profileId = id;
+    }
     if (s.community !== undefined && s.community !== null) {
       if (typeof s.community !== 'string' || s.community.length > 128) {
         errors.monitor_config = 'monitor_config.snmp.community must be a string';
@@ -45,6 +57,10 @@ function validateMonitorConfig(raw, errors) {
       }
       snmp.community = s.community;
     }
+    // One or the other, never both: a stored literal alongside a named
+    // credential is a second secret that nobody maintains and that quietly
+    // wins the day somebody changes the profile.
+    if (snmp.profileId && snmp.community !== undefined) delete snmp.community;
     if (s.version !== undefined && s.version !== null) {
       if (!SNMP_VERSIONS.includes(String(s.version))) {
         errors.monitor_config = `monitor_config.snmp.version must be one of: ${SNMP_VERSIONS.join(', ')}`;

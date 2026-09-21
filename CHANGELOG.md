@@ -1,5 +1,44 @@
 # Changelog
 
+## 0.183.0 — Accept clears what you accepted
+
+Four things an operator could see were wrong, and one they could not.
+
+**Accept did nothing visible.** Accepting a host's findings wrote the rows —
+thousands of them — and the overview did not move. The per-host counts were
+totals: every finding that host ever had, accepted or not. The number that
+should have gone to zero counted history, so it never could. `byHost` now
+carries OPEN counts beside the totals (`open`, `openCrit`, `openWarn`,
+`openInfo`), the table shows those, a host with nothing open leaves the list,
+and the button says what it did.
+
+**Multi-selects were unreadable.** A native `<select multiple>` shows the
+selection as a highlight in a box that scrolls — three sites selected out of
+twenty is invisible below the fold. `ui.multiSelect` shows the picks as
+removable tags above a filterable list with checkmarks, over a hidden real
+`<select multiple>` so `ui.selected()` and every caller still work. Used by the
+SNMP community form (sites, agents) and the discovery vantage points.
+
+**A credential's NAME was treated as a password.** The Name field in Settings →
+SNMP communities triggered the browser's password manager, which offered to
+save it — the one field on that form that is not a secret. It carries a name
+and `autocomplete="off"` now.
+
+**An agent's SNMP community was typed in by hand.** Edit agent took the literal
+community string, stored it in `monitor_config`, and handed it back from the
+agents API. It now picks one of the named communities from Settings and stores
+only the id; `GET /agents/me/config` resolves it for the one hop that needs it,
+through the same grant check as the device targets — a credential the agent is
+not granted sends no community at all rather than a fallback nobody chose. The
+free-text field stays for agents configured before this and for an operator who
+cannot see the admin-only list.
+
+**And the one they could not see:** an agent that refused an update produced
+"the agent did not accept the update" and nothing else. The refusal reason now
+comes back with it, and the commonest cause — this server cannot sign commands,
+so an agent that pins a key refuses every privileged one — is named outright,
+with where to fix it.
+
 ## 0.173.0 — The vendor decides which key a fleet accepts
 
 An agent verifies the releases and the privileged commands it acts on against a

@@ -28,6 +28,15 @@ ON by default (`RETENTION_ENABLED`) — DB hygiene is a safe default.
   purge is conservative: **only acknowledged findings are deleted** —
   unacknowledged findings (including CRIT) are kept regardless of age.
 
+> **Why the Analysis page does not slow down as findings pile up.** It reads
+> `?open=1` by default — only what nobody has accepted — through
+> `idx_findings_open` (migration 114). Accepted findings stay in the table for
+> the retention window above and still appear under "Open + accepted", but they
+> are no longer scanned on every load. Before that, four `GROUP BY` passes read
+> every row on every visit, so a long-running server got slower and accepting
+> findings could not help.
+
+
 ## Idempotency
 
 Rollup deletes the raw rows it aggregates, so a repeated run finds nothing to

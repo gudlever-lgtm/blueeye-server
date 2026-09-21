@@ -27,9 +27,18 @@ const ID_CHUNK = 1000;
 // Builds the shared WHERE fragment (+ ordered params) used by both list() and
 // summary(), so the aggregate overview and the row list always scope to the
 // exact same filter set. Only defined keys contribute a clause.
-function buildFilter({ hostId, deviceId, interfaceId, severity, metric, since, until } = {}) {
+function buildFilter({ hostId, deviceId, interfaceId, severity, metric, since, until, open } = {}) {
   const where = [];
   const params = [];
+  // OPEN ONLY — the default the Analysis screen asks for, and the reason that
+  // screen can be fast at all. A fleet that has been running for a year holds
+  // ~185 000 findings and 98 open ones; every grouping below used to scan all
+  // 185 000 whatever the operator had accepted, so accepting made the page
+  // slower (more rows) rather than faster. Scoped to `acked = 0` the same four
+  // groupings read the 98, through idx_findings_open (migration 114).
+  //
+  // Placed FIRST so it is the leading column of the index range.
+  if (open) where.push('acked = 0');
   if (hostId) {
     where.push('host_id = ?');
     params.push(hostId);
@@ -334,8 +343,8 @@ class FindingStore {
   // as list() (hostId/severity/metric/since/until). One scan per grouping; all
   // done in SQL so the dashboard never pulls the raw rows just to total them.
   // deviation can be NULL (threshold/flatline findings) — AVG/MAX skip NULLs.
-  async summary({ hostId, severity, metric, since, until } = {}) {
-    const { where, params } = buildFilter({ hostId, severity, metric, since, until });
+  async summary({ hostId, severity, metric, since, until, open } = {}) {
+    const { where, params } = buildFilter({ hostId, severity, metric, since, until, open });
     const clause = where.length ? `WHERE ${where.join(' AND ')}` : '';
 
     const [sevRows] = await this.pool.query(

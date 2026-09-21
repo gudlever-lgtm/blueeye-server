@@ -173,7 +173,8 @@ CREATE TABLE IF NOT EXISTS `findings` (
   CONSTRAINT fk_findings_event_case FOREIGN KEY (event_case_id) REFERENCES event_cases (id) ON DELETE SET NULL,
   CONSTRAINT fk_findings_severity_rule FOREIGN KEY (severity_rule_id) REFERENCES event_severity_rules(id) ON DELETE SET NULL,
   KEY idx_findings_device_created (`device_id`, `created_at`),
-  KEY idx_findings_interface_created (`interface_id`, `created_at`)
+  KEY idx_findings_interface_created (`interface_id`, `created_at`),
+  KEY idx_findings_open (`acked`, `host_id`, `metric`, `severity`, `created_at`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- 010 — geo-enriched flow records. One row per reported flow. The external

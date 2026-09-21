@@ -147,3 +147,58 @@ test('accepting twice is honest about the second time', async () => {
   // Nothing left: the dashboard says so rather than claiming another success.
   assert.equal((await post(app, { all: true }, 'operator', '?hostId=9')).body.acked, 0);
 });
+
+// ------------------------------------------------------ what the page reads
+//
+// "Analysis still takes a very long time to load even though I have acked a
+// lot." 184 780 findings, 98 of them open — and every load ran four GROUP BY
+// passes over all 184 780, because nothing in the read was scoped to what was
+// still open. Accepting could not make the page faster; an accepted finding is
+// still a row. The screen asks "what is wrong, and where", so that is now what
+// it reads, and migration 114 indexes exactly that range.
+
+test('the list and the summary can be scoped to what is still open', async () => {
+  const findingStore = await seeded();
+  const app = makeApp({ findingStore });
+  const get = (path) => request(app).get(path).set('Authorization', authHeader('viewer'));
+
+  const all = await get('/api/findings');
+  assert.equal(all.body.length, 4);
+
+  const open = await get('/api/findings?open=1');
+  assert.equal(open.status, 200);
+  assert.equal(open.body.length, 3, 'd was accepted');
+  assert.ok(open.body.every((f) => !f.acked));
+
+  const sum = await get('/api/findings/summary?open=1');
+  assert.equal(sum.status, 200);
+  assert.equal(sum.body.total, 3, 'the totals follow the same scope as the rows');
+  assert.equal(sum.body.acked, 0);
+});
+
+test('open is opt-in, so every existing caller still counts the accepted ones', async () => {
+  // A report that says "412 findings, 400 accepted" is a different and useful
+  // sentence; scoping by default would have quietly rewritten it.
+  const app = makeApp({ findingStore: await seeded() });
+  const sum = await request(app).get('/api/findings/summary').set('Authorization', authHeader('viewer'));
+  assert.equal(sum.body.total, 4);
+  assert.equal(sum.body.acked, 1);
+});
+
+test('a junk scope is a 400, not a silently different set of rows', async () => {
+  const app = makeApp({ findingStore: await seeded() });
+  const res = await request(app).get('/api/findings?open=maybe').set('Authorization', authHeader('viewer'));
+  assert.equal(res.status, 400);
+  assert.equal(res.body.details.open, 'open must be 0 or 1');
+});
+
+test('accepting "everything I am looking at" respects the open scope too', async () => {
+  // The scope narrows the accept the same way it narrows the list — which is
+  // the direction that is safe. It can never reach further than the screen.
+  const findingStore = await seeded();
+  const app = makeApp({ findingStore });
+  const res = await post(app, { all: true }, 'operator', '?open=1&severity=WARN');
+  assert.equal(res.status, 200);
+  assert.equal(res.body.acked, 2);
+  assert.equal(findingStore.rows.find((f) => f.id === 'a').acked, false, 'the CRIT is untouched');
+});

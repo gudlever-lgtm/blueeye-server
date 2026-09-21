@@ -1,5 +1,45 @@
 # Changelog
 
+## 0.184.0 — A refusal that names its own fix, and an Analysis page that stops re-reading history
+
+**"The agent refused the update — refused: command signature verification
+failed", and then a dead end.** That refusal means one thing: the agent pins
+release key A and this server signs with key B, usually because the server's
+key was regenerated after the agent was installed. The dashboard has had the
+fix all along — re-pin the agent over its own connection — and never offered
+it, because `isPinnedKeyRefusal()` did not know the agent's actual wording. It
+matched "signature did not verify" and the agent says "signature verification
+failed". The matcher now covers what the agent really sends, and the refusal
+path (not just the audit-follow path) opens the re-pin. Refusals a re-pin does
+NOT fix are kept out deliberately — a server that cannot sign, clock skew, an
+identity mix-up — each with its own message.
+
+**And the agent now says which key it trusts.** `releaseKeyFingerprint` in its
+capabilities: a SHA-256 of the public key it pins, never the key. The re-pin
+dialog shows both fingerprints side by side, so "it trusts ab12…, you sign with
+cd34…" replaces a sentence about cryptography with a sentence about this host.
+Needs agent v0.37.0; older agents simply report nothing.
+
+**The Windows updater no longer needs two goes.** It asked the scheduled task
+to stop, killed node, slept two seconds and carried on. Nothing waited, and the
+directory delete that followed swallowed every error — so on a host where node
+took longer than two seconds to exit, the old process still held its files, the
+new code unpacked over a tree that had not been cleared, and the task refused
+the start because an instance was still live. The script printed "done". The
+second run worked because the FIRST run's kill had finally landed. It now waits
+for the process to actually be gone (45s, then fails and says which PID), fails
+loudly on a locked file instead of silently, and verifies the agent really came
+back up before reporting success.
+
+**Analysis stopped getting slower the longer the server runs.** 184 780
+findings, 98 of them open, and every load ran four `GROUP BY` passes over all
+184 780 — accepting findings could not help, because an accepted finding is
+still a row. The page now reads `?open=1` by default, through the new
+`idx_findings_open` (migration 114): the same four passes read what is still
+open. "Open + accepted" in the toolbar gets the old, complete counts. The live
+socket also stopped re-running the whole summary per arriving finding; it
+coalesces to one refresh a second.
+
 ## 0.183.0 — Accept clears what you accepted
 
 Four things an operator could see were wrong, and one they could not.

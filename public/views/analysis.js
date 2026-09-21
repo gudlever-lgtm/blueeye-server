@@ -34,6 +34,13 @@
       // The sort lives with the filters in app.js, but the view does not depend
       // on that state having been shaped for it.
       if (!state.sort) state.sort = { key: 'time', dir: 'desc' };
+      // SCOPE: open findings, unless the operator asks for the accepted ones
+      // too. This is what makes the page quick — the groupings behind it read
+      // the rows nobody has accepted (migration 114) instead of every finding
+      // this server has ever recorded — and it is also the honest default for a
+      // screen titled "what is wrong, and where". `state.showAccepted` is
+      // undefined on a first visit, which is the scoped reading.
+      var openOnly = function () { return !state.showAccepted; };
       var root2 = ui.page();
       var stripHost = el('div', {});
       var toolbarHost = el('div', {});
@@ -294,6 +301,10 @@
         if (state.hostId && skip.indexOf('hostId') < 0) qs.set('hostId', state.hostId);
         if (state.severity && skip.indexOf('severity') < 0) qs.set('severity', state.severity);
         if (state.metric && skip.indexOf('metric') < 0) qs.set('metric', state.metric);
+        // Sent to the list, the summary AND the bulk accept, so all three mean
+        // the same set of findings. An accept that reached wider than the list
+        // would retire rows the operator never saw.
+        if (openOnly() && skip.indexOf('open') < 0) qs.set('open', '1');
         var s = qs.toString();
         return s ? '?' + s : '';
       }
@@ -325,6 +336,12 @@
               label: t('analysis.filter.metric'), value: state.metric,
               options: metricOptions(),
               onchange: function (e) { state.metric = e.target.value; loadList(); },
+            })),
+            ui.filter(t('analysis.filter.scope'), ui.select({
+              label: t('analysis.filter.scope'),
+              value: state.showAccepted ? 'all' : 'open',
+              options: [['open', t('analysis.filter.scopeOpen')], ['all', t('analysis.filter.scopeAll')]],
+              onchange: function (e) { state.showAccepted = e.target.value === 'all'; reload(); },
             })),
           ],
           actions: deps.toolbarActions(),
@@ -617,6 +634,19 @@
         return Promise.all([loadSummary(), loadList()]);
       }
 
+      // The summary is four grouped reads. A busy fleet delivers findings in
+      // bursts, and re-running them per arrival turned a live stream into a
+      // queue of identical aggregate queries — each one making the next arrive
+      // later. Coalesce: one refresh per second of arrivals, however many land.
+      var summaryTimer = null;
+      function loadSummarySoon() {
+        if (summaryTimer) return;
+        summaryTimer = setTimeout(function () {
+          summaryTimer = null;
+          loadSummary();
+        }, 1000);
+      }
+
       // A finding that arrives over the socket while this screen is open.
       deps.onLive(function (f) {
         var hostOk = !state.hostId || String(f.hostId) === String(state.hostId);
@@ -624,8 +654,8 @@
         var metricOk = !state.metric || f.metric === state.metric;
         if (hostOk && sevOk && metricOk) rows.unshift(f);
         // The totals move whether or not the row is on screen, so they are
-        // re-read either way.
-        loadSummary();
+        // re-read either way — but coalesced, see loadSummarySoon.
+        loadSummarySoon();
         if (hostOk && sevOk && metricOk) drawList();
       });
 

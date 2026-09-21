@@ -1937,8 +1937,29 @@ const UNSIGNED_REASON_KEY = {
 // An agent refuses an update it cannot authenticate, and says so in these words.
 // That refusal is not a mystery to debug — it is the pinned key disagreeing with
 // the server's, and it has one fix: re-pin the host.
+// Which refusals a RE-PIN actually fixes. The agent's wording is the contract
+// here, and this matcher is only as good as its coverage: "refused: command
+// signature verification failed" — the message an agent sends when it pins key
+// A and the server signs with key B, i.e. the single commonest way a fleet ends
+// up stuck — was not in the old list, so the one failure this dashboard can fix
+// by itself was shown as a dead-end toast.
+//
+// Deliberately NOT here, because re-pinning does not fix them and offering it
+// would send the operator down the wrong path:
+//   * "unsigned command (this agent requires signed commands)" — the SERVER
+//     cannot sign; the fix is a signing key, not a new anchor.
+//   * "outside the accepted time window (replay?)" — clock skew.
+//   * "signed for a different agent" / "names no agent" — an identity mix-up.
 function isPinnedKeyRefusal(detail) {
-  return /unsigned update|signature downgrade|signature did not verify|release public key/i.test(String(detail || ''));
+  const text = String(detail || '');
+  if (/time window|replay|different agent|names no agent/i.test(text)) return false;
+  if (/requires signed commands/i.test(text)) return false;
+  return /unsigned update|signature downgrade|signature did not verify|signature verification failed|release public key|trust anchor this agent already holds/i.test(text);
+}
+
+// A refusal the operator can act on but a re-pin will not fix.
+function clockSkewRefusal(detail) {
+  return /time window|replay\?/i.test(String(detail || ''));
 }
 
 // The way out of a pinned-key deadlock, done FROM HERE: the server sends the
@@ -1948,6 +1969,25 @@ function isPinnedKeyRefusal(detail) {
 //
 // The one-liner is kept as a fallback for an agent that is not connected (a
 // command cannot reach it), not as the way this is normally done.
+// The fingerprint an agent reports for the release key it has pinned, when it is
+// new enough to report one at all. Older agents simply say nothing, and an
+// absent fingerprint must never render as a mismatch.
+function agentTrustedKey(a) {
+  const fp = a && a.capabilities && a.capabilities.releaseKeyFingerprint;
+  return typeof fp === 'string' && fp.length >= 16 ? fp : null;
+}
+
+function shortFp(fp) {
+  return `${String(fp).slice(0, 12)}\u2026`;
+}
+
+function trustMismatchLine(a, serverFingerprint) {
+  const agentFp = agentTrustedKey(a);
+  if (!agentFp || !serverFingerprint || agentFp === serverFingerprint) return null;
+  return el('p', { class: 'error small' },
+    t('agentUpdate.trustMismatch', { agent: shortFp(agentFp), server: shortFp(serverFingerprint) }));
+}
+
 async function showRepinCommand(a, detail, { retryUpdate = false } = {}) {
   const name = a.display_name || a.hostname;
   let data;
@@ -2004,6 +2044,12 @@ async function showRepinCommand(a, detail, { retryUpdate = false } = {}) {
     data.fingerprint
       ? el('p', { class: 'muted small' }, t('agentUpdate.repin.fingerprint'), ' ', el('code', {}, data.fingerprint))
       : null,
+    // BOTH fingerprints, side by side, when the agent reports the one it pins
+    // (agents from v0.36.3). "The signature did not verify" is a sentence about
+    // cryptography; "it trusts ab12…, you sign with cd34…" is a sentence about
+    // this host, and only the second one tells the operator they are looking at
+    // the right fix.
+    trustMismatchLine(a, data.fingerprint),
     data.canSign ? null : el('p', { class: 'muted small' }, t('agentUpdate.repin.cannotSign')),
     el('p', { class: 'muted small' }, t('agentUpdate.repin.keepsIdentity')),
     el('div', { class: 'form-actions' },
@@ -2050,6 +2096,20 @@ async function updateAgent(a, target, { confirmed = false } = {}) {
     // the one refusal that has a fix in this dashboard looked like every other.
     if (r.commandSigned === false && /signed command/i.test(String(r.reason || ''))) {
       toast(`${name}: ${t('agentUpdate.refused.unsignedCommand')}`, true);
+      return;
+    }
+    // An agent that refuses a SIGNED update because it trusts a different key is
+    // one re-pin away from working, and this dashboard can send that re-pin. It
+    // used to stop at the toast: the operator read "command signature
+    // verification failed", and the fix was two menus away in a flow they had no
+    // reason to connect to it.
+    if (isPinnedKeyRefusal(r.reason)) {
+      toast(`${name}: ${t('agentUpdate.refused.wrongKey')}`, true);
+      showRepinCommand(a, r.reason, { retryUpdate: true });
+      return;
+    }
+    if (clockSkewRefusal(r.reason)) {
+      toast(`${name}: ${t('agentUpdate.refused.clockSkew')}`, true);
       return;
     }
     toast(`${name}: ${t('agentUpdate.refused.reason', { reason: r.reason || t('agentUpdate.refused.noReason') })}`, true);

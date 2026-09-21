@@ -694,7 +694,12 @@ function start() {
   const serviceDependencyJob = createServiceDependencyJob({ serviceDependenciesRepo, flowsRepo, agentsRepo, hostConnectionsRepo, logger });
   // Blast-radius impact analysis over the unified topology graph (l2_link +
   // service_dep). Used by the event enrichment + the topology endpoint.
-  const blastRadiusService = createBlastRadiusService({ lldpNeighborsRepo, serviceDependenciesRepo, agentsRepo });
+  const blastRadiusService = createBlastRadiusService({
+    lldpNeighborsRepo, serviceDependenciesRepo, agentsRepo,
+    // The polled switches go on the graph too, so blast radius can answer
+    // what one of them cuts off (src/topology/nodeId.js, migration 106).
+    snmpDevicesRepo, snmpNeighborsRepo, deviceInterfacesRepo,
+  });
   // Topology change detection — diffs each LLDP report against the previous
   // snapshot, records changes (reusing the timeline shape) + writes them to the
   // hash-chained audit log as evidence, with flap suppression.

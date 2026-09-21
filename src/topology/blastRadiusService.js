@@ -16,14 +16,30 @@ function readMaxDepth(env = process.env) {
   return loadTopologyConfig(env).blastRadiusMaxDepth || DEFAULT_MAX_DEPTH;
 }
 
-function createBlastRadiusService({ lldpNeighborsRepo = null, serviceDependenciesRepo = null, agentsRepo = null, maxDepth = readMaxDepth() }) {
+function createBlastRadiusService({
+  lldpNeighborsRepo = null, serviceDependenciesRepo = null, agentsRepo = null,
+  // The polled switches, their own LLDP and the port MACs that resolve it.
+  // Without these the graph is agents only — and blast radius, which is built
+  // on this graph, cannot answer "what does this switch cut off" because the
+  // switch is not in it.
+  snmpDevicesRepo = null, snmpNeighborsRepo = null, deviceInterfacesRepo = null,
+  maxDepth = readMaxDepth(),
+}) {
+  // Each source is optional and answers [] when it is not wired, so a build
+  // that has no SNMP inventory gets exactly the graph it got before.
+  const readOr = (repo, method, args) => (repo && typeof repo[method] === 'function'
+    ? repo[method](args) : Promise.resolve([]));
+
   async function graph() {
-    const [l2, serviceDeps, agents] = await Promise.all([
-      lldpNeighborsRepo && typeof lldpNeighborsRepo.listAll === 'function' ? lldpNeighborsRepo.listAll({}) : Promise.resolve([]),
-      serviceDependenciesRepo && typeof serviceDependenciesRepo.listAll === 'function' ? serviceDependenciesRepo.listAll({}) : Promise.resolve([]),
+    const [l2, serviceDeps, agents, devices, deviceNeighbours, deviceMacs] = await Promise.all([
+      readOr(lldpNeighborsRepo, 'listAll', {}),
+      readOr(serviceDependenciesRepo, 'listAll', {}),
       agentsRepo && typeof agentsRepo.findAll === 'function' ? agentsRepo.findAll() : Promise.resolve([]),
+      readOr(snmpDevicesRepo, 'list', {}),
+      readOr(snmpNeighborsRepo, 'listAll', {}),
+      readOr(deviceInterfacesRepo, 'listMacs', {}),
     ]);
-    return buildTopologyGraph({ l2, serviceDeps, agents });
+    return buildTopologyGraph({ l2, serviceDeps, agents, devices, deviceNeighbours, deviceMacs });
   }
 
   // Compute blast radius for a node. Throws if a repo throws (DB unavailable).

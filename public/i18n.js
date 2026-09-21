@@ -2737,6 +2737,8 @@
 
       'tshoot.state.unknown': 'Not polled yet ({n})',
       'tshoot.openDevice': 'Open switch',
+      'flows.noFlowsHint.source': '{agent} reports traffic as “{source}”, which carries no flows. Flow data needs its traffic source set to NetFlow or sFlow — Fleet → the agent → Edit. An sFlow exporter running on the host is not enough on its own; the agent has to be told to collect it.',
+      'flows.noFlowsHint.configured': 'This agent is set to {source}, so the source is right — nothing has arrived in this window. Widen the range, or check that the exporter is pointed at this agent.',
       'snmpcom.add.title': 'Add an SNMP community',
       'snmpcom.add.lead': 'A community is a named credential. Assign it to the sites it is valid at, and to the agents allowed to use it — an agent only ever walks with a community assigned to it.',
       'snmpcom.add.submit': 'Add community',
@@ -2934,7 +2936,7 @@
       'devlog.field.skew': 'Clock difference',
       'devlog.action.timeline': 'Open this device',
       'devlog.empty.title': 'Nothing logged in this window',
-      'devlog.empty.body': 'Either the network has been quiet, or no device is pointing its logging at an agent yet.',
+      'devlog.empty.body': 'Two things have to be true, and BOTH are off until you turn them on. The agent must be listening — syslog and trap reception are opt-in per agent (BLUEEYE_SYSLOG_ENABLED / BLUEEYE_TRAPS_ENABLED) — and the switch must be pointed at it, on UDP 1514 for syslog and UDP 1162 for traps. The high ports are deliberate: binding below 1024 would need root.',
       'devlog.err.title': 'Could not load the device log',
       'devlog.err.body': 'The log could not be read.',
 
@@ -6711,6 +6713,8 @@
 
       'tshoot.state.unknown': 'Ikke pollet endnu ({n})',
       'tshoot.openDevice': 'Åbn switch',
+      'flows.noFlowsHint.source': '{agent} rapporterer trafik som “{source}”, og det bærer ingen flows. Flowdata kræver at trafikkilden er sat til NetFlow eller sFlow — Flåde → agenten → Redigér. En sFlow-eksportør der kører på værten er ikke nok i sig selv; agenten skal have besked på at opsamle den.',
+      'flows.noFlowsHint.configured': 'Denne agent er sat til {source}, så kilden er rigtig — der er bare ikke kommet noget i dette vindue. Udvid perioden, eller tjek at eksportøren peger på denne agent.',
       'snmpcom.add.title': 'Tilføj en SNMP-community',
       'snmpcom.add.lead': 'En community er en navngivet legitimation. Tildel den de lokationer hvor den gælder, og de agenter der må bruge den — en agent walker kun med en community der er tildelt den.',
       'snmpcom.add.submit': 'Tilføj community',
@@ -6906,7 +6910,7 @@
       'devlog.field.skew': 'Urforskel',
       'devlog.action.timeline': 'Åbn denne enhed',
       'devlog.empty.title': 'Intet logget i dette vindue',
-      'devlog.empty.body': 'Enten har netværket været stille, eller også peger ingen enhed sin logning på en agent endnu.',
+      'devlog.empty.body': 'To ting skal være opfyldt, og BEGGE er slået fra indtil du slår dem til. Agenten skal lytte — modtagelse af syslog og traps er opt-in pr. agent (BLUEEYE_SYSLOG_ENABLED / BLUEEYE_TRAPS_ENABLED) — og switchen skal pege på den, på UDP 1514 for syslog og UDP 1162 for traps. De høje porte er bevidste: at binde under 1024 ville kræve root.',
       'devlog.err.title': 'Kunne ikke hente enhedsloggen',
       'devlog.err.body': 'Loggen kunne ikke læses.',
 

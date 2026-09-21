@@ -2248,21 +2248,45 @@ async function bulkUpdateAgents(list, target) {
   const n = list.length;
   if (!confirm(`Update ${n} outdated agent${n > 1 ? 's' : ''} to v${target || '?'}?\n\nThey're updated one at a time, ${BULK_UPDATE_STAGGER_MS / 1000}s apart, so they don't all download the new build at once. Each rebuilds and restarts, briefly interrupting monitoring on that host.`)) return;
   let sent = 0;
-  let declined = 0;
-  let failed = 0;
+  const declined = [];
+  const failed = [];
   for (let i = 0; i < list.length; i += 1) {
+    const agent = list[i];
+    const name = agent.display_name || agent.hostname || `#${agent.id}`;
     try {
-      const r = await api(`/agents/${list[i].id}/update`, { method: 'POST' });
+      const r = await api(`/agents/${agent.id}/update`, { method: 'POST' });
       if (r.accepted) sent += 1;
-      else declined += 1;
-    } catch { failed += 1; }
+      // A runtime that declines says WHY (docker, unmanaged): keep it.
+      else declined.push({ name, reason: r.reason || 'declined' });
+    } catch (e) {
+      // WHY IT FAILED IS THE WHOLE ANSWER. This used to be `catch { failed++ }`
+      // and the toast said "2 failed" — which tells an operator nothing they
+      // can act on, and the two reasons need opposite responses: "Agent not
+      // connected" is a host to go and look at, "No agent source is published"
+      // is a server to fix once for the whole fleet.
+      failed.push({ name, reason: errText(e) });
+    }
     // Space out the rest so their downloads don't land on the server together.
     if (i < list.length - 1) await new Promise((resolve) => setTimeout(resolve, BULK_UPDATE_STAGGER_MS));
   }
-  const bits = [`${sent} updating`];
-  if (declined) bits.push(`${declined} declined (Docker/unmanaged)`);
-  if (failed) bits.push(`${failed} failed`);
-  toast(`Bulk update — ${bits.join(' · ')}.`, declined > 0 || failed > 0);
+
+  // One line per distinct reason, with the agents it applies to — a fleet where
+  // every one failed the same way is one sentence, not twenty.
+  const group = (rows) => {
+    const by = new Map();
+    for (const r of rows) {
+      if (!by.has(r.reason)) by.set(r.reason, []);
+      by.get(r.reason).push(r.name);
+    }
+    return [...by.entries()].map(([reason, names]) => `${reason} (${names.join(', ')})`);
+  };
+
+  const bits = [];
+  if (sent) bits.push(`${sent} updating`);
+  if (declined.length) bits.push(`${declined.length} declined: ${group(declined).join(' · ')}`);
+  if (failed.length) bits.push(`${failed.length} failed: ${group(failed).join(' · ')}`);
+  if (!bits.length) bits.push('nothing to update');
+  toast(`Bulk update — ${bits.join(' · ')}.`, declined.length > 0 || failed.length > 0);
 }
 
 // ---- Tests (server-defined test packages pushed to agents to run) ---------

@@ -1,5 +1,6 @@
 'use strict';
 
+const crypto = require('crypto');
 const { numOrNull } = require('../lib/num');
 
 // Pure read-model for the "what changed since I last looked" landing page
@@ -57,7 +58,7 @@ function toIso(v) {
 
 function makeEvent({
   timestamp, source, type, severity, summary, refId = null, agentId = null, kind,
-  currentState = false, metric = null, findingCount = 0, caseId = null,
+  currentState = false, metric = null, findingCount = 0, caseId = null, stateKey = null,
 }) {
   const ts = toIso(timestamp);
   return {
@@ -89,6 +90,10 @@ function makeEvent({
     // Saying so is the honest option; inferring a start time would be inventing
     // history, which is precisely what this page must never do.
     currentState,
+    // What makes a current-state row THIS occurrence of its condition (the
+    // last-seen time of a silent agent, the version a skewed agent runs). Only
+    // feeds ackKeyFor() and is stripped before the feed is returned.
+    stateKey: stateKey == null ? null : String(stateKey),
   };
 }
 
@@ -438,6 +443,7 @@ function agentHealthRows(agents, { now, serverAgentVersion = null, heartbeatStal
         agentId: Number(a.id),
         kind: 'agent_health',
         currentState: true,
+        stateKey: toIso(a.last_seen),
       }));
     }
 
@@ -454,6 +460,7 @@ function agentHealthRows(agents, { now, serverAgentVersion = null, heartbeatStal
         agentId: Number(a.id),
         kind: 'agent_health',
         currentState: true,
+        stateKey: version,
       }));
     }
   }
@@ -625,11 +632,36 @@ function correlateEvents(events) {
   return collapseRecurring(rollUpFindings(Array.isArray(events) ? events : []));
 }
 
-// `caseId` and `primaryFindingId` are roll-up plumbing, not part of the feed's
-// contract — dropped so the response describes only what the UI renders.
+// --- acknowledgement key -----------------------------------------------------
+// The identity a per-user acknowledgement is stored against (change_acks,
+// migration 115). It has to survive a reload and a different window, so it is
+// built from the CONDITION, never from the row's position or its newest ref_id:
+//
+//   * a current-state row  → type + agent + stateKey. An agent that reports
+//     again and then goes silent again has a new last_seen, so it is a new key
+//     and shows up again; an ack does not silence the agent for good.
+//   * a collapsible row    → the correlation key. Repeats of the condition fold
+//     into the same row and keep the same key; whether a NEW repeat re-opens it
+//     is decided by comparing timestamps, in the route.
+//   * anything else        → the correlation key + ref_id, because a config
+//     capture or a topology change is a distinct artifact each time, and
+//     acknowledging one must not acknowledge the next.
+//
+// Hashed so the key is a fixed 64 hex characters whatever went into it.
+function ackKeyFor(e) {
+  let raw;
+  if (e.currentState) raw = ['state', e.type, e.agentId == null ? '-' : e.agentId, e.stateKey == null ? '-' : e.stateKey].join('|');
+  else if (COLLAPSIBLE_KINDS.has(e.kind)) raw = correlationKey(e);
+  else raw = `${correlationKey(e)}|${e.ref_id == null ? '-' : e.ref_id}`;
+  return crypto.createHash('sha256').update(raw).digest('hex');
+}
+
+// `caseId`, `primaryFindingId` and `stateKey` are internal plumbing, not part of
+// the feed's contract — dropped so the response describes only what the UI
+// renders. `ackKey` is added here, from the row as it stands after correlation.
 function stripInternals(e) {
-  const { caseId, primaryFindingId, ...rest } = e;
-  return rest;
+  const { caseId, primaryFindingId, stateKey, ...rest } = e;
+  return { ...rest, ackKey: ackKeyFor(e) };
 }
 
 // Builds the final feed: filter to the window, order, group by severity, cap.
@@ -680,6 +712,7 @@ module.exports = {
   compareEvents,
   withinWindow,
   correlationKey,
+  ackKeyFor,
   rollUpFindings,
   collapseRecurring,
   correlateEvents,

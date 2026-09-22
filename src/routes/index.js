@@ -499,6 +499,7 @@ function createApiRouter({
     }),
     usersRepo,
     auditLogger,
+    logger,
   }));
 
   // Universal search. The CMDB resolver is passed as a thunk rather than the

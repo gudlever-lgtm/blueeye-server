@@ -42,6 +42,7 @@ const { createIncidentsRepository } = require(path.join(ROOT, 'src/serviceTests/
 const { createAiAnalysesRepository } = require(path.join(ROOT, 'src/serviceTests/storage/aiAnalysesRepository'));
 const { createRunsRepository } = require(path.join(ROOT, 'src/serviceTests/storage/runsRepository'));
 const { createSnmpDevicesRepository } = require(path.join(ROOT, 'src/repositories/snmpDevicesRepository'));
+const { createUsersRepository } = require(path.join(ROOT, 'src/repositories/usersRepository'));
 const { createDeviceInterfacesRepository } = require(path.join(ROOT, 'src/repositories/deviceInterfacesRepository'));
 const { createDeviceCounterSamplesRepository } = require(path.join(ROOT, 'src/repositories/deviceCounterSamplesRepository'));
 const { createSnmpCredentialProfilesRepository } = require(path.join(ROOT, 'src/repositories/snmpCredentialProfilesRepository'));
@@ -57,6 +58,34 @@ const fakeSecretBox = {
 
 const checks = [];
 const check = (name, fn) => checks.push({ name, fn });
+
+check('change acks: upsert, millisecond round trip, per-user read, undo', async (pool) => {
+  // User 1 is the seeded admin (see the migration chain).
+  const repo = createUsersRepository({ pool });
+  const key = 'd'.repeat(64);
+  const first = new Date(Date.now() - 5000);
+  first.setMilliseconds(123);
+  await repo.ackChange(1, key, first);
+  let acks = await repo.listChangeAcks(1);
+  assert.strictEqual(acks.get(key).getTime(), first.getTime(), 'DATETIME(3) lost the milliseconds');
+
+  const later = new Date(first.getTime() + 1000);
+  await repo.ackChange(1, key, later); // the upsert moves it, never duplicates
+  acks = await repo.listChangeAcks(1);
+  assert.strictEqual(acks.size, 1);
+  assert.strictEqual(acks.get(key).getTime(), later.getTime());
+
+  // Older than the TTL: not read, and pruned by the next ack.
+  await pool.query('INSERT INTO change_acks (user_id, ack_key, acked_at) VALUES (1, ?, NOW(3) - INTERVAL 31 DAY)', ['e'.repeat(64)]);
+  assert.strictEqual((await repo.listChangeAcks(1)).has('e'.repeat(64)), false);
+  await repo.ackChange(1, key, later);
+  const [[{ n }]] = await pool.query("SELECT COUNT(*) AS n FROM change_acks WHERE ack_key = ?", ['e'.repeat(64)]);
+  assert.strictEqual(Number(n), 0, 'the expired row was not pruned');
+
+  assert.strictEqual((await repo.listChangeAcks(2)).size, 0, 'another user saw this ack');
+  assert.strictEqual(await repo.unackChange(1, key), true);
+  assert.strictEqual(await repo.unackChange(1, key), false);
+});
 
 check('observations: a batch writes and reads back', async (pool) => {
   const repo = createObservationsRepository({ db: { pool } });

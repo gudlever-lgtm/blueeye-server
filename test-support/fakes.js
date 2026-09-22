@@ -57,7 +57,10 @@ function makeUsersRepo(overrides = {}) {
   // the monotonic rule (a stale tab cannot rewind the marker) is actually
   // exercised rather than stubbed away.
   let lastSeenChanges = overrides.initialLastSeenChanges || null;
+  // Changes-page acknowledgements (migration 115): `${userId}|${key}` → Date.
+  const changeAcks = new Map(Object.entries(overrides.initialChangeAcks || {}).map(([k, v]) => [k, new Date(v)]));
   return {
+    changeAcks,
     findAll: overrides.findAll || (async () => []),
     findById: overrides.findById || (async () => null),
     findByEmail: overrides.findByEmail || (async () => null),
@@ -85,6 +88,16 @@ function makeUsersRepo(overrides = {}) {
       if (!lastSeenChanges || new Date(at) > lastSeenChanges) lastSeenChanges = new Date(at);
       return true;
     }),
+    listChangeAcks: overrides.listChangeAcks || (async (userId) => {
+      const out = new Map();
+      for (const [k, at] of changeAcks) {
+        const [uid, key] = k.split('|');
+        if (String(uid) === String(userId)) out.set(key, at);
+      }
+      return out;
+    }),
+    ackChange: overrides.ackChange || (async (userId, key, at) => { changeAcks.set(`${userId}|${key}`, new Date(at)); return at; }),
+    unackChange: overrides.unackChange || (async (userId, key) => changeAcks.delete(`${userId}|${key}`)),
   };
 }
 

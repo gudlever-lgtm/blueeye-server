@@ -67,6 +67,10 @@ const VIEWER_WRITE_ALLOWED = new Set([
   'POST /api/assistant/location-summary',
   'POST /api/forecast/',
   'POST /api/changes/seen',
+  // Acknowledging a Changes row writes only the caller's own view (migration
+  // 115) — the same footing as marking the page seen.
+  'POST /api/changes/ack',
+  'DELETE /api/changes/ack/:key',
   'POST /api/nis2/custom-reports/preview',
   'POST /api/nis2/custom-reports/export',
   'POST /api/logs/client',

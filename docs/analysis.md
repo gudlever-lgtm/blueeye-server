@@ -209,7 +209,10 @@ finding never claims anything the dashboard verdict doesn't:
 - `probe.reachability` (CRIT) — targets not responding;
 - `probe.loss` (WARN ≥2 % / CRIT ≥20 %);
 - `probe.latency` (ANOMALY, z-score vs. the target's own baseline — **but only
-  once the latency actually moved**, see below);
+  once the latency actually moved**, see below). **Always WARN**, never CRIT:
+  slow is a warning, CRIT is kept for a target that is gone (unreachable, heavy
+  loss, heavy jitter). Severity is set per evidence row, so a latency finding
+  stays WARN even when another target on the same agent is down;
 - `probe.jitter` (WARN ≥30 ms / CRIT ≥100 ms);
 - `probe.cert` (WARN ≤14 d / CRIT ≤3 d) — TLS certificate expiry from the **http**
   probe, judged independently of reachability.
@@ -221,7 +224,7 @@ worth waking somebody for", and on a stable LAN the two come apart badly.
 
 A LAN target sits at 0.5 ms with a MAD of a few tens of **microseconds**. Divide
 an ordinary 0.4 ms wobble by a 54 µs sigma and the answer is z = 7.4 — past
-`Z_BAD`, so *critical*, on a link nobody would call slow. In the field that
+the old `Z_BAD` (6), so *critical*, on a link nobody would call slow. In the field that
 produced **30 003 criticals out of 184 668 findings**, which is the same as
 having none: a backlog nobody can read is one everybody stops reading.
 
@@ -234,8 +237,8 @@ So elevated latency has to clear two bars before the z-score is consulted at all
 | `LAT_MIN_FRACTION` | 20 % | and on a 200 ms WAN path, 5 ms is not news either |
 
 Both, not either. `0.5 → 2 ms` is +300 % and still a tiny change; `118 → 124 ms`
-is +6 ms and still inside normal variation. `118 → 309 ms` clears both, and stays
-critical exactly as before.
+is +6 ms and still inside normal variation. `118 → 309 ms` clears both and is reported
+(as a WARN — latency has no CRIT tier).
 
 The floor gates **latency only**. Loss, jitter and unreachability always had
 absolute thresholds and are untouched — a quiet-latency target that is dropping

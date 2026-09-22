@@ -236,3 +236,41 @@ test('explainRttShift says nothing when there is nothing to say', () => {
   assert.equal(explainRttShift(null), '');
   assert.match(explainRttShift({ material: false, afterMs: 24, samplesAfter: 2, samplesBefore: 2 }), /unchanged/);
 });
+
+// Latency is a warning signal, never a critical one — CRIT is for a target that
+// is gone. And severity is per evidence row: a latency finding stays WARN even
+// when a different target on the same agent is unreachable.
+function latencyRows(target, values, extra = {}) {
+  const base = Date.parse(T);
+  return values.map((rttMs, i) => ({
+    ts: new Date(base - i * 60000).toISOString(), type: 'ping', target, ok: true, rttMs, lossPct: 0, jitterMs: 1, ...extra,
+  }));
+}
+const WAN = [89, 88, 90, 87, 89, 91, 88, 87, 89, 90, 88];
+
+test('a large latency spike (z well past 6) is a WARN, not a CRIT', () => {
+  const fs = evaluateProbeFindings(7, latencyRows('https://mundtrold.dk/', [199.6].concat(WAN)), { now: at });
+  const lat = fs.find((f) => f.metric === 'probe.latency');
+  assert.ok(lat);
+  assert.ok(lat.deviation > 6, `z=${lat.deviation} is past the old critical bar`);
+  assert.equal(lat.severity, 'WARN');
+  assert.equal(fs.some((f) => f.severity === 'CRIT'), false);
+});
+
+test('latency stays WARN when another target on the same agent is unreachable', () => {
+  const rows = latencyRows('https://mundtrold.dk/', [199.6].concat(WAN))
+    .concat([{ ts: T, type: 'ping', target: '10.0.0.9', ok: false, rttMs: null, lossPct: 100, jitterMs: null }]);
+  const fs = evaluateProbeFindings(7, rows, { now: at });
+  assert.equal(fs.find((f) => f.metric === 'probe.reachability').severity, 'CRIT');
+  assert.equal(fs.find((f) => f.metric === 'probe.latency').severity, 'WARN');
+});
+
+test('moderate loss stays WARN when another target is unreachable', () => {
+  const rows = [
+    { ts: T, type: 'ping', target: '8.8.8.8', ok: true, rttMs: 10, lossPct: 5, jitterMs: 1 },
+    { ts: T, type: 'tcp', target: '10.0.0.9:443', ok: false, rttMs: null, lossPct: null, jitterMs: null },
+  ];
+  const fs = evaluateProbeFindings(7, rows, { now: at });
+  assert.equal(fs.find((f) => f.metric === 'probe.reachability').severity, 'CRIT');
+  assert.equal(fs.find((f) => f.metric === 'probe.loss').severity, 'WARN');
+});

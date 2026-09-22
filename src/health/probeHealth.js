@@ -19,14 +19,17 @@ const LOSS_WARN = 2; // % packet loss
 const LOSS_BAD = 20;
 const JITTER_WARN = 30; // ms
 const JITTER_BAD = 100;
-const Z_WARN = 3; // robust z-score of latest RTT vs. the target's own baseline
-const Z_BAD = 6;
+// Robust z-score of latest RTT vs. the target's own baseline. Latency is a
+// WARNING signal only — however far it moves, it never makes an agent 'bad'
+// (and so never a CRIT finding). CRIT is kept for the target being gone:
+// unreachable, heavy loss, or jitter bad enough to break real-time traffic.
+const Z_WARN = 3;
 
 // HOW FAR THE LATENCY ACTUALLY MOVED, which the z-score on its own does not say.
 //
 // A stable LAN target has a baseline like 0.5 ms with a MAD of a few tens of
 // MICROSECONDS. Divide an ordinary 0.4 ms wobble by a 54 us sigma and the answer
-// is z=7.4 — past Z_BAD, so "critical", on a link nobody would call slow. That is
+// is z=7.4 — past what was then Z_BAD, so "critical", on a link nobody would call slow. That is
 // not a broken statistic, it is a correct statistic answering the wrong question:
 // "is this unusual for this target" instead of "is this worth waking someone for".
 // In the field it produced 30 003 criticals out of 184 668 findings, which is the
@@ -143,22 +146,25 @@ function computeAgentHealth(rows, { now = Date.now() } = {}) {
 
   let status = 'ok';
   const evidence = [];
-  const note = (metric, t, extra) => evidence.push({ metric, target: t.target, type: t.type, ...extra });
+  // Each evidence row carries its OWN level ('warn' | 'bad' | 'down'), so a
+  // warn-grade signal is not promoted to CRIT just because a different signal
+  // on the same agent is bad.
+  const note = (level, metric, t, extra) => evidence.push({ metric, level, target: t.target, type: t.type, ...extra });
 
   if (unreachable.length === targets.length) {
     status = 'down';
-    note('reachability', unreachable[0], { ok: false, of: targets.length, unreachable: unreachable.length });
+    note('down', 'reachability', unreachable[0], { ok: false, of: targets.length, unreachable: unreachable.length });
   } else {
-    if (unreachable.length) { status = worse(status, 'bad'); note('reachability', unreachable[0], { ok: false, of: targets.length, unreachable: unreachable.length }); }
-    if (worstLoss && worstLoss.lossPct >= LOSS_BAD) { status = worse(status, 'bad'); note('loss', worstLoss, { lossPct: round1(worstLoss.lossPct) }); }
-    else if (worstLoss && worstLoss.lossPct >= LOSS_WARN) { status = worse(status, 'warn'); note('loss', worstLoss, { lossPct: round1(worstLoss.lossPct) }); }
+    if (unreachable.length) { status = worse(status, 'bad'); note('bad', 'reachability', unreachable[0], { ok: false, of: targets.length, unreachable: unreachable.length }); }
+    if (worstLoss && worstLoss.lossPct >= LOSS_BAD) { status = worse(status, 'bad'); note('bad', 'loss', worstLoss, { lossPct: round1(worstLoss.lossPct) }); }
+    else if (worstLoss && worstLoss.lossPct >= LOSS_WARN) { status = worse(status, 'warn'); note('warn', 'loss', worstLoss, { lossPct: round1(worstLoss.lossPct) }); }
     // `latencyMoved` is the gate described at LAT_MIN_DELTA_MS: a z-score on a
-    // target that barely moved says nothing worth reporting.
+    // target that barely moved says nothing worth reporting. Past it, latency
+    // is a warning at any z — see Z_WARN.
     const latMoved = worstLat ? latencyMoved(worstLat) : false;
-    if (latMoved && worstLat.z >= Z_BAD) { status = worse(status, 'bad'); note('latency', worstLat, { rttMs: round1(worstLat.rttMs), baselineMs: round1(worstLat.baselineMs), z: round1(worstLat.z) }); }
-    else if (latMoved && worstLat.z >= Z_WARN) { status = worse(status, 'warn'); note('latency', worstLat, { rttMs: round1(worstLat.rttMs), baselineMs: round1(worstLat.baselineMs), z: round1(worstLat.z) }); }
-    if (worstJit && worstJit.jitterMs >= JITTER_BAD) { status = worse(status, 'bad'); note('jitter', worstJit, { jitterMs: round1(worstJit.jitterMs) }); }
-    else if (worstJit && worstJit.jitterMs >= JITTER_WARN) { status = worse(status, 'warn'); note('jitter', worstJit, { jitterMs: round1(worstJit.jitterMs) }); }
+    if (latMoved && worstLat.z >= Z_WARN) { status = worse(status, 'warn'); note('warn', 'latency', worstLat, { rttMs: round1(worstLat.rttMs), baselineMs: round1(worstLat.baselineMs), z: round1(worstLat.z) }); }
+    if (worstJit && worstJit.jitterMs >= JITTER_BAD) { status = worse(status, 'bad'); note('bad', 'jitter', worstJit, { jitterMs: round1(worstJit.jitterMs) }); }
+    else if (worstJit && worstJit.jitterMs >= JITTER_WARN) { status = worse(status, 'warn'); note('warn', 'jitter', worstJit, { jitterMs: round1(worstJit.jitterMs) }); }
   }
 
   // Quiet/offline agent: a healthy-but-old verdict is "stale", not "ok".
@@ -333,5 +339,5 @@ module.exports = {
   mergeConnection,
   robustStats,
   // exported for tests / tuning visibility
-  THRESHOLDS: { LOSS_WARN, LOSS_BAD, JITTER_WARN, JITTER_BAD, Z_WARN, Z_BAD, MIN_BASELINE, STALE_MS, LAT_MIN_DELTA_MS, LAT_MIN_FRACTION },
+  THRESHOLDS: { LOSS_WARN, LOSS_BAD, JITTER_WARN, JITTER_BAD, Z_WARN, MIN_BASELINE, STALE_MS, LAT_MIN_DELTA_MS, LAT_MIN_FRACTION },
 };

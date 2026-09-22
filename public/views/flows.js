@@ -133,6 +133,30 @@
         return ui.filter(label, input);
       }
 
+      // WHY there are no flows, rather than where to go and look.
+      //
+      // The hint used to say "check the source under Fleet", which is right and
+      // is still a second screen and a guess. The view already holds the agent
+      // rows, so it can say what the source actually IS — and "proc" is the
+      // answer every single time this screen is empty on a fleet that has
+      // never been switched over. A sentence that names the agent and its
+      // source ends the question; a sentence that names a screen starts one.
+      function noFlowsHint() {
+        var id = state.agentId;
+        if (!id) return t('flows.noFlowsHint');
+        var agent = null;
+        for (var i = 0; i < agents.length; i += 1) {
+          if (String(agents[i].id) === String(id)) { agent = agents[i]; break; }
+        }
+        if (!agent) return t('flows.noFlowsHint');
+        var source = String((agent.monitor_config && agent.monitor_config.source) || 'proc');
+        if (source === 'netflow' || source === 'sflow') return t('flows.noFlowsHint.configured', { source: source });
+        return t('flows.noFlowsHint.source', {
+          agent: agent.display_name || agent.hostname || ('#' + agent.id),
+          source: source,
+        });
+      }
+
       function drawToolbar() {
         var filters = [ui.filter(t('flows.agent'), ui.select({
           label: t('flows.agent'), value: state.agentId || '',
@@ -366,7 +390,7 @@
                 refresh();
               },
             })
-            : ui.emptyState({ kind: 'nodata', title: t('flows.noFlows'), body: t('flows.noFlowsHint') })],
+            : ui.emptyState({ kind: 'nodata', title: t('flows.noFlows'), body: noFlowsHint() })],
         }));
 
         panels.push(ui.panelGrid(
@@ -433,7 +457,7 @@
           kids.push(el('div', { class: 'panel-body' },
             deps.chart(pts, { markers: markers, onBrush: applyZoom })));
         } else {
-          kids.push(ui.emptyState({ kind: 'nodata', title: t('flows.noFlows'), body: t('flows.noFlowsHint') }));
+          kids.push(ui.emptyState({ kind: 'nodata', title: t('flows.noFlows'), body: noFlowsHint() }));
         }
         if (data.topTalkers && data.topTalkers.length) {
           kids.push(el('div', { class: 'panel-body' }, ui.metaXs(t('flows.talkers'))));

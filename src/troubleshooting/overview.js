@@ -19,6 +19,10 @@
 // cost the operator that one panel, never the whole screen.
 
 const { normalizeSeverity } = require('../timeline/targetTimeline');
+const {
+  key: nodeKey, isDevice: isDeviceNode, deviceIdOf, compare: compareNodes,
+} = require('../topology/nodeId');
+const { deviceState } = require('../topology/deviceNodes');
 
 const SEVERITY_RANK = Object.freeze({ INFO: 1, WARN: 2, CRIT: 3 });
 
@@ -225,7 +229,16 @@ function worseState(a, b) {
   return (STATE_RANK[b] || 0) > (STATE_RANK[a] || 0) ? b : a;
 }
 
-function buildTopologyView({ graph = null, agents = [], blastByNode = new Map() } = {}) {
+// The view over the graph: every node with the state it is in.
+//
+// THE GRAPH HOLDS TWO KINDS OF NODE. An agent's state comes from its row's
+// `status`; a switch's comes from its last poll, which is a different question
+// with a third answer (`deviceNodes.deviceState` — never polled is not ok).
+// Reading an agent's status for a switch would report every switch as offline,
+// because no agent row has that id.
+function buildTopologyView({
+  graph = null, agents = [], devices = [], blastByNode = new Map(),
+} = {}) {
   const nodes = asArray(graph && graph.nodes);
   const edges = asArray(graph && graph.edges);
 
@@ -234,19 +247,44 @@ function buildTopologyView({ graph = null, agents = [], blastByNode = new Map() 
     const id = toNodeId(a && a.id);
     if (id !== null) agentById.set(id, a);
   }
+  const deviceById = new Map();
+  for (const d of asArray(devices)) {
+    if (d && d.id != null) deviceById.set(Number(d.id), d);
+  }
 
-  // --- 1. base state straight from the agent row --------------------------
+  // --- 1. base state straight from the agent row, or the device's last poll --
   const state = new Map();
   const out = [];
   for (const n of nodes) {
-    const id = toNodeId(n && n.id);
+    if (!n || n.id == null) continue;
+
+    if (isDeviceNode(n.id)) {
+      const device = deviceById.get(deviceIdOf(n.id)) || null;
+      const key = nodeKey(n.id);
+      state.set(key, deviceState(device) || 'unknown');
+      out.push({
+        id: n.id,
+        label: n.label || (device && (device.displayName || device.host)) || String(n.id),
+        locationId: n.locationId ?? (device && device.locationId != null ? Number(device.locationId) : null),
+        kind: 'device',
+        host: n.host || (device && device.host) || null,
+        status: null,
+        lastSeen: (device && device.lastOkAt) || null,
+        lastError: (device && device.lastError) || null,
+        state: NODE_STATE.OK, // filled in after the downstream pass
+      });
+      continue;
+    }
+
+    const id = toNodeId(n.id);
     if (id === null) continue;
     const agent = agentById.get(id) || null;
-    state.set(id, stateFromAgentStatus(agent && agent.status));
+    state.set(nodeKey(id), stateFromAgentStatus(agent && agent.status));
     out.push({
       id,
-      label: (n && n.label) || (agent && (agent.display_name || agent.hostname)) || `agent ${id}`,
+      label: n.label || (agent && (agent.display_name || agent.hostname)) || `agent ${id}`,
       locationId: agent && agent.location_id != null ? Number(agent.location_id) : null,
+      kind: 'agent',
       status: (agent && agent.status) || null,
       lastSeen: toIso(agent && agent.last_seen),
       state: NODE_STATE.OK, // filled in after the downstream pass
@@ -255,7 +293,7 @@ function buildTopologyView({ graph = null, agents = [], blastByNode = new Map() 
 
   // --- 2. grey out what a `down` node cuts off ----------------------------
   const lookup = blastByNode instanceof Map
-    ? (id) => blastByNode.get(id)
+    ? (id) => (blastByNode.get(id) ?? blastByNode.get(Number(id)))
     : (id) => (blastByNode && typeof blastByNode === 'object' ? blastByNode[id] : undefined);
 
   for (const [id, s] of state) {
@@ -263,21 +301,21 @@ function buildTopologyView({ graph = null, agents = [], blastByNode = new Map() 
     const radius = lookup(id);
     if (!radius) continue;
     for (const hit of asArray(radius.directly_isolated)) {
-      const hostId = toNodeId(hit && hit.hostId);
-      if (hostId === null) continue;
+      if (!hit || hit.hostId == null) continue;
+      const hostKey = nodeKey(hit.hostId);
       // Never downgrade a node we already know is down.
-      if (state.get(hostId) === NODE_STATE.DOWN) continue;
-      state.set(hostId, NODE_STATE.UNREACHABLE_DOWNSTREAM);
+      if (state.get(hostKey) === NODE_STATE.DOWN) continue;
+      state.set(hostKey, NODE_STATE.UNREACHABLE_DOWNSTREAM);
     }
   }
-  for (const node of out) node.state = state.get(node.id) || NODE_STATE.OK;
+  for (const node of out) node.state = state.get(nodeKey(node.id)) || NODE_STATE.OK;
 
   // --- 3. links, tagged by layer, state = worse endpoint ------------------
   const links = [];
   for (const e of edges) {
-    if (!e) continue;
-    const source = toNodeId(e.source);
-    const target = toNodeId(e.target);
+    if (!e || e.source == null || e.target == null) continue;
+    const source = isDeviceNode(e.source) ? e.source : toNodeId(e.source);
+    const target = isDeviceNode(e.target) ? e.target : toNodeId(e.target);
     if (source === null || target === null) continue;
     const layer = e.type === 'l2_link' ? 'l2' : 'l3';
     links.push({
@@ -287,15 +325,25 @@ function buildTopologyView({ graph = null, agents = [], blastByNode = new Map() 
       source,
       target,
       dstPort: e.dstPort != null ? Number(e.dstPort) : null,
-      state: worseState(state.get(source) || NODE_STATE.OK, state.get(target) || NODE_STATE.OK),
+      // Which port, when the adjacency came off a switch that knows.
+      localIfName: e.localIfName || null,
+      remotePortId: e.remotePortId || null,
+      state: worseState(state.get(nodeKey(source)) || NODE_STATE.OK, state.get(nodeKey(target)) || NODE_STATE.OK),
     });
   }
 
+  // The three canonical states are always present; `unknown` only when
+  // something is in it. It is a state no agent can be in — a legend entry that
+  // always reads 0 is one nobody reads.
   const counts = { ok: 0, down: 0, unreachable_downstream: 0 };
-  for (const node of out) counts[node.state] += 1;
+  for (const node of out) {
+    if (counts[node.state] === undefined) counts[node.state] = 0;
+    counts[node.state] += 1;
+  }
+  if (!counts.unknown) delete counts.unknown;
 
   return {
-    nodes: out.sort((a, b) => a.id - b.id),
+    nodes: out.sort((a, b) => compareNodes(a.id, b.id)),
     links,
     counts,
     layers: {

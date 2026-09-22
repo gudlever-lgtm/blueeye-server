@@ -344,7 +344,7 @@ function createApiRouter({
   // Flow-derived dependency/topology map (who-talks-to-whom from the 5-tuples).
   if (discoveredDevicesRepo) router.use('/api/discovery', createDiscoveryRouter({ discoveredDevicesRepo, agentsRepo, discoverySweepJob, agentCommander, auditLogger, auditLogRepo, config: discoveryConfig, getConfig: settingsService ? () => settingsService.getDiscovery() : null, setConfig: settingsService ? (patch) => settingsService.setDiscovery(patch) : null }));
 
-  if (flowsRepo || lldpNeighborsRepo || serviceDependenciesRepo || topologyChangesRepo || flowPairBaselinesRepo) router.use('/api/topology', createTopologyRouter({ flowsRepo, agentsRepo, locationsRepo, centroids, lldpNeighborsRepo, serviceDependenciesRepo, serviceDependencyJob, blastRadiusService, topologyChangesRepo, flowPairBaselinesRepo, flowPairBaselineJob }));
+  if (flowsRepo || lldpNeighborsRepo || serviceDependenciesRepo || topologyChangesRepo || flowPairBaselinesRepo) router.use('/api/topology', createTopologyRouter({ flowsRepo, agentsRepo, locationsRepo, centroids, lldpNeighborsRepo, serviceDependenciesRepo, serviceDependencyJob, blastRadiusService, topologyChangesRepo, flowPairBaselinesRepo, flowPairBaselineJob, snmpDevicesRepo }));
   // Consolidated Troubleshooting Dashboard — a pure READ aggregation over the
   // five capability domains above (topology rediscovery, dependency mapping,
   // blast radius, flow-pair baselining, active discovery). Owns no data of its
@@ -355,9 +355,9 @@ function createApiRouter({
       overviewService: createTroubleshootingOverviewService({
         clustersRepo: eventClustersRepo, findingStore, agentsRepo, blastRadiusService,
         topologyChangesRepo, auditEventsRepo, discoveredDevicesRepo,
-        // The switches on the map. The graph is agents and their LLDP; these
-        // put the polled network on it (src/topology/snmpTopologyMerge.js).
-        snmpDevicesRepo, snmpNeighborsRepo, deviceInterfacesRepo, lldpNeighborsRepo,
+        // The device rows, for the poll state of each switch on the map. The
+        // switches themselves arrive with the graph (src/topology/graph.js).
+        snmpDevicesRepo,
         logger,
       }),
     }));

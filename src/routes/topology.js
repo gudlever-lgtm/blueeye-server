@@ -5,6 +5,7 @@ const { asyncHandler } = require('../middleware/asyncHandler');
 const { requireAuth, requireRole } = require('../auth/middleware');
 const { ROLES } = require('../auth/roles');
 const { parseId } = require('../validation/locationValidation');
+const { parse: parseNodeId, deviceIdOf } = require('../topology/nodeId');
 const { buildTopology } = require('../analysis/topology');
 const { buildTopologyGraph } = require('../topology/graph');
 const { mapTopologyChange } = require('../timeline/targetTimeline');
@@ -16,7 +17,7 @@ const DEFAULT_TOP_N = 50;
 // Flow-derived dependency / topology map. Mounted at /api/topology behind the
 // user JWT. Builds a who-talks-to-whom graph from the ingested 5-tuple flows
 // (whole fleet, or one agent via ?agentId=), over a ?minutes window. viewer+.
-function createTopologyRouter({ flowsRepo = null, agentsRepo = null, locationsRepo = null, centroids = null, lldpNeighborsRepo = null, serviceDependenciesRepo = null, serviceDependencyJob = null, blastRadiusService = null, topologyChangesRepo = null, flowPairBaselinesRepo = null, flowPairBaselineJob = null }) {
+function createTopologyRouter({ flowsRepo = null, agentsRepo = null, locationsRepo = null, centroids = null, lldpNeighborsRepo = null, serviceDependenciesRepo = null, serviceDependencyJob = null, blastRadiusService = null, topologyChangesRepo = null, flowPairBaselinesRepo = null, flowPairBaselineJob = null, snmpDevicesRepo = null }) {
   const router = express.Router();
   const reader = requireRole(ROLES.VIEWER, ROLES.OPERATOR, ROLES.ADMIN);
   const writer = requireRole(ROLES.OPERATOR, ROLES.ADMIN);
@@ -86,9 +87,23 @@ function createTopologyRouter({ flowsRepo = null, agentsRepo = null, locationsRe
   // invalid, 500 when the topology store is unavailable.
   if (blastRadiusService) {
     router.get('/blast-radius/:node', requireAuth, writer, asyncHandler(async (req, res) => {
-      const nodeId = parseId(req.params.node);
-      if (nodeId === null) return res.status(400).json({ error: 'node must be a positive integer' });
-      if (agentsRepo && typeof agentsRepo.findById === 'function' && !(await agentsRepo.findById(nodeId))) {
+      // A node is an agent (`12`) or a polled switch (`d:5`) — the graph holds
+      // both since migration 106's merge, and asking what a SWITCH cuts off is
+      // the case the L2 tier exists for.
+      const nodeId = parseNodeId(req.params.node);
+      if (nodeId === null) {
+        return res.status(400).json({ error: 'node must be an agent id or a device id (d:<id>)' });
+      }
+      // Existence is checked against the register the id belongs to. Checking
+      // a device id against `agents` is how a real switch became a 404.
+      const deviceId = deviceIdOf(nodeId);
+      if (deviceId !== null) {
+        if (snmpDevicesRepo && typeof snmpDevicesRepo.findById === 'function'
+          && !(await snmpDevicesRepo.findById(deviceId))) {
+          return res.status(404).json({ error: 'Node not found' });
+        }
+      } else if (agentsRepo && typeof agentsRepo.findById === 'function'
+        && !(await agentsRepo.findById(nodeId))) {
         return res.status(404).json({ error: 'Node not found' });
       }
       let depth;

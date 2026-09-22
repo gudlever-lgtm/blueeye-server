@@ -97,7 +97,7 @@
   // Monitoring and Fleet guides and pinned by test/guides.test.js.
   var HEALTH_THRESHOLDS = {
     LOSS_WARN: '2', LOSS_BAD: '20', JITTER_WARN: '30', JITTER_BAD: '100',
-    Z_WARN: '3', Z_BAD: '6', MIN_BASELINE: '8', STALE_MIN: '15',
+    Z_WARN: '3', MIN_BASELINE: '8', STALE_MIN: '15',
     IFACE_UTIL_WARN: '75', IFACE_UTIL_BAD: '90',
   };
 
@@ -775,7 +775,7 @@
             table([t('guide.col.verdict'), t('guide.col.means')], [
               [mono('ok'), t('guide.mon.fleet.v.ok')],
               [mono('warn'), t('guide.mon.fleet.v.warn', { loss: HEALTH_THRESHOLDS.LOSS_WARN, jitter: HEALTH_THRESHOLDS.JITTER_WARN, z: HEALTH_THRESHOLDS.Z_WARN })],
-              [mono('bad'), t('guide.mon.fleet.v.bad', { loss: HEALTH_THRESHOLDS.LOSS_BAD, jitter: HEALTH_THRESHOLDS.JITTER_BAD, z: HEALTH_THRESHOLDS.Z_BAD })],
+              [mono('bad'), t('guide.mon.fleet.v.bad', { loss: HEALTH_THRESHOLDS.LOSS_BAD, jitter: HEALTH_THRESHOLDS.JITTER_BAD })],
               [mono('down'), t('guide.mon.fleet.v.down')],
               [mono('stale'), t('guide.mon.fleet.v.stale', { minutes: HEALTH_THRESHOLDS.STALE_MIN })],
               [mono('unknown'), t('guide.mon.fleet.v.unknown')],

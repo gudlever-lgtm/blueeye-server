@@ -26,6 +26,41 @@ someone already dealt with.
 `NULL` (never marked) falls back to the default window, not the epoch — a
 first-time visitor wants their shift, not four years of history.
 
+## Acknowledging a row
+
+`POST /api/changes/ack { key }` · `DELETE /api/changes/ack/:key` · viewer+.
+
+Every row carries an `ackKey` (64 hex) and `acknowledgedAt` (ISO or `null`).
+Acknowledge hides the row from **the caller's own view** — it does not change
+anything for other users, and it does not acknowledge the source record (a
+finding or a cluster keeps its own, shared acknowledgement on its own screen).
+It is per user because the feed owns no events: most rows (a silent agent,
+version skew) exist in no table, so there is nothing shared to write back to.
+
+The key is a hash of the **condition**, not the record (`ackKeyFor` in
+`src/changes/changeFeed.js`), so it survives reloads and window changes:
+
+| Row | Key | Comes back when |
+| --- | --- | --- |
+| Repeating condition (probe, finding, event, interface, agent on/offline, device event, SA) | the correlation key | it happens again after the ack — the row's newest timestamp is later than `acked_at` |
+| Current state (`agent.heartbeat_stale`, `agent.version_skew`) | type + agent + state (last-seen time / version) | the state changes: the agent reports and goes silent again, or drifts to another version |
+| One-off artifact (config capture, topology change, playbook run) | correlation key + `ref_id` | never — the next one is a different row |
+
+Stored in `change_acks` (migration 115), `DATETIME(3)` because the reopen rule
+compares against millisecond timestamps. An ack lasts 30 days (the longest
+window the page shows); the repository ignores older rows and prunes them on the
+next ack.
+
+`DELETE` is a 404 when there is nothing to undo, including a key that is not
+64 hex. A failing ack lookup on `GET` marks the feed `partial` with
+`acknowledgements` in `failedSources`, and every row reads as not acknowledged.
+
+In the UI, **Show** defaults to *Not acknowledged*; the note under the toolbar
+counts the hidden ones, and *Acknowledged* lists them with **Undo acknowledge**.
+The stat cards count what **Show** lets through.
+
+*Mute this rule* in the row menu is still a placeholder (a toast only).
+
 ## What it reports
 
 | Kind | Source | Transition-logged? |
@@ -148,12 +183,18 @@ every other source's events off the page.
 | | |
 | --- | --- |
 | `since` | ISO timestamp, or `last_login` (the marker). Future → 400. Older than 30d → 400. |
-| `window` | `30m` / `6h` / `7d`, or a bare number of minutes. Default 24h, max 30d. |
+| `window` | `30m` / `6h` / `7d`, or a bare number of minutes. Default 24h, max 30d. With `since=last_login` it is only the fallback for a user who has no marker yet — a marker wins over it. |
 | `limit` | 1..500, default 200 |
 | `offset` | ≥ 0 |
 
 An unparseable `window` is a **400, not a silent fallback to the default** — on
 this page, quietly showing the wrong time range is worse than an error.
+
+The dashboard's Window picker therefore sends ONE of the two: "Since last seen"
+(the default) sends `since=last_login&window=24h`, a fixed window (30m/6h/24h/7d)
+sends `window` alone. Sending the marker with every request made the picker do
+nothing for anyone who had ever pressed "Mark as seen". Mark as seen switches
+the picker back to "Since last seen".
 
 ## Empty is an answer
 
@@ -172,12 +213,12 @@ and every mapper labels from it): that is a 500.
 
 ## Files
 
-- Migration `migrations/074_add_user_last_seen_changes.sql`
+- Migrations `migrations/074_add_user_last_seen_changes.sql`, `migrations/115_change_acks.sql`
 - Pure read-model `src/changes/changeFeed.js` (mappers, window, correlation, ordering, grouping)
 - Condition families `src/changes/indications.js`
 - Fan-out `src/changes/changesService.js`
 - Vocabulary (event vs. incident vs. situation vs. probe outage): [events.md](events.md)
 - Router `src/routes/changes.js`
-- Fleet-wide repo additions: `remediationPlaybooksRepository.listRunsBetween`, `configSnapshotsRepository.listBetween`, `usersRepository.get/setLastSeenChanges`
+- Fleet-wide repo additions: `remediationPlaybooksRepository.listRunsBetween`, `configSnapshotsRepository.listBetween`, `usersRepository.get/setLastSeenChanges`, `usersRepository.listChangeAcks/ackChange/unackChange`
 - UI `views.changes` + `changesRowEl()` in `public/app.js`, `.chg-*` CSS, `PAGE_INFO.changes`
-- Tests `test/changesFeed.test.js` (pure), `test/changesApi.test.js` (HTTP)
+- Tests `test/changesFeed.test.js` (pure), `test/changesApi.test.js` (HTTP), `test/changesAck.test.js` + `test/changeAcksRepository.test.js` (acknowledge), `test/changesView.test.js` (UI)

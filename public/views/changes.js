@@ -41,6 +41,9 @@
       // view, because a window the user chose must survive leaving the page and
       // the marker moves only on an explicit "Mark as seen".
       var state = {
+        // Acknowledged rows are hidden by default: acknowledging is how a
+        // reader says "I have dealt with this one", so it leaves the list.
+        status: 'open',
         severity: '',
         host: '',
         sort: { key: 'time', dir: 'desc' },
@@ -55,7 +58,7 @@
           api('/api/changes/seen', { method: 'POST', body: {} })
             .then(function () {
               ui.toast(t('changes.marked'), t('changes.markedDetail'));
-              deps.setSince('last_login');
+              deps.setWindow(deps.LAST_SEEN);
               return load();
             })
             .catch(function (e) { ui.toast(t('changes.title'), errText(e), { bad: true }); })
@@ -73,6 +76,7 @@
               el('p', {}, t('changes.help.p1')),
               el('p', {}, t('changes.help.p2')),
               el('p', {}, t('changes.help.p3')),
+              el('p', {}, t('changes.help.p4')),
             ];
           },
         },
@@ -96,6 +100,11 @@
                 ['WARN', t('changes.group.WARN')], ['INFO', t('changes.group.INFO')]],
               onchange: function (e) { state.severity = e.target.value; onChange(); },
             })),
+            ui.filter(t('changes.filter.status'), ui.select({
+              label: t('changes.filter.status'), value: state.status,
+              options: [['open', t('changes.status.open')], ['acked', t('changes.status.acked')], ['all', t('changes.status.all')]],
+              onchange: function (e) { state.status = e.target.value; onChange(); },
+            })),
             ui.filter(t('changes.filter.host'), el('input', {
               type: 'search', value: state.host, placeholder: t('changes.filter.hostPlaceholder'),
               'aria-label': t('changes.filter.host'), size: '16',
@@ -106,6 +115,23 @@
             ui.button('secondary', t('changes.export'), { onclick: deps.exportCsv }),
           ],
         });
+      }
+
+      // Acknowledge / undo, for the caller's own view only (POST/DELETE
+      // /api/changes/ack). The row is updated in place and the list redrawn, so
+      // with "Not acknowledged" selected it leaves the list straight away.
+      function setAck(ev, on) {
+        var req = on
+          ? api('/api/changes/ack', { method: 'POST', body: { key: ev.ackKey } })
+          : api('/api/changes/ack/' + encodeURIComponent(ev.ackKey), { method: 'DELETE' });
+        return req
+          .then(function (res) {
+            ev.acknowledgedAt = on ? ((res && res.acknowledgedAt) || new Date().toISOString()) : null;
+            ui.closeDrawer();
+            ui.toast(on ? t('changes.act.acked') : t('changes.act.unacked'), ev.summary);
+            draw();
+          })
+          .catch(function (e) { ui.toast(t('changes.title'), errText(e), { bad: true }); });
       }
 
       function hostName(id) { return names[id] || (t('changes.agentN', { id: id })); }
@@ -128,7 +154,7 @@
             [ui.fmt.short(ev.firstAt || ev.timestamp), t('changes.drawer.first')],
             [ui.fmt.short(ev.timestamp), t('changes.drawer.last')],
             [null, t('changes.drawer.seen', { count: Number(ev.count) || 1 })],
-          ])),
+          ].concat(ev.acknowledgedAt ? [[ui.fmt.short(ev.acknowledgedAt), t('changes.drawer.acked')]] : []))),
         ];
         ui.openDrawer({
           title: ev.summary,
@@ -136,7 +162,11 @@
           meta: ui.fmt.abs(ev.timestamp),
           row: tr,
           sections: sections.filter(Boolean),
-          footer: ev.agentId == null ? null : ui.drawerFooter([], [
+          footer: ui.drawerFooter([
+            ev.ackKey ? ui.button('secondary', ev.acknowledgedAt ? t('changes.act.unack') : t('changes.act.ack'), {
+              onclick: function () { setAck(ev, !ev.acknowledgedAt); },
+            }) : null,
+          ].filter(Boolean), ev.agentId == null ? [] : [
             ui.button('primary', t('changes.drawer.openHost'), {
               onclick: function () { ui.closeDrawer(); openAgent(Number(ev.agentId)); },
             }),
@@ -153,14 +183,19 @@
               time: ui.fmt.short(ev.timestamp),
               severity: ui.badge(SEV_TONE[ev.severity] || 'info', String(ev.severity || '')),
               type: ui.meta(kindLabel(ev.kind)),
-              title: ev.summary,
+              title: ev.acknowledgedAt
+                ? el('span', {}, ev.summary, ' ', ui.badge('neutral', t('changes.status.acked')))
+                : ev.summary,
               // Host is a link in its own column, never a chip on the title.
               host: ev.agentId == null ? ui.meta('—')
                 : ui.hostLink(hostName(ev.agentId), function () { openAgent(Number(ev.agentId)); }),
               // Metadata as muted text, not a chip.
               count: ui.meta(count > 1 ? count + '×' : '—'),
               actions: ui.rowActions(
-                { label: t('changes.act.ack'), onclick: function () { ui.toast(t('changes.act.acked'), ev.summary); } },
+                ev.ackKey ? {
+                  label: ev.acknowledgedAt ? t('changes.act.unack') : t('changes.act.ack'),
+                  onclick: function () { setAck(ev, !ev.acknowledgedAt); },
+                } : null,
                 [
                   { label: t('changes.act.open'), onclick: function () { openRowDrawer(ev, null); } },
                   ev.agentId == null ? null : { label: t('changes.act.host'), onclick: function () { openAgent(Number(ev.agentId)); } },
@@ -196,8 +231,18 @@
 
       var data = null;
 
+      // The rows the status selector lets through. The stat strip counts these,
+      // so acknowledging a WARN takes it off the WARN card too.
+      function byStatus() {
+        return (data.events || []).filter(function (ev) {
+          if (state.status === 'open') return !ev.acknowledgedAt;
+          if (state.status === 'acked') return !!ev.acknowledgedAt;
+          return true;
+        });
+      }
+
       function visible() {
-        var out = (data.events || []).filter(function (ev) {
+        var out = byStatus().filter(function (ev) {
           if (state.severity && ev.severity !== state.severity) return false;
           if (state.host) {
             var n = ev.agentId == null ? '' : hostName(ev.agentId);
@@ -223,7 +268,10 @@
 
       function draw() {
         var counts = { CRIT: 0, WARN: 0, INFO: 0 };
-        (data.events || []).forEach(function (ev) { if (counts[ev.severity] !== undefined) counts[ev.severity]++; });
+        var pool = byStatus();
+        var ackedHidden = state.status === 'open'
+          ? (data.events || []).filter(function (ev) { return ev.acknowledgedAt; }).length : 0;
+        pool.forEach(function (ev) { if (counts[ev.severity] !== undefined) counts[ev.severity]++; });
         var pick = function (sev) {
           return function () { state.severity = state.severity === sev ? '' : sev; draw(); };
         };
@@ -231,13 +279,14 @@
           { value: counts.CRIT, label: t('changes.group.CRIT'), tone: 'crit', active: state.severity === 'CRIT', onclick: pick('CRIT') },
           { value: counts.WARN, label: t('changes.group.WARN'), tone: 'warn', active: state.severity === 'WARN', onclick: pick('WARN') },
           { value: counts.INFO, label: t('changes.group.INFO'), tone: 'info', active: state.severity === 'INFO', onclick: pick('INFO') },
-          { value: (data.events || []).length, label: t('changes.total'), active: state.severity === '', onclick: function () { state.severity = ''; draw(); } },
+          { value: pool.length, label: t('changes.total'), active: state.severity === '', onclick: function () { state.severity = ''; draw(); } },
         ]));
 
         var rows = visible();
         var kids = [toolbar(draw)];
         kids.push(ui.inlineNote(t('changes.since', { when: ui.fmt.abs(data.since) })
-          + (data.correlated > 0 ? ' · ' + t('changes.correlated', { rows: data.total, raw: data.rawTotal }) : '')));
+          + (data.correlated > 0 ? ' · ' + t('changes.correlated', { rows: data.total, raw: data.rawTotal }) : '')
+          + (ackedHidden > 0 ? ' · ' + t('changes.ackedHidden', { n: ackedHidden }) : '')));
         // A partial result is a fact about the DATA, so it sits above the table
         // as an inline note — never a banner, never hidden behind the (?).
         if (data.partial && (data.failedSources || []).length) {
@@ -250,15 +299,15 @@
             rows.length ? table(rows) : ui.emptyState({
               title: t('changes.empty', { when: ui.fmt.abs(data.since) }),
               body: t('changes.emptyHint'),
-              action: state.severity || state.host
+              action: state.severity || state.host || state.status !== 'open'
                 ? ui.button('secondary', t('changes.clearFilters'), {
-                  onclick: function () { state.severity = ''; state.host = ''; draw(); },
+                  onclick: function () { state.severity = ''; state.host = ''; state.status = 'open'; draw(); },
                 })
                 : null,
             }),
           ],
           foot: rows.length ? [
-            el('span', {}, t('changes.showing', { shown: rows.length, total: (data.events || []).length })),
+            el('span', {}, t('changes.showing', { shown: rows.length, total: pool.length })),
             el('div', { class: 'foot-right' },
               ui.button('secondary', '‹ ' + t('changes.prev'), { disabled: true }),
               ui.button('secondary', t('changes.next') + ' ›', { disabled: true })),

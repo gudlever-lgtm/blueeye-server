@@ -8458,10 +8458,20 @@ async function globalSearch(q) {
 // that would drift from the timeline's.
 
 // Window presets offered in the picker, plus the "since I last looked" mode
-// that is the whole point.
-const CHANGES_WINDOWS = ['30m', '6h', '24h', '7d'];
-let changesWindow = '24h';
-let changesSince = 'last_login';
+// that is the whole point. The two are exclusive: a fixed window is sent
+// WITHOUT `since`, because the server lets `since=last_login` win over
+// `window` whenever the user has a marker — sending both made the picker a
+// no-op for everyone who had ever pressed "Mark as seen".
+const CHANGES_LAST_SEEN = 'last_seen';
+const CHANGES_WINDOWS = [CHANGES_LAST_SEEN, '30m', '6h', '24h', '7d'];
+let changesWindow = CHANGES_LAST_SEEN;
+
+// The query for the current choice. `window` rides along with the marker mode
+// as the fallback the server uses when there is no marker yet.
+function changesQuery() {
+  if (changesWindow === CHANGES_LAST_SEEN) return new URLSearchParams({ since: 'last_login', window: '24h' });
+  return new URLSearchParams({ window: changesWindow });
+}
 
 function changesRowEl(event, nameFor, showIndication = true) {
   // formatTime: without it renderRow falls back to String(iso) and the column
@@ -8540,15 +8550,11 @@ function getChangesView() {
   if (typeof window === 'undefined' || !window.ChangesView || !ui) return null;
   changesView = window.ChangesView.create({
     el, api, t, errText, openAgent, ui,
-    WINDOWS: CHANGES_WINDOWS,
+    WINDOWS: CHANGES_WINDOWS.map((w) => [w, w === CHANGES_LAST_SEEN ? t('changes.window.lastSeen') : w]),
+    LAST_SEEN: CHANGES_LAST_SEEN,
     getWindow: () => changesWindow,
     setWindow: (w) => { if (CHANGES_WINDOWS.includes(w)) changesWindow = w; },
-    setSince: (s) => { changesSince = s; },
-    feedPath: () => {
-      const qs = new URLSearchParams({ window: changesWindow });
-      if (changesSince) qs.set('since', changesSince);
-      return `/api/changes?${qs.toString()}`;
-    },
+    feedPath: () => `/api/changes?${changesQuery().toString()}`,
     exportCsv: () => exportChangesCsv(),
   });
   return changesView;
@@ -8564,9 +8570,7 @@ views.changes = async () => {
 // rows, so a truncated page does not become a truncated export.
 async function exportChangesCsv() {
   try {
-    const qs = new URLSearchParams({ window: changesWindow });
-    if (changesSince) qs.set('since', changesSince);
-    const data = await api(`/api/changes?${qs.toString()}`);
+    const data = await api(`/api/changes?${changesQuery().toString()}`);
     const rows = [['time', 'severity', 'kind', 'type', 'summary', 'agent', 'count']];
     for (const e of data.events || []) {
       rows.push([e.timestamp, e.severity, e.kind, e.type, e.summary, e.agentId == null ? '' : e.agentId, e.count || 1]);

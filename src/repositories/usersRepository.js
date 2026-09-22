@@ -24,6 +24,10 @@ function parsePreferences(value) {
 }
 
 // Data-access layer for the `users` table.
+// How long a Changes-page acknowledgement lasts (migration 115). Matches the
+// route's MAX_WINDOW_MS: past it, no window can show the row it was about.
+const CHANGE_ACK_TTL_DAYS = 30;
+
 function createUsersRepository(db) {
   const { pool } = db;
 
@@ -222,6 +226,43 @@ function createUsersRepository(db) {
     return res.affectedRows > 0;
   }
 
+  // Per-user acknowledgements on the Changes page (migration 115). Keyed by the
+  // feed row's ackKey; older than CHANGE_ACK_TTL_DAYS is treated as gone, which
+  // is also the longest window the page can show.
+  //
+  // Returns Map<ackKey, Date>.
+  async function listChangeAcks(userId) {
+    const [rows] = await pool.query(
+      `SELECT ack_key, acked_at FROM change_acks
+        WHERE user_id = ? AND acked_at >= (NOW(3) - INTERVAL ${CHANGE_ACK_TTL_DAYS} DAY)`,
+      [userId]
+    );
+    const out = new Map();
+    for (const r of rows) out.set(String(r.ack_key), r.acked_at instanceof Date ? r.acked_at : new Date(r.acked_at));
+    return out;
+  }
+
+  // Acknowledges (or re-acknowledges, moving the time forward) one row, and
+  // prunes this user's expired acknowledgements on the way, so the table stays
+  // bounded without a sweep of its own.
+  async function ackChange(userId, key, at) {
+    await pool.query(
+      'INSERT INTO change_acks (user_id, ack_key, acked_at) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE acked_at = VALUES(acked_at)',
+      [userId, key, at]
+    );
+    await pool.query(
+      `DELETE FROM change_acks WHERE user_id = ? AND acked_at < (NOW(3) - INTERVAL ${CHANGE_ACK_TTL_DAYS} DAY)`,
+      [userId]
+    );
+    return at;
+  }
+
+  // Undo. True when there was an acknowledgement to remove.
+  async function unackChange(userId, key) {
+    const [res] = await pool.query('DELETE FROM change_acks WHERE user_id = ? AND ack_key = ?', [userId, key]);
+    return res.affectedRows > 0;
+  }
+
   return {
     findAll,
     findById,
@@ -237,8 +278,11 @@ function createUsersRepository(db) {
     getPreferences,
     getLastSeenChanges,
     setLastSeenChanges,
+    listChangeAcks,
+    ackChange,
+    unackChange,
     updatePreferences,
   };
 }
 
-module.exports = { createUsersRepository };
+module.exports = { createUsersRepository, CHANGE_ACK_TTL_DAYS };

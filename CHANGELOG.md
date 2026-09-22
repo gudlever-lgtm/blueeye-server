@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.186.0 — Acknowledge on the Changes page does something
+
+**The Acknowledge button on a Changes row only showed a toast.** Nothing was
+stored and the row stayed. It now acknowledges the row for you
+(`POST /api/changes/ack`, migration 115 `change_acks`): the row leaves the
+default *Not acknowledged* list, the note under the toolbar counts how many are
+hidden, and **Show → Acknowledged** lists them with **Undo acknowledge**
+(`DELETE /api/changes/ack/:key`).
+
+Per user, because the feed owns no events — most rows (a silent agent, version
+skew) exist in no table. Each row carries an `ackKey`, a hash of the condition
+it describes, so an ack survives reloads. A condition that happens again after
+the ack comes back; a silent agent that reports and goes silent again is a new
+row. Acks last 30 days. See `docs/changes-feed.md`.
+
+*Mute this rule* is still a placeholder.
+
 ## 0.185.0 — Errors that name their own fix
 
 **A failing AI provider was reported as a bug in this server.** Every assistant

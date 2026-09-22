@@ -9,9 +9,18 @@ const { ROLES } = require('../auth/roles');
 //
 //   GET  /api/changes?since=<iso|last_login>&window=<duration>&limit=&offset=
 //   POST /api/changes/seen                       — move the per-user marker
+//   POST   /api/changes/ack       { key }        — acknowledge one row (own view)
+//   DELETE /api/changes/ack/:key                 — undo it
 //
 // viewer+. Read-only aggregation over existing sources; owns no tables beyond
-// the per-user marker column (migration 074).
+// the per-user marker column (migration 074) and the per-user acknowledgements
+// (migration 115).
+//
+// ACKNOWLEDGEMENT RULE: a row is acknowledged while (a) the caller has an ack
+// for its ackKey and (b) nothing newer has happened — its newest timestamp is
+// not after the ack. A condition that fires again after it was acknowledged is
+// shown again. Current-state rows carry their state in the key instead (see
+// ackKeyFor), because their timestamp is always "now".
 //
 // THE MARKER RULE: `since=last_login` reads users.last_seen_changes, and that
 // column moves ONLY on the explicit POST — never on a GET. A marker that
@@ -50,7 +59,22 @@ function parseIntParam(raw, { min, max, fallback }) {
   return n;
 }
 
-function createChangesRouter({ changesService, usersRepo = null, auditLogger = null }) {
+// A row's ackKey is a sha256 hex digest (ackKeyFor in changeFeed.js).
+const ACK_KEY_RE = /^[0-9a-f]{64}$/;
+
+function isAcknowledged(ev, ackedAt) {
+  if (!ackedAt) return false;
+  if (ev.currentState) return true;
+  const ts = ev.timestamp ? Date.parse(ev.timestamp) : NaN;
+  return Number.isFinite(ts) && ts <= ackedAt.getTime();
+}
+
+function createChangesRouter({ changesService, usersRepo = null, auditLogger = null, logger = null }) {
+  const canAck = () => usersRepo
+    && typeof usersRepo.listChangeAcks === 'function'
+    && typeof usersRepo.ackChange === 'function'
+    && typeof usersRepo.unackChange === 'function';
+
   const router = express.Router();
   const reader = requireRole(ROLES.VIEWER, ROLES.OPERATOR, ROLES.ADMIN);
 
@@ -92,10 +116,39 @@ function createChangesRouter({ changesService, usersRepo = null, auditLogger = n
 
     const feed = await changesService.changesSince({ from, to, limit, offset });
 
+    // Annotate with the caller's acknowledgements. A failure here must not blank
+    // the page a shift starts on: the rows are still true, they just cannot say
+    // which ones this user has dealt with — so it is reported like any other
+    // failed source, and every row reads as not acknowledged.
+    let acks = new Map();
+    const failedSources = [...(feed.failedSources || [])];
+    if (canAck()) {
+      try {
+        acks = await usersRepo.listChangeAcks(req.user.id);
+      } catch (err) {
+        failedSources.push('acknowledgements');
+        if (logger && typeof logger.warn === 'function') logger.warn(`changes: acknowledgements failed (${err.message})`);
+      }
+    }
+    const annotate = (ev) => {
+      const at = acks.get(ev.ackKey);
+      return { ...ev, acknowledgedAt: isAcknowledged(ev, at) ? at.toISOString() : null };
+    };
+    const events = (feed.events || []).map(annotate);
+    const groups = (feed.groups || []).map((g) => ({ ...g, events: (g.events || []).map(annotate) }));
+
     // An empty window is 200 with an empty list AND the reference time, never
     // 404 and never a blank body — "nothing changed since 06:00" is the answer,
     // and the timestamp is the half that makes it meaningful.
-    return res.json({ ...feed, sinceMode });
+    return res.json({
+      ...feed,
+      events,
+      groups,
+      acknowledged: events.filter((e) => e.acknowledgedAt).length,
+      partial: failedSources.length > 0,
+      failedSources,
+      sinceMode,
+    });
   }));
 
   // POST /api/changes/seen — mark the feed as read up to `at` (default now).
@@ -134,7 +187,46 @@ function createChangesRouter({ changesService, usersRepo = null, auditLogger = n
     return res.json({ lastSeenChanges: stored ? stored.toISOString() : at.toISOString() });
   }));
 
+  // POST /api/changes/ack — acknowledge one row, for the caller only.
+  //
+  // viewer+ for the same reason as /seen: it writes only the caller's own view.
+  // The key is not looked up in the feed first — rebuilding a dozen sources to
+  // validate one click is not worth it, and an ack for a key no row carries is
+  // harmless (it matches nothing and expires). It IS validated for shape.
+  router.post('/ack', requireAuth, reader, asyncHandler(async (req, res) => {
+    if (!canAck()) return res.status(503).json({ error: 'Acknowledgements are not available' });
+    const key = req.body && typeof req.body.key === 'string' ? req.body.key : '';
+    if (!ACK_KEY_RE.test(key)) return res.status(400).json({ error: 'key must be a row ackKey (64 hex characters)' });
+
+    const at = new Date();
+    await usersRepo.ackChange(req.user.id, key, at);
+    if (auditLogger) {
+      await auditLogger.record(req, {
+        category: 'user', action: 'change_acknowledged', target: String(req.user.id),
+        detail: `acknowledged change ${key.slice(0, 12)}`,
+      });
+    }
+    return res.json({ key, acknowledgedAt: at.toISOString() });
+  }));
+
+  // DELETE /api/changes/ack/:key — undo. 404 when there was nothing to undo.
+  router.delete('/ack/:key', requireAuth, reader, asyncHandler(async (req, res) => {
+    if (!canAck()) return res.status(503).json({ error: 'Acknowledgements are not available' });
+    // A key that is not even the right shape cannot have been acknowledged: it
+    // is a 404 like any other missing id, answered without a query.
+    const key = String(req.params.key || '');
+    const removed = ACK_KEY_RE.test(key) ? await usersRepo.unackChange(req.user.id, key) : false;
+    if (!removed) return res.status(404).json({ error: 'That change is not acknowledged' });
+    if (auditLogger) {
+      await auditLogger.record(req, {
+        category: 'user', action: 'change_unacknowledged', target: String(req.user.id),
+        detail: `removed acknowledgement ${key.slice(0, 12)}`,
+      });
+    }
+    return res.status(204).end();
+  }));
+
   return router;
 }
 
-module.exports = { createChangesRouter, parseWindow, MAX_WINDOW_MS, MAX_LIMIT, DEFAULT_WINDOW_MS };
+module.exports = { createChangesRouter, isAcknowledged, ACK_KEY_RE, parseWindow, MAX_WINDOW_MS, MAX_LIMIT, DEFAULT_WINDOW_MS };

@@ -33,6 +33,9 @@ const VIRTUAL_IFACE_RE = new RegExp('^(' + [
   'macvtap\\d+',                     // macvtap
   'cni\\d+', 'cali[0-9a-f]+', 'flannel\\.?\\d*', 'cilium_\\w+', // common K8s CNIs
   'vEthernet \\(.+\\)',             // Windows Hyper-V virtual switch ports
+  'utun\\d+', 'awdl\\d+', 'llw\\d+',  // macOS VPN tunnels, AirDrop / low-latency WLAN
+  'anpi\\d+', 'ap\\d+', 'gif\\d+', 'stf\\d+', // macOS internal, hotspot, 6in4 tunnels
+  'bridge\\d+',                     // macOS Thunderbolt Bridge / Internet Sharing
 ].join('|') + ')$', 'i');
 
 // Link state to the lowercase operstate vocabulary. Windows agents before

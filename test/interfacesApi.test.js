@@ -91,6 +91,27 @@ test('computeInterfaceHealth reads raw Windows Get-NetAdapter Status (agents < 0
   assert.equal(by['vEthernet (Default Switch)'].status, 'ok');
 });
 
+test('isVirtual treats macOS software interfaces as virtual, enN as physical', () => {
+  for (const n of ['utun0', 'utun3', 'awdl0', 'llw0', 'anpi0', 'ap1', 'gif0', 'stf0', 'bridge0']) {
+    assert.equal(isVirtual(n), true, `expected ${n} virtual`);
+  }
+  for (const n of ['en0', 'en5']) assert.equal(isVirtual(n), false, `expected ${n} physical`);
+});
+
+test('computeInterfaceHealth: an inactive Thunderbolt Bridge does not flag a Mac DOWN', () => {
+  const by = Object.fromEntries(computeInterfaceHealth({ elapsedSec: 1, interfaces: [
+    { iface: 'en0', operStatus: 'up', speedMbps: 866, rxBytesPerSec: 1000 },
+    { iface: 'bridge0', operStatus: 'down' },
+    { iface: 'awdl0', operStatus: 'down' },
+    { iface: 'en7', operStatus: 'down' },
+  ] }).map((i) => [i.iface, i]));
+  assert.equal(by.en0.status, 'ok');
+  assert.equal(by.en0.utilPct, round1(1000 * 8 / 866e6 * 100));
+  assert.equal(by.bridge0.status, 'ok');
+  assert.equal(by.awdl0.status, 'ok');
+  assert.equal(by.en7.status, 'down'); // an unplugged real port still reads DOWN
+});
+
 test('isVirtual treats Hyper-V vEthernet ports as virtual, plain Windows NICs as physical', () => {
   assert.equal(isVirtual('vEthernet (Default Switch)'), true);
   assert.equal(isVirtual('vEthernet (WSL)'), true);

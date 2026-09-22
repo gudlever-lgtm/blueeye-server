@@ -68,6 +68,35 @@ test('computeInterfaceHealth still flags errors/util on a virtual interface that
   assert.equal(d.status, 'bad'); // errors are real even on a virtual port
 });
 
+test('computeInterfaceHealth reads raw Windows Get-NetAdapter Status (agents < 0.37.3)', () => {
+  const out = computeInterfaceHealth({
+    elapsedSec: 1,
+    interfaces: [
+      { iface: 'Ethernet', operStatus: 'Up', speedMbps: 1000 },
+      { iface: 'Wi-Fi', operStatus: 'Disconnected' },
+      { iface: 'Ethernet 2', operStatus: 'Disabled' },
+      { iface: 'Ethernet 3', operStatus: 'Not Present' },
+      { iface: 'vEthernet (Default Switch)', operStatus: 'Disconnected' },
+    ],
+  });
+  const by = Object.fromEntries(out.map((i) => [i.iface, i]));
+  assert.equal(by.Ethernet.status, 'ok');
+  assert.equal(by.Ethernet.operStatus, 'up');
+  assert.equal(by.Ethernet.linkDown, false);
+  assert.equal(by['Wi-Fi'].status, 'down');
+  assert.equal(by['Wi-Fi'].operStatus, 'down');
+  assert.equal(by['Ethernet 2'].status, 'down');
+  assert.equal(by['Ethernet 3'].status, 'down');
+  assert.equal(by['vEthernet (Default Switch)'].virtual, true); // Hyper-V switch port
+  assert.equal(by['vEthernet (Default Switch)'].status, 'ok');
+});
+
+test('isVirtual treats Hyper-V vEthernet ports as virtual, plain Windows NICs as physical', () => {
+  assert.equal(isVirtual('vEthernet (Default Switch)'), true);
+  assert.equal(isVirtual('vEthernet (WSL)'), true);
+  for (const n of ['Ethernet', 'Ethernet 2', 'Wi-Fi']) assert.equal(isVirtual(n), false, `expected ${n} physical`);
+});
+
 // ---- route ----------------------------------------------------------------
 
 test('GET /api/interfaces returns derived health from the latest result (200)', async () => {

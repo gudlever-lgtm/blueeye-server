@@ -32,7 +32,19 @@ const VIRTUAL_IFACE_RE = new RegExp('^(' + [
   '(gre|gretap|sit|ip6tnl|ip6gre|erspan)\\d*', // tunnels
   'macvtap\\d+',                     // macvtap
   'cni\\d+', 'cali[0-9a-f]+', 'flannel\\.?\\d*', 'cilium_\\w+', // common K8s CNIs
+  'vEthernet \\(.+\\)',             // Windows Hyper-V virtual switch ports
 ].join('|') + ')$', 'i');
+
+// Link state to the lowercase operstate vocabulary. Windows agents before
+// 0.37.3 send Get-NetAdapter's Status raw ("Up", "Disconnected", "Disabled",
+// "Not Present"); compared case-sensitively, every Windows link read DOWN.
+const WIN_OPER_STATUS = { disconnected: 'down', disabled: 'down' };
+function normalizeOperStatus(status) {
+  if (typeof status !== 'string') return null;
+  const key = status.replace(/[\s_-]/g, '').toLowerCase();
+  if (!key) return null;
+  return WIN_OPER_STATUS[key] || key;
+}
 
 // Is this interface a virtual/software port (container/VM/VPN/loopback)?
 function isVirtual(name) {
@@ -73,7 +85,7 @@ function computeInterfaceHealth(traffic) {
     const lateCollPerSec = lateCollisions === null ? null : round2(lateCollisions / elapsed);
     const errPerSec = round2((rxErrors + txErrors) / elapsed);
     const dropPerSec = round2((rxDrop + txDrop) / elapsed);
-    const operStatus = i.operStatus || null;
+    const operStatus = normalizeOperStatus(i.operStatus);
     const virtual = isVirtual(i.iface);
     const linkDown = !!operStatus && !['up', 'unknown', 'dormant'].includes(operStatus);
     let status = 'ok';

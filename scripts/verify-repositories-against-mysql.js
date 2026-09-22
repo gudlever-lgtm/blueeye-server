@@ -400,6 +400,17 @@ check('snmp devices: the credential chain resolves on the server, once per devic
     host: '10.14.0.12', credentialProfileId: profile.id, version: '2c',
   });
 
+  // WHETHER a device has its own community is a different question from what
+  // it is, and the setup checklist has to be able to ask it: a switch carrying
+  // its own credential needs nothing resolved. Computed in SQL, so the
+  // encrypted value never leaves the database on this path.
+  const listed = await repo.list({});
+  const ownListed = listed.find((d) => d.id === own.id);
+  const profileListed = listed.find((d) => d.id === viaProfile.id);
+  assert.strictEqual(ownListed.hasCommunity, true);
+  assert.strictEqual(ownListed.community, undefined, 'and still never the value');
+  assert.strictEqual(profileListed.hasCommunity, false, 'a device with none of its own says so');
+
   // The ONE read that decrypts, and the whole point of the chain: a device with
   // its own credential keeps it; one without inherits the profile's.
   const withSecrets = await repo.listForAgentWithSecret(null);

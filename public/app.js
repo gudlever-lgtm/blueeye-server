@@ -10058,7 +10058,7 @@ views.map = async () => {
 
 // ---- Destinations map (internal sites + external destinations + selection) ----
 const geoState = { map: null, ext: null, hosts: null, rect: null, dests: [], internalHosts: [], sinceIso: '',
-  selecting: false, rectStart: null, healthByHost: null, pathLayer: null, config: null, mapOpts: null };
+  selecting: false, rectStart: null, healthByHost: null, traces: new Map(), config: null, mapOpts: null };
 
 // Drops the Leaflet objects, keeping the data they were drawn from: mounting a
 // new map has to tear the old one down WITHOUT throwing away the overview it is
@@ -10066,7 +10066,7 @@ const geoState = { map: null, ext: null, hosts: null, rect: null, dests: [], int
 function teardownGeoMap() {
   if (geoState.map) { try { geoState.map.remove(); } catch { /* ignore */ } }
   geoState.map = null; geoState.ext = null; geoState.hosts = null; geoState.rect = null;
-  geoState.selecting = false; geoState.rectStart = null; geoState.pathLayer = null;
+  geoState.selecting = false; geoState.rectStart = null; geoState.traces = new Map();
 }
 function stopGeo() {
   teardownGeoMap();
@@ -10257,107 +10257,219 @@ function getDestinationsView() {
       return out;
     },
     loadPathTargets: async (agentId, list) => {
-      list.replaceChildren();
+      if (list) list.replaceChildren();
       pathTargetTypes.clear();
-      if (!agentId) return;
+      if (!agentId) return [];
       try {
         const data = await api(`/api/probes/latest?agentId=${encodeURIComponent(agentId)}`);
         for (const r of (data.results || [])) {
           if (r.type !== 'traceroute' && r.type !== 'tcptraceroute') continue;
           if (!pathTargetTypes.has(r.target)) pathTargetTypes.set(r.target, r.type);
         }
-        for (const target of pathTargetTypes.keys()) list.append(el('option', { value: target }));
+        if (list) for (const target of pathTargetTypes.keys()) list.append(el('option', { value: target }));
       } catch { /* leave the list empty */ }
+      return [...pathTargetTypes.keys()];
     },
-    // Draws the path and resolves with the graph (plus its geolocated stops),
-    // or null when a fresh traceroute had to be sent and produced nothing yet.
-    showPath: async (agentId, target) => {
+    // Draws one trace and resolves with the graph (plus its geolocated stops),
+    // or { empty, reason } when a run produced no path.
+    //
+    // `fresh` always runs a new trace; otherwise a stored path is shown and a
+    // run is only requested when there is none. While a run is in flight,
+    // `onLive(nodes)` is called with every hop the agent streams, and the same
+    // hops are drawn on the map as they arrive.
+    showPath: async (agentId, target, { fresh = false, onLive = null } = {}) => {
       if (!geoState.map) return null;
       const probeType = pathTargetTypes.get(target) || 'traceroute';
+      const key = traceKey(agentId, probeType, target);
       const qs = `agentId=${encodeURIComponent(agentId)}&target=${encodeURIComponent(target)}&probeType=${encodeURIComponent(probeType)}`;
-      let data = await api(`/api/probes/path?${qs}`);
-      if (!(data.nodes && data.nodes.length)) {
-        // Nothing stored yet: ask for a run, then poll.
-        //
-        // The run used to be hard-coded to 'traceroute' while the QUERY filtered
-        // on probeType. For a target last traced with tcptraceroute that stored
-        // a traceroute result the poll was not looking for, so it never found
-        // anything and the path never appeared. Run what we are asking for.
-        await api(`/agents/${agentId}/probe`, { method: 'POST', body: { type: probeType, host: target } });
-        // Poll for a path OR for a recorded failure, whichever lands first. A
-        // probe that cannot run (no traceroute binary, -T without root) reports
-        // back within seconds; waiting out the full path timeout before looking
-        // meant the operator stared at nothing for a minute and a half to be
-        // told something the agent had already said.
-        const out = await pollForPath(qs, () => pathFailureReason(agentId, target, probeType));
-        if (out && out.nodes) data = out;
-        else return { empty: true, target, probeType, reason: (out && out.reason) || null };
-      }
-      return drawGeoPath(data);
+      const data = await api(`/api/probes/path?${qs}`);
+      if (!fresh && data.nodes && data.nodes.length) return drawGeoPath(key, data, { fit: true });
+      const out = await runTrace({ key, agentId, target, probeType, qs, before: data, onLive });
+      if (out && out.nodes && out.nodes.length) return drawGeoPath(key, out, { fit: true });
+      return { key, empty: true, target, probeType, reason: (out && out.reason) || null, timedOut: !!(out && out.timedOut) };
     },
-    clearPath: () => { if (geoState.pathLayer) geoState.pathLayer.clearLayers(); },
+    traceKey: (agentId, target) => traceKey(agentId, pathTargetTypes.get(target) || 'traceroute', target),
+    // No key clears every trace on the map.
+    clearPath: (key) => {
+      for (const [k, tr] of geoState.traces) {
+        if (key && k !== key) continue;
+        if (geoState.map) geoState.map.removeLayer(tr.layer);
+        geoState.traces.delete(k);
+      }
+    },
+    focusPath: (key) => {
+      const tr = geoState.traces.get(key);
+      if (!tr || !geoState.map || !tr.latlngs || !tr.latlngs.length) return;
+      try { geoState.map.fitBounds(tr.latlngs, { padding: [40, 40], maxZoom: 7 }); } catch { /* single point */ }
+    },
   });
   return destinationsView;
 }
 
-// Waits for a freshly-requested trace to land. A traceroute that walks 30 hops
-// with a timeout on several of them routinely takes longer than a minute — the
-// old 4 attempts at 4 s gave up after SIXTEEN SECONDS and reported no path for
-// a probe that was still perfectly healthy and running.
+// One map layer per trace, keyed by agent + type + target, so several traces
+// can sit on the map at once and each can be removed on its own.
+function traceKey(agentId, probeType, target) {
+  return `${agentId}|${probeType}|${target}`;
+}
+
+// Live traces: key -> { onHop(node), onDone(result) }. Fed by the dashboard
+// socket (`trace-hop` while the agent runs, `probe-result` when it lands).
+const traceWatchers = new Map();
+// A trace already in flight. A second click on the same target joins it
+// instead of sending the agent another traceroute.
+const pendingTraces = new Map();
+
+function onTraceFrame(type, payload) {
+  if (!payload) return;
+  const key = traceKey(payload.agentId, payload.probeType || payload.type, payload.target);
+  const w = traceWatchers.get(key);
+  if (!w) return;
+  if (type === 'trace-hop') w.onHop(payload.node);
+  else w.onDone(payload);
+}
+
+// A tcptraceroute target is stored as host:port. The agent wants them apart —
+// sending "host:443" as the host traced "host:443:443" and never matched.
+function traceRequest(probeType, target) {
+  if (probeType === 'tcptraceroute') {
+    const m = /^(.+):(\d{1,5})$/.exec(target);
+    if (m && !m[1].includes(':')) return { type: probeType, host: m[1], port: Number(m[2]) };
+  }
+  return { type: probeType, host: target };
+}
+
+// The agent's own time budget for a trace is up to 180 s (20 hops x 3 probes
+// x 2 s + headroom, capped). Waiting any less gave up on traces that were
+// still running and then reported them as never having come back.
 const PATH_POLL_MS = 5000;
-const PATH_POLL_ATTEMPTS = 18; // ~90 s
-function pollForPath(qs, checkFailure) {
-  return new Promise((resolve) => {
-    let attempts = 0;
-    const done = (v) => { clearInterval(poll); resolve(v); };
-    const poll = setInterval(async () => {
-      attempts += 1;
+const PATH_WAIT_MS = 200000;
+
+function runTrace({ key, agentId, target, probeType, qs, before, onLive }) {
+  const existing = pendingTraces.get(key);
+  if (existing) {
+    if (onLive) existing.listeners.push(onLive);
+    if (onLive && existing.nodes.length) onLive(existing.nodes.slice());
+    return existing.promise;
+  }
+  const entry = { nodes: [], listeners: onLive ? [onLive] : [], promise: null };
+  const baselineTs = before && before.lastTs ? before.lastTs : null;
+  const origin = before && before.origin ? before.origin : null;
+  let wake = null;
+  let finished = false;
+
+  const liveGraph = () => ({
+    target, samples: 0, live: true,
+    nodes: [originNode(origin)].concat(entry.nodes),
+  });
+  traceWatchers.set(key, {
+    onHop: (node) => {
+      if (finished || !node || !Number.isInteger(node.hop)) return;
+      const i = entry.nodes.findIndex((n) => n.hop === node.hop);
+      if (i >= 0) entry.nodes[i] = node; else entry.nodes.push(node);
+      entry.nodes.sort((a, b) => a.hop - b.hop);
+      drawGeoPath(key, liveGraph(), { fit: false });
+      for (const fn of entry.listeners) { try { fn(entry.nodes.slice()); } catch { /* a view went away */ } }
+    },
+    onDone: () => { if (wake) wake(); },
+  });
+
+  entry.promise = (async () => {
+    try {
+      await api(`/agents/${agentId}/probe`, { method: 'POST', body: traceRequest(probeType, target) });
+      return await waitForPath(qs, baselineTs, () => pathFailureReason(agentId, target, probeType, baselineTs), (fn) => { wake = fn; });
+    } finally {
+      finished = true;
+      traceWatchers.delete(key);
+      pendingTraces.delete(key);
+    }
+  })();
+  pendingTraces.set(key, entry);
+  return entry.promise;
+}
+
+// Waits for a run NEWER than `baselineTs` to land, or for the agent to report
+// a failure. Wakes early on the socket's `probe-result` frame; polls as the
+// fallback for agents and proxies without the live channel. A single failed
+// poll (a 502 from a proxy, a dropped connection) is retried rather than
+// read as "never came back".
+function waitForPath(qs, baselineTs, checkFailure, onWake) {
+  const deadline = Date.now() + PATH_WAIT_MS;
+  const sleep = () => new Promise((resolve) => {
+    const timer = setTimeout(resolve, PATH_POLL_MS);
+    onWake(() => { clearTimeout(timer); resolve(); });
+  });
+  const isNew = (d) => d && d.lastTs && (!baselineTs || new Date(d.lastTs) > new Date(baselineTs));
+  return (async () => {
+    let errors = 0;
+    while (Date.now() < deadline) {
+      // eslint-disable-next-line no-await-in-loop
+      await sleep();
       try {
+        // eslint-disable-next-line no-await-in-loop
         const d = await api(`/api/probes/path?${qs}`);
-        if (d.nodes && d.nodes.length) return done(d);
+        errors = 0;
+        if (isNew(d) && d.nodes && d.nodes.length) return d;
         // The agent may have reported a FAILURE instead of hops. That is an
         // answer, and waiting out the rest of the window cannot improve it.
-        if (checkFailure) {
-          const reason = await checkFailure();
-          if (reason) return done({ reason });
-        }
-        if (attempts >= PATH_POLL_ATTEMPTS) done(null);
-      } catch { done(null); }
-    }, PATH_POLL_MS);
-  });
+        // eslint-disable-next-line no-await-in-loop
+        const reason = checkFailure ? await checkFailure() : null;
+        if (reason) return { reason };
+      } catch {
+        errors += 1;
+        if (errors >= 4) return null;
+      }
+    }
+    return { timedOut: true };
+  })();
 }
 
 // Why a requested trace produced no path. The agent stores its own failure text
 // on the probe result, and ctFailureReason already turns that into a sentence
-// (missing tool, needs root, name not found, timed out...). Without this the UI
-// showed the same empty panel whether traceroute was not installed, needed root
-// for -T, or was simply still running.
-async function pathFailureReason(agentId, target, probeType) {
+// (missing tool, needs root, name not found, timed out...). Only a result newer
+// than the request counts — an old failure is not this run's answer.
+async function pathFailureReason(agentId, target, probeType, sinceTs) {
   try {
     const latest = await api(`/api/probes/latest?agentId=${encodeURIComponent(agentId)}`);
     const rows = (latest && latest.results) || [];
     const match = rows.filter((r) => r.target === target && r.type === probeType).pop()
       || rows.filter((r) => r.target === target).pop();
     if (!match) return null;            // never landed: still running, or never dispatched
+    if (sinceTs && match.ts && new Date(match.ts) <= new Date(sinceTs)) return null;
     if (match.ok) return null;          // it succeeded but placed no hops — a geo problem, not a probe one
     const why = ctFailureReason(match);
     return (why && (why.full || why.short)) || match.detail || null;
   } catch { return null; }
 }
 
-// Overlays a traceroute path graph (from /api/probes/path) onto the map in a
-// dedicated layer that "Clear path" wipes — the same pathGeoStops/
-// renderPathStops the Probes traceroute map uses.
-function drawGeoPath(graph) {
+function originNode(origin) {
+  return {
+    kind: 'source', hop: 0, ip: null, label: (origin && origin.label) || 'Agent',
+    lat: origin && Number.isFinite(origin.lat) ? origin.lat : null,
+    lng: origin && Number.isFinite(origin.lng) ? origin.lng : null,
+    rttMs: 0, lossPct: 0, severity: 'ok', explain: 'Probe origin',
+  };
+}
+
+// Draws one trace into its own layer, replacing what that trace had before
+// and leaving every other trace alone. Clicking the line or a stop tells the
+// view which trace it belongs to.
+function drawGeoPath(key, graph, { fit = true } = {}) {
   if (!geoState.map) return null;
   const stops = pathGeoStops(graph.nodes || []);
-  if (!geoState.pathLayer) geoState.pathLayer = L.layerGroup().addTo(geoState.map);
-  geoState.pathLayer.clearLayers();
-  if (stops.length >= 2) {
-    const latlngs = renderPathStops(geoState.pathLayer, stops);
-    try { geoState.map.fitBounds(latlngs, { padding: [40, 40], maxZoom: 7 }); } catch { /* single point */ }
+  let tr = geoState.traces.get(key);
+  if (!tr) {
+    tr = { layer: L.featureGroup().addTo(geoState.map), latlngs: [] };
+    tr.layer.on('click', () => {
+      if (geoState.mapOpts && geoState.mapOpts.onPath) geoState.mapOpts.onPath(key);
+    });
+    geoState.traces.set(key, tr);
   }
-  return Object.assign({}, graph, { stops });
+  tr.layer.clearLayers();
+  tr.latlngs = stops.length ? renderPathStops(tr.layer, stops) : [];
+  if (fit && tr.latlngs.length >= 2) {
+    try { geoState.map.fitBounds(tr.latlngs, { padding: [40, 40], maxZoom: 7 }); } catch { /* single point */ }
+  }
+  return Object.assign({}, graph, { key, stops });
 }
 
 views.geo = async () => {
@@ -15109,6 +15221,9 @@ function connectLive() {
     // chart right now; nobody watching means the frame is simply dropped —
     // the authoritative series arrives with the finished run.
     else if (msg.type === 'burst-sample' && burstWatcher) burstWatcher(msg.payload);
+    // A traceroute hop as the agent reaches it, and the finished run. Only a
+    // trace someone is waiting on has a watcher; the rest are dropped.
+    else if (msg.type === 'trace-hop' || msg.type === 'probe-result') onTraceFrame(msg.type, msg.payload);
   });
   sock.addEventListener('close', () => {
     liveWs = null;

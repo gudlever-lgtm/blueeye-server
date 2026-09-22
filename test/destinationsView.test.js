@@ -52,15 +52,27 @@ function fakeLeaflet(window) {
   const destLayer = mk(drawn.dests);
   window.L = {
     circleMarker(latlng, opts) {
-      return { latlng, opts, handlers: {}, bindTooltip() { return this; }, on(ev, fn) { this.handlers[ev] = fn; return this; } };
+      return {
+        latlng, opts, handlers: {}, bindTooltip() { return this; }, bindPopup() { return this; },
+        addTo(layer) { if (layer && layer.addLayer) layer.addLayer(this); return this; },
+        on(ev, fn) { this.handlers[ev] = fn; return this; },
+      };
     },
     // Destinations cluster, sites do not — which is how the two layers are told
     // apart here.
     layerGroup() { return hostLayer; },
     markerClusterGroup() { return destLayer; },
+    // One per trace on the map: a traceroute path's own layer.
+    featureGroup() {
+      const layer = { items: [], handlers: {},
+        clearLayers() { this.items.length = 0; }, addLayer(m) { this.items.push(m); },
+        addTo() { return this; }, on(ev, fn) { this.handlers[ev] = fn; return this; } };
+      (window.__paths = window.__paths || []).push(layer);
+      return layer;
+    },
     latLngBounds() { return { contains: () => true }; },
     rectangle() { return { setBounds() {}, addTo() { return this; } }; },
-    polyline() { return { addTo() {} }; },
+    polyline() { return { addTo(layer) { if (layer && layer.addLayer) layer.addLayer(this); return this; } }; },
     map() {
       const m = {
         handlers: {},
@@ -97,7 +109,15 @@ function boot({ t, routes = {}, url = 'http://server.test/destinations', role = 
   };
   window.matchMedia = () => ({ matches: false, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {} });
   window.scrollTo = () => {};
-  window.WebSocket = class { constructor() { this.readyState = 3; } close() {} send() {} addEventListener() {} removeEventListener() {} };
+  // Records its listeners so a test can push a dashboard frame through the
+  // same handler the real socket feeds.
+  window.__sockets = [];
+  window.WebSocket = class {
+    constructor(u) { this.url = String(u); this.readyState = 3; this.listeners = {}; window.__sockets.push(this); }
+    close() {} send() {}
+    addEventListener(ev, fn) { (this.listeners[ev] = this.listeners[ev] || []).push(fn); }
+    removeEventListener() {}
+  };
   window.EventSource = window.WebSocket;
   if (t) t.after(() => window.close());
   window.localStorage.setItem('blueeye.server.token', 'T');
@@ -352,4 +372,141 @@ test('a probe that FAILED shows the agent\'s own reason, not an empty panel', as
   const view = doc.querySelector('#view').textContent;
   assert.match(view, /root/i, "the agent's own reason is not shown anywhere");
   assert.match(view, /geolocated stops|stops/i, '"Show path" produced no result panel at all — only a toast');
+});
+
+// ------------------------------------------------------ live + several traces
+//
+// A trace that ran longer than the old 90 s poll window was reported as never
+// having come back, every re-click sent the agent another traceroute, and only
+// one path could sit on the map at a time.
+
+// Delivers one dashboard-socket frame to every socket the app opened.
+function frame(window, type, payload) {
+  const socks = window.__sockets.filter((x) => (x.listeners.message || []).length);
+  assert.ok(socks.length, 'the dashboard never opened its live socket');
+  for (const sock of socks) for (const fn of sock.listeners.message) fn({ data: JSON.stringify({ type, payload }) });
+}
+
+const clickButton = async (window, doc, re) => {
+  const btn = [...doc.querySelectorAll('#view button')].find((b) => re.test(b.textContent));
+  assert.ok(btn, `no button matching ${re}`);
+  btn.dispatchEvent(new window.Event('click', { bubbles: true }));
+  await settle();
+};
+
+async function pickAgentAndTarget(t, routes, target) {
+  const { doc, window, log, errors } = boot({ t, routes: SESSION(routes) });
+  await settle();
+  const sel = [...doc.querySelectorAll('#view select')].find((s) => [...s.options].some((o) => o.value === '7'));
+  sel.value = '7';
+  sel.dispatchEvent(new window.Event('change', { bubbles: true }));
+  await settle();
+  if (target != null) [...doc.querySelectorAll('#view input[type="text"]')].pop().value = target;
+  return { doc, window, log, errors };
+}
+
+test('Trace now draws each hop as the agent streams it', async (t) => {
+  const { doc, window, errors } = await pickAgentAndTarget(t, {
+    'GET /api/probes/latest': { agentId: 7, results: [] },
+    'GET /api/probes/path': { nodes: [], stops: [], origin: { lat: 55.6, lng: 12.5, label: 'oslo-edge-01' } },
+    'POST /agents/7/probe': { delivered: 1 },
+  }, 'us.cnn.com');
+  await clickButton(window, doc, /^Trace now$/);
+  assert.match(doc.querySelector('#view').textContent, /waiting for the first hop/i);
+
+  frame(window, 'trace-hop', { agentId: '7', probeType: 'traceroute', target: 'us.cnn.com',
+    node: { kind: 'hop', hop: 1, ip: '192.168.1.1', private: true, rttMs: 1.2, severity: 'ok' } });
+  frame(window, 'trace-hop', { agentId: '7', probeType: 'traceroute', target: 'us.cnn.com',
+    node: { kind: 'hop', hop: 2, ip: '62.61.1.1', country: 'DK', lat: 56, lng: 10, rttMs: 8, severity: 'ok' } });
+  const view = doc.querySelector('#view').textContent;
+  assert.match(view, /reached hop 2/i);
+  assert.match(view, /62\.61\.1\.1/);
+  assert.match(view, /192\.168\.1\.1/);
+  assert.deepEqual(errors, []);
+});
+
+test('a second click on a running trace joins it instead of sending another', async (t) => {
+  const { doc, window, log } = await pickAgentAndTarget(t, {
+    'GET /api/probes/latest': { agentId: 7, results: [] },
+    'GET /api/probes/path': { nodes: [], stops: [] },
+    'POST /agents/7/probe': { delivered: 1 },
+  }, 'us.cnn.com');
+  await clickButton(window, doc, /^Trace now$/);
+  await clickButton(window, doc, /^Trace now$/);
+  await clickButton(window, doc, /^Show path$/);
+  assert.equal(runFor(log).length, 1, 'the agent was asked to trace the same target more than once');
+});
+
+test('a tcptraceroute target stored as host:port is sent as host + port', async (t) => {
+  const { doc, window, log } = await pickAgentAndTarget(t, {
+    'GET /api/probes/latest': { agentId: 7, results: [{ type: 'tcptraceroute', target: 'us.cnn.com:443', ok: true }] },
+    'GET /api/probes/path': { nodes: [], stops: [] },
+    'POST /agents/7/probe': { delivered: 1 },
+  }, 'us.cnn.com:443');
+  await clickButton(window, doc, /^Trace now$/);
+  const run = runFor(log)[0];
+  assert.ok(run);
+  assert.deepEqual(run.body, { type: 'tcptraceroute', host: 'us.cnn.com', port: 443 });
+});
+
+test('the finished run is drawn as soon as the server says it landed', async (t) => {
+  const routes = {
+    'GET /api/probes/latest': { agentId: 7, results: [] },
+    'GET /api/probes/path': { nodes: [], stops: [], lastTs: null },
+    'POST /agents/7/probe': { delivered: 1 },
+  };
+  const { doc, window } = await pickAgentAndTarget(t, routes, 'us.cnn.com');
+  await clickButton(window, doc, /^Trace now$/);
+  // The run lands; the next /path read returns it.
+  const landed = {
+    target: 'us.cnn.com', samples: 1, lastTs: '2026-09-22T10:00:00.000Z',
+    nodes: [
+      { kind: 'source', hop: 0, label: 'oslo-edge-01', lat: 55.6, lng: 12.5, severity: 'ok' },
+      { kind: 'dest', hop: 9, ip: '151.101.1.67', country: 'US', lat: 39, lng: -98, rttMs: 98, severity: 'ok' },
+    ],
+  };
+  // eslint-disable-next-line no-param-reassign
+  const realFetch = window.fetch;
+  window.fetch = async (u, opts) => {
+    if (String(u).includes('/api/probes/path')) {
+      return { ok: true, status: 200, headers: { get: () => 'application/json' }, json: async () => landed, text: async () => JSON.stringify(landed) };
+    }
+    return realFetch(u, opts);
+  };
+  frame(window, 'probe-result', { agentId: 7, type: 'traceroute', target: 'us.cnn.com', ok: true });
+  await settle();
+  const view = doc.querySelector('#view').textContent;
+  assert.match(view, /1 runs · 2 stops/);
+  assert.match(view, /1 runs aggregated · 2 geolocated stops/);
+});
+
+test('Show all traces puts every traced target on the list, each removable', async (t) => {
+  const graph = (target) => ({
+    target, samples: 3, lastTs: '2026-09-22T10:00:00.000Z',
+    nodes: [
+      { kind: 'source', hop: 0, label: 'oslo-edge-01', lat: 55.6, lng: 12.5, severity: 'ok' },
+      { kind: 'dest', hop: 5, ip: '1.1.1.1', country: 'DE', lat: 51, lng: 10, rttMs: 20, severity: 'ok' },
+    ],
+  });
+  const { doc, window, log } = await pickAgentAndTarget(t, {
+    'GET /api/probes/latest': { agentId: 7, results: [
+      { type: 'traceroute', target: 'a.example', ok: true },
+      { type: 'traceroute', target: 'b.example', ok: true },
+      { type: 'ping', target: 'c.example', ok: true },
+    ] },
+    'GET /api/probes/path': graph('x'),
+  }, null);
+  await clickButton(window, doc, /^Show all traces$/);
+  const view = doc.querySelector('#view').textContent;
+  assert.match(view, /a\.example/);
+  assert.match(view, /b\.example/);
+  assert.doesNotMatch(view, /c\.example/, 'a ping target is not a trace');
+  assert.match(view, /2 trace\(s\)/);
+  assert.equal(runFor(log).length, 0, 'showing stored traces must not start new runs');
+
+  const remove = [...doc.querySelectorAll('#view button')].find((b) => /Remove the trace to a\.example/.test(b.getAttribute('aria-label') || ''));
+  assert.ok(remove);
+  remove.dispatchEvent(new window.Event('click', { bubbles: true }));
+  await settle();
+  assert.match(doc.querySelector('#view').textContent, /1 trace\(s\)/);
 });

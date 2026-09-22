@@ -690,7 +690,7 @@ function createApiRouter({
   // Unified audit log (license feature `audit_log`) + API tokens (`api_access`).
   if (auditLogRepo) router.use('/api/audit-log', createAuditLogRouter({ auditLogRepo, featureGate, planService }));
   if (apiTokensRepo) router.use('/api/api-tokens', createApiTokensRouter({ apiTokensRepo, featureGate, planService, auditLogger }));
-  router.use('/agents', createAgentReportsRouter({ agentAuth, resultsRepo, resultsTsdbRepo, agentsRepo, auditEventsRepo, analysisPipeline, flowPipeline, probeResultsRepo, probePipeline, probeOutageService, installToolService, lldpNeighborsRepo, topologyChangeService, hostConnectionsRepo, arpEntriesRepo, deviceEventIngest, snmpDevicesRepo, snmpTopologyIngest, snmpCounterIngest, interfaceStateService, discoveredDevicesRepo, snmpProfilesRepo, auditLogger, logger }));
+  router.use('/agents', createAgentReportsRouter({ agentAuth, resultsRepo, resultsTsdbRepo, agentsRepo, auditEventsRepo, analysisPipeline, flowPipeline, probeResultsRepo, probePipeline, probeOutageService, installToolService, lldpNeighborsRepo, topologyChangeService, hostConnectionsRepo, arpEntriesRepo, deviceEventIngest, snmpDevicesRepo, snmpTopologyIngest, snmpCounterIngest, interfaceStateService, discoveredDevicesRepo, snmpProfilesRepo, auditLogger, notifyDashboard, logger }));
   router.use('/agents', createAgentEnrollRouter({ enrollmentStore, notifyDashboard, integrationTrigger: integrationsDispatcher, auditEventsRepo, settingsService, rateLimit: enrollRateLimiter }));
 
   return router;

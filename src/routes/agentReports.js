@@ -17,7 +17,7 @@ const { validateSnmpTopologyBatch, validateSnmpCounterBatch } = require('../vali
 //
 // Paths use the `/me/...` prefix so they don't collide with the user-JWT agents
 // router's `/:id` routes mounted under the same /agents path.
-function createAgentReportsRouter({ agentAuth, resultsRepo, resultsTsdbRepo = null, agentsRepo, auditEventsRepo = null, analysisPipeline = null, flowPipeline = null, probeResultsRepo = null, probePipeline = null, probeOutageService = null, installToolService = null, lldpNeighborsRepo = null, topologyChangeService = null, hostConnectionsRepo = null, arpEntriesRepo = null, deviceEventIngest = null, snmpDevicesRepo = null, snmpTopologyIngest = null, snmpCounterIngest = null, interfaceStateService = null, discoveredDevicesRepo = null, snmpProfilesRepo = null, auditLogger = null, logger = null }) {
+function createAgentReportsRouter({ agentAuth, resultsRepo, resultsTsdbRepo = null, agentsRepo, auditEventsRepo = null, analysisPipeline = null, flowPipeline = null, probeResultsRepo = null, probePipeline = null, probeOutageService = null, installToolService = null, lldpNeighborsRepo = null, topologyChangeService = null, hostConnectionsRepo = null, arpEntriesRepo = null, deviceEventIngest = null, snmpDevicesRepo = null, snmpTopologyIngest = null, snmpCounterIngest = null, interfaceStateService = null, discoveredDevicesRepo = null, snmpProfilesRepo = null, auditLogger = null, notifyDashboard = null, logger = null }) {
   const router = express.Router();
 
   // Each probe-results POST re-reads the agent's recent rows for probe-finding
@@ -71,6 +71,18 @@ function createAgentReportsRouter({ agentAuth, resultsRepo, resultsTsdbRepo = nu
         return res.status(400).json({ error: 'Validation failed', details: errors });
       }
       const inserted = await probeResultsRepo.createMany(req.agent.agentId, value.results);
+
+      // A finished trace tells the dashboard straight away, so a path the
+      // operator is waiting on draws the moment it lands instead of on the
+      // next poll — or never, when the trace outlived the poll window.
+      if (typeof notifyDashboard === 'function') {
+        for (const r of value.results) {
+          if (r.type !== 'traceroute' && r.type !== 'tcptraceroute') continue;
+          try {
+            notifyDashboard({ type: 'probe-result', payload: { agentId: req.agent.agentId, type: r.type, target: r.target, ok: !!r.ok } });
+          } catch { /* live view is a courtesy */ }
+        }
+      }
 
       // Audit what the agent probed. Each (type → target) collapses to one row;
       // repeats (scheduled probes) bump it rather than spamming the trail. A

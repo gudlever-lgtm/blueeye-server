@@ -121,7 +121,21 @@
       var pathAgentSel = null;
       var pathTargetInput = null;
       var pathTargetList = null;
-      var showPathBtn = null;
+
+      // Every trace on the map, in the order it was added. One is "current":
+      // its detail sits under the list. A trace is running (hops arrive live),
+      // done, failed (with the agent's reason) or pending (outlived the wait).
+      var traces = [];
+      var currentKey = null;
+      var MAX_SHOW_ALL = 12;
+
+      function agentName(id) {
+        var a = agents.filter(function (x) { return String(x.id) === String(id); })[0];
+        return a ? (a.display_name || a.hostname) : t('dest.hostN', { id: id });
+      }
+      function traceOf(key) {
+        return traces.filter(function (tr) { return tr.key === key; })[0] || null;
+      }
 
       // The traceroute overlay belongs to the map, so its controls sit in the
       // map panel rather than in the page toolbar.
@@ -144,75 +158,231 @@
           type: 'text', list: 'geo-path-targets',
           'aria-label': t('dest.path.target'), placeholder: t('dest.path.target'),
         });
-        showPathBtn = ui.button('secondary', t('dest.path.show'), { onclick: runPath });
         return ui.toolbar({
           filters: [
             ui.filter(t('dest.path'), pathAgentSel),
             ui.filter(t('dest.path.targetLabel'), pathTargetInput),
             pathTargetList,
           ],
-          actions: [showPathBtn, ui.button('ghost', t('dest.path.clear'), { onclick: clearPath })],
+          actions: [
+            ui.button('secondary', t('dest.path.show'), { onclick: function () { runPath(false); } }),
+            ui.button('secondary', t('dest.path.trace'), { onclick: function () { runPath(true); }, title: t('dest.path.traceHint') }),
+            ui.button('ghost', t('dest.path.showAll'), { onclick: showAll, title: t('dest.path.showAllHint') }),
+            ui.button('ghost', t('dest.path.clear'), { onclick: function () { clearPath(null); } }),
+          ],
         });
       }
 
-      function runPath() {
+      function picked() {
         var agentId = pathAgentSel.value;
         var target = pathTargetInput.value.trim();
-        if (!agentId) { ui.toast(t('dest.path.pickAgent'), null, { bad: true, focus: pathAgentSel }); return; }
-        if (!target) { ui.toast(t('dest.path.pickTarget'), null, { bad: true, focus: pathTargetInput }); return; }
-        showPathBtn.disabled = true;
-        showPathBtn.textContent = t('dest.path.running');
-        deps.showPath(agentId, target)
-          .then(function (graph) {
-            // A run that produced no path still gets a PANEL. It used to get a
-            // toast and nothing else, so "Show path" looked like it had done
-            // nothing at all — and the reason, which the agent had reported all
-            // along, was never shown anywhere.
-            if (graph && graph.empty) drawNoPath(graph);
-            else if (graph) drawPath(graph);
-            else ui.toast(t('dest.path.none'), null, { bad: true });
-          })
-          .catch(function (e) { ui.toast(t('dest.err.path'), deps.errText(e), { bad: true }); })
-          .then(function () {
-            showPathBtn.disabled = false;
-            showPathBtn.textContent = t('dest.path.show');
-          });
+        if (!agentId) { ui.toast(t('dest.path.pickAgent'), null, { bad: true, focus: pathAgentSel }); return null; }
+        if (!target) { ui.toast(t('dest.path.pickTarget'), null, { bad: true, focus: pathTargetInput }); return null; }
+        return { agentId: agentId, target: target };
       }
-      // No path came back. Say which of the two things happened — the probe
-      // failed (with the agent's own reason), or it has not reported yet.
-      function drawNoPath(res) {
+
+      function runPath(fresh) {
+        var p = picked();
+        if (!p) return;
+        startTrace(p.agentId, p.target, fresh, true);
+      }
+
+      // Adds (or re-runs) one trace. `fresh` asks the agent for a new run even
+      // when a stored path exists; that run draws hop by hop as it happens.
+      function startTrace(agentId, target, fresh, makeCurrent) {
+        var key = deps.traceKey(agentId, target);
+        var tr = traceOf(key);
+        if (tr && tr.status === 'running') {
+          // Already in flight: show it rather than start a second one.
+          if (makeCurrent) { currentKey = key; drawTraces(); }
+          return Promise.resolve();
+        }
+        if (!tr) {
+          tr = { key: key, agentId: agentId, target: target };
+          traces.push(tr);
+        }
+        tr.status = 'running';
+        tr.nodes = [];
+        tr.reason = null;
+        tr.startedAt = Date.now();
+        if (makeCurrent) currentKey = key;
+        drawTraces();
+        return deps.showPath(agentId, target, {
+          fresh: fresh,
+          onLive: function (nodes) {
+            tr.nodes = nodes;
+            drawTraces();
+          },
+        })
+          .then(function (res) {
+            if (!res) { tr.status = 'failed'; tr.reason = t('dest.path.noMap'); return; }
+            if (res.empty) {
+              tr.status = res.reason ? 'failed' : 'pending';
+              tr.reason = res.reason || null;
+              return;
+            }
+            tr.status = 'done';
+            tr.graph = res;
+          })
+          .catch(function (e) {
+            tr.status = 'failed';
+            tr.reason = deps.errText(e);
+          })
+          .then(drawTraces);
+      }
+
+      // Every target this agent has traced before, on the map at once.
+      function showAll() {
+        var agentId = pathAgentSel.value;
+        if (!agentId) { ui.toast(t('dest.path.pickAgent'), null, { bad: true, focus: pathAgentSel }); return; }
+        deps.loadPathTargets(agentId, pathTargetList).then(function (targets) {
+          if (!targets || !targets.length) { ui.toast(t('dest.path.noTargets'), null, { bad: true }); return; }
+          if (targets.length > MAX_SHOW_ALL) ui.toast(t('dest.path.showAllCapped', { n: MAX_SHOW_ALL, total: targets.length }));
+          targets.slice(0, MAX_SHOW_ALL).forEach(function (target, i) {
+            startTrace(agentId, target, false, i === 0 && !currentKey);
+          });
+        });
+      }
+
+      function clearPath(key) {
+        deps.clearPath(key || null);
+        traces = key ? traces.filter(function (tr) { return tr.key !== key; }) : [];
+        if (!key || currentKey === key) currentKey = traces.length ? traces[traces.length - 1].key : null;
+        drawTraces();
+      }
+
+      // A click on a trace on the map makes it the current one.
+      function focusFromMap(key) {
+        if (!traceOf(key)) return;
+        currentKey = key;
+        drawTraces();
+        if (pathHost.scrollIntoView) pathHost.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+      }
+
+      var RANK = { bad: 3, warn: 2, muted: 1, ok: 0 };
+      function worstOf(nodes) {
+        return (nodes || []).filter(function (n) { return n.kind !== 'source'; }).reduce(function (w, n) {
+          return (RANK[n.severity] || 0) > (RANK[w && w.severity] || 0) ? n : w;
+        }, null);
+      }
+
+      function statusText(tr) {
+        if (tr.status === 'running') {
+          return tr.nodes && tr.nodes.length
+            ? t('dest.path.status.live', { n: tr.nodes[tr.nodes.length - 1].hop })
+            : t('dest.path.status.started');
+        }
+        if (tr.status === 'failed') return t('dest.path.status.failed');
+        if (tr.status === 'pending') return t('dest.path.status.pending');
+        var g = tr.graph || {};
+        return t('dest.path.status.done', { runs: g.samples || 0, stops: (g.stops || []).length });
+      }
+      function statusTone(tr) {
+        if (tr.status === 'running') return 'sev-muted';
+        if (tr.status === 'failed') return 'sev-bad';
+        if (tr.status === 'pending') return 'sev-warn';
+        var w = worstOf(tr.graph && tr.graph.nodes);
+        return 'sev-' + ((w && w.severity) || 'ok');
+      }
+
+      // The list of traces, then the current one's detail.
+      function drawTraces() {
+        if (!traces.length) { pathHost.replaceChildren(); return; }
+        if (!traceOf(currentKey)) currentKey = traces[traces.length - 1].key;
+        var list = el('ul', { class: 'path-stops' }, traces.map(function (tr) {
+          var current = tr.key === currentKey;
+          var li = el('li', {
+            class: 'is-clickable' + (current ? ' is-current' : ''), tabindex: '0', role: 'button',
+            'aria-pressed': current ? 'true' : 'false',
+          },
+          el('span', { class: 'ui-legend-dot ' + statusTone(tr) }),
+          el('span', { class: 'mono' }, tr.target),
+          ui.metaXs(agentName(tr.agentId)),
+          el('span', { class: 'path-grow' }, ui.metaXs(statusText(tr))),
+          ui.button('ghost', t('dest.path.remove'), {
+            size: 'xs', ariaLabel: t('dest.path.removeOne', { target: tr.target }),
+            onclick: function (e) { e.stopPropagation(); clearPath(tr.key); },
+          }));
+          var pick = function () { currentKey = tr.key; deps.focusPath(tr.key); drawTraces(); };
+          li.addEventListener('click', pick);
+          li.addEventListener('keydown', function (e) {
+            if (e.target !== li) return;
+            if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); pick(); }
+          });
+          return li;
+        }));
+
+        var cur = traceOf(currentKey);
         pathHost.replaceChildren(ui.panel({
+          title: t('dest.path.traces'),
+          note: t('dest.path.tracesNote', { n: traces.length }),
+          actions: [ui.button('ghost', t('dest.path.clear'), { onclick: function () { clearPath(null); } })],
+          children: [ui.inlineNote(t('dest.path.what')), list],
+        }), ui.panel({
           title: t('dest.path.panel'),
-          note: t('dest.path.note', { target: res.target || '—', runs: 0, stops: 0 }),
-          actions: [ui.button('ghost', t('dest.path.clear'), { onclick: clearPath })],
-          children: [
-            ui.inlineNote(t('dest.path.what')),
-            res.reason
-              ? ui.inlineNote(t('dest.path.failed', { why: res.reason }), 'crit')
-              : ui.inlineNote(t('dest.path.pending', { target: res.target || '—' }), 'warn'),
-            ui.emptyState({
-              kind: 'nodata',
-              title: t('dest.path.noStops'),
-              body: res.reason ? t('dest.path.noStopsFailed') : t('dest.path.noStopsPending'),
-            }),
-          ],
+          note: cur ? traceNote(cur) : null,
+          actions: cur && cur.status !== 'running'
+            ? [ui.button('secondary', t('dest.path.trace'), {
+              onclick: function () { startTrace(cur.agentId, cur.target, true, true); },
+            })]
+            : [],
+          children: cur ? traceDetail(cur) : [],
         }));
       }
 
-      function clearPath() {
-        deps.clearPath();
-        pathHost.replaceChildren();
+      function traceNote(tr) {
+        if (tr.status === 'done' && tr.graph) {
+          return t('dest.path.note', { target: tr.target, runs: tr.graph.samples || 0, stops: (tr.graph.stops || []).length });
+        }
+        return tr.target + ' · ' + agentName(tr.agentId);
       }
 
-      // A drawn path gets its own panel under the map — it is about the map,
-      // and it goes away with "Clear path".
-      function drawPath(graph) {
+      function traceDetail(tr) {
+        if (tr.status === 'running') return liveDetail(tr);
+        if (tr.status === 'done' && tr.graph) return pathDetail(tr.graph);
+        // No path came back. Say which of the two things happened — the probe
+        // failed (with the agent's own reason), or it has not reported yet.
+        return [
+          tr.reason
+            ? ui.inlineNote(t('dest.path.failed', { why: tr.reason }), 'crit')
+            : ui.inlineNote(t('dest.path.pending', { target: tr.target }), 'warn'),
+          ui.emptyState({
+            kind: 'nodata',
+            title: t('dest.path.noStops'),
+            body: tr.reason ? t('dest.path.noStopsFailed') : t('dest.path.noStopsPending'),
+          }),
+        ];
+      }
+
+      // The trace while it runs: every hop as the agent reaches it. Agents
+      // older than 0.38 do not stream hops, so the list stays empty and the
+      // path appears whole when the run lands.
+      function liveDetail(tr) {
+        var nodes = tr.nodes || [];
+        var secs = Math.round((Date.now() - (tr.startedAt || Date.now())) / 1000);
+        if (!nodes.length) {
+          return [ui.inlineNote(t('dest.path.liveWaiting', { target: tr.target }), 'info'), ui.loadingState(3)];
+        }
+        return [
+          ui.inlineNote(t('dest.path.liveNote', { n: nodes.length, s: secs }), 'info'),
+          el('ul', { class: 'path-stops' }, nodes.map(function (n) {
+            var where = [n.asnName || (n.asn ? 'AS' + n.asn : null), n.country || null,
+              n.private ? t('dest.path.privateAddr') : null].filter(Boolean).join(' · ');
+            return el('li', {},
+              el('span', { class: 'ui-legend-dot sev-' + (n.severity || 'ok') }),
+              ui.metaXs(t('dest.path.hop', { n: n.hop })),
+              el('span', { class: 'mono' }, n.ip || t('dest.path.silent')),
+              where ? ui.metaXs(where) : null,
+              typeof n.rttMs === 'number' ? ui.metaXs(Math.round(n.rttMs) + ' ms') : null);
+          })),
+        ];
+      }
+
+      // A finished path: its stops, each opening the hops it covers.
+      function pathDetail(graph) {
         var stops = graph.stops || [];
         var hops = (graph.nodes || []).filter(function (n) { return n.kind !== 'source'; });
-        var RANK = { bad: 3, warn: 2, muted: 1, ok: 0 };
-        var worst = hops.reduce(function (w, n) {
-          return (RANK[n.severity] || 0) > (RANK[w && w.severity] || 0) ? n : w;
-        }, null);
+        var worst = worstOf(graph.nodes);
         // A STOP IS A PLACE ON THE ROUTE, not a flag. "DE" tells a reader the
         // packet passed through Germany and nothing they can act on; the hop
         // addresses, whose network they belong to and what the latency did are
@@ -270,12 +440,12 @@
               n.asnName && n.asn ? 'AS' + n.asn : null,
               n.country || null,
               n.private ? t('dest.path.privateAddr') : null,
-            ].filter(Boolean).join(' \u00b7 ');
+            ].filter(Boolean).join(' · ');
             var measured = [
               typeof n.rttMs === 'number' ? Math.round(n.rttMs) + ' ms' : null,
               typeof n.lossPct === 'number' && n.lossPct > 0 ? t('dest.path.lossN', { pct: Math.round(n.lossPct) }) : null,
               typeof n.jitterMs === 'number' ? t('dest.path.jitterN', { ms: Math.round(n.jitterMs) }) : null,
-            ].filter(Boolean).join(' \u00b7 ');
+            ].filter(Boolean).join(' · ');
             return [
               t('dest.path.hop', { n: n.hop }),
               el('div', {},
@@ -297,28 +467,22 @@
           ? el('ul', { class: 'path-stops' }, stops.map(stopRow))
           : ui.emptyState({ icon: '↯', title: t('dest.path.noStops'), body: t('dest.path.noStopsHint') });
 
-        pathHost.replaceChildren(ui.panel({
-          title: t('dest.path.panel'),
-          note: t('dest.path.note', { target: graph.target || '—', runs: graph.samples || 0, stops: stops.length }),
-          actions: [ui.button('ghost', t('dest.path.clear'), { onclick: clearPath })],
-          children: [
-            ui.inlineNote(t('dest.path.what')),
-            worst && (RANK[worst.severity] || 0) > 0
-              ? ui.inlineNote(t('dest.path.worst', { hop: worst.hop, why: worst.explain || '' }),
-                worst.severity === 'bad' ? 'crit' : 'warn')
-              : null,
-            // A run that produced nothing placeable is a different thing from
-            // no run at all, and the reason is actionable.
-            graph.samples > 0 && stops.length < 2
-              ? ui.inlineNote(hops.length
-                ? t('dest.path.unplaceable', { n: hops.length })
-                : (graph.detail
-                  ? t('dest.path.failed', { why: graph.detail })
-                  : t('dest.path.noHops')), 'warn')
-              : null,
-            body,
-          ].filter(Boolean),
-        }));
+        return [
+          worst && (RANK[worst.severity] || 0) > 0
+            ? ui.inlineNote(t('dest.path.worst', { hop: worst.hop, why: worst.explain || '' }),
+              worst.severity === 'bad' ? 'crit' : 'warn')
+            : null,
+          // A run that produced nothing placeable is a different thing from
+          // no run at all, and the reason is actionable.
+          graph.samples > 0 && stops.length < 2
+            ? ui.inlineNote(hops.length
+              ? t('dest.path.unplaceable', { n: hops.length })
+              : (graph.detail
+                ? t('dest.path.failed', { why: graph.detail })
+                : t('dest.path.noHops')), 'warn')
+            : null,
+          body,
+        ].filter(Boolean);
       }
 
       // Mounted ONCE. A period change redraws the markers and retitles the
@@ -354,6 +518,7 @@
           onDestination: openDestination,
           onHost: openHost,
           onRegion: openRegion,
+          onPath: focusFromMap,
         });
       }
 

@@ -80,7 +80,9 @@ function createProbesRouter({ probeResultsRepo, agentsRepo, geoProvider = null, 
       label: agent.display_name || agent.hostname || 'Agent',
     };
     const graph = buildPathGraph(runs, { geoProvider, centroids, target, origin });
-    res.json({ agentId, probeType, ...graph, asGraph: asGraphFromNodes(graph.nodes) });
+    // `origin` rides along even when there are no runs yet, so a live trace
+    // can anchor its first hops to the agent's site before anything is stored.
+    res.json({ agentId, probeType, origin, ...graph, asGraph: asGraphFromNodes(graph.nodes) });
   }));
 
   // GET /api/probes/path/metrics — the metric catalogue for the timeline's

@@ -38,12 +38,13 @@ test('the screenshot case: 0.9 ms against a 0.5 ms baseline is NOT critical', ()
   assert.equal(health.evidence.filter((e) => e.metric === 'latency').length, 0);
 });
 
-test('a real WAN degradation is still critical', () => {
+test('a real WAN degradation is still reported — as a warning', () => {
   // The other row from the same screen: 309.8 ms where ~118.6 ms is normal.
-  // 191 ms is a genuine problem and must survive the floor untouched.
+  // 191 ms is a genuine problem and must survive the floor. Latency has no
+  // 'bad' tier, so it is a warning however far it moved.
   const now = Date.now();
   const health = computeAgentHealth(rows([309.8].concat(STABLE_WAN), { target: 'mundtrold.dk', now }), { now });
-  assert.equal(health.status, 'bad');
+  assert.equal(health.status, 'warn');
   const lat = health.evidence.find((e) => e.metric === 'latency');
   assert.ok(lat, 'the latency evidence is what names the target');
   assert.equal(lat.target, 'mundtrold.dk');
@@ -63,7 +64,7 @@ test('both bars have to be cleared, not either one', () => {
 
   // Clears both: a LAN target that went from half a millisecond to 40.
   const lanReal = computeAgentHealth(rows([40].concat(STABLE_LAN), { now }), { now });
-  assert.equal(lanReal.status, 'bad', 'that is a real fault and must still fire');
+  assert.equal(lanReal.status, 'warn', 'that is a real fault and must still fire');
 });
 
 test('the floor never suppresses loss, jitter or unreachability', () => {
@@ -86,5 +87,6 @@ test('the thresholds are published, so they can be argued with', () => {
   assert.equal(THRESHOLDS.LAT_MIN_FRACTION, 0.2);
   // The floor is a PRE-condition on the z-score, not a replacement for it: a
   // target that moved 50 ms but always moves 50 ms is still normal.
-  assert.ok(THRESHOLDS.Z_WARN > 0 && THRESHOLDS.Z_BAD > THRESHOLDS.Z_WARN);
+  assert.ok(THRESHOLDS.Z_WARN > 0);
+  assert.equal(THRESHOLDS.Z_BAD, undefined, 'latency has no bad tier');
 });

@@ -33,13 +33,11 @@ function evaluateProbeFindings(agentId, rows, { now = () => new Date(), geoProvi
   const out = [];
 
   const health = computeAgentHealth(rows, { now: at.getTime() });
-  const severity = health.status === 'warn'
-    ? Severity.WARN
-    : (health.status === 'bad' || health.status === 'down') ? Severity.CRIT : null;
-  if (severity) {
-    for (const ev of health.evidence) {
-      out.push(buildFinding({ hostId, at, severity, ev, health }));
-    }
+  // Severity per evidence row, not per agent: a latency warning stays a WARN
+  // even when another target on the same agent is unreachable.
+  for (const ev of health.evidence) {
+    const severity = severityOf(ev.level);
+    if (severity) out.push(buildFinding({ hostId, at, severity, ev, health }));
   }
 
   for (const c of certFindings(hostId, rows, at)) out.push(c);
@@ -50,6 +48,12 @@ function evaluateProbeFindings(agentId, rows, { now = () => new Date(), geoProvi
   // measured with small packets that sail straight through it.
   for (const c of evaluateMtuFindings(hostId, rows, at)) out.push(c);
   return out;
+}
+
+function severityOf(level) {
+  if (level === 'warn') return Severity.WARN;
+  if (level === 'bad' || level === 'down') return Severity.CRIT;
+  return null;
 }
 
 // Maps a single verdict evidence row to a finding.

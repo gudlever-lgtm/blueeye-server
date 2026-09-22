@@ -431,7 +431,7 @@ test('the values the general guides quote are the code’s values', async (t) =>
   assert.equal(th.JITTER_WARN, String(THRESHOLDS.JITTER_WARN));
   assert.equal(th.JITTER_BAD, String(THRESHOLDS.JITTER_BAD));
   assert.equal(th.Z_WARN, String(THRESHOLDS.Z_WARN));
-  assert.equal(th.Z_BAD, String(THRESHOLDS.Z_BAD));
+  assert.equal(th.Z_BAD, undefined, 'latency has no bad tier');
   assert.equal(th.MIN_BASELINE, String(THRESHOLDS.MIN_BASELINE));
   assert.equal(th.STALE_MIN, String(THRESHOLDS.STALE_MS / 60000));
 

@@ -148,12 +148,18 @@ every other source's events off the page.
 | | |
 | --- | --- |
 | `since` | ISO timestamp, or `last_login` (the marker). Future → 400. Older than 30d → 400. |
-| `window` | `30m` / `6h` / `7d`, or a bare number of minutes. Default 24h, max 30d. |
+| `window` | `30m` / `6h` / `7d`, or a bare number of minutes. Default 24h, max 30d. With `since=last_login` it is only the fallback for a user who has no marker yet — a marker wins over it. |
 | `limit` | 1..500, default 200 |
 | `offset` | ≥ 0 |
 
 An unparseable `window` is a **400, not a silent fallback to the default** — on
 this page, quietly showing the wrong time range is worse than an error.
+
+The dashboard's Window picker therefore sends ONE of the two: "Since last seen"
+(the default) sends `since=last_login&window=24h`, a fixed window (30m/6h/24h/7d)
+sends `window` alone. Sending the marker with every request made the picker do
+nothing for anyone who had ever pressed "Mark as seen". Mark as seen switches
+the picker back to "Since last seen".
 
 ## Empty is an answer
 

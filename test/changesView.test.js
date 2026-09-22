@@ -112,13 +112,34 @@ test('the window picker offers the vocabulary the server accepts, and re-asks wi
   const { doc, window, log } = boot({ t, routes: SESSION() });
   await settle();
   const sel = doc.querySelector('#view .toolbar-ui select');
-  assert.deepEqual([...sel.options].map((o) => o.value), ['30m', '6h', '24h', '7d'],
+  assert.deepEqual([...sel.options].map((o) => o.value), ['last_seen', '30m', '6h', '24h', '7d'],
     'the picker offers a window the server would 400 on');
+  assert.equal(sel.value, 'last_seen', 'the default is no longer "since last seen"');
   sel.value = '7d';
   sel.dispatchEvent(new window.Event('change', { bubbles: true }));
   await settle();
   const last = log.filter((c) => c.key === 'GET /api/changes').pop();
-  assert.equal(new URL(last.url, 'http://server.test').searchParams.get('window'), '7d');
+  const q = new URL(last.url, 'http://server.test').searchParams;
+  assert.equal(q.get('window'), '7d');
+  // The server lets since=last_login win over window whenever a marker exists,
+  // so sending both made the picker do nothing for anyone who had marked seen.
+  assert.equal(q.get('since'), null, 'a fixed window still carries the marker, so the server ignores the window');
+  assert.equal(doc.querySelector('#view .toolbar-ui select').value, '7d', 'the picker forgot the choice');
+});
+
+test('Mark as seen switches the picker back to "since last seen"', async (t) => {
+  const { doc, window, log } = boot({ t, routes: SESSION() });
+  await settle();
+  const sel = doc.querySelector('#view .toolbar-ui select');
+  sel.value = '30m';
+  sel.dispatchEvent(new window.Event('change', { bubbles: true }));
+  await settle();
+  doc.querySelector('#view .page-head-actions .btn-primary')
+    .dispatchEvent(new window.Event('click', { bubbles: true }));
+  await settle();
+  const last = log.filter((c) => c.key === 'GET /api/changes').pop();
+  assert.equal(new URL(last.url, 'http://server.test').searchParams.get('since'), 'last_login');
+  assert.equal(doc.querySelector('#view .toolbar-ui select').value, 'last_seen');
 });
 
 test('the StatStrip filters the table, and clicking the active card clears it', async (t) => {

@@ -468,6 +468,10 @@ function makeSnmpDevicesRepo(overrides = {}, { credentialProfilesRepo = null } =
     intervalSec: r.interval_sec,
     counterIntervalSec: r.counter_interval_sec ?? null,
     credentialProfileId: r.credential_profile_id ?? null,
+    // WHETHER it carries its own community, never what it is — the same rule
+    // the real repository follows, computed in SQL so the encrypted value
+    // never leaves the database.
+    hasCommunity: !!r.community,
     enabled: !!r.enabled,
     lastPolledAt: iso(r.last_polled_at),
     lastOkAt: iso(r.last_ok_at),

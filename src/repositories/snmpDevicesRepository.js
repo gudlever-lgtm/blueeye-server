@@ -40,6 +40,14 @@ function mapRow(row) {
     // device with its own community still wins over both, so every row that
     // existed before profiles keeps working with nothing to migrate.
     credentialProfileId: row.credential_profile_id == null ? null : Number(row.credential_profile_id),
+    // WHETHER this device carries its own community, never what it is. The
+    // difference between "no credential configured" and "a credential you
+    // cannot see" is the whole of what a reader needs, and a caller asking
+    // "is this switch going to be polled" had no way to tell them apart —
+    // `SAFE_COLUMNS` omits the encrypted column entirely, as it must.
+    // `undefined` on the shapes that do not select it, so absent is never
+    // read as false.
+    hasCommunity: row.has_community === undefined ? undefined : !!Number(row.has_community),
     collect: parseJson(row.collect, ['if', 'fdb', 'lldp', 'vlan']),
     intervalSec: Number(row.interval_sec),
     // NULL means this device is not polled for counters. The volume is opt-in
@@ -67,13 +75,17 @@ function mapRow(row) {
 function createSnmpDevicesRepository(db, { secretBox = null, credentialProfilesRepo = null } = {}) {
   const { pool } = db;
 
+  // The boolean, computed in SQL so the encrypted value never leaves the
+  // database on this path.
+  const HAS_COMMUNITY = "community_encrypted IS NOT NULL AND community_encrypted <> '' AS has_community";
+
   async function list({ agentId = null, enabled = null } = {}) {
     const where = [];
     const params = [];
     if (agentId != null) { where.push('agent_id = ?'); params.push(agentId); }
     if (enabled != null) { where.push('enabled = ?'); params.push(enabled ? 1 : 0); }
     const [rows] = await pool.query(
-      `SELECT ${SAFE_COLUMNS} FROM snmp_devices
+      `SELECT ${SAFE_COLUMNS}, ${HAS_COMMUNITY} FROM snmp_devices
         ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
         ORDER BY host ASC, port ASC`,
       params,

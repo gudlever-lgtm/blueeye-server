@@ -55,7 +55,7 @@
           api('/api/changes/seen', { method: 'POST', body: {} })
             .then(function () {
               ui.toast(t('changes.marked'), t('changes.markedDetail'));
-              deps.setSince('last_login');
+              deps.setWindow(deps.LAST_SEEN);
               return load();
             })
             .catch(function (e) { ui.toast(t('changes.title'), errText(e), { bad: true }); })

@@ -47,6 +47,7 @@ const { createInterfacesRouter } = require('./interfaces');
 const { createDeviceEventsRouter } = require('./deviceEvents');
 const { createSnmpDevicesRouter } = require('./snmpDevices');
 const { createSnmpProfilesRouter } = require('./snmpProfiles');
+const { createSetupRouter } = require('./setup');
 const { createBurstRouter } = require('./burst');
 const { createFleetRouter } = require('./fleet');
 const { createDashboardRouter } = require('./dashboard');
@@ -438,6 +439,15 @@ function createApiRouter({
   // SNMP credential profiles. ADMIN for everything, including the read: a list
   // of profiles says which sites share a secret and which use v3, which is a
   // map of where to attack first.
+  // "Why is this screen empty?" — answered once for the whole product, from
+  // what the database actually holds rather than a box somebody ticked.
+  // Always mounted: an install with nothing wired up is exactly the one that
+  // needs it, and every source inside is best-effort.
+  router.use('/api/setup', createSetupRouter({
+    agentsRepo, snmpDevicesRepo, snmpProfilesRepo, deviceEventsRepo,
+    locationsRepo, settingsService, logger,
+  }));
+
   if (snmpProfilesRepo) {
     router.use('/api/snmp-profiles', createSnmpProfilesRouter({
       snmpProfilesRepo, locationsRepo, agentsRepo, auditLogger, logger,

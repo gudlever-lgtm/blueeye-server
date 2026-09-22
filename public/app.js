@@ -11121,7 +11121,7 @@ const SETTINGS_GROUPS = [
   ['Access & security', [['users', 'Users', true], ['auth', 'Authentication', true], ['apitokens', 'API tokens', true], ['agentkey', 'Agent key', true]]],
   ['Detection & alerts', [['analyse', 'Analysis', true], ['alerting', 'Alerting', true], ['severity', 'Severity rules', true], ['runbooks', 'Runbooks', true], ['integrations', 'ITSM', true], ['cmdb', 'CMDB', true], ['ai', 'AI', true], ['maintenance', 'Maintenance', true]]],
   ['Data', [['database', 'Database', true], ['retention', 'Retention', true], ['types', 'Traffic types', true], ['map', 'Map', true]]],
-  ['System', [['updates', 'Updates', true], ['agents', 'Agents', true], ['snmp', 'SNMP devices', true], ['snmpcommunities', 'SNMP communities', true], ['screening', 'Test Settings', true], ['assurance', 'Service Assurance', true]]],
+  ['System', [['setup', 'Setup', true], ['updates', 'Updates', true], ['agents', 'Agents', true], ['snmp', 'SNMP devices', true], ['snmpcommunities', 'SNMP communities', true], ['screening', 'Test Settings', true], ['assurance', 'Service Assurance', true]]],
   ['Personal', [['appearance', 'Appearance', false], ['license', 'License', false]]],
 ];
 // ---- Logs (admin-only operational + client-error view) ----------------------
@@ -11833,6 +11833,7 @@ const SETTINGS_SECTIONS = {
   updates: settingsUpdatesView,
   agentkey: settingsAgentKeyView,
   agents: settingsAgentsView,
+  setup: settingsSetupView,
   snmp: settingsSnmpDevicesView,
   snmpcommunities: settingsSnmpCommunitiesView,
   retention: settingsRetentionView,
@@ -12703,6 +12704,112 @@ async function settingsSnmpDevicesView() {
 // Trying them in order on the wire is credential spraying — it locks v3
 // accounts, and on v2c a wrong community usually just times out, so the polling
 // collapses before it finds anything.
+// ---- Settings → Setup ------------------------------------------------------
+// "Why is this screen empty?", answered once for the whole product.
+//
+// EVERY ROW IS COMPUTED, NEVER TICKED. There is no "mark as done" here: a
+// checklist somebody ticks starts lying the moment the configuration it
+// describes changes, and the point is to be true on the day an operator opens
+// an empty screen — not on the day somebody set it up. The server derives each
+// row from what the database holds (src/services/setupChecklist.js).
+//
+// WHY EACH ROW SAYS WHAT STAYS EMPTY. "Set a traffic source" is a task. "Flows,
+// the traffic map and the topology diagram are empty until you do" is a reason,
+// and it is the half that was missing every time somebody went looking for a
+// bug in a screen that was working exactly as configured.
+async function settingsSetupView() {
+  const host = el('div', { class: 'settings-grid' });
+
+  // Where a row sends you. The keys are settings tabs, except the two that are
+  // whole screens of their own — a task that ends in "and now go to Settings"
+  // when the thing to change is not IN settings is a task with a wrong ending.
+  const VIEW_FIX = { enrollment: 'enrollment', locations: 'locations' };
+
+  function stateBadge(state) {
+    const tone = { ok: 'ok', partial: 'warn', todo: 'crit', unknown: 'neutral' }[state] || 'neutral';
+    return el('span', { class: `badge-ui ${tone}` }, t(`setup.state.${state}`));
+  }
+
+  // What each check unlocks, named as the screens somebody would be looking at.
+  // The nav labels are already translated, so this borrows them rather than
+  // keeping a second list that can disagree with the menu.
+  function unlocksCell(keys) {
+    const names = (keys || []).map((k) => t(`nav.view.${k}`)).filter(Boolean);
+    if (!names.length) return el('span', { class: 'muted' }, '—');
+    return el('span', { class: 'meta-xs' }, names.join(' · '));
+  }
+
+  function fixControl(check) {
+    if (!check.fix) return null;
+    const view = VIEW_FIX[check.fix];
+    if (view) {
+      return el('button', {
+        class: 'btn btn-secondary btn-xs',
+        onclick: () => { currentView = view; render(); },
+      }, t('setup.fix'));
+    }
+    return el('button', {
+      class: 'btn btn-secondary btn-xs',
+      onclick: () => { settingsTab = check.fix; currentView = 'settings'; render(); },
+    }, t('setup.fix'));
+  }
+
+  function row(check) {
+    // The detail line is the server's numbers in the reader's language. A key
+    // this build has no string for falls back to the state, so a check added
+    // server-side never renders as a raw key.
+    const detailKey = `setup.check.${check.key}.${check.state}`;
+    let detail = t(detailKey, check.detail || {});
+    if (detail === detailKey) detail = t(`setup.state.${check.state}`);
+    return el('tr', {},
+      el('td', {},
+        el('strong', {}, t(`setup.check.${check.key}.title`)),
+        el('div', { class: 'meta-xs' }, detail)),
+      el('td', {}, stateBadge(check.state)),
+      el('td', {}, unlocksCell(check.unlocks)),
+      el('td', {}, check.state === 'ok' ? null : fixControl(check)));
+  }
+
+  async function refresh() {
+    let data;
+    try {
+      data = await api('/api/setup/checklist');
+    } catch (e) {
+      host.replaceChildren(el('div', { class: 'error' }, errText(e)));
+      return;
+    }
+    const checks = data.checks || [];
+
+    const head = el('section', { class: 'card' },
+      el('h3', {}, t('setup.title')),
+      el('p', { class: 'muted' }, t('setup.lead')),
+      data.complete
+        ? el('div', {},
+          el('strong', {}, t('setup.complete.title')),
+          el('p', { class: 'muted' }, t('setup.complete.body')))
+        : el('span', { class: 'badge-ui warn' }, t('setup.outstanding', { n: data.outstanding || 0 })));
+
+    const table = el('table', { class: 'dt' },
+      el('thead', {}, el('tr', {},
+        el('th', {}, t('setup.col.what')),
+        el('th', {}, t('setup.col.state')),
+        el('th', {}, t('setup.col.empty')),
+        el('th', {}, ''))),
+      // Outstanding work first. A list that opens on six green rows is a list
+      // whose one red row is below the fold.
+      el('tbody', {}, checks
+        .slice()
+        .sort((a, b) => (a.state === 'ok' ? 1 : 0) - (b.state === 'ok' ? 1 : 0))
+        .map(row)));
+
+    const list = el('section', { class: 'card' }, el('div', { class: 'table-wrap-ui' }, table));
+    host.replaceChildren(head, list);
+  }
+
+  await refresh();
+  return host;
+}
+
 async function settingsSnmpCommunitiesView() {
   const host = el('div', { class: 'settings-grid' });
   let profiles = [];

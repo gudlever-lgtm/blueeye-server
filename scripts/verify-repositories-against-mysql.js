@@ -87,6 +87,35 @@ check('change acks: upsert, millisecond round trip, per-user read, undo', async 
   assert.strictEqual(await repo.unackChange(1, key), false);
 });
 
+check('change mutes: live-only read, upsert, prune, undo', async (pool) => {
+  const repo = createUsersRepository({ pool });
+  const key = 'f'.repeat(64);
+  const until = new Date(Date.now() + 3600 * 1000);
+  until.setMilliseconds(456);
+  await repo.muteChange(1, key, until);
+  let mutes = await repo.listChangeMutes(1);
+  assert.strictEqual(mutes.get(key).getTime(), until.getTime(), 'DATETIME(3) lost the milliseconds');
+
+  const longer = new Date(until.getTime() + 3600 * 1000);
+  await repo.muteChange(1, key, longer); // re-mute replaces the end time
+  mutes = await repo.listChangeMutes(1);
+  assert.strictEqual(mutes.size, 1);
+  assert.strictEqual(mutes.get(key).getTime(), longer.getTime());
+
+  // Expired: not read, cannot be unmuted, and pruned by the next mute.
+  const old = '0'.repeat(64);
+  await pool.query('INSERT INTO change_mutes (user_id, mute_key, muted_until) VALUES (1, ?, NOW(3) - INTERVAL 1 MINUTE)', [old]);
+  assert.strictEqual((await repo.listChangeMutes(1)).has(old), false);
+  assert.strictEqual(await repo.unmuteChange(1, old), false);
+  await repo.muteChange(1, key, longer);
+  const [[{ n }]] = await pool.query('SELECT COUNT(*) AS n FROM change_mutes WHERE mute_key = ?', [old]);
+  assert.strictEqual(Number(n), 0, 'the expired mute was not pruned');
+
+  assert.strictEqual((await repo.listChangeMutes(2)).size, 0, 'another user saw this mute');
+  assert.strictEqual(await repo.unmuteChange(1, key), true);
+  assert.strictEqual(await repo.unmuteChange(1, key), false);
+});
+
 check('observations: a batch writes and reads back', async (pool) => {
   const repo = createObservationsRepository({ db: { pool } });
   const earlier = new Date(Date.now() - 60000);

@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.188.0 — Mute this rule does something
+
+**"Mute this rule" on a Changes row only showed a toast.** It now mutes the
+row's rule — every row of that source + type, on every host — for 24 hours, for
+you only (`POST /api/changes/mute`, migration 116 `change_mutes`). Muted rows
+leave the default list, the note under the toolbar counts them, and
+**Show → Muted** lists them with **Unmute this rule**
+(`DELETE /api/changes/mute/:key`).
+
+Always time-boxed (1..168 hours through the API), and it never touches
+alerting. See `docs/changes-feed.md`.
+
 ## 0.186.0 — Acknowledge on the Changes page does something
 
 **The Acknowledge button on a Changes row only showed a toast.** Nothing was

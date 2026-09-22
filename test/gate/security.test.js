@@ -71,6 +71,10 @@ const VIEWER_WRITE_ALLOWED = new Set([
   // 115) — the same footing as marking the page seen.
   'POST /api/changes/ack',
   'DELETE /api/changes/ack/:key',
+  // Muting a rule on the Changes page is the same: own view only (migration
+  // 116), time-boxed, and it never touches alerting.
+  'POST /api/changes/mute',
+  'DELETE /api/changes/mute/:key',
   'POST /api/nis2/custom-reports/preview',
   'POST /api/nis2/custom-reports/export',
   'POST /api/logs/client',

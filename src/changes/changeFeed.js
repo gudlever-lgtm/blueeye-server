@@ -656,12 +656,27 @@ function ackKeyFor(e) {
   return crypto.createHash('sha256').update(raw).digest('hex');
 }
 
+// --- mute key ----------------------------------------------------------------
+// "Mute this rule" (change_mutes, migration 116) silences a KIND of row rather
+// than one row: every row of this source + type, on every host, for a while.
+// That is the difference from acknowledging — an ack is "I have dealt with this
+// one", a mute is "stop showing me version skew until tomorrow".
+//
+// Severity and host are deliberately left out: a mute that a WARN → CRIT
+// escalation silently walked through would be worse than no mute, but a mute
+// that only covered one host would just be a slower acknowledge. The route shows
+// muted CRIT rows the same as any other — the reader chose to mute the type.
+function muteKeyFor(e) {
+  return crypto.createHash('sha256').update(['rule', e.source, e.type].join('|')).digest('hex');
+}
+
 // `caseId`, `primaryFindingId` and `stateKey` are internal plumbing, not part of
 // the feed's contract — dropped so the response describes only what the UI
-// renders. `ackKey` is added here, from the row as it stands after correlation.
+// renders. `ackKey` and `muteKey` are added here, from the row as it stands after
+// correlation.
 function stripInternals(e) {
   const { caseId, primaryFindingId, stateKey, ...rest } = e;
-  return { ...rest, ackKey: ackKeyFor(e) };
+  return { ...rest, ackKey: ackKeyFor(e), muteKey: muteKeyFor(e) };
 }
 
 // Builds the final feed: filter to the window, order, group by severity, cap.
@@ -713,6 +728,7 @@ module.exports = {
   withinWindow,
   correlationKey,
   ackKeyFor,
+  muteKeyFor,
   rollUpFindings,
   collapseRecurring,
   correlateEvents,

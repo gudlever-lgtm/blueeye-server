@@ -59,7 +59,31 @@ In the UI, **Show** defaults to *Not acknowledged*; the note under the toolbar
 counts the hidden ones, and *Acknowledged* lists them with **Undo acknowledge**.
 The stat cards count what **Show** lets through.
 
-*Mute this rule* in the row menu is still a placeholder (a toast only).
+## Muting a rule
+
+`POST /api/changes/mute { key, hours? }` · `DELETE /api/changes/mute/:key` · viewer+.
+
+Every row also carries a `muteKey` and `mutedUntil` (ISO or `null`). The key is
+a hash of **source + type** (`muteKeyFor`), so one mute covers every row of that
+rule on **every host** — "stop showing me version skew until tomorrow". Severity
+is not in the key: a mute covers an escalated row too, because the reader chose
+to mute the type. Where an ack is "I have dealt with this one row", a mute is
+"not this kind of row, for a while".
+
+- **Time-boxed, always.** `hours` defaults to 24 and is 1..168; anything else is
+  a 400. There is no permanent mute: one that outlives its reason is how the
+  page quietly stops showing what matters.
+- **Per user**, like acks. It changes only the caller's Changes page and never
+  touches alerting (severity rules and alert rules are separate).
+- Stored in `change_mutes` (migration 116). Only live mutes are read; expired
+  ones are pruned on the next mute. `DELETE` is a 404 when nothing live is
+  muted, including a malformed key.
+- A failing lookup on `GET` marks the feed `partial` with `mutes` in
+  `failedSources`, and every row reads as not muted.
+
+In the UI, *Mute this rule* is in the row's ⋯ menu. Muted rows leave the default
+*Not acknowledged* list (the note counts them), and **Show → Muted** lists them
+with *Unmute this rule*.
 
 ## What it reports
 
@@ -213,12 +237,12 @@ and every mapper labels from it): that is a 500.
 
 ## Files
 
-- Migrations `migrations/074_add_user_last_seen_changes.sql`, `migrations/115_change_acks.sql`
+- Migrations `migrations/074_add_user_last_seen_changes.sql`, `migrations/115_change_acks.sql`, `migrations/116_change_mutes.sql`
 - Pure read-model `src/changes/changeFeed.js` (mappers, window, correlation, ordering, grouping)
 - Condition families `src/changes/indications.js`
 - Fan-out `src/changes/changesService.js`
 - Vocabulary (event vs. incident vs. situation vs. probe outage): [events.md](events.md)
 - Router `src/routes/changes.js`
-- Fleet-wide repo additions: `remediationPlaybooksRepository.listRunsBetween`, `configSnapshotsRepository.listBetween`, `usersRepository.get/setLastSeenChanges`, `usersRepository.listChangeAcks/ackChange/unackChange`
+- Fleet-wide repo additions: `remediationPlaybooksRepository.listRunsBetween`, `configSnapshotsRepository.listBetween`, `usersRepository.get/setLastSeenChanges`, `usersRepository.listChangeAcks/ackChange/unackChange`, `usersRepository.listChangeMutes/muteChange/unmuteChange`
 - UI `views.changes` + `changesRowEl()` in `public/app.js`, `.chg-*` CSS, `PAGE_INFO.changes`
-- Tests `test/changesFeed.test.js` (pure), `test/changesApi.test.js` (HTTP), `test/changesAck.test.js` + `test/changeAcksRepository.test.js` (acknowledge), `test/changesView.test.js` (UI)
+- Tests `test/changesFeed.test.js` (pure), `test/changesApi.test.js` (HTTP), `test/changesAck.test.js` + `test/changesMute.test.js` + `test/changeAcksRepository.test.js` (acknowledge, mute), `test/changesView.test.js` (UI)

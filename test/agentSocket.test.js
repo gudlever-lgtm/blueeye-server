@@ -573,3 +573,29 @@ test('a license rejection (403) is recorded against the agent id', async () => {
     }
   );
 });
+
+test('a trace_hop frame is relayed to the dashboard as trace-hop, with the agent id from the token', async () => {
+  const tracker = makeStatusTracker();
+  const agentsRepo = makeAgentsRepo({ setStatus: tracker.setStatus });
+  const frames = [];
+  let got;
+  const relayed = new Promise((resolve) => { got = resolve; });
+  const notifyDashboard = (m) => { frames.push(m); if (m.type === 'trace-hop') got(m); return 1; };
+
+  await withWsServer({ agentTokensRepo: validRepo(), agentsRepo, notifyDashboard }, async ({ port }) => {
+    const client = new WebSocket(`ws://127.0.0.1:${port}/ws/agent`, { headers: { Authorization: 'Bearer good' } });
+    try {
+      await withTimeout(waitOpen(client), 4000, 'did not open');
+      await withTimeout(tracker.waitFor('online'), 4000, 'online not set');
+      // A frame that claims another agent id: the relay must use the token's.
+      client.send(JSON.stringify({ type: 'trace_hop', agentId: 1234, probeType: 'traceroute', target: 'us.cnn.com', hop: { hop: 2, ip: '10.0.0.1', rttMs: 3 } }));
+      const m = await withTimeout(relayed, 4000, 'trace-hop was not relayed');
+      assert.equal(m.payload.agentId, 9);
+      assert.equal(m.payload.target, 'us.cnn.com');
+      assert.equal(m.payload.node.hop, 2);
+      assert.equal(m.payload.node.private, true);
+    } finally {
+      client.close();
+    }
+  });
+});

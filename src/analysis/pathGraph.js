@@ -285,4 +285,25 @@ function buildBranches(runs, byPos, maxPos, { geoProvider = null, centroids = nu
   return { multipath, hops, edges };
 }
 
-module.exports = { buildPathGraph, PATH_PROBE_TYPES, buildBranches, THRESHOLDS: T };
+// One hop from a trace that is STILL RUNNING, shaped like a graph node so the
+// dashboard can draw it with the same code as a finished path. Single run, so
+// no medians: the numbers are the hop's own. Geo follows the same rule as the
+// graph — public addresses only, country centroid.
+function describeLiveHop(h, { geoProvider = null, centroids = null } = {}) {
+  const hop = Number(h && h.hop);
+  if (!Number.isInteger(hop) || hop < 1 || hop > 64) return null;
+  const ip = typeof h.ip === 'string' && h.ip.length <= 64 ? h.ip : null;
+  const num = (v) => (typeof v === 'number' && Number.isFinite(v) && v >= 0 ? round(v) : null);
+  const rttMs = num(h.rttMs);
+  const jitterMs = num(h.jitterMs);
+  const lossPct = h.lossPct != null ? num(h.lossPct) : (rttMs != null ? 0 : 100);
+  const responded = rttMs != null ? 1 : 0;
+  const unresponsive = responded === 0;
+  const { severity, reason } = classify({ lossPct, jitterMs, rttMs, responded, unresponsive });
+  return {
+    kind: 'hop', hop, ip, label: ip || '* * *', ...enrichGeo(ip, geoProvider, centroids),
+    rttMs, lossPct, jitterMs, responded, runs: 1, unresponsive, severity, explain: reason,
+  };
+}
+
+module.exports = { buildPathGraph, describeLiveHop, PATH_PROBE_TYPES, buildBranches, THRESHOLDS: T };

@@ -112,6 +112,7 @@ const { createFlowsRepository } = require('./repositories/flowsRepository');
 const { createGeoProvider } = require('./geo/provider');
 const { createGeoipUpdater } = require('./geo/geoipUpdater');
 const { createCentroids } = require('./geo/centroids');
+const { describeLiveHop } = require('./analysis/pathGraph');
 const { createGeoEnricher } = require('./geo/enricher');
 const { createFlowPipeline } = require('./geo/flowPipeline');
 const { loadAlertingConfig } = require('./analysis/alerting/config');
@@ -1248,6 +1249,8 @@ function start() {
     licenseGuard: (count) => licenseManager.canAcceptNewConnection(count),
     // Push live online/offline transitions to the dashboard.
     notifyDashboard,
+    // Live traceroute hops, geolocated the same way as the finished path.
+    describeTraceHop: (hop) => describeLiveHop(hop, { geoProvider, centroids }),
     // Transaction-test channel: config push on connect/change + result ingest +
     // threshold alerting (reuses the same dispatcher as probe/analysis findings).
     // The assistant supplies an optional Danish diagnosis (falls back to a template).

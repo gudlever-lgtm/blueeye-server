@@ -6,6 +6,7 @@ const { extractToken, pathnameOf, safeSend, startHeartbeat } = require('./wsComm
 const { PROTOCOL_VERSION } = require('../protocol');
 const { validateResultIngest } = require('../validation/transactionValidation');
 const { stepsOf, classifyDeviation, diagnoseText, evaluateThresholds } = require('../analysis/transactionAlerts');
+const { describeLiveHop } = require('../analysis/pathGraph');
 
 const silentLogger = { info() {}, warn() {}, error() {} };
 
@@ -24,6 +25,25 @@ function clientIp(req) {
 // Attaches the agent WebSocket endpoint to an existing HTTP server. Agent-token
 // auth is enforced during the upgrade handshake — a connection without a valid
 // token is rejected hard (no WebSocket is ever established).
+// Shapes an agent's `trace_hop` frame for the dashboard, or null when it is not
+// one. The agent is authenticated but its frame is still input: the target is
+// bounded, the type must be a path probe, and the hop goes through
+// describeLiveHop (or the same bounds without geo) so only numbers and a short
+// address string reach the browser.
+const TRACE_TYPES = ['traceroute', 'tcptraceroute'];
+function traceHopPayload(agentId, msg, describe) {
+  const target = typeof msg.target === 'string' ? msg.target.trim() : '';
+  if (!target || target.length > 255) return null;
+  const probeType = TRACE_TYPES.includes(msg.probeType) ? msg.probeType : null;
+  if (!probeType || !msg.hop || typeof msg.hop !== 'object') return null;
+  let node = null;
+  try {
+    node = typeof describe === 'function' ? describe(msg.hop) : describeLiveHop(msg.hop);
+  } catch { node = null; }
+  if (!node) return null;
+  return { agentId, probeType, target, node };
+}
+
 function attachAgentWebSocket({
   server,
   agentTokensRepo,
@@ -46,6 +66,10 @@ function attachAgentWebSocket({
   licenseGuard = () => true,
   // Optional: pushes live agent online/offline events to the dashboard channel.
   notifyDashboard = null,
+  // Optional: turns one streamed traceroute hop into a map-ready node (geo +
+  // severity) — describeLiveHop bound to the geo provider. Without it, hops
+  // are still forwarded, just without coordinates.
+  describeTraceHop = null,
   // Optional transaction-test channel: the repo (config push + result ingest),
   // the alerting dispatcher, whether alerting is on (bool or live getter), and the
   // AI assistant for an optional Danish diagnosis (falls back to a template).
@@ -250,6 +274,16 @@ function attachAgentWebSocket({
             },
           });
         } catch { /* the chart is a courtesy */ }
+      }
+      // agent -> server: one traceroute hop, as the trace reaches it (agent
+      // 0.38+). Forwarded to the dashboard so the path grows on the map while
+      // the trace runs. Not stored: the finished run arrives on
+      // POST /agents/probe-results and is the record.
+      if (msg.type === 'trace_hop' && typeof notifyDashboard === 'function') {
+        const payload = traceHopPayload(ws.agentId, msg, describeTraceHop);
+        if (payload) {
+          try { notifyDashboard({ type: 'trace-hop', payload }); } catch { /* live view is a courtesy */ }
+        }
       }
       // agent -> server: a finished burst. The whole series, analysed once and
       // stored with its verdict.
@@ -600,4 +634,4 @@ function attachAgentWebSocket({
   return { wss, sendCommand, sendCommandAndWait, broadcast, close, connectionCount, getSflowStatus, pushTransactionConfig, getConnectionInfo, disconnectAgent };
 }
 
-module.exports = { attachAgentWebSocket };
+module.exports = { attachAgentWebSocket, traceHopPayload };

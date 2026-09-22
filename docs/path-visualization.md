@@ -90,12 +90,35 @@ per-hop precision stays in the topology graph; the map answers "which countries 
 the traffic cross, and where did it degrade?". When there aren't at least two
 geolocated stops (no GeoIP DB, or all-private hops) the panel explains why.
 
-The same overlay is also reachable **from the Destinations tab** via a path picker
-(pick agent + traceroute target → "Show path"): `drawGeoPath()` draws the path into
-a dedicated Leaflet layer on the existing map (shared `renderPathStops()`), with a
-side-panel summary listing the geolocated stops and the worst hop; "Clear path"
-removes the layer and restores the destinations overview. Target options come from
-the agent's recent traceroutes (`/api/probes/latest`).
+The same overlay is also reachable **from the Destinations tab**, where several
+traces can sit on the map at once:
+
+- **Show path** draws the stored path for agent + target, and asks the agent for
+  a run only when nothing is stored.
+- **Trace now** always runs a new trace and draws it **while it runs**: agent
+  0.38+ sends a `trace_hop` frame over `/ws/agent` for every hop the moment the
+  traceroute binary prints it; the server geolocates it (`describeLiveHop` in
+  `analysis/pathGraph.js` — public addresses only, country centroid, same rule
+  as the finished graph) and relays it to the dashboard socket as `trace-hop`.
+  Nothing is stored per hop — the submitted run is the record.
+- When a traceroute/tcptraceroute result is stored (`POST /agents/probe-results`)
+  the server sends `probe-result` to the dashboard, so the finished path draws
+  the moment it lands. Polling stays as the fallback (older agents, a proxy that
+  drops the socket), for up to 200 s — the agent's own budget is up to 180 s.
+  The old 90 s window gave up on traces that were still running.
+- A second click on a trace in flight joins it instead of sending another run.
+- **Show all traces** puts every target the agent has traced (up to 12) on the
+  map. Each trace has its own Leaflet layer (`geoState.traces`, keyed
+  agent|type|target); the list under the map shows each one's state (live hop,
+  runs · stops, failed, no answer), a click there or on the map opens its hops,
+  and **Remove** / **Clear path** take one or all off the map.
+- A tcptraceroute target is stored as `host:port`; the run is dispatched as
+  `{ host, port }`. Sending `host:port` as the host used to trace
+  `host:port:port`, which never matched.
+
+Target options come from the agent's recent traceroutes (`/api/probes/latest`).
+`/api/probes/path` always returns the agent's `origin`, so live hops are anchored
+to the agent's site before any run is stored.
 
 ## Shared Path Visualization component (path graph + metric timeline)
 

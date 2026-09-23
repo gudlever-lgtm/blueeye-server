@@ -100,7 +100,10 @@ function createInvestigationRouter({
       try {
         result = await locator.runInvestigation({ locationRef, windowMinutes });
       } catch (err) {
-        return res.status(500).json({ error: 'Investigation failed', details: err.message });
+        // The reason goes to the log, not the response: it is a repository
+        // error (SQL, host, port) and says nothing the caller can act on.
+        (req.log || logger).error(`investigation: run failed (${err.message})`);
+        return res.status(500).json({ error: 'Investigation failed' });
       }
 
       result = await maybeAddNarrative(result);
@@ -155,7 +158,10 @@ function createInvestigationRouter({
       try {
         result = await locator.runInvestigation({ locationRef, windowMinutes: 30 });
       } catch (err) {
-        return res.status(500).json({ error: 'Investigation failed', details: err.message });
+        // The reason goes to the log, not the response: it is a repository
+        // error (SQL, host, port) and says nothing the caller can act on.
+        (req.log || logger).error(`investigation: run failed (${err.message})`);
+        return res.status(500).json({ error: 'Investigation failed' });
       }
 
       result = await maybeAddNarrative(result);

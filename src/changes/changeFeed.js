@@ -35,6 +35,19 @@ const { numOrNull } = require('../lib/num');
 //   findingCount — anomalies rolled up into an event row (0 when none).
 
 const { metricFamily } = require('./indications');
+const { VERDICT_SUMMARY } = require('../health/agentOffline');
+
+// The agent-offline finding (src/health/agentOfflineMonitor.js) carries its
+// dead-agent vs network-down verdict in evidence[0]. The feed surfaces it on
+// the row, because "X went offline" is the question and the verdict is the
+// answer the landing page exists to give.
+const AGENT_OFFLINE_METRIC = 'agent.offline';
+function offlineVerdictOf(f) {
+  if (!f || f.metric !== AGENT_OFFLINE_METRIC) return null;
+  const ev = Array.isArray(f.evidence) ? f.evidence[0] : null;
+  const v = ev && typeof ev.verdict === 'string' ? ev.verdict : null;
+  return v && Object.prototype.hasOwnProperty.call(VERDICT_SUMMARY, v) ? v : null;
+}
 
 const SEVERITY_ORDER = ['CRIT', 'WARN', 'INFO'];
 const SEVERITY_RANK = { CRIT: 0, WARN: 1, INFO: 2 };
@@ -126,23 +139,58 @@ function fromAgentEvents(rows, { nameFor = (id) => `agent ${id}` } = {}) {
 // New anomaly findings. These are the RAW detections: most of them belong to an
 // event (event_case) that already represents them, and correlateEvents() folds
 // those away — `caseId` is the link that makes that possible.
+// A new-device finding (src/discovery/newDeviceDetector.js) is shown as its
+// own kind, 'new_device', rather than as an anomaly: it is an inventory change
+// ("10.20.0.57, a Siemens MAC, appeared at Plant A"), the row says what appeared,
+// and — not being kind 'finding' — it is neither rolled into whatever event the
+// agent happens to have open nor collapsed with the next new device, because two
+// new devices are two things to look at.
+const NEW_DEVICE_METRIC = 'device.new';
+
+function newDeviceSummary(f, who) {
+  const ev = Array.isArray(f.evidence) ? f.evidence[0] : null;
+  const l = (ev && ev.labels) || {};
+  if (l.summary) return `${l.count || 'Several'} new devices seen by ${who} (over the hourly limit)`;
+  const bits = [l.mac, l.vendor].filter(Boolean).join(' · ');
+  const site = l.siteName ? ` at ${l.siteName}` : '';
+  return `New device ${l.ip || (ev && ev.target) || '?'}${bits ? ` (${bits})` : ''} seen by ${who}${site}`;
+}
+
 function fromFindings(rows, { nameFor = (id) => `host ${id}` } = {}) {
   return (rows || []).map((f) => {
     // `Number(null)` is 0, and agent 0 does not exist — the row would claim a
     // host it cannot name, and `agentId == null` checks downstream would miss it.
     const agentId = numOrNull(f.hostId ?? f.host_id);
-    return makeEvent({
+    const who = agentId == null ? (f.hostId ?? f.host_id) : nameFor(agentId);
+    if (f.metric === NEW_DEVICE_METRIC) {
+      return makeEvent({
+        timestamp: f.createdAt || f.created_at,
+        source: 'finding',
+        type: `finding.${f.metric}`,
+        severity: f.severity,
+        summary: newDeviceSummary(f, who),
+        refId: f.id,
+        agentId,
+        kind: 'new_device',
+        metric: f.metric,
+      });
+    }
+    const verdict = offlineVerdictOf(f);
+    const event = makeEvent({
       timestamp: f.createdAt || f.created_at,
       source: 'finding',
       type: `finding.${f.metric}`,
       severity: f.severity,
-      summary: `${f.metric} on ${agentId == null ? (f.hostId ?? f.host_id) : nameFor(agentId)}`,
+      summary: verdict ? `${who} offline: ${VERDICT_SUMMARY[verdict]}` : `${f.metric} on ${who}`,
       refId: f.id,
       agentId,
       kind: 'finding',
       metric: f.metric,
       caseId: f.eventCaseId ?? f.event_case_id ?? null,
     });
+    // Additive, and only on the rows that have one: the UI translates the code
+    // (agents.offlineVerdict.<code>), the summary above carries the English.
+    return verdict ? { ...event, offlineVerdict: verdict } : event;
   });
 }
 
@@ -280,10 +328,16 @@ function fromTopologyChanges(rows) {
 // Interface state transitions (migration 075). This is the dimension the feed
 // could not report before interfaces were given a transition log — and the one a
 // technician asks about most.
+//
+// Since migration 118 this also carries SWITCH PORTS (a row with a deviceId).
+// Their summary already names the switch and the port ("sw-core-1 Gi1/0/24
+// link went down"), and `agentId` there is only the agent that observed it —
+// so "on <agent>" would name the wrong box, and is left off.
 function fromInterfaceTransitions(rows, { nameFor = (id) => `agent ${id}` } = {}) {
   return (rows || []).map((t) => {
     const agentId = t.agentId != null ? Number(t.agentId) : null;
-    const where = agentId == null ? '' : ` on ${nameFor(agentId)}`;
+    const onSwitch = t.deviceId != null || t.device_id != null;
+    const where = agentId == null || onSwitch ? '' : ` on ${nameFor(agentId)}`;
     return makeEvent({
       timestamp: t.detectedAt || t.detected_at,
       source: 'interface',
@@ -539,6 +593,11 @@ function rollUpFindings(events) {
   if (caseIds.size === 0 && primaryFindingIds.size === 0) return events;
 
   const rolledInto = new Map(); // caseId -> anomalies folded in
+  // An agent-offline verdict must survive the fold: the event row that absorbs
+  // the finding is what the page shows, and its title is only "agent.offline
+  // on X". Keyed by case id and by primary finding id, like the fold itself.
+  const verdictByCase = new Map();
+  const verdictByPrimary = new Map();
   const kept = events.filter((e) => {
     if (e.kind !== 'finding') return true;
     const cid = e.caseId == null ? null : Number(e.caseId);
@@ -546,13 +605,21 @@ function rollUpFindings(events) {
     const byPrimary = e.ref_id != null && primaryFindingIds.has(String(e.ref_id));
     if (!byFk && !byPrimary) return true;
     if (cid != null) rolledInto.set(cid, (rolledInto.get(cid) || 0) + 1);
+    if (e.offlineVerdict) {
+      if (cid != null) verdictByCase.set(cid, e.offlineVerdict);
+      if (e.ref_id != null) verdictByPrimary.set(String(e.ref_id), e.offlineVerdict);
+    }
     return false;
   });
 
   return kept.map((e) => {
     if (e.kind !== 'event' || e.ref_id == null) return e;
     const n = rolledInto.get(Number(e.ref_id)) || 0;
-    return n ? { ...e, findingCount: e.findingCount + n } : e;
+    let out = n ? { ...e, findingCount: e.findingCount + n } : e;
+    const verdict = verdictByCase.get(Number(e.ref_id))
+      || (e.primaryFindingId != null ? verdictByPrimary.get(String(e.primaryFindingId)) : null);
+    if (verdict) out = { ...out, summary: `${out.summary}: ${VERDICT_SUMMARY[verdict]}`, offlineVerdict: verdict };
+    return out;
   });
 }
 
@@ -657,7 +724,7 @@ function ackKeyFor(e) {
 }
 
 // --- mute key ----------------------------------------------------------------
-// "Mute this rule" (change_mutes, migration 116) silences a KIND of row rather
+// "Mute this rule" (change_mutes, migration 124) silences a KIND of row rather
 // than one row: every row of this source + type, on every host, for a while.
 // That is the difference from acknowledging — an ack is "I have dealt with this
 // one", a mute is "stop showing me version skew until tomorrow".

@@ -219,14 +219,31 @@ test('blast radius names the impact beyond the affected devices', async () => {
   assert.ok(beyond.includes(4), 'app-1 depends on sw-acc-b and must be in the blast radius');
 });
 
-test('an offline agent is down and greys out what it isolates', async () => {
+// This used to assert that 2 and 3 went `unreachable_downstream` "behind"
+// offline agent 1. Both are online and reporting, so the server can hear them:
+// they are reachable by definition, and greying them out attributed agent 1's
+// outage to healthy neighbours (fault-scenario audit, scenario 12). The blast
+// radius now stops at nodes known to be up, and the view never overrules them.
+test('an offline agent is down and does NOT grey out neighbours that are online', async () => {
   const app = await fullApp();
   const res = await request(app).get(PATH).set('Authorization', authHeader('operator'));
   const byId = Object.fromEntries(res.body.topology.nodes.map((n) => [n.id, n]));
   assert.equal(byId[1].state, 'down'); // sw-core is offline
-  assert.equal(byId[2].state, 'unreachable_downstream'); // behind sw-core
-  assert.equal(byId[3].state, 'unreachable_downstream');
+  assert.equal(byId[2].state, 'ok'); // online and reporting — reachable
+  assert.equal(byId[3].state, 'ok');
   assert.equal(res.body.summary.devicesDown, 1);
+  assert.equal(res.body.summary.devicesUnreachable, 0);
+});
+
+test('an offline neighbour of an offline agent stays down, not unreachable', async () => {
+  const agents = AGENTS.map((a) => (a.id === 2 ? { ...a, status: 'offline' } : a));
+  const app = await fullApp({ agents });
+  const res = await request(app).get(PATH).set('Authorization', authHeader('operator'));
+  const byId = Object.fromEntries(res.body.topology.nodes.map((n) => [n.id, n]));
+  assert.equal(byId[1].state, 'down');
+  assert.equal(byId[2].state, 'down');
+  assert.equal(byId[3].state, 'ok');
+  assert.equal(res.body.summary.devicesDown, 2);
 });
 
 test('both layers are present and tagged', async () => {

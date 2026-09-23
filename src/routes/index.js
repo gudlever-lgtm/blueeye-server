@@ -48,6 +48,8 @@ const { createDeviceEventsRouter } = require('./deviceEvents');
 const { createSnmpDevicesRouter } = require('./snmpDevices');
 const { createSnmpProfilesRouter } = require('./snmpProfiles');
 const { createSetupRouter } = require('./setup');
+const { createCoverageRouter } = require('./coverage');
+const { createCoverageService } = require('../coverage/coverageService');
 const { createBurstRouter } = require('./burst');
 const { createFleetRouter } = require('./fleet');
 const { createDashboardRouter } = require('./dashboard');
@@ -345,7 +347,7 @@ function createApiRouter({
   // Flow-derived dependency/topology map (who-talks-to-whom from the 5-tuples).
   if (discoveredDevicesRepo) router.use('/api/discovery', createDiscoveryRouter({ discoveredDevicesRepo, agentsRepo, discoverySweepJob, agentCommander, auditLogger, auditLogRepo, config: discoveryConfig, getConfig: settingsService ? () => settingsService.getDiscovery() : null, setConfig: settingsService ? (patch) => settingsService.setDiscovery(patch) : null }));
 
-  if (flowsRepo || lldpNeighborsRepo || serviceDependenciesRepo || topologyChangesRepo || flowPairBaselinesRepo) router.use('/api/topology', createTopologyRouter({ flowsRepo, agentsRepo, locationsRepo, centroids, lldpNeighborsRepo, serviceDependenciesRepo, serviceDependencyJob, blastRadiusService, topologyChangesRepo, flowPairBaselinesRepo, flowPairBaselineJob, snmpDevicesRepo }));
+  if (flowsRepo || lldpNeighborsRepo || serviceDependenciesRepo || topologyChangesRepo || flowPairBaselinesRepo) router.use('/api/topology', createTopologyRouter({ flowsRepo, agentsRepo, locationsRepo, centroids, lldpNeighborsRepo, serviceDependenciesRepo, serviceDependencyJob, blastRadiusService, topologyChangesRepo, flowPairBaselinesRepo, flowPairBaselineJob, snmpDevicesRepo, getCategories: settingsService ? () => settingsService.getFlowCategories() : undefined }));
   // Consolidated Troubleshooting Dashboard — a pure READ aggregation over the
   // five capability domains above (topology rediscovery, dependency mapping,
   // blast radius, flow-pair baselining, active discovery). Owns no data of its
@@ -446,6 +448,17 @@ function createApiRouter({
   router.use('/api/setup', createSetupRouter({
     agentsRepo, snmpDevicesRepo, snmpProfilesRepo, deviceEventsRepo,
     locationsRepo, settingsService, logger,
+  }));
+  // "Which parts of the network do I NOT see?" — the coverage-gap report.
+  // Always mounted, like the checklist above: a READ over existing
+  // repositories, every source best-effort, and a source that is not wired
+  // makes its checks SKIPPED in the answer rather than silently clean.
+  router.use('/api/coverage', createCoverageRouter({
+    coverageService: createCoverageService({
+      agentsRepo, locationsRepo, snmpDevicesRepo, snmpProfilesRepo, flowsRepo,
+      deviceInterfacesRepo, fdbEntriesRepo, snmpNeighborsRepo, lldpNeighborsRepo,
+      arpEntriesRepo, discoveredDevicesRepo, logger,
+    }),
   }));
 
   if (snmpProfilesRepo) {
@@ -633,6 +646,7 @@ function createApiRouter({
       nis2RisksRepo, nis2ControlsRepo, nis2IncidentsRepo,
       nis2ReportsRepo, nis2EvidenceRepo, nis2AuditRepo,
       featureGate, planService, releaseKeyService,
+      eventCasesRepo: eventCasesRepo || null,
     }));
   }
   // Lokationsdrevet investigation — trigger en rutine der samler og korrelerer

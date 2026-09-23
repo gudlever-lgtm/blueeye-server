@@ -128,16 +128,21 @@ test('blast radius is computed from ONE graph read, not one per device', async (
   assert.deepEqual(out.rootCauses[0].blastRadius.directlyIsolated, [9]);
 });
 
-test('offline agents drive node state and grey out what they isolate', async () => {
+// This used to assert that online agent 2 went unreachable_downstream behind
+// offline agent 1 (counts { ok: 0, down: 1, unreachable_downstream: 1 }). Agent
+// 2 is online and reporting, so it is reachable by definition; greying it out
+// blamed agent 1's outage on a healthy neighbour (fault-scenario audit,
+// scenario 12). Offline drives `down`; online stays `ok`.
+test('offline agents drive node state; an online neighbour is not greyed out', async () => {
   const { service } = makeService({
     agents: [{ id: 1, status: 'offline', hostname: 'core' }, { id: 2, status: 'online', hostname: 'acc' }],
     graph: { nodes: [{ id: 1, label: 'core' }, { id: 2, label: 'acc' }], edges: [l2(1, 2)] },
   });
   const out = await service.getOverview({ now });
-  assert.deepEqual(out.topology.counts, { ok: 0, down: 1, unreachable_downstream: 1 });
+  assert.deepEqual(out.topology.counts, { ok: 1, down: 1, unreachable_downstream: 0 });
   assert.equal(out.summary.devicesDown, 1);
-  assert.equal(out.summary.devicesUnreachable, 1);
-  assert.equal(out.summary.affectedDevices, 2);
+  assert.equal(out.summary.devicesUnreachable, 0);
+  assert.equal(out.summary.affectedDevices, 1);
 });
 
 test('both layers reach the topology panel', async () => {

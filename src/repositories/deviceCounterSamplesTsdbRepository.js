@@ -22,35 +22,70 @@
 // cannot join here. It returns the samples and the caller decorates them — the
 // same split the device-events reader already makes for agent names.
 
-const { mapRow, RAW_COLUMNS, RATE_COLUMNS, FIELD, LOOKBACK_MS } = require('./deviceCounterSamplesRepository');
+const {
+  mapRow, RAW_COLUMNS, STATE_COLUMNS, RATE_COLUMNS, FIELD, LOOKBACK_MS,
+} = require('./deviceCounterSamplesRepository');
 
-const INSERT_COLUMNS = ['ts', 'device_id', 'interface_id', ...RAW_COLUMNS, ...RATE_COLUMNS, 'discontinuity'];
+// The columns migration 116 added. A TimescaleDB node is migrated by re-running
+// 001_init.sql, which is a separate step from the MySQL migrations the server
+// runs itself — so a node that has not had it yet must not lose every counter
+// sample over two columns it cannot hold. See insertMany.
+const NEW_COLUMNS = new Set(['duplex', 'late_coll_pps']);
+const INSERT_COLUMNS = [
+  'ts', 'device_id', 'interface_id', ...RAW_COLUMNS, ...STATE_COLUMNS, ...RATE_COLUMNS, 'discontinuity',
+];
+const LEGACY_COLUMNS = INSERT_COLUMNS.filter((c) => !NEW_COLUMNS.has(c));
 
-function createDeviceCounterSamplesTsdbRepository(tsdb) {
+// Postgres: "column … does not exist".
+const UNDEFINED_COLUMN = '42703';
+
+function valueFor(r, col) {
+  if (col === 'ts') return r.ts;
+  if (col === 'device_id') return r.deviceId;
+  if (col === 'interface_id') return r.interfaceId;
+  if (col === 'discontinuity') return r.discontinuity ?? null;
+  if (col === 'duplex') return r.duplex ?? null;
+  return r[FIELD[col]] ?? null;
+}
+
+function createDeviceCounterSamplesTsdbRepository(tsdb, { logger = null } = {}) {
   const { query } = tsdb;
+  // Set once a node has answered "no such column": every later insert goes
+  // straight to the legacy shape instead of failing first.
+  let legacy = false;
 
-  async function insertMany(rows) {
-    const list = Array.isArray(rows) ? rows : [];
-    if (!list.length) return 0;
-
+  async function insertWith(columns, list) {
     const params = [];
     const tuples = [];
     for (const r of list) {
       const start = params.length;
-      params.push(r.ts, r.deviceId, r.interfaceId);
-      for (const col of RAW_COLUMNS) params.push(r[FIELD[col]] ?? null);
-      for (const col of RATE_COLUMNS) params.push(r[FIELD[col]] ?? null);
-      params.push(r.discontinuity ?? null);
-      tuples.push(`(${INSERT_COLUMNS.map((_, i) => `$${start + i + 1}`).join(', ')})`);
+      for (const col of columns) params.push(valueFor(r, col));
+      tuples.push(`(${columns.map((_, i) => `$${start + i + 1}`).join(', ')})`);
     }
-
     const out = await query(
-      `INSERT INTO device_counter_samples (${INSERT_COLUMNS.join(', ')})
+      `INSERT INTO device_counter_samples (${columns.join(', ')})
        VALUES ${tuples.join(', ')}
        RETURNING 1`,
       params,
     );
     return out.length;
+  }
+
+  async function insertMany(rows) {
+    const list = Array.isArray(rows) ? rows : [];
+    if (!list.length) return 0;
+    if (legacy) return insertWith(LEGACY_COLUMNS, list);
+    try {
+      return await insertWith(INSERT_COLUMNS, list);
+    } catch (err) {
+      if (!err || err.code !== UNDEFINED_COLUMN) throw err;
+      legacy = true;
+      if (logger) {
+        logger.warn('tsdb: device_counter_samples has no duplex/late_coll_pps column yet — '
+          + 're-run server/db/timescale/001_init.sql; storing without them until then');
+      }
+      return insertWith(LEGACY_COLUMNS, list);
+    }
   }
 
   // DISTINCT ON — the Postgres idiom for the newest row per interface.

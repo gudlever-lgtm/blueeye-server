@@ -42,7 +42,6 @@ const CHECKS = [
 ];
 
 const CHECK_IDS = CHECKS.map((c) => c.id);
-const RUNNABLE_IDS = CHECKS.filter((c) => c.available).map((c) => c.id);
 
 const isIpLiteral = (host) => net.isIP(String(host || '').trim()) !== 0;
 
@@ -52,10 +51,6 @@ function checkApplies(check, host) {
   if (!check || !check.available) return false;
   if (check.appliesTo === 'hostname' && isIpLiteral(host)) return false;
   return true;
-}
-
-function findCheck(id) {
-  return CHECKS.find((c) => c.id === id) || null;
 }
 
 // The catalogue as the API serves it: what each check is, whether it can run at
@@ -92,4 +87,4 @@ function specsFor(host, ids) {
   return { specs, skipped };
 }
 
-module.exports = { CHECKS, CHECK_IDS, RUNNABLE_IDS, catalogue, specsFor, checkApplies, findCheck, isIpLiteral };
+module.exports = { CHECKS, CHECK_IDS, catalogue, specsFor, checkApplies, isIpLiteral };

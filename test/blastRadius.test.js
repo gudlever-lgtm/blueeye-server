@@ -114,3 +114,37 @@ test('performance: 5,000-node graph completes well under 2s', () => {
   assert.deepEqual(ids(r.directly_isolated), [2, 3, 4, 5]);
   assert.ok(ms < 2000, `blast radius took ${ms.toFixed(1)}ms (budget 2000ms)`);
 });
+
+// --- isAlive: what is heard from is not cut off -----------------------------
+// The mis-attribution from the fault-scenario audit (scenario 12): agent 1 is
+// a leaf on switch d:5; its agent stopped. The bare undirected walk reached
+// d:5 and then every other host on it, calling all of them isolated.
+test('isAlive: an offline leaf does not isolate the live switch or the hosts behind it', () => {
+  const edges = [l2(1, 'd:5'), l2(2, 'd:5'), l2(3, 'd:5'), dep(4, 1, 443)];
+  const bare = computeBlastRadius({ edges }, 1);
+  assert.deepEqual(bare.directly_isolated.map((e) => e.hostId).sort(), [2, 3, 'd:5'].sort());
+
+  const alive = new Set(['2', '3', 'd:5']);
+  const r = computeBlastRadius({ edges }, 1, { isAlive: (id) => alive.has(String(id)) });
+  assert.deepEqual(r.directly_isolated, []);
+  assert.deepEqual(r.known_reachable, ['d:5']);
+  // A dependant of the failing host is still affected — its dependency is down
+  // however reachable the dependant itself is.
+  assert.deepEqual(ids(r.dependency_affected), [4]);
+});
+
+test('isAlive: a node that is not known alive is still walked, and the walk stops at live ones', () => {
+  // 1 - 2 (offline) - 3 (alive) - 4 (offline): 2 is cut off; 3 is heard, so
+  // neither it nor what is behind it is attributed to 1.
+  const edges = [l2(1, 2), l2(2, 3), l2(3, 4)];
+  const r = computeBlastRadius({ edges }, 1, { isAlive: (id) => Number(id) === 3 });
+  assert.deepEqual(ids(r.directly_isolated), [2]);
+  assert.deepEqual(r.known_reachable, [3]);
+});
+
+test('isAlive that throws is treated as "not known alive" (the bare walk)', () => {
+  const edges = [l2(1, 2)];
+  const r = computeBlastRadius({ edges }, 1, { isAlive: () => { throw new Error('boom'); } });
+  assert.deepEqual(ids(r.directly_isolated), [2]);
+  assert.deepEqual(r.known_reachable, []);
+});

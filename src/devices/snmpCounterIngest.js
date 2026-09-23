@@ -1,6 +1,9 @@
 'use strict';
 
 const { computeSample, detectReboot } = require('./counterDelta');
+const {
+  detectDuplexMismatch, buildDuplexFinding, REFRACTORY_MINUTES: DUPLEX_REFRACTORY_MINUTES,
+} = require('./duplexMismatch');
 
 // Stores one SNMP counter cycle: a snapshot of every interface counter on each
 // switch the submitting agent polls, turned into rates against the previous
@@ -32,9 +35,44 @@ function createSnmpCounterIngest({
   // nothing evaluates them, which is exactly the state per-interface counters
   // were in before this — collected, shown, never analysed.
   analysisPipeline = null,
+  // Where a rule-based switch finding goes (./findingSink.js). Optional: without
+  // it the duplex indicator is simply not raised, and the samples are stored as
+  // before.
+  findingSink = null,
   logger = null,
   now = () => new Date(),
 }) {
+  // interfaceId -> ms of the last duplex finding. In memory, like every other
+  // refractory period on this path.
+  const duplexRaised = new Map();
+
+  // Raises the duplex-mismatch indicator for the rows that show it. Best-effort
+  // and after the write, like the detector: the measurement is the record.
+  async function checkDuplex(agentId, device, rows, nameById, at) {
+    if (!findingSink) return 0;
+    let raised = 0;
+    for (const r of rows) {
+      const verdict = detectDuplexMismatch(r);
+      if (!verdict) continue;
+      const last = duplexRaised.get(r.interfaceId);
+      if (last && at.getTime() - last < DUPLEX_REFRACTORY_MINUTES * 60 * 1000) continue;
+      const finding = buildDuplexFinding(r, verdict, {
+        hostId: agentId,
+        deviceName: device.displayName || device.host,
+        ifName: nameById.get(r.interfaceId) || null,
+      });
+      try {
+        if (await findingSink.emit(finding)) {
+          duplexRaised.set(r.interfaceId, at.getTime());
+          raised += 1;
+        }
+      } catch (err) {
+        if (logger) logger.warn(`snmp-counters: duplex finding failed for device ${device.id} (${err.message})`);
+      }
+    }
+    return raised;
+  }
+
   async function ownedBy(agentId) {
     const rows = await snmpDevicesRepo.list({ agentId });
     return new Map(rows.map((d) => [d.id, d]));
@@ -136,6 +174,7 @@ function createSnmpCounterIngest({
               if (logger) logger.warn(`snmp-counters: analysis failed for device ${d.deviceId} (${err.message})`);
             }
           }
+          findings += await checkDuplex(agentId, device, rows, nameById, at);
         }
 
         // The device clock, for the NEXT cycle's reboot check. Written after

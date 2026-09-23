@@ -525,6 +525,14 @@ SELECT create_hypertable(
 CREATE INDEX IF NOT EXISTS idx_devctr_iface_ts  ON device_counter_samples (interface_id, ts DESC);
 CREATE INDEX IF NOT EXISTS idx_devctr_device_ts ON device_counter_samples (device_id, ts DESC);
 
+-- Mirrors MySQL migration 116: the port's duplex as the device reported it
+-- ('half' | 'full' | 'unknown', NULL when it did not answer) and the
+-- late-collision RATE. Added as nullable columns without defaults, which a
+-- compressed hypertable accepts, so re-running this file on an existing node is
+-- the forward migration.
+ALTER TABLE device_counter_samples ADD COLUMN IF NOT EXISTS duplex TEXT;
+ALTER TABLE device_counter_samples ADD COLUMN IF NOT EXISTS late_coll_pps DOUBLE PRECISION;
+
 -- COMPRESSION. The first compression policy in this schema, and this is the
 -- table that earns one: counter columns are monotonically rising BIGINTs
 -- (delta-encodes well) and the error columns are zero most of the time on a

@@ -80,9 +80,24 @@ const TIER = { down: 0, bad: 1, warn: 2, stale: 3, unknown: 4, ok: 5 };
 const worse = (a, b) => (TIER[a] <= TIER[b] ? a : b);
 
 // Per-(type,target) summary from that target's recent samples (newest-first).
+//
+// The sample being judged is the latest one, and it is NOT part of the baseline
+// it is judged against: the baseline is everything before it. Including it let
+// the value under test pull the median toward itself and widen the MAD by its
+// own distance — a small effect with many samples, a large one near
+// MIN_BASELINE, and in every case the wrong question ("is this unusual compared
+// with a history that already contains it?").
+//
+// What this does NOT change: the baseline is a rolling window (the caller's —
+// 6 h in the probe pipeline), and a median follows the majority. Degradation
+// that persists for more than about half the window becomes the new normal and
+// stops being reported as latency; loss, reachability and jitter are absolute
+// and keep reporting. A longer window would hold the old normal longer but also
+// be slower to accept a legitimate change (a new route, a moved server), and
+// costs a larger read on every probe ingest — so the default stays at 6 h.
 function summarizeTarget(samples) {
   const latest = samples[0];
-  const base = robustStats(samples.map((s) => s.rttMs));
+  const base = robustStats(samples.slice(1).map((s) => s.rttMs));
   let z = 0;
   if (Number.isFinite(latest.rttMs) && base.n >= MIN_BASELINE && base.median != null) {
     const sigma = (base.mad || 0) * MAD_TO_SIGMA;

@@ -357,6 +357,13 @@
           ],
           rows: rows,
         })];
+        // Tests the plan wanted and deliberately did not schedule — today the
+        // reverse direction when the origin agent's own address is unknown.
+        // Said out loud, so a plan with no return-path test is not read as one
+        // that checked the return path.
+        (plan.skipped || []).forEach(function (s) {
+          children.push(ui.inlineNote(t('diag.tests.skipped', { type: s.probeType, reason: s.reason || '' }), 'warn'));
+        });
 
         if (!deps.isViewer()) {
           syncCount();

@@ -29,4 +29,24 @@
 // back, and merging across it would misreport when the problem started.
 const EVENT_ACTIVITY_WINDOW_MS = 15 * 60 * 1000;
 
-module.exports = { EVENT_ACTIVITY_WINDOW_MS };
+// THE SAME BUG, ONE LAYER UP: a finding source that de-dupes.
+//
+// "Recurrence keeps an event alive" holds only if the recurrence reaches the
+// event. The probe pipeline deliberately does NOT re-raise an ongoing problem on
+// every probe — it holds the same (metric, target) back for a cooldown. That
+// cooldown was 30 min against this 15 min window, so a probe fault that never
+// cleared still went quiet, AS FAR AS THE EVENT COULD SEE, for 30 min at a time:
+// every re-raise landed after the window had closed and opened a NEW event on
+// the same host, roughly every half hour, for as long as the fault lasted.
+//
+// So a source that holds recurrences back may hold them back for at most
+// MAX_REFIRE_COOLDOWN_MS: the window minus REFIRE_SLACK_MS. The slack is how
+// long after its cooldown expires a still-present condition can take to be
+// raised again — the next probe/sample to arrive and be evaluated (agent probe
+// cadence is 60 s by default; five minutes leaves room for a slow agent or a
+// late batch). Derived here, next to the window it has to fit inside, so the
+// two cannot drift apart again.
+const REFIRE_SLACK_MS = 5 * 60 * 1000;
+const MAX_REFIRE_COOLDOWN_MS = EVENT_ACTIVITY_WINDOW_MS - REFIRE_SLACK_MS;
+
+module.exports = { EVENT_ACTIVITY_WINDOW_MS, REFIRE_SLACK_MS, MAX_REFIRE_COOLDOWN_MS };

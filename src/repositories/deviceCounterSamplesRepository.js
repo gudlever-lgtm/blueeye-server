@@ -25,12 +25,17 @@ const RAW_COLUMNS = [
   'in_errors', 'out_errors', 'in_discards', 'out_discards',
   'fcs_errors', 'alignment_errors', 'late_collisions', 'carrier_sense_errors',
 ];
+// What the port SAID about itself at read time, rather than a count (migration
+// 116). A string, so it is kept out of the numeric mapping below.
+const STATE_COLUMNS = ['duplex'];
 const RATE_COLUMNS = [
   'delta_sec', 'in_bps', 'out_bps', 'in_err_pps', 'out_err_pps',
-  'in_disc_pps', 'out_disc_pps', 'fcs_pps', 'in_bcast_pps',
+  'in_disc_pps', 'out_disc_pps', 'fcs_pps', 'late_coll_pps', 'in_bcast_pps',
   'in_util_pct', 'out_util_pct',
 ];
-const ALL_COLUMNS = ['ts', 'device_id', 'interface_id', ...RAW_COLUMNS, ...RATE_COLUMNS, 'discontinuity'];
+const ALL_COLUMNS = [
+  'ts', 'device_id', 'interface_id', ...RAW_COLUMNS, ...STATE_COLUMNS, ...RATE_COLUMNS, 'discontinuity',
+];
 
 // How far back "the newest sample" is allowed to look. Generous against a
 // 60-second polling interval, and the difference between reading one hour of
@@ -50,7 +55,7 @@ const FIELD = {
   delta_sec: 'deltaSec', in_bps: 'inBps', out_bps: 'outBps',
   in_err_pps: 'inErrPps', out_err_pps: 'outErrPps',
   in_disc_pps: 'inDiscPps', out_disc_pps: 'outDiscPps',
-  fcs_pps: 'fcsPps', in_bcast_pps: 'inBcastPps',
+  fcs_pps: 'fcsPps', late_coll_pps: 'lateCollPps', in_bcast_pps: 'inBcastPps',
   in_util_pct: 'inUtilPct', out_util_pct: 'outUtilPct',
 };
 
@@ -67,6 +72,9 @@ function mapRow(row) {
     deviceId: Number(row.device_id),
     interfaceId: Number(row.interface_id),
     discontinuity: row.discontinuity ?? null,
+    // NULL when the device did not answer — never defaulted to 'full', which
+    // is the one value that would rule a duplex mismatch out.
+    duplex: row.duplex ?? null,
   };
   for (const [col, field] of Object.entries(FIELD)) out[field] = numOrNull(row[col]);
   if (row.if_name !== undefined) out.ifName = row.if_name;
@@ -89,6 +97,7 @@ function createDeviceCounterSamplesRepository(db) {
       placeholders.push(`(${ALL_COLUMNS.map(() => '?').join(', ')})`);
       params.push(r.ts, r.deviceId, r.interfaceId);
       for (const col of RAW_COLUMNS) params.push(r[FIELD[col]] ?? null);
+      params.push(r.duplex ?? null);
       for (const col of RATE_COLUMNS) params.push(r[FIELD[col]] ?? null);
       params.push(r.discontinuity ?? null);
     }
@@ -198,6 +207,7 @@ module.exports = {
   mapRow,
   LOOKBACK_MS,
   RAW_COLUMNS,
+  STATE_COLUMNS,
   RATE_COLUMNS,
   ALL_COLUMNS,
   FIELD,

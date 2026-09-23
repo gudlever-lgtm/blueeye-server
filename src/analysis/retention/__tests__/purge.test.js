@@ -91,3 +91,57 @@ test('purge deletes old ACKED findings but NEVER an unacknowledged CRIT', async 
   assert.deepEqual(ids, ['b', 'c', 'd']);
   assert.ok(repo.state.findings.some((f) => f.id === 'b'), 'unacked CRIT must survive purge');
 });
+
+test('the tables that used to grow forever are purged, each on its own window', async () => {
+  const cuts = {};
+  const record = (name, n) => async (ts) => { cuts[name] = ts; return n; };
+  const repo = {
+    purgeFlowRollupsBefore: async () => 0,
+    purgeMetricRollupsBefore: async () => 0,
+    purgeAckedFindingsBefore: async () => 0,
+    purgeInternalFlowRollupsBefore: record('internal', 11),
+    purgeProbeResultsBefore: record('probe', 1),
+    purgeResolvedProbeOutagesBefore: record('outage', 2),
+    purgeSpeedtestResultsBefore: record('speed', 3),
+    purgeTransactionResultsBefore: record('tx', 4),
+    purgeTopologyChangesBefore: record('topo', 5),
+    purgeStaleDiscoveredDevicesBefore: record('disc', 6),
+    purgeHostConnectionsBefore: record('conn', 7),
+    purgeAuditEventsBefore: record('audit', 8),
+  };
+  const days = {
+    probeResultRetentionDays: 400, probeOutageRetentionDays: 401, speedtestRetentionDays: 365,
+    transactionResultRetentionDays: 90, topologyChangeRetentionDays: 180, discoveredDeviceRetentionDays: 91,
+    hostConnectionRetentionDays: 30, auditEventRetentionDays: 366,
+  };
+  const res = await createPurge({ repo, config: { ...config, ...days }, now: () => NOW }).purgeExpired();
+  assert.deepEqual(
+    [res.internalFlowRollups, res.probeResults, res.probeOutages, res.speedtestResults, res.transactionResults,
+      res.topologyChanges, res.discoveredDevices, res.hostConnections, res.auditEvents],
+    [11, 1, 2, 3, 4, 5, 6, 7, 8],
+  );
+  const ago = (d) => new Date(NOW.getTime() - d * 864e5).toISOString();
+  assert.equal(cuts.internal.toISOString(), ago(90)); // shares the rollup window
+  assert.equal(cuts.probe.toISOString(), ago(400));
+  assert.equal(cuts.outage.toISOString(), ago(401));
+  assert.equal(cuts.speed.toISOString(), ago(365));
+  assert.equal(cuts.tx.toISOString(), ago(90));
+  assert.equal(cuts.topo.toISOString(), ago(180));
+  assert.equal(cuts.disc.toISOString(), ago(91));
+  assert.equal(cuts.conn.toISOString(), ago(30));
+  assert.equal(cuts.audit.toISOString(), ago(366));
+});
+
+test('a window of 0 keeps that table (e.g. RETENTION_AUDIT_EVENT_DAYS=0 keeps audit_events forever)', async () => {
+  let called = false;
+  const repo = { ...fakeRepo([]), purgeAuditEventsBefore: async () => { called = true; return 1; } };
+  const res = await createPurge({ repo, config: { ...config, auditEventRetentionDays: 0 }, now: () => NOW }).purgeExpired();
+  assert.equal(called, false);
+  assert.equal(res.auditEvents, 0);
+});
+
+test('the new dimensions are skipped when the repo lacks them (older wiring)', async () => {
+  const res = await createPurge({ repo: fakeRepo([]), config: { ...config, probeResultRetentionDays: 30 }, now: () => NOW }).purgeExpired();
+  assert.equal(res.probeResults, 0);
+  assert.equal(res.internalFlowRollups, 0);
+});

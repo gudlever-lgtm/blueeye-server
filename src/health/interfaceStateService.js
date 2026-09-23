@@ -31,11 +31,26 @@ function createInterfaceStateService({
   // Picks the traffic payload out of a batch of results. An agent posts a batch;
   // the LAST traffic sample is the current one, and diffing against an older
   // sample in the same batch would emit transitions the agent already superseded.
+  //
+  // THE SHAPE IS THE AGENT'S, NOT A WRAPPER. A result element is exactly what
+  // the agent's testRunner returns — { name, commandId, ok, startedAt,
+  // finishedAt, traffic, system } — stored unchanged, with `traffic` at the TOP
+  // level. This used to read only `r.payload.traffic`, a shape no agent has ever
+  // sent, so in production it found nothing and never recorded a single
+  // transition while its tests (which posted that invented shape) passed.
+  // `payload.traffic` is still accepted, so nothing that did send it breaks.
+  function trafficOf(r) {
+    if (!r || typeof r !== 'object') return null;
+    if (r.traffic && Array.isArray(r.traffic.interfaces)) return r.traffic;
+    if (r.payload && r.payload.traffic && Array.isArray(r.payload.traffic.interfaces)) return r.payload.traffic;
+    return null;
+  }
+
   function latestTraffic(results) {
     let latest = null;
     for (const r of Array.isArray(results) ? results : []) {
-      const traffic = r && r.payload && r.payload.traffic;
-      if (traffic && Array.isArray(traffic.interfaces)) latest = traffic;
+      const traffic = trafficOf(r);
+      if (traffic) latest = traffic;
     }
     return latest;
   }

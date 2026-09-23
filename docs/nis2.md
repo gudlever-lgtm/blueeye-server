@@ -38,8 +38,9 @@ existing user-JWT RBAC:
 | `GET /dashboard` | viewer+ | Readiness score, headline counts, per-category status, top recommended actions |
 | `GET/POST /risks`, `GET/PUT/DELETE /risks/:id` | viewer/operator | Risk register CRUD |
 | `GET/POST /controls`, `GET/PUT/DELETE /controls/:id` | viewer/operator | Control-evidence CRUD; `?withoutEvidence=true` = prioritised gap list |
-| `GET/POST /incidents`, `GET/PUT/DELETE /incidents/:id` | viewer/operator | Security-incident CRUD (mints `INC-YYYY-NNNN`). Reads carry computed Art.23 reporting **`deadlines`** (24h early-warning / 72h notification / 1-month final), anchored on `detectedAt`, for incidents with a reporting duty (`notificationRequired`/`nis2Relevant`). |
-| `GET /deadlines` | viewer+ | NIS2 Art.23 reporting-deadline overview — duty-bearing incidents, most-urgent first (`overdue` → `due-soon` → `upcoming`) + counts. Computed (no stored columns); status is time-based (submission to the authority isn't tracked). |
+| `GET/POST /incidents`, `GET/PUT/DELETE /incidents/:id` | viewer/operator | Security-incident CRUD (mints `INC-YYYY-NNNN`). Reads carry computed Art.23 reporting **`deadlines`** (24h early-warning / 72h notification / 1-month final), anchored on `detectedAt`, for incidents with a reporting duty (`notificationRequired`/`nis2Relevant`). Carries the Art. 23 fields (see [Article 23 fields](#article-23-fields-and-submission)). A `PUT` that omits an Art. 23 field keeps its stored value. |
+| `POST /incidents/from-event-case/:caseId` | operator+ | Drafts a NIS2 incident from an event case — pre-filled (title, detection = the case's first event, severity, affected device/site and the case timeline) and linked (`eventCaseId`). `nis2Relevant` is set, `notificationRequired` is not (significance is a human judgement). `409` names the incident already drafted from that case; `404` unknown case; `503` when event cases are not wired. |
+| `GET /deadlines` | viewer+ | NIS2 Art.23 reporting-deadline overview — duty-bearing incidents, most-urgent first (`overdue` → `due-soon` → `upcoming` → `submitted`) + counts. Due dates are computed; a stage with a recorded submission time reads `submitted` (with `onTime`). |
 | `GET/POST /evidence`, `DELETE /evidence/:id` | viewer/operator | Evidence references (link/document metadata) |
 | `GET/POST /reports`, `GET /reports/:id`, `DELETE /reports/:id` | viewer/operator | Generated reports (snapshot frozen for trend) |
 | `POST /reports/:id/approve` | admin | Approve a draft report |
@@ -51,6 +52,40 @@ existing user-JWT RBAC:
 | `GET /custom-reports/sources` | viewer+ | Report Generator source catalogue (admin-only sources hidden from non-admins) |
 | `POST /custom-reports/preview` | viewer+ | Build a custom report (JSON; rows capped per section) |
 | `POST /custom-reports/export` | viewer+ | Export a custom report — `format`: `html` \| `csv` \| `json` |
+
+## Article 23 fields and submission
+
+Art. 23(4) says what the notifications contain, and the incident register holds
+it (migrations 122/126):
+
+| Field | Art. 23 | Meaning |
+| --- | --- | --- |
+| `suspectedMalicious` | (4)(a) | The early warning states whether the incident is suspected of being caused by an unlawful or malicious act. |
+| `crossBorderImpact`, `crossBorderDetails` | (4)(a) | Whether it could have a cross-border impact, and where. |
+| `authorityReference` | — | The CSIRT's / competent authority's own case reference. |
+| `earlyWarningSubmittedAt`, `notificationSubmittedAt`, `finalReportSubmittedAt` | (4)(a)(b)(d) | When each report was actually sent. Validation refuses a submission time before `detectedAt`. |
+| `eventCaseId` | — | The event case the incident was drafted from (read-only; set by the draft endpoint, never by an edit). |
+
+**Deadlines** (`src/nis2/deadlines.js`) are still computed on read. Each stage is
+`upcoming` / `due-soon` (≤ 12 h) / `overdue` until its submission time is
+recorded; then it is `submitted`, with `onTime` saying whether it beat the due
+date, and it no longer counts towards the incident's worst status (all three
+submitted ⇒ `submitted`). The final report is due **one month after the
+notification was submitted** (23(4)(d)) once that time is recorded; before it
+is, it is anchored on detection + 30 days — earlier than the directive
+requires, never later.
+
+**In the dashboard** — Reporting → NIS2 → Incidents shows an *Art. 23
+deadlines* column: one badge per stage (overdue = crit, due soon = warn,
+submitted on time = ok, submitted late = warn, upcoming = neutral — the shared
+badge palette), the due date in the tooltip. The New/Edit form carries the
+Art. 23 fields. An incident drafted from an event case links back to it.
+
+**Drafting** — an event case page has a *Draft NIS2 incident* action (operator+)
+that calls `POST /incidents/from-event-case/:id` and opens the register. The
+Overview's *Open issues → Active events* (probe outages) has a *NIS2 draft*
+button per outage (operator+) that shows `GET /api/reports/nis2-draft/:id` — the
+plain-text CFCS notification draft of that outage — read-only for review.
 
 ## Inline guidance (what & why)
 

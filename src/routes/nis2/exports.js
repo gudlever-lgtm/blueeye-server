@@ -47,7 +47,10 @@ function createExportsRouter(ctx) {
   router.get('/export/incidents.csv', requireAuth, reader, asyncHandler(async (req, res) => {
     const rows = await nis2IncidentsRepo.findAll();
     sendCsv(res, 'nis2-incidents.csv',
-      ['id', 'incidentId', 'title', 'severity', 'detectedAt', 'startedAt', 'resolvedAt', 'affectedSystems', 'businessImpact', 'rootCause', 'actionsTaken', 'nis2Relevant', 'notificationRequired', 'status', 'lessonsLearned', 'createdAt', 'updatedAt'],
+      // The Art. 23 fields (migrations 122/126) are appended, never interleaved,
+      // so a spreadsheet built on the old column order keeps working.
+      ['id', 'incidentId', 'title', 'severity', 'detectedAt', 'startedAt', 'resolvedAt', 'affectedSystems', 'businessImpact', 'rootCause', 'actionsTaken', 'nis2Relevant', 'notificationRequired', 'status', 'lessonsLearned', 'createdAt', 'updatedAt',
+        'suspectedMalicious', 'crossBorderImpact', 'crossBorderDetails', 'authorityReference', 'earlyWarningSubmittedAt', 'notificationSubmittedAt', 'finalReportSubmittedAt', 'eventCaseId'],
       rows);
   }));
 

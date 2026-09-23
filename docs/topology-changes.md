@@ -57,9 +57,22 @@ changes format:
   `src/repositories/topologyChangesRepository.js`; timeline source in
   `src/timeline/targetTimeline.js`.
 
-## Known gaps (server-ready, agent-pending)
+## Where the neighbours come from
 
-- The shipping agent **does not collect LLDP** yet (`capabilities.lldp` is never
-  sent), so in production the feature is dormant until an agent reports neighbours.
-- `link_state_changed` additionally needs agents to report a per-neighbour link
-  state. The engine, storage and tests cover it; it fires once that data flows.
+- **Agent-local LLDP** (agent v0.39.0+): when `lldpd` is installed on the host,
+  the agent reads `lldpctl -f json` and sends `capabilities.lldp` (+
+  `lldpChassisId`) with every capabilities report — at start, on reconnect and
+  every 5 minutes (`BLUEEYE_CAPABILITIES_INTERVAL_MS`). Without lldpd the field is
+  omitted (never sent as `[]`, which would read as "every neighbour removed") and
+  `capabilities.unavailable.lldp` says why.
+- `link_state_changed` uses the per-neighbour `linkState` the agent derives from
+  `/sys/class/net/<if>/operstate`.
+- Switch-side LLDP learnt over SNMP (`snmp_neighbors`) is diffed on each SNMP
+  topology ingest (`topologyChangeService.processDeviceSnapshot`, migration 118):
+  the switch's neighbours from its previous poll against this one, with the same
+  change types, flap collapse and audit evidence. Those rows carry `device_id`
+  (the switch) beside `agent_id` (the agent that polled it), and their summary
+  names the switch. The **first** snapshot of a switch is a baseline and emits
+  nothing, and an **empty** table is not read as "every neighbour left" (a walk
+  that timed out, or LLDP turned off, reports nothing too). The agent-LLDP flap
+  lookup ignores device rows, and the device lookup ignores agent rows.

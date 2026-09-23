@@ -1242,7 +1242,7 @@ const PAGE_INFO = {
       el('h4', {}, 'Bidirectional mode'),
       el('ul', {},
         el('li', {}, 'Ingress (↓) and egress (↑) side-by-side with separate charts, top talkers and protocol breakdowns.'),
-        el('li', {}, 'Asymmetry banner: flags when one direction carries ≥80% of traffic — a sign of asymmetric routing.'),
+        el('li', {}, 'Direction-balance banner: flags when one direction carries ≥80% of the bytes. A volume split, not a routing verdict — test the return path with Diagnose.'),
         el('li', {}, 'Anomaly findings overlaid as markers on both charts.')),
       el('p', { class: 'muted' }, 'Metadata only (5-tuple + bytes/flows), never packet contents. Internal RFC1918 addresses are shown but never geolocated. Requires NetFlow/sFlow + the geo pipeline.'),
     ],
@@ -1422,6 +1422,7 @@ const CONTRACT_VIEWS = new Map([
   ['users', 'users'],
   ['screening', 'screening'],
   ['license', 'license'],
+  ['coverage', 'coverage'],
 ]);
 
 
@@ -1749,7 +1750,37 @@ async function showConnection(a) {
   const name = a.display_name || a.hostname;
   let d;
   try { d = await api(`/agents/${a.id}/connection`); } catch (err) { toast(`${name}: ${err.message}`, true); return; }
-  renderConnectionModal(a, d);
+  renderConnectionModal(a, d, d.connected ? null : await offlineVerdictFor(a));
+}
+
+// The dead-agent vs network-down verdict for an offline agent, off the
+// agent.offline finding the server raises once the grace period has passed
+// (src/health/agentOfflineMonitor.js). Only the CURRENT episode's finding
+// counts — one created before the agent last reported is a previous outage.
+// Best-effort: no finding yet, no access, no analysis module → null, and the
+// modal shows the connection diagnosis on its own, as it always did.
+async function offlineVerdictFor(a) {
+  try {
+    const rows = await api(`/api/findings?hostId=${encodeURIComponent(a.id)}&metric=agent.offline&limit=1`);
+    const f = Array.isArray(rows) ? rows[0] : null;
+    const ev = f && Array.isArray(f.evidence) ? f.evidence[0] : null;
+    if (!ev || !ev.verdict) return null;
+    const lastSeen = a.last_seen ? Date.parse(a.last_seen) : NaN;
+    if (Number.isFinite(lastSeen) && Date.parse(f.createdAt) < lastSeen) return null;
+    return ev;
+  } catch { return null; }
+}
+
+function offlineVerdictBlock(ev) {
+  const checks = Array.isArray(ev.checks) ? ev.checks : [];
+  return el('div', {},
+    el('p', {}, el('strong', {}, t('ag.offline.title')), ' ', t(`ag.offline.verdict.${ev.verdict}`),
+      ev.confidence ? el('span', { class: 'muted' }, ` (${t(`ag.offline.conf.${ev.confidence}`)})`) : null),
+    ev.offlineSince ? el('p', { class: 'muted small' }, t('ag.offline.since', { at: new Date(ev.offlineSince).toLocaleString() })) : null,
+    checks.length ? el('details', {},
+      el('summary', { class: 'muted' }, t('ag.offline.checks')),
+      el('ul', {}, ...checks.map((c) => el('li', {}, el('strong', {}, `${t(`ag.offline.check.${c.check}`)}: `), c.detail || ''))))
+      : null);
 }
 
 // Badge styling per diagnosis state (renderConnectionModal).
@@ -1762,11 +1793,12 @@ const CONNECTION_STATE_BADGES = {
   'never-connected': 'badge grace',
 };
 
-function renderConnectionModal(a, d) {
+function renderConnectionModal(a, d, offline = null) {
   const card = $('#modal-card');
   const name = a.display_name || a.hostname;
   const body = [el('h3', {}, `Connection — ${name}`)];
   body.push(el('p', {}, el('span', { class: CONNECTION_STATE_BADGES[d.state] || 'badge' }, d.state), ' ', d.explanation));
+  if (offline) body.push(offlineVerdictBlock(offline));
   if (d.hints && d.hints.length) {
     body.push(el('p', { class: 'muted' }, 'What to do:'));
     body.push(el('ul', {}, ...d.hints.map((h) => el('li', {}, h))));
@@ -4119,6 +4151,21 @@ function getEventPage() {
         : el('span', {}, incAgentLabel(inc));
     },
     locationLabel: incLocationLabel,
+    // Drafts the NIS2 incident of this case (pre-filled + linked server-side,
+    // POST /api/nis2/incidents/from-event-case/:id) and opens it in the NIS2
+    // register. A case that already has one opens that one instead.
+    draftNis2: async (id) => {
+      try {
+        const r = await api(`/api/nis2/incidents/from-event-case/${id}`, { method: 'POST', body: {} });
+        toast(t('ev.nis2Drafted', { ref: r.incidentId }));
+        openNis2Incidents();
+      } catch (err) {
+        if (err.status === 409 && err.data && err.data.incident) {
+          toast(t('ev.nis2Exists', { ref: err.data.incident.incidentId }));
+          openNis2Incidents();
+        } else toast(errText(err), true);
+      }
+    },
     helpBody: () => [
       el('p', {}, t('ev.info.p1')),
       el('p', {}, t('ev.info.p2')),
@@ -5848,6 +5895,13 @@ function topoGraphSvg(nodes, edges, { label, kindBadge, actionBtns } = {}) {
     const pa = pos.get(e.from), pb = pos.get(e.to);
     if (!pa || !pb) return;
     const line = mk('line', { class: 'topo-link', x1: pa.x, y1: pa.y, x2: pb.x, y2: pb.y, 'stroke-width': widthOf(e).toFixed(1) });
+    // Hover says what the edge carries (e.g. "Modbus/TCP"), flagged when it is
+    // an industrial-control (OT) protocol.
+    if (e.service) {
+      const tip = mk('title', {});
+      tip.textContent = `${e.from} \u2192 ${e.to}: ${e.service}${e.ot ? ` (${t('topo.ot.badge')})` : ''}`;
+      line.append(tip);
+    }
     svg.append(line);
     edgeLines.push({ from: e.from, to: e.to, el: line });
   });
@@ -6467,6 +6521,50 @@ function getDiscoveryPage() {
 views.discovery = async () => {
   const v = getDiscoveryPage();
   if (!v) return el('div', { class: 'empty error' }, t('disc.err.config'));
+  return v.view();
+};
+
+// ---- Administration → Coverage gaps (MIGRATED — see public/views/coverage.js)
+// "Which parts of the network do I NOT see?" Admin-only, like the API behind
+// it (src/routes/coverage.js): a list of blind spots is a map of where nobody
+// is looking. Help is read through t() at draw time, so it follows a language
+// switch without a reload.
+PAGE_INFO.coverage = {
+  get hero() { return t('coverage.lead'); },
+  get title() { return t('coverage.info.title'); },
+  body: () => [
+    el('p', {}, t('coverage.info.p1')),
+    el('p', {}, t('coverage.info.p2')),
+    el('p', { class: 'muted' }, t('coverage.info.p3')),
+  ],
+};
+let coveragePage = null;
+const coveragePageState = {};
+function getCoveragePage() {
+  if (coveragePage) return coveragePage;
+  if (typeof window === 'undefined' || !window.CoveragePage || !ui) return null;
+  coveragePage = window.CoveragePage.create({
+    el, t, ui, errText,
+    state: coveragePageState,
+    help: () => ({ title: PAGE_INFO.coverage.title, body: PAGE_INFO.coverage.body }),
+    fetchReport: () => api('/api/coverage'),
+    // Where a gap's "Fix this" goes. The server names a view (and an id or a
+    // settings tab); this is the one place that knows how to open each.
+    go: (link) => {
+      if (!link || !link.view) return;
+      if (link.view === 'agent' && link.id != null) { openAgent(link.id); return; }
+      if (link.view === 'location' && link.id != null) { openLocation(link.id); return; }
+      if (link.view === 'snmpDevice' && link.id != null) { openSnmpDevice(link.id); return; }
+      if (link.view === 'settings') { closeDrawer(); settingsTab = link.tab || settingsTab; currentView = 'settings'; render(); return; }
+      gotoView(link.view);
+    },
+  });
+  return coveragePage;
+}
+
+views.coverage = async () => {
+  const v = getCoveragePage();
+  if (!v) return el('div', { class: 'empty error' }, t('coverage.err.title'));
   return v.view();
 };
 
@@ -8839,18 +8937,40 @@ function fleetIssues(w) {
   if (!w) return el('div', {});
   const count = (n) => el('span', { class: 'muted fi-count' }, n ? ` · ${n}` : '');
 
-  const inc = el('div', { class: 'card' }, el('h3', {}, 'Active events', count(w.events.active)));
-  if (!w.events.recent.length) inc.append(el('p', { class: 'muted' }, 'No active events.'));
-  else inc.append(el('table', { class: 'adv-table' }, el('tbody', {}, ...w.events.recent.map((i) =>
+  // The server names this widget `probeOutages`; `events` is what it was once
+  // called, and reading only that left the whole panel throwing on a current
+  // server. Both are read.
+  const outages = w.probeOutages || w.events || { active: 0, recent: [] };
+  // One probe outage as a CFCS notification draft (GET /api/reports/nis2-draft/:id,
+  // operator+), shown read-only under the table for review and copying.
+  const draftHost = el('div', {});
+  const showDraft = async (id) => {
+    draftHost.replaceChildren(el('p', { class: 'muted' }, t('common.loading')));
+    try {
+      const r = await api(`/api/reports/nis2-draft/${id}`);
+      draftHost.replaceChildren(el('details', { class: 'inv-nis2-draft', open: 'open' },
+        el('summary', {}, el('span', { class: 'badge inv-badge INFO' }, 'NIS2'), ' ', t('fleet.nis2Draft.title', { id: String(id) })),
+        el('div', { class: 'inv-nis2-draft-body' },
+          el('p', { class: 'muted' }, t('fleet.nis2Draft.notice')),
+          el('pre', {}, r.draft || ''))));
+    } catch (err) { draftHost.replaceChildren(el('p', { class: 'error' }, errText(err))); }
+  };
+  const inc = el('div', { class: 'card' }, el('h3', {}, 'Active events', count(outages.active)));
+  if (!outages.recent.length) inc.append(el('p', { class: 'muted' }, 'No active events.'));
+  else inc.append(el('table', { class: 'adv-table' }, el('tbody', {}, ...outages.recent.map((i) =>
     el('tr', i.agentId ? { class: 'clickable', onclick: () => openAgent(i.agentId) } : {},
       el('td', {}, el('span', { class: `badge ${i.severity === 'critical' ? 'crit' : 'warn'}` }, i.severity)),
       el('td', {}, i.agentName || `agent ${i.agentId}`, i.locationName ? el('span', { class: 'muted' }, ` · ${i.locationName}`) : null),
       el('td', {}, i.metric),
-      el('td', { class: 'muted' }, fmtDate(i.startedAt)))))));
+      el('td', { class: 'muted' }, fmtDate(i.startedAt)),
+      el('td', {}, canWrite() && i.id != null
+        ? el('button', { class: 'small ghost', title: t('fleet.nis2Draft.hint'), onclick: (e) => { e.stopPropagation(); showDraft(i.id); } }, t('fleet.nis2Draft.btn'))
+        : null))))), draftHost);
 
-  const fnd = el('div', { class: 'card' }, el('h3', {}, 'Recent findings', count(w.findings.open)));
-  if (!w.findings.recent.length) fnd.append(el('p', { class: 'muted' }, 'No open analysis findings.'));
-  else fnd.append(el('table', { class: 'adv-table' }, el('tbody', {}, ...w.findings.recent.map((x) =>
+  const findings = w.findings || { open: 0, recent: [] };
+  const fnd = el('div', { class: 'card' }, el('h3', {}, 'Recent findings', count(findings.open)));
+  if (!findings.recent.length) fnd.append(el('p', { class: 'muted' }, 'No open analysis findings.'));
+  else fnd.append(el('table', { class: 'adv-table' }, el('tbody', {}, ...findings.recent.map((x) =>
     el('tr', {},
       el('td', {}, el('span', { class: `badge ${x.severity === 'CRIT' ? 'crit' : x.severity === 'WARN' ? 'warn' : 'grace'}` }, x.severity)),
       el('td', {}, x.hostId, el('span', { class: 'muted' }, ` · ${x.metric}`)),
@@ -9573,7 +9693,7 @@ views.nics = async () => {
 
 // Flow Explorer — merged conversation explorer + bidirectional inspector.
 // Unified mode: top talkers, ports, protocols, scan/fan-out, anomaly markers.
-// Bidirectional mode: ingress/egress side-by-side with asymmetry indicator.
+// Bidirectional mode: ingress/egress side-by-side with a direction-balance note.
 // Metadata only; internal (LAN) conversations are shown — never geolocated.
 // ---- Flows (MIGRATED — see public/views/flows.js) ---------------------------
 // The traffic map, its legend chips and the traffic-type colour ramp stay here:
@@ -12903,7 +13023,10 @@ async function settingsSetupView() {
         ? el('div', {},
           el('strong', {}, t('setup.complete.title')),
           el('p', { class: 'muted' }, t('setup.complete.body')))
-        : el('span', { class: 'badge-ui warn' }, t('setup.outstanding', { n: data.outstanding || 0 })));
+        : el('span', { class: 'badge-ui warn' }, t('setup.outstanding', { n: data.outstanding || 0 })),
+      // The next question once the wiring is done: what is still not SEEN.
+      // Same role as this screen (admin), so the link is never a dead end.
+      el('p', { class: 'muted' }, t('setup.coverage.lead'), ' ', viewLink('coverage', t('nav.view.coverage'))));
 
     const table = el('table', { class: 'dt' },
       el('thead', {}, el('tr', {},
@@ -15303,6 +15426,12 @@ const reportingState = { section: 'findings' };
 // section that says something on a fresh install, where NIS2 wants controls and
 // the generator wants a selection before either has an answer.
 const nis2State = { tab: 'dashboard' };
+// Opens Reporting → NIS2 → Incidents (from an event case's NIS2 draft).
+function openNis2Incidents() {
+  reportingState.section = 'nis2';
+  nis2State.tab = 'incidents';
+  gotoView('reporting');
+}
 
 // Maps a value to one of the shared badge palette classes (ok/warn/crit/INFO/neutral).
 const NIS2_BAND_CLASS = { Critical: 'crit', High: 'warn', Medium: 'INFO', Low: 'ok' };
@@ -15842,6 +15971,16 @@ function nis2IncidentFields(i) {
     { name: 'rootCause', label: 'Root cause', type: 'textarea', value: i.rootCause, hint: 'What ultimately caused it, once known — required for the final report.' },
     { name: 'actionsTaken', label: 'Actions taken', type: 'textarea', value: i.actionsTaken, hint: 'Containment, remediation and recovery steps taken.' },
     { name: 'lessonsLearned', label: 'Lessons learned', type: 'textarea', value: i.lessonsLearned, hint: 'What you will change to prevent a recurrence.' },
+    // NIS2 Art. 23(4) — what the early warning must state, the authority's own
+    // reference, and when each report was actually submitted (the submission
+    // times are what turn a deadline from "overdue" into "submitted").
+    selField('suspectedMalicious', t('nis2.f.suspectedMalicious'), yesNo(), String(!!i.suspectedMalicious), t('nis2.f.suspectedMaliciousHint')),
+    selField('crossBorderImpact', t('nis2.f.crossBorder'), yesNo(), String(!!i.crossBorderImpact), t('nis2.f.crossBorderHint')),
+    { name: 'crossBorderDetails', label: t('nis2.f.crossBorderDetails'), type: 'textarea', value: i.crossBorderDetails, hint: t('nis2.f.crossBorderDetailsHint') },
+    { name: 'authorityReference', label: t('nis2.f.authorityRef'), value: i.authorityReference, hint: t('nis2.f.authorityRefHint') },
+    { name: 'earlyWarningSubmittedAt', label: t('nis2.f.ewSubmitted'), type: 'datetime-local', value: dt(i.earlyWarningSubmittedAt), hint: t('nis2.f.ewSubmittedHint') },
+    { name: 'notificationSubmittedAt', label: t('nis2.f.notifSubmitted'), type: 'datetime-local', value: dt(i.notificationSubmittedAt), hint: t('nis2.f.notifSubmittedHint') },
+    { name: 'finalReportSubmittedAt', label: t('nis2.f.finalSubmitted'), type: 'datetime-local', value: dt(i.finalReportSubmittedAt), hint: t('nis2.f.finalSubmittedHint') },
   ];
 }
 function nis2IncidentBody(v) {
@@ -15851,7 +15990,40 @@ function nis2IncidentBody(v) {
     nis2Relevant: v.nis2Relevant === 'true', notificationRequired: v.notificationRequired === 'true',
     affectedSystems: v.affectedSystems, businessImpact: v.businessImpact, rootCause: v.rootCause,
     actionsTaken: v.actionsTaken, lessonsLearned: v.lessonsLearned,
+    suspectedMalicious: v.suspectedMalicious === 'true', crossBorderImpact: v.crossBorderImpact === 'true',
+    crossBorderDetails: v.crossBorderDetails, authorityReference: v.authorityReference,
+    earlyWarningSubmittedAt: v.earlyWarningSubmittedAt || null,
+    notificationSubmittedAt: v.notificationSubmittedAt || null,
+    finalReportSubmittedAt: v.finalReportSubmittedAt || null,
   };
+}
+
+// The NIS2 Art. 23 deadline status of one incident, one badge per stage, from
+// the `deadlines` the server attaches (src/nis2/deadlines.js). Colour comes from
+// the shared badge palette only: overdue = crit, due soon = warn, submitted on
+// time = ok, submitted late = warn, still upcoming = neutral.
+const NIS2_DL_STAGE_KEY = { 'early-warning': 'nis2.dl.ew', notification: 'nis2.dl.notif', 'final-report': 'nis2.dl.final' };
+function nis2DeadlineCell(dl) {
+  if (!dl || !dl.applicable) return '–';
+  if (!dl.stages || !dl.stages.length) return nbadge(t('nis2.dl.noAnchor'), 'warn');
+  return el('div', { class: 'row-actions' }, ...dl.stages.map((s) => {
+    const stage = t(NIS2_DL_STAGE_KEY[s.stage] || 'nis2.dl.final');
+    const hours = Math.abs(s.hoursRemaining);
+    let text; let cls;
+    if (s.status === 'submitted') {
+      text = t(s.onTime ? 'nis2.dl.submitted' : 'nis2.dl.submittedLate', { stage });
+      cls = s.onTime ? 'ok' : 'warn';
+    } else if (s.status === 'overdue') {
+      text = t('nis2.dl.overdue', { stage, hours: String(hours) }); cls = 'crit';
+    } else if (s.status === 'due-soon') {
+      text = t('nis2.dl.dueSoon', { stage, hours: String(hours) }); cls = 'warn';
+    } else {
+      text = t('nis2.dl.upcoming', { stage, date: fmtDate(s.dueAt) }); cls = 'neutral';
+    }
+    const b = nbadge(text, cls);
+    b.title = s.submittedAt ? t('nis2.dl.titleSubmitted', { due: fmtDate(s.dueAt), at: fmtDate(s.submittedAt) }) : t('nis2.dl.titleDue', { due: fmtDate(s.dueAt) });
+    return b;
+  }));
 }
 async function nis2Incidents() {
   const incidents = await api('/api/nis2/incidents');
@@ -15866,15 +16038,19 @@ async function nis2Incidents() {
     'Your log of significant security incidents — what happened, when it was detected, the systems and business affected, the root cause and the actions taken. These are incidents you record by hand, distinct from the network events BlueEyes derives automatically from probes.',
     'NIS2 (Article 23) makes incident notification a legal duty. Flag “Notification required” for a significant incident: you then owe the national CSIRT/authority an early warning within 24 hours, a full notification within 72 hours, and a final report within one month. Capturing the timeline, impact and root cause here is what lets you produce that report.'));
   if (!incidents.length) { wrap.append(el('div', { class: 'empty' }, 'No incidents recorded yet.')); return wrap; }
-  const head = ['Ref', 'Title', 'Severity', 'Detected', 'Status', 'NIS2', 'Notify', ''];
+  const head = ['Ref', 'Title', 'Severity', 'Detected', 'Status', 'NIS2', 'Notify', t('nis2.dl.col'), ''];
   const rows = incidents.map((i) => el('tr', {},
     el('td', {}, el('code', {}, i.incidentId)),
-    el('td', {}, el('strong', {}, i.title)),
+    el('td', {}, el('strong', {}, i.title),
+      i.eventCaseId ? el('div', {}, el('a', { href: '#', onclick: (e) => { e.preventDefault(); openEvent(i.eventCaseId); } }, t('nis2.fromCase', { id: String(i.eventCaseId) }))) : null,
+      i.suspectedMalicious ? el('div', {}, nbadge(t('nis2.malicious'), 'crit')) : null,
+      i.crossBorderImpact ? el('div', {}, nbadge(t('nis2.crossBorder'), 'warn')) : null),
     el('td', {}, nbadge(i.severity, NIS2_SEV_CLASS[i.severity])),
     el('td', {}, i.detectedAt ? fmtDate(i.detectedAt) : '–'),
     el('td', {}, nbadge(i.status, 'neutral')),
     el('td', {}, i.nis2Relevant ? nbadge('yes', 'warn') : '–'),
     el('td', {}, i.notificationRequired ? nbadge('required', 'crit') : '–'),
+    el('td', {}, nis2DeadlineCell(i.deadlines)),
     el('td', {}, el('div', { class: 'row-actions' },
       canWrite() ? el('button', { class: 'small ghost', onclick: () => nis2EditIncident(i) }, 'Edit') : null,
       canWrite() ? el('button', { class: 'small ghost', onclick: () => nis2DeleteIncident(i) }, 'Delete') : null))));
@@ -16918,6 +17094,9 @@ function routeIdFor(view) {
     case 'location': return selectedLocationId;
     case 'event': return selectedEventId;
     case 'cluster': return selectedClusterId;
+    // The switch page is a deep link too (/snmp-devices/:id): without this a
+    // reload, or a link somebody pasted, landed on "No device selected".
+    case 'snmpDevice': return selectedSnmpDeviceId;
     default: return null;
   }
 }
@@ -16938,6 +17117,7 @@ function setRouteId(view, id) {
   else if (view === 'location') selectedLocationId = id;
   else if (view === 'event') selectedEventId = id;
   else if (view === 'cluster') selectedClusterId = id;
+  else if (view === 'snmpDevice') selectedSnmpDeviceId = id;
 }
 
 // Read the address into view state. Returns false when the path names no screen

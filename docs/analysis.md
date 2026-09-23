@@ -61,10 +61,18 @@ Windows are persisted (file cache) so they survive a restart.
 normal data:
 
 - **Warm-up:** no/too-small baseline → learn and return `null`.
-- **Flatline:** same value for 10 consecutive intervals → `FLATLINE` (WARN) —
-  possible sensor/agent stop.
+- **Flatline:** same value for 10 consecutive intervals, and the sample being
+  judged continues that run → `FLATLINE` (WARN) — possible sensor/agent stop.
+  A sample that differs from the run is judged as an anomaly instead. Switch-port
+  rates (`if.<id>.in.errPps`, `…fcs.pps`, `…utilPct`, etc. from `deviceIngest.js`)
+  never flatline: a constant 0 is their healthy state (`isDevicePortMetric`,
+  injectable as `flatlineExempt`).
 - **Anomaly:** robust z-score `dev = (value − median) / (MAD·1.4826)`;
   `|dev| ≥ critSigma` → `CRIT`, `≥ warnSigma` → `WARN`.
+- **Step off a constant:** when every baseline sample is identical there is no
+  scale, so no σ can be stated. The same value again is normal; a different
+  value (the first error on a port that has always read 0) is an `ANOMALY`
+  (WARN) with `deviation: null` and the plain numbers in the explanation.
 
 The explanation contains the actual numbers, e.g.:
 `cpu at 92 deviated 5.3σ from 7-day baseline (41)`.

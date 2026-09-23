@@ -22,6 +22,18 @@ const DEFAULT_CATEGORIES = [
   { id: 'ntp', label: 'NTP', kind: 'port', ports: [123] },
   { id: 'voip', label: 'VoIP / SIP', kind: 'port', ports: [5060, 5061] },
   { id: 'vpn', label: 'VPN', kind: 'port', ports: [500, 1194, 1701, 4500, 51820] },
+  // Industrial control (ICS/OT) protocols — the same ports services.js names,
+  // each an IANA registration or the vendor's documented default (see the
+  // comments there). Two are deliberately left OUT, because a category has no
+  // protocol to refine on: 2222 (EtherNet/IP I/O is 2222/udp, but 2222/tcp is
+  // usually an alternate SSH port) and MQTT 1883/8883 (general IoT/cloud
+  // messaging; classing every smart-home broker as OT would cry wolf).
+  {
+    id: 'ot',
+    label: 'Industrial / OT',
+    kind: 'port',
+    ports: [102, 502, 1911, 2404, 4840, 9600, 18245, 20000, 34962, 34963, 34964, 44818, 47808],
+  },
   // Destination organisations by ASN (approximate).
   { id: 'facebook', label: 'Facebook / Meta', kind: 'asn', asns: [32934, 54115, 63293] },
   { id: 'google', label: 'Google', kind: 'asn', asns: [15169, 19527, 36040, 36384, 396982] },

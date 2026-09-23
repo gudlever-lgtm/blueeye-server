@@ -289,3 +289,63 @@ test('the record marks itself in the rail and in the breadcrumb', async (t) => {
   assert.equal(marked.dataset.view, 'events');
   assert.match(doc.querySelector('#crumb').textContent, /Insights.*Events.*#11/);
 });
+
+// --- NIS2 draft from the case (migration 123) --------------------------------------
+
+test('an operator can draft the NIS2 incident of this case, and lands in the register', async (t) => {
+  const { doc, window, log } = boot({
+    t, routes: SESSION({
+      'POST /api/nis2/incidents/from-event-case/11': { status: 201, body: { id: 3, incidentId: 'INC-2026-0003', title: 'x', eventCaseId: 11 } },
+      'GET /api/nis2/incidents': [],
+    }),
+  });
+  await settle();
+  const btn = headBtns(doc).find((b) => /Draft NIS2 incident/.test(b.textContent));
+  assert.ok(btn, `no NIS2 draft action — ${headBtns(doc).map((b) => b.textContent).join(', ')}`);
+  assert.ok(!btn.classList.contains('btn-primary'), 'a follow-up, not the primary move');
+  btn.dispatchEvent(new window.Event('click', { bubbles: true }));
+  await settle();
+  assert.ok(log.some((x) => x.key === 'POST /api/nis2/incidents/from-event-case/11'), 'the draft was not requested');
+  assert.ok(log.some((x) => x.key === 'GET /api/nis2/incidents'), 'the register was not opened');
+});
+
+test('a viewer is not offered the NIS2 draft', async (t) => {
+  const { doc } = boot({
+    t, role: 'viewer',
+    routes: SESSION({ 'GET /me': { id: 2, email: 'v@y.dk', role: 'viewer', preferences: {} } }),
+  });
+  await settle();
+  assert.ok(!headBtns(doc).some((b) => /NIS2/.test(b.textContent)));
+});
+
+test('the NIS2 register shows each Art. 23 deadline, coloured from the badge palette', async (t) => {
+  const incident = {
+    id: 3, incidentId: 'INC-2026-0003', title: 'Payment API down', severity: 'high', status: 'open',
+    detectedAt: '2026-09-17T13:40:00.000Z', nis2Relevant: true, notificationRequired: true, eventCaseId: 11,
+    suspectedMalicious: true,
+    deadlines: {
+      applicable: true, worstStatus: 'overdue', stages: [
+        { stage: 'early-warning', status: 'submitted', onTime: true, dueAt: '2026-09-18T13:40:00.000Z', submittedAt: '2026-09-17T20:00:00.000Z', hoursRemaining: -30 },
+        { stage: 'notification', status: 'overdue', dueAt: '2026-09-20T13:40:00.000Z', hoursRemaining: -5 },
+        { stage: 'final-report', status: 'upcoming', dueAt: '2026-10-17T13:40:00.000Z', hoursRemaining: 500 },
+      ],
+    },
+  };
+  const { doc, window } = boot({
+    t, routes: SESSION({
+      'POST /api/nis2/incidents/from-event-case/11': { status: 409, body: { error: 'exists', incident: { id: 3, incidentId: 'INC-2026-0003' } } },
+      'GET /api/nis2/incidents': [incident],
+    }),
+  });
+  await settle();
+  headBtns(doc).find((b) => /Draft NIS2 incident/.test(b.textContent)).dispatchEvent(new window.Event('click', { bubbles: true }));
+  await settle();
+  const cells = [...doc.querySelectorAll('#view td .badge')].map((b) => ({ text: b.textContent, cls: b.className }));
+  const find = (re) => cells.find((c) => re.test(c.text));
+  assert.ok(find(/24 h submitted/), JSON.stringify(cells));
+  assert.match(find(/24 h submitted/).cls, /\bok\b/);
+  assert.match(find(/72 h overdue by 5 h/).cls, /\bcrit\b/);
+  assert.match(find(/Final due/).cls, /\bneutral\b/);
+  assert.ok(find(/Suspected malicious/));
+  assert.match(doc.querySelector('#view').textContent, /From event case #11/);
+});

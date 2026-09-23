@@ -434,15 +434,19 @@
       }
 
       function drawBidi(data, markers) {
-        var asym = data.asymmetry || {};
+        // `directionBalance` is a byte split between the two directions — NOT
+        // a routing verdict (a download-heavy host is always one-sided). Older
+        // servers only send the same numbers as `asymmetry`.
+        var bal = data.directionBalance || data.asymmetry || {};
+        var imbalanced = bal.imbalanced !== undefined ? bal.imbalanced : bal.asymmetric;
         var panels = [];
-        if (asym.ratio !== null && asym.ratio !== undefined) {
-          var inPct = Math.round(asym.ratio * 100);
+        if (bal.ratio !== null && bal.ratio !== undefined) {
+          var inPct = Math.round(bal.ratio * 100);
           panels.push(ui.inlineNote(
-            asym.asymmetric
-              ? t('flows.asym', { in: inPct, out: 100 - inPct })
-              : t('flows.sym', { in: inPct, out: 100 - inPct }),
-            asym.asymmetric ? 'warn' : null));
+            imbalanced
+              ? t('flows.dirImbalance', { in: inPct, out: 100 - inPct })
+              : t('flows.dirBalanced', { in: inPct, out: 100 - inPct }),
+            imbalanced ? 'warn' : null));
         }
         panels.push(ui.panelGrid(
           dirPanel(t('flows.ingress'), data.ingress, markers),

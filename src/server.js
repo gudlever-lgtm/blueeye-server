@@ -62,6 +62,7 @@ const { createRemediationPlaybooksRepository } = require('./repositories/remedia
 const { createConfigSnapshotsRepository } = require('./repositories/configSnapshotsRepository');
 const { createEventCaseService } = require('./eventCases/eventCaseService');
 const { createEventAutoResolveJob } = require('./eventCases/autoResolveJob');
+const { createAgentOfflineMonitor } = require('./health/agentOfflineMonitor');
 const { createEventClustersRepository } = require('./repositories/eventClustersRepository');
 const { createRunbooksRepository } = require('./repositories/runbooksRepository');
 const { createLldpNeighborsRepository } = require('./repositories/lldpNeighborsRepository');
@@ -82,6 +83,8 @@ const { createDeviceCounterSamplesTsdbRepository } = require('./repositories/dev
 const { createSnmpCounterIngest } = require('./devices/snmpCounterIngest');
 const { createL2LoopService } = require('./analysis/l2LoopService');
 const { createSnmpTopologyIngest } = require('./devices/snmpTopologyIngest');
+const { createDeviceFindingSink } = require('./devices/findingSink');
+const { createSwitchPortStateService } = require('./devices/switchPortStateService');
 const { createBurstRunsRepository } = require('./repositories/burstRunsRepository');
 const { createBurstService } = require('./probes/burstService');
 const { createInterfaceStatesRepository } = require('./repositories/interfaceStatesRepository');
@@ -94,6 +97,9 @@ const { createFlowPairBaselinesRepository } = require('./repositories/flowPairBa
 const { createFlowPairBaselineJob } = require('./analysis/flowPairBaselineJob');
 const { createDiscoveredDevicesRepository } = require('./repositories/discoveredDevicesRepository');
 const { createDiscoverySweepJob } = require('./discovery/discoverySweepJob');
+const {
+  createNewDeviceDetector, withArpDetection, withDiscoveryDetection, loadNewDeviceConfig,
+} = require('./discovery/newDeviceDetector');
 const { createClusterNotifier } = require('./analysis/clusterNotifier');
 const { createClusterNis2Service } = require('./analysis/clusterNis2');
 const { createClusterAlertGate } = require('./analysis/clusterAlertGate');
@@ -612,7 +618,34 @@ function start() {
   // recomputed off the ingest hot path by a leader-only job (backgroundJobs).
   const serviceDependenciesRepo = createServiceDependenciesRepository(db);
   const hostConnectionsRepo = createHostConnectionsRepository(db);
-  const arpEntriesRepo = createArpEntriesRepository(db);
+  // New-device detection (src/discovery/newDeviceDetector.js): a MAC no agent
+  // at the site has seen before, or an address discovery never found, becomes a
+  // `device.new` finding — stored, published, grouped and alerted like any
+  // other. It watches the two repositories by wrapping them (check before the
+  // upsert, raise after it), so every writer — the capabilities report, the
+  // evidence snapshot, both discovery paths — is covered without each route
+  // knowing. The raw stores are what the detector itself reads. Gated like the
+  // other finding producers (analysis flag + licence) and by
+  // NEW_DEVICE_ALERTS_ENABLED; `dispatcher` and `alertingConfig` are read at
+  // call time because they are built further down.
+  const arpEntriesStore = createArpEntriesRepository(db);
+  const discoveredDevicesStore = createDiscoveredDevicesRepository(db);
+  const newDeviceDetector = createNewDeviceDetector({
+    arpEntriesRepo: arpEntriesStore,
+    discoveredDevicesRepo: discoveredDevicesStore,
+    agentsRepo,
+    locationsRepo,
+    findingStore,
+    eventCaseService,
+    publishFinding: (hostId, message) => (dashboardWs ? dashboardWs.broadcast(message) : 0),
+    getDispatcher: () => dispatcher,
+    alertingEnabled: () => alertingConfig.enabled,
+    integrationTrigger: integrationsDispatcher,
+    licensed: () => !!analysisConfig.analysisEnabled && featureGate.isFeatureEnabled('analysis'),
+    config: loadNewDeviceConfig(),
+    logger,
+  });
+  const arpEntriesRepo = withArpDetection(arpEntriesStore, newDeviceDetector, { logger });
   // Device events (syslog now, SNMP traps from stage 03). HIGH-volume telemetry
   // by the classification in docs/storage-split-audit.md, so it follows the
   // same dual-store rule as `results`: TimescaleDB when TSDB is configured,
@@ -620,12 +653,8 @@ function start() {
   const deviceEventsRepo = tsdb
     ? createDeviceEventsTsdbRepository(tsdb)
     : createDeviceEventsRepository(db);
-  const deviceEventIngest = createDeviceEventIngest({
-    deviceEventsRepo,
-    agentsRepo,
-    arpEntriesRepo,
-    logger,
-  });
+  // (The device-event INGEST is built below, after the SNMP inventory: a
+  // link.down from a polled switch is tied to that switch's port.)
 
   // The SNMP device inventory and what an agent reads off it. The community
   // string is AES-256-GCM at rest, so the repository takes the same secretBox
@@ -654,23 +683,72 @@ function start() {
   // other one does. The dashboard socket is the one thing that does not exist
   // yet here, so the publish is a closure over `dashboardWs` rather than the
   // socket itself — reading it at call time, when it is there.
+  //
+  // Rule-based switch findings (a loop, an uplink down, a flapping port, a
+  // duplex mismatch) all leave through ONE sink: store, publish, event case,
+  // alert, integrations — the same steps the analysis pipeline gives a counter
+  // finding. The alerting dispatcher, its config and the cluster gate are built
+  // further down, so they are read through getters at emit time (after boot);
+  // the try/catch covers the window before those consts exist, where the
+  // answer is simply "no alerting yet".
+  const lateBound = (read) => () => { try { return read(); } catch { return null; } };
+  const deviceFindingSink = createDeviceFindingSink({
+    findingStore,
+    eventCaseService,
+    publishFinding: (hostId, message) => (dashboardWs ? dashboardWs.broadcast(message) : 0),
+    dispatcher: lateBound(() => dispatcher),
+    alertingEnabled: lateBound(() => alertingConfig.enabled),
+    integrationTrigger: integrationsDispatcher,
+    clusterAlertGate: {
+      suppressedCluster: (f) => { const g = lateBound(() => clusterAlertGate)(); return g ? g.suppressedCluster(f) : null; },
+      ensureFresh: async () => { const g = lateBound(() => clusterAlertGate)(); if (g && g.ensureFresh) await g.ensureFresh(); },
+    },
+    // Findings are an analysis feature, gated like the detector path.
+    enabled: () => !!analysisConfig.analysisEnabled && featureGate.isFeatureEnabled('analysis'),
+    logger,
+  });
   const l2LoopService = createL2LoopService({
     fdbEntriesRepo,
     counterSamplesRepo,
     deviceEventsRepo,
     deviceInterfacesRepo,
     snmpDevicesRepo,
-    findingStore,
-    eventCaseService,
-    publishFinding: (hostId, message) => (dashboardWs ? dashboardWs.broadcast(message) : 0),
+    findingSink: deviceFindingSink,
     logger,
   });
+  // Switch-port link history (migration 118): polled status changes and
+  // link.* traps/syslog, with flap collapse, into interface_state_transitions.
+  const interfaceStatesRepo = createInterfaceStatesRepository(db);
+  const switchPortStateService = createSwitchPortStateService({
+    interfaceStatesRepo,
+    deviceInterfacesRepo,
+    snmpNeighborsRepo,
+    findingSink: deviceFindingSink,
+    logger,
+  });
+  // Topology change detection — diffs each LLDP report against the previous
+  // snapshot, records changes (reusing the timeline shape) + writes them to the
+  // hash-chained audit log as evidence, with flap suppression. Built here
+  // because the SNMP topology ingest diffs each switch's own LLDP table with it.
+  const topologyChangesRepo = createTopologyChangesRepository(db);
+  const topologyChangeService = createTopologyChangeService({ topologyChangesRepo, lldpNeighborsRepo, auditLogger });
   const snmpTopologyIngest = createSnmpTopologyIngest({
     snmpDevicesRepo,
     fdbEntriesRepo,
     snmpNeighborsRepo,
     deviceInterfacesRepo,
     l2LoopService,
+    switchPortStateService,
+    topologyChangeService,
+    logger,
+  });
+  const deviceEventIngest = createDeviceEventIngest({
+    deviceEventsRepo,
+    agentsRepo,
+    arpEntriesRepo,
+    snmpDevicesRepo,
+    deviceInterfacesRepo,
+    switchPortStateService,
     logger,
   });
   // Interface counters. The second-largest write stream in the product after
@@ -688,7 +766,6 @@ function start() {
   // samples that come back, the routes need it to dispatch.
   const burstRunsRepo = createBurstRunsRepository(db);
   const burstService = createBurstService({ burstRunsRepo, agentCommander, logger });
-  const interfaceStatesRepo = createInterfaceStatesRepository(db);
   // Interface transitions are recorded at the results-ingest seam — the one place
   // that sees every observation — not reconstructed by polling current state.
   const interfaceStateService = createInterfaceStateService({ interfaceStatesRepo, logger });
@@ -701,11 +778,6 @@ function start() {
     // what one of them cuts off (src/topology/nodeId.js, migration 106).
     snmpDevicesRepo, snmpNeighborsRepo, deviceInterfacesRepo,
   });
-  // Topology change detection — diffs each LLDP report against the previous
-  // snapshot, records changes (reusing the timeline shape) + writes them to the
-  // hash-chained audit log as evidence, with flap suppression.
-  const topologyChangesRepo = createTopologyChangesRepository(db);
-  const topologyChangeService = createTopologyChangeService({ topologyChangesRepo, lldpNeighborsRepo, auditLogger });
   // Per-flow-pair traffic-volume baselines (extends per-metric anomaly detection
   // to per-(src,dst,port)). Leader-only hourly rollup + robust baseline + scoring
   // that emits deviations to the correlator as ordinary findings.
@@ -713,7 +785,7 @@ function start() {
   const flowPairBaselineJob = createFlowPairBaselineJob({ flowPairBaselinesRepo, flowsRepo, agentsRepo, findingStore, logger });
   // Scheduled active discovery (admin-only). Probes the configured CIDR scope for
   // devices passive collection misses; candidates require admin promotion.
-  const discoveredDevicesRepo = createDiscoveredDevicesRepository(db);
+  const discoveredDevicesRepo = withDiscoveryDetection(discoveredDevicesStore, newDeviceDetector, { logger });
   // Scope is re-read each sweep from the settings-backed provider (defined
   // below), so an admin's in-UI scope edit applies without a restart; the static
   // env config remains the fallback + the enable/schedule source.
@@ -840,6 +912,8 @@ function start() {
     deviceInterfacesRepo,
     counterSamplesRepo,
     analysisPipeline,
+    // The duplex-mismatch indicator (half duplex + late collisions / FCS).
+    findingSink: deviceFindingSink,
     logger,
   });
   // Offline GeoIP/ASN provider (EU-sourced range DB; config.geo.dbPath). Created
@@ -1011,6 +1085,36 @@ function start() {
     { start: () => geoipUpdater.startSchedule(), stop: () => geoipUpdater.stopSchedule() },
     createTransactionBaselineJob({ repo: transactionsRepo, logger }),
     createEventAutoResolveJob({ eventCasesRepo, auditLogRepo, logger }),
+    // Agent offline: the periodic stale-status sweep (a missed WS close no
+    // longer leaves a green badge on a dead agent) + ONE finding per offline
+    // episode past the grace period, with a dead-agent vs network-down verdict,
+    // through the same finding → event → alert path the probe pipeline uses.
+    // agentWs is late-bound: the job starts after the WS hub is attached.
+    createAgentOfflineMonitor({
+      agentsRepo,
+      findingStore,
+      eventCaseService,
+      eventCasesRepo,
+      auditLogRepo,
+      auditEventsRepo,
+      notifyDashboard: (message) => (dashboardWs ? dashboardWs.broadcast(message) : 0),
+      publishFinding: (hostId, message) => (dashboardWs ? dashboardWs.broadcast(message) : 0),
+      dispatcher,
+      alertingEnabled: () => alertingConfig.enabled,
+      integrationTrigger: integrationsDispatcher,
+      arpEntriesRepo,
+      fdbEntriesRepo,
+      deviceInterfacesRepo,
+      deviceEventsRepo,
+      connectedAgentIds: () => (agentWs ? agentWs.connectedAgentIds() : []),
+      getConnectionInfo: (agentId) => (agentWs ? agentWs.getConnectionInfo(agentId) : null),
+      licensed: () => featureGate.isFeatureEnabled('analysis'),
+      staleOfflineSec: config.ws.staleOfflineSec,
+      graceMs: config.ws.offlineGraceMs,
+      maxAgeMs: config.ws.offlineMaxAgeMs,
+      intervalMs: config.ws.offlineSweepMs,
+      logger,
+    }),
     createCrossAgentClusterJob({ service: crossAgentClusterService, logger }),
     createVerificationJob({ service: verificationService, logger }),
     // Service dependency graph recompute (rolling 24h TCP edges), off the ingest
@@ -1229,8 +1333,10 @@ function start() {
   // agent. Still-live agents reconnect within seconds and re-set 'online'; the
   // last_seen threshold means we only touch ones already silent past it, so a
   // healthy fleet doesn't flap. Best-effort.
+  // The same rule then runs every minute from the agent-offline monitor
+  // (backgroundJobs), so a close the server never saw is caught at runtime too.
   Promise.resolve()
-    .then(() => agentsRepo.markStaleOffline({ olderThanSec: 300 }))
+    .then(() => agentsRepo.markStaleOffline({ olderThanSec: config.ws.staleOfflineSec }))
     .then((n) => { if (n) logger.info(`agents: reconciled ${n} stale 'online' row(s) to 'offline' at startup.`); })
     .catch((err) => logger.warn(`agents: startup stale-status reconcile failed: ${err.message}`));
 

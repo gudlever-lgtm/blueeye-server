@@ -16,7 +16,7 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 
 const {
-  detectLoop, pairsFromMoves, MIN_MOVES_PER_MAC, MIN_FLAPPING_MACS,
+  detectLoop, pairsFromMoves, MIN_MOVES_PER_MAC, MIN_FLAPPING_MACS, BROADCAST_STORM_MIN_PPS,
 } = require('../src/analysis/l2Loop');
 
 // Six MACs bouncing between bridge ports 12 and 24 — the textbook signature.
@@ -87,10 +87,48 @@ test('a MAC that moved twice is not flapping', () => {
   assert.equal(detectLoop({ moving: barely, broadcast: surging(), topoChanges: 4 }), null);
 });
 
-test('broadcast alone is NOT a loop, however loud', () => {
+test('broadcast alone is NOT a loop while it is one reading, however loud', () => {
   // A backup starting, a discovery sweep, a misconfigured application. Firing
-  // on this is how a detector gets switched off in a week.
+  // on this is how a detector gets switched off in a week. (Updated
+  // deliberately: this used to hold for ANY broadcast without MAC flapping. A
+  // storm that is SUSTAINED is now a lower-confidence case — see below — but a
+  // surge the service has not seen hold is still nothing.)
   assert.equal(detectLoop({ moving: [], broadcast: surging(20), topoChanges: 0 }), null);
+});
+
+test('a SUSTAINED, loud storm with no MAC moving is a suspected loop behind the port — at WARN', () => {
+  // The loop is downstream of one port (an unmanaged switch patched to
+  // itself), so every circulating frame arrives the same way and no MAC ever
+  // flaps here. The storm itself is the only evidence this switch has.
+  const storm = [{
+    interfaceId: 7, ifName: 'Gi1/0/7', inBcastPps: 2500, baselineBcastPps: 2, sustained: true,
+  }];
+  const out = detectLoop({ moving: [], broadcast: storm, topoChanges: 0, deviceName: 'sw-acc-3' });
+  assert.ok(out);
+  assert.equal(out.basis, 'broadcast');
+  assert.equal(out.severity, 'WARN');
+  assert.deepEqual(out.stormPorts, [{ interfaceId: 7, ifName: 'Gi1/0/7' }]);
+  assert.match(out.explanation, /Gi1\/0\/7/);
+  assert.match(out.explanation, /sw-acc-3/);
+  assert.match(out.explanation, /BEHIND that port/);
+
+  // STP churn corroborates, but never promotes it to CRIT.
+  const churn = detectLoop({ moving: [], broadcast: storm, topoChanges: 6 });
+  assert.equal(churn.severity, 'WARN');
+  assert.ok(churn.score > out.score);
+});
+
+test('a sustained storm under the absolute floor is a chatty port, not a storm', () => {
+  const chatty = [{ interfaceId: 7, ifName: 'Gi1/0/7', inBcastPps: BROADCAST_STORM_MIN_PPS - 1, baselineBcastPps: 1, sustained: true }];
+  assert.equal(detectLoop({ moving: [], broadcast: chatty }), null);
+});
+
+test('port-pair moves count the WINDOW, never the all-time counter', () => {
+  const pairs = pairsFromMoves([
+    { mac: 'a', bridgePort: 12, prevBridgePort: 24, movesInWindow: 3, moveCount: 400 },
+    { mac: 'b', bridgePort: 24, prevBridgePort: 12, movesInWindow: 2, moveCount: 900 },
+  ]);
+  assert.equal(pairs[0].moves, 5);
 });
 
 test('spanning-tree churn alone is NOT a loop', () => {

@@ -1,16 +1,52 @@
 # Changelog
 
-## 0.188.0 — Mute this rule does something
+## 0.189.0 — Mute this rule does something
 
 **"Mute this rule" on a Changes row only showed a toast.** It now mutes the
 row's rule — every row of that source + type, on every host — for 24 hours, for
-you only (`POST /api/changes/mute`, migration 116 `change_mutes`). Muted rows
+you only (`POST /api/changes/mute`, migration 124 `change_mutes`). Muted rows
 leave the default list, the note under the toolbar counts them, and
 **Show → Muted** lists them with **Unmute this rule**
 (`DELETE /api/changes/mute/:key`).
 
 Always time-boxed (1..168 hours through the API), and it never touches
 alerting. See `docs/changes-feed.md`.
+
+## 0.188.0 — Audit fixes: switch ports, OT traffic, coverage gaps, agent offline
+
+Fixes the findings in `docs/audit/fejlscenarie-audit.md` (section 8 lists each
+one). Pair with agent 0.39.1, which sends the new probe fields (`errorCode`,
+`failure`, `resolver`, hop `ips`), local LLDP and `sysDescr`; older agents keep
+working and simply omit them.
+
+**Things that were built but never fired now do.** Interface transitions read
+the agent's real result shape. Trap events are sent with syslog off. Severity
+rules reach the alert. The cluster gate applies to probe findings. ECMP is no
+longer ruled out on every run, and the reverse asymmetric-routing test probes
+back to the origin agent instead of the same target.
+
+**Switch ports.** Link state gets a history from polls and traps/syslog, with
+findings for a downed uplink and a flapping port. Duplex and the late-collision
+rate are stored and analysed (a `duplex.mismatch` finding), VLAN names and
+sysDescr are kept, and the L2-loop detector counts moves inside its window.
+Healthy zero error counters no longer raise FLATLINE.
+
+**OT and new devices.** Modbus/TCP, S7comm, IEC-104, DNP3, EtherNet/IP, BACnet,
+OPC UA, PROFINET and more are named on flows and topology edges (category
+`ot`). Internal flows get an hourly rollup (90 days). A device never seen
+before on a site raises a `device.new` finding.
+
+**New screens and data.** Administration → Coverage gaps (`GET /api/coverage`)
+lists what the product cannot see. An agent offline for 5 minutes raises
+`agent.offline` with a verdict (agent process, host, access port or site). NIS2
+incidents show Art. 23 deadline status, record submissions and the Art. 23(4)
+fields, and can be drafted from an event case.
+
+**Operations.** Retention runs 2 minutes after boot and now also purges probe,
+speedtest, transaction, outage, topology-change, discovery, connection and
+audit-event rows. Migrations 116–123. A busy ARP table no longer fails the
+capabilities report, and the public build-status route no longer shows build
+error text.
 
 ## 0.186.0 — Acknowledge on the Changes page does something
 

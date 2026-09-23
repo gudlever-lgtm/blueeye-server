@@ -263,7 +263,7 @@ function createUsersRepository(db) {
     return res.affectedRows > 0;
   }
 
-  // "Mute this rule" on the Changes page (migration 116). Only live mutes are
+  // "Mute this rule" on the Changes page (migration 124). Only live mutes are
   // read — an expired one is simply gone. Returns Map<muteKey, Date until>.
   async function listChangeMutes(userId) {
     const [rows] = await pool.query(

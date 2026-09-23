@@ -171,12 +171,16 @@ not required) via `probeResultsRepository.metricRows`.
 When a hop load-balances across several next-hops, the linear median graph would
 hide it (it collapses to the mode IP). `buildPathGraph` therefore also emits an
 additive **`branches`** structure (`{ multipath, hops[], edges[] }`) inferred from
-the **multiple stored runs** — no agent change: each TTL keeps *every* distinct
-responding IP as its own branch node, and the observed hop→hop transitions become
-the branch edges. When `branches.multipath` is set, the hop pane draws the
-branches as parallel bezier curves that fan out and rejoin, and the head shows an
-**ECMP** badge. (True single-run multipath — Paris-traceroute — would need an
-agent release and is out of scope here.)
+the **multiple stored runs**, and — for agents that report every responder per
+hop (`hop.ips`) — from the members that answered within one run: each TTL keeps
+*every* distinct responding IP as its own branch node, and the observed hop→hop
+transitions become the branch edges (within one run every member of a hop is
+joined to every member of the next, since the run cannot say which led where).
+Latency/loss are the hop's aggregates and are attributed to its representative
+`ip` only. When `branches.multipath` is set, the hop pane draws the branches as
+parallel bezier curves that fan out and rejoin, and the head shows an **ECMP**
+badge. The same member sets drive the diagnose ECMP facts (`ecmpAnalysis`, see
+`docs/diagnose.md`).
 
 ### API
 

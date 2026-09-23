@@ -220,4 +220,4 @@ function buildTopologyGraph({
   };
 }
 
-module.exports = { buildTopologyGraph };
+module.exports = { buildTopologyGraph, normaliseMac, nameKey };

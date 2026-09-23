@@ -536,3 +536,38 @@ test('a service that flaps collapses instead of burying every other source', () 
   assert.ok(feed.events.length < rows.length, `${rows.length} incidents collapsed to ${feed.events.length}`);
   assert.ok(feed.correlated > 0);
 });
+
+// --- agent offline verdict (src/health/agentOfflineMonitor.js) --------------
+// The offline finding carries a dead-agent vs network-down verdict in its
+// evidence; the feed row must say it, and must keep saying it after the row is
+// folded into the event that represents it.
+const offlineFinding = (over = {}) => ({
+  id: 'f-off', hostId: '7', metric: 'agent.offline', severity: 'WARN', createdAt: TO, eventCaseId: 11,
+  evidence: [{ ts: TO, verdict: 'agent_process_down', checks: [] }],
+  ...over,
+});
+
+test('fromFindings puts the agent-offline verdict on the row', () => {
+  const [e] = fromFindings([offlineFinding()], { nameFor: () => 'edge-7' });
+  assert.equal(e.summary, 'edge-7 offline: host reachable, agent process down');
+  assert.equal(e.offlineVerdict, 'agent_process_down');
+});
+
+test('fromFindings ignores a verdict it does not know, and non-offline findings carry none', () => {
+  const [bogus] = fromFindings([offlineFinding({ evidence: [{ verdict: 'nonsense' }] })], { nameFor: () => 'edge-7' });
+  assert.equal(bogus.summary, 'agent.offline on edge-7');
+  assert.equal('offlineVerdict' in bogus, false);
+  const [other] = fromFindings([{ id: 'x', hostId: '7', metric: 'probe.loss', severity: 'WARN', createdAt: TO, evidence: [{ verdict: 'site_outage' }] }]);
+  assert.equal('offlineVerdict' in other, false);
+});
+
+test('the verdict survives the roll-up into the event row', () => {
+  const rows = rollUpFindings([
+    ...fromEvents([{ id: 11, hostId: '7', title: 'WARN agent.offline on edge-7', status: 'open', severity: 'WARN', firstEventAt: TO, lastEventAt: TO, primaryFindingId: 'f-off' }]),
+    ...fromFindings([offlineFinding()]),
+  ]);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].kind, 'event');
+  assert.equal(rows[0].summary, 'WARN agent.offline on edge-7: host reachable, agent process down');
+  assert.equal(rows[0].offlineVerdict, 'agent_process_down');
+});

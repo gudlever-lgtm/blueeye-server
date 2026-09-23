@@ -5,7 +5,7 @@
 > the fault is one cable, somewhere.
 
 **Detector:** `src/analysis/l2Loop.js` (pure) · **Service:** `src/analysis/l2LoopService.js`
-**Tables:** `fdb_entries.move_count` (migration 111), `device_counter_samples` (109), `device_events` (103)
+**Tables:** `fdb_entries` + `fdb_mac_moves` (migrations 111, 117), `device_counter_samples` (109), `device_events` (103)
 
 ---
 
@@ -24,7 +24,7 @@ independent facts**, each unremarkable on its own:
 
 | Fact | Where it comes from | Why it happens |
 | --- | --- | --- |
-| A MAC address keeps moving between two ports | `fdb_entries.move_count` | Frames from one host arrive by two paths, so the switch relearns the address on whichever port delivered last |
+| A MAC address keeps moving between two ports | `fdb_mac_moves`, counted inside the window | Frames from one host arrive by two paths, so the switch relearns the address on whichever port delivered last |
 | Broadcast arrival rate up sharply on **many** ports at once | `device_counter_samples.in_bcast_pps` | A broadcast in a loop circulates forever and multiplies at every switch |
 | Spanning tree reconverging repeatedly | `device_events` `stp.topology_change` | Either the cause (it has not converged) or the symptom (it keeps trying) |
 
@@ -143,3 +143,59 @@ property of the **switch**, not of one port, even though the verdict names two.
 `host_id` is the polling agent, so every per-agent read finds it, and it is
 grouped into an event case like any other finding — a loop belongs in the same
 event as the link flaps and timeouts it is causing.
+
+It goes through the same sink every rule-based switch finding uses
+(`src/devices/findingSink.js`): stored, published, grouped into an event case,
+**alerted** (behind the alerting flag, suppressed when an open cluster already
+covers the host) and handed to the outbound integrations. Before, the service
+stored, published and grouped — and nothing handed it a dispatcher, so a loop
+on the core switch opened an event case and paged nobody.
+
+---
+
+## Counting moves inside the window (migration 117)
+
+`move_count` is all-time and reset by nothing, and the detector used to read it
+as the number of moves **in its window**. A laptop re-docked forty times over a
+month looked exactly like a MAC flapping forty times in ten minutes.
+
+Each observed move is now kept in `fdb_mac_moves` — written by the sweep that
+records it (one `INSERT … SELECT` of the rows whose `last_move_at` is this
+sweep), aged out after `RETENTION_FDB_MOVE_DAYS` (default 2) — and
+`movingMacs()` counts them inside the window. `move_count` stays the all-time
+figure it always was.
+
+Counting correctly exposed a second fault the all-time count had been hiding:
+**a sweep sees at most one move per MAC**, so a ten-minute window over a
+switch polled every five minutes holds two sweeps and a MAC could never reach
+the four moves the rule needs. The window is therefore the configured floor
+(10 minutes) or `MIN_SWEEPS_PER_WINDOW` (eight) sweeps of the device's own
+topology interval, whichever is longer — 40 minutes at the 300-second default.
+A switch where loops matter should be polled every 60 seconds.
+
+## A storm with no MAC flapping
+
+A loop entirely **behind one port** — an unmanaged desk switch with two of its
+ports patched together — never makes a MAC flap on the managed switch: every
+circulating frame arrives on the same port. What the managed switch sees is a
+broadcast storm pouring in on that port and not stopping.
+
+So a port whose broadcast rate is at least `BROADCAST_SURGE_RATIO` times its
+own median (over the last hour), at least 200 frames/s, for the last two
+counter samples in a row, is raised as a **suspected** loop behind that port —
+`basis: 'broadcast'` in the evidence, **WARN at most**, and an explanation that
+says it is a suspicion (a faulty NIC or a flooding host looks the same). A
+single burst, or a chatty port under the floor, is nothing. Without moving
+MACs only ports above the floor are looked at, so on a quiet network the check
+costs one read.
+
+## Spanning-tree events are matched by the switch's address
+
+`device_events.device_id` is **not** an `snmp_devices` id: the device-event
+ingest resolves a sender through the agents' own addresses, so that column
+holds an agent id. The STP corroboration used to query it with the switch's
+`snmp_devices.id`, which matched some unrelated agent's events or none — in
+production the corroboration was always zero. It now matches events by
+`source_ip` against the switch's polled `host` (what the agent's trap receiver
+and syslog listener record). A switch configured by DNS name has no address to
+match and contributes nothing, which only ever adds nothing to the score.

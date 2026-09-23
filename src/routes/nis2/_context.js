@@ -21,6 +21,8 @@ function createNis2Context({
   nis2ReportsRepo, nis2EvidenceRepo, nis2AuditRepo,
   featureGate = null, planService = null,
   releaseKeyService = null,
+  // Optional: lets an incident be drafted from an event case (incidents.js).
+  eventCasesRepo = null,
 }) {
   const reader = requireRole(ROLES.VIEWER, ROLES.OPERATOR, ROLES.ADMIN);
   const writer = requireRole(ROLES.OPERATOR, ROLES.ADMIN);
@@ -74,6 +76,7 @@ function createNis2Context({
     nis2RisksRepo, nis2ControlsRepo, nis2IncidentsRepo,
     nis2ReportsRepo, nis2EvidenceRepo, nis2AuditRepo,
     releaseKeyService,
+    eventCasesRepo,
     // role + licence middleware
     reader, writer, approver, compliancePack,
     // helpers

@@ -163,6 +163,16 @@ const config = {
     // Browser live channel (analysis findings pushed to the dashboard).
     dashboardPath: process.env.WS_DASHBOARD_PATH || '/ws/dashboard',
     heartbeatIntervalMs: toInt(process.env.WS_HEARTBEAT_MS, 30000),
+    // Agent-offline monitor (src/health/agentOfflineMonitor.js). The stale
+    // threshold must clear the 60 s last_seen touch throttle plus a heartbeat,
+    // or a healthy agent would flap — hence the 120 s floor.
+    staleOfflineSec: clampInt(process.env.AGENT_STALE_OFFLINE_SEC, 300, 120, 86400),
+    offlineSweepMs: clampInt(process.env.AGENT_OFFLINE_SWEEP_MS, 60000, 10000, 3600000),
+    // How long an agent must be offline, continuously, before it raises a
+    // finding (and, through alerting, a notification). Minutes.
+    offlineGraceMs: clampInt(process.env.AGENT_OFFLINE_GRACE_MINUTES, 5, 1, 1440) * 60000,
+    // Silent longer than this = abandoned, not newly failed: no finding. Hours.
+    offlineMaxAgeMs: clampInt(process.env.AGENT_OFFLINE_MAX_AGE_HOURS, 24, 1, 24 * 90) * 3600000,
   },
   // Client-side licensing against blueeye-licens. Set at installation (not CRUD).
   license: {
@@ -223,7 +233,7 @@ const config = {
   discovery: {
     enabled: /^(1|true|yes|on)$/i.test(String(process.env.DISCOVERY_ENABLED || '').trim()),
     cidrs: (process.env.DISCOVERY_CIDRS || '').split(',').map((s) => s.trim()).filter(Boolean),
-    ports: (process.env.DISCOVERY_PORTS || '22,80,161,443,3389').split(',').map((s) => toInt(s, 0)).filter((n) => n > 0 && n <= 65535),
+    ports: (process.env.DISCOVERY_PORTS || '22,80,102,161,443,502,2404,3389,4840,20000,44818').split(',').map((s) => toInt(s, 0)).filter((n) => n > 0 && n <= 65535),
     rateLimit: clampInt(process.env.DISCOVERY_RATE_LIMIT, 50, 1, 10000),
     addressCap: clampInt(process.env.DISCOVERY_ADDRESS_CAP, 65536, 1, 16777216),
     intervalMinutes: clampInt(process.env.DISCOVERY_INTERVAL_MINUTES, 360, 1, 10080),

@@ -48,6 +48,10 @@ const COUNTER_FIELDS = [
   'fcsErrors', 'alignmentErrors', 'lateCollisions', 'carrierSenseErrors',
 ];
 
+// What a port's duplex can be, as the agent names dot3StatsDuplexStatus. Anything
+// else is not an answer and becomes null.
+const DUPLEX_VALUES = ['half', 'full', 'unknown'];
+
 // 32-bit and 64-bit counter ceilings, for the wrap question below.
 const WRAP32 = 2 ** 32;
 
@@ -112,6 +116,10 @@ function computeSample({
 } = {}) {
   const raw = {};
   for (const f of COUNTER_FIELDS) raw[f] = current && current[f] != null ? Number(current[f]) : null;
+  // Duplex is a STATE, not a counter: it is true of the moment it was read, so
+  // it survives every discontinuity below. A reboot voids the rates; it does
+  // not make "this port negotiated half duplex" any less the case.
+  raw.duplex = current && DUPLEX_VALUES.includes(current.duplex) ? current.duplex : null;
 
   // The reasons are checked in order of how badly they invalidate the delta.
   let discontinuity = null;
@@ -129,7 +137,7 @@ function computeSample({
       inBps: null, outBps: null,
       inErrPps: null, outErrPps: null,
       inDiscPps: null, outDiscPps: null,
-      fcsPps: null, inBcastPps: null,
+      fcsPps: null, lateCollPps: null, inBcastPps: null,
       inUtilPct: null, outUtilPct: null,
       discontinuity,
     };
@@ -143,6 +151,12 @@ function computeSample({
   const inDisc = d('inDiscards');
   const outDisc = d('outDiscards');
   const fcs = d('fcsErrors');
+  // Late collisions, as a rate like FCS. On a full-duplex link there are none
+  // at all (collisions do not exist there), and on a half-duplex one they only
+  // happen when the far end is transmitting without listening — which is what a
+  // duplex mismatch IS. The raw counter was stored and never analysed: a
+  // counter only ever rises, so the detector could not baseline it.
+  const lateColl = d('lateCollisions');
   const inBcast = d('inBcastPkts');
 
   // A wrap on ANY octet counter voids the whole row. The two directions are
@@ -156,7 +170,7 @@ function computeSample({
       inBps: null, outBps: null,
       inErrPps: null, outErrPps: null,
       inDiscPps: null, outDiscPps: null,
-      fcsPps: null, inBcastPps: null,
+      fcsPps: null, lateCollPps: null, inBcastPps: null,
       inUtilPct: null, outUtilPct: null,
       discontinuity: 'wrap',
     };
@@ -178,6 +192,7 @@ function computeSample({
     inDiscPps: round(rate(inDisc.value, elapsedSec)),
     outDiscPps: round(rate(outDisc.value, elapsedSec)),
     fcsPps: round(rate(fcs.value, elapsedSec)),
+    lateCollPps: round(rate(lateColl.value, elapsedSec)),
     inBcastPps: round(rate(inBcast.value, elapsedSec)),
     inUtilPct: capacityBps && inBps != null ? round((inBps / capacityBps) * 100, 2) : null,
     outUtilPct: capacityBps && outBps != null ? round((outBps / capacityBps) * 100, 2) : null,
@@ -190,6 +205,7 @@ module.exports = {
   detectReboot,
   delta,
   COUNTER_FIELDS,
+  DUPLEX_VALUES,
   MAX_DELTA_SEC,
   MIN_DELTA_SEC,
   UPTIME_SLACK_SEC,

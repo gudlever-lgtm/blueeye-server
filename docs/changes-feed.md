@@ -75,7 +75,7 @@ to mute the type. Where an ack is "I have dealt with this one row", a mute is
   page quietly stops showing what matters.
 - **Per user**, like acks. It changes only the caller's Changes page and never
   touches alerting (severity rules and alert rules are separate).
-- Stored in `change_mutes` (migration 116). Only live mutes are read; expired
+- Stored in `change_mutes` (migration 124). Only live mutes are read; expired
   ones are pruned on the next mute. `DELETE` is a 404 when nothing live is
   muted, including a malformed key.
 - A failing lookup on `GET` marks the feed `partial` with `mutes` in
@@ -135,6 +135,25 @@ log that quietly lies about timing.
 
 Flapping interfaces collapse onto **one** row with a count. See
 `docs/interface-transitions.md`.
+
+The agent posts each result element with `traffic` at the **top level**
+(`{ name, commandId, ok, startedAt, finishedAt, traffic, system }`, stored
+unchanged). The seam used to read only `payload.traffic` — a shape no agent
+sends — so it recorded nothing in production; it now reads the real shape and
+still accepts the old one.
+
+**Switch ports** (migration 118) share the same history: a row with a
+`device_id` is a port on a polled switch, learned from two topology polls that
+disagree (`source: 'poll'`) or from a `link.down` / `link.up` /
+`link.admin_down` trap or syslog line tied to the switch by its address and to
+the port by its name (`'trap'` / `'syslog'`). Its summary names the switch and
+the port ("sw-core-1 Gi1/0/24 link went down (uplink to sw-acc-2)"), so the
+feed does not add "on <agent>". A port going down is CRIT on an **uplink** (the
+switch's own LLDP table has a neighbour on it) and INFO elsewhere — an access
+port goes down every time somebody switches a PC off. An uplink going down, and
+any port flapping (three changes inside the window), is also a **finding**
+(`if.<id>.link.down`, `if.<id>.link.flapping`) that reaches alerting and event
+cases (`src/devices/switchPortStateService.js`).
 
 ## Correlation — fewer rows, and what they indicate
 
@@ -237,7 +256,7 @@ and every mapper labels from it): that is a 500.
 
 ## Files
 
-- Migrations `migrations/074_add_user_last_seen_changes.sql`, `migrations/115_change_acks.sql`, `migrations/116_change_mutes.sql`
+- Migrations `migrations/074_add_user_last_seen_changes.sql`, `migrations/115_change_acks.sql`, `migrations/124_change_mutes.sql`
 - Pure read-model `src/changes/changeFeed.js` (mappers, window, correlation, ordering, grouping)
 - Condition families `src/changes/indications.js`
 - Fan-out `src/changes/changesService.js`

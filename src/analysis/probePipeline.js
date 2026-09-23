@@ -1,6 +1,8 @@
 'use strict';
 
 const { evaluateProbeFindings } = require('./probeFindings');
+const { clusterSuppressedIds, storedOr } = require('./pipeline');
+const { MAX_REFIRE_COOLDOWN_MS } = require('../eventCases/activityWindow');
 
 const silentLogger = { info() {}, warn() {}, error() {}, debug() {} };
 
@@ -23,13 +25,23 @@ function createProbePipeline({
   alertingEnabled = false,
   integrationTrigger = null,
   eventCaseService = null,
+  // Dispatch-time cluster suppression, exactly as the analysis pipeline applies
+  // it: a finding whose host is already covered by an open medium/high cluster
+  // does not alert or emit to ITSM on its own (the ONE cluster alert covers
+  // it). It is still saved, published and grouped. Nullable → no suppression.
+  clusterAlertGate = null,
   licensed = () => true,
   // Optional offline GeoIP/ASN provider — passed to the evaluator so it can map
   // traceroute hop IPs to ASNs for AS-path change detection. null → that check is
   // skipped; all other findings are unaffected.
   geoProvider = null,
   windowMs = 6 * 3600 * 1000, // how far back to look for the verdict
-  cooldownMs = 30 * 60 * 1000, // don't re-raise the same (metric,target) within this
+  // Don't re-raise the same (metric,target) within this. It must stay inside
+  // the event-case activity window (with slack for the next probe), or an
+  // ongoing fault re-raises after its event has closed and opens a new one each
+  // time — see ../eventCases/activityWindow.js. Was 30 min against a 15 min
+  // window, i.e. a fresh event case about every half hour on the same host.
+  cooldownMs = MAX_REFIRE_COOLDOWN_MS,
   evaluate = evaluateProbeFindings,
   now = () => new Date(),
   logger = silentLogger,
@@ -80,10 +92,12 @@ function createProbePipeline({
     const produced = [];
     for (const finding of fresh) {
       try {
-        await findingStore.save(finding);
-        produced.push(finding);
+        // The stored finding carries the severity rules' verdict; publish,
+        // group and alert on that (see storedOr).
+        const stored = storedOr(await findingStore.save(finding), finding);
+        produced.push(stored);
         try {
-          publishFinding(finding.hostId, { type: 'finding', payload: finding });
+          publishFinding(stored.hostId, { type: 'finding', payload: stored });
         } catch (err) {
           logger.warn(`probe-analysis: publish failed (${err.message})`);
         }
@@ -104,10 +118,14 @@ function createProbePipeline({
       }
     }
 
+    // Cluster-suppressed findings, computed once (shared by alerting + ITSM emit).
+    const suppressed = produced.length > 0 ? await clusterSuppressedIds(clusterAlertGate, produced) : new Set();
+
     // alertingEnabled may be a live getter so a runtime enable/disable applies.
     const alertOn = typeof alertingEnabled === 'function' ? alertingEnabled() : alertingEnabled;
     if (dispatcher && alertOn && produced.length > 0) {
       for (const finding of produced) {
+        if (suppressed.has(finding.id)) continue; // rolled into an open cluster
         try {
           await dispatcher.dispatch(finding, null);
         } catch (err) {
@@ -116,8 +134,10 @@ function createProbePipeline({
       }
     }
     // Outbound integrations (ITSM/IPAM). Fire-and-forget; independent of alerting.
+    // Cluster-suppressed findings are NOT emitted — the ONE cluster ticket covers them.
     if (integrationTrigger && typeof integrationTrigger.emitFinding === 'function') {
       for (const finding of produced) {
+        if (suppressed.has(finding.id)) continue;
         try { integrationTrigger.emitFinding(finding).catch(() => {}); } catch { /* never affects ingestion */ }
       }
     }

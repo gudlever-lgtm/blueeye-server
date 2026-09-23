@@ -2,6 +2,7 @@
 
 const crypto = require('crypto');
 const { buildHostResolver } = require('../topology/hostResolver');
+const { LINK_EVENTS, statusFromEvent } = require('./switchPortStateService');
 
 // Turns a batch of raw device events, as received by one agent, into stored
 // rows: resolve who sent each one, decide how it folds, hand it to the
@@ -61,6 +62,20 @@ function createDeviceEventIngest({
   deviceEventsRepo,
   agentsRepo,
   arpEntriesRepo = null,
+  // THE SWITCH-PORT PATH (migration 118). A link.down / link.up /
+  // link.admin_down from a switch the server POLLS is also a fact about one of
+  // that switch's ports, and it used to stop at the Device Log. With these
+  // three wired, such an event is tied to the polled device by the address it
+  // came from (snmp_devices.host) and to the port by its name, and handed to
+  // the switch-port history — which is what gives it a place in the changes
+  // feed and, for an uplink or a flapping port, a finding.
+  //
+  // This is a SEPARATE resolution from the one above on purpose: `device_id`
+  // on a stored event is an AGENT id (the hostResolver maps addresses to
+  // agents), and nothing here changes what that column means.
+  snmpDevicesRepo = null,
+  deviceInterfacesRepo = null,
+  switchPortStateService = null,
   logger = null,
   foldBucketMs = FOLD_BUCKET_MS,
   resolverTtlMs = RESOLVER_TTL_MS,
@@ -68,6 +83,80 @@ function createDeviceEventIngest({
 }) {
   let cachedResolver = null;
   let cachedAt = 0;
+  let cachedSwitches = null;
+  let switchesAt = 0;
+
+  // host -> snmp_devices row, rebuilt at most once per TTL for the same reason
+  // the agent resolver is: the inventory moves on the scale of days.
+  async function getSwitches() {
+    if (cachedSwitches && now() - switchesAt < resolverTtlMs) return cachedSwitches;
+    try {
+      const rows = await snmpDevicesRepo.list({});
+      cachedSwitches = new Map();
+      for (const d of rows || []) {
+        if (d && typeof d.host === 'string') cachedSwitches.set(d.host.trim().toLowerCase(), d);
+      }
+      switchesAt = now();
+    } catch (err) {
+      if (logger) logger.warn(`device-event ingest: could not refresh the switch list (${err.message})`);
+      if (!cachedSwitches) return new Map();
+    }
+    return cachedSwitches;
+  }
+
+  // Finds the port an event names. The trap path names it by ifName (the
+  // agent resolves ifIndex through the topology poll's own table); a syslog
+  // line usually spells it the long way ("GigabitEthernet1/0/12"), which is
+  // what ifDescr holds. Exact matches only, case aside: a guessed port is worse
+  // than none.
+  function findPort(ports, ifname) {
+    const want = String(ifname).trim().toLowerCase();
+    if (!want) return null;
+    return ports.find((p) => String(p.ifName || '').toLowerCase() === want)
+      || ports.find((p) => String(p.ifDescr || '').toLowerCase() === want)
+      || null;
+  }
+
+  // Hands every link event in a batch that can be tied to a polled switch port
+  // to the switch-port history. Best-effort: the events are already stored.
+  async function recordSwitchPorts(agentId, events) {
+    if (!switchPortStateService || !snmpDevicesRepo || !deviceInterfacesRepo) return 0;
+    const links = events
+      .filter((e) => e && LINK_EVENTS.includes(e.eventType) && e.ifname && e.sourceIp)
+      .sort((a, b) => new Date(a.receivedAt) - new Date(b.receivedAt));
+    if (!links.length) return 0;
+
+    const switches = await getSwitches();
+    const portsByDevice = new Map();
+    let recorded = 0;
+    for (const e of links) {
+      const device = switches.get(String(e.sourceIp).trim().toLowerCase());
+      if (!device) continue;
+      try {
+        if (!portsByDevice.has(device.id)) {
+          portsByDevice.set(device.id, await deviceInterfacesRepo.listForDevice(device.id, { limit: 4096 }));
+        }
+        const port = findPort(portsByDevice.get(device.id), e.ifname);
+        if (!port) continue;
+        const out = await switchPortStateService.recordEvent({
+          agentId,
+          device,
+          port,
+          eventType: e.eventType,
+          source: e.transport === 'trap' ? 'trap' : 'syslog',
+          at: new Date(e.receivedAt),
+        });
+        // The row the service just updated is the port's state for the next
+        // event in this same batch.
+        if (out.transition || out.flapped) recorded += 1;
+        const nextState = statusFromEvent(e.eventType, port);
+        if (nextState) Object.assign(port, nextState);
+      } catch (err) {
+        if (logger) logger.warn(`device-event ingest: port history failed for ${e.sourceIp} ${e.ifname} (${err.message})`);
+      }
+    }
+    return recorded;
+  }
 
   // The IP→agent map, rebuilt at most once per TTL. A failure to rebuild keeps
   // the previous map rather than resolving nothing: a stale answer about which
@@ -135,7 +224,16 @@ function createDeviceEventIngest({
     });
 
     const { inserted, folded } = await deviceEventsRepo.createMany(agentId, prepared);
-    return { inserted, folded, resolved, unresolved };
+
+    // After the write, like every other bookkeeping step: the event is stored
+    // whatever happens to the port history.
+    let portTransitions = 0;
+    try {
+      portTransitions = await recordSwitchPorts(agentId, rows);
+    } catch (err) {
+      if (logger) logger.warn(`device-event ingest: switch-port history failed (${err.message})`);
+    }
+    return { inserted, folded, resolved, unresolved, portTransitions };
   }
 
   // Drops the cached resolver. Called when an agent is created or deleted so a
@@ -144,6 +242,8 @@ function createDeviceEventIngest({
   function invalidateResolver() {
     cachedResolver = null;
     cachedAt = 0;
+    cachedSwitches = null;
+    switchesAt = 0;
   }
 
   return { ingest, invalidateResolver, buildDedupKey };

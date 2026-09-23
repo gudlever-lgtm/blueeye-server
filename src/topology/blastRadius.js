@@ -26,6 +26,20 @@
 //      source→target meaning "source depends on target", so the dependents of X
 //      are the sources of edges whose target is X). Transitive up to the cap.
 //
+// WHAT IS KNOWN TO BE UP IS NOT CUT OFF. `l2_link` is undirected, so the bare
+// walk from a failing agent reaches its access switch and, through it, every
+// other host on that switch — all "isolated" by a host that is a leaf. That is
+// how an agent whose service stopped used to grey out every healthy neighbour
+// on the troubleshooting map. A caller that knows which nodes are alive (an
+// agent that is online and reporting, a switch whose last poll answered)
+// passes `isAlive(id)`: such a node is reachable by definition, so it is never
+// listed as isolated and the walk does not continue THROUGH it — whatever is
+// behind a node we can hear is not cut off by the failing one. The nodes the
+// walk stopped at are returned as `known_reachable` so the answer says why it
+// is smaller. Without `isAlive` the walk is the plain what-if it always was
+// ("if this node died, what could it take with it"), which is what the
+// /api/topology/blast-radius endpoint asks.
+//
 // Pure, no I/O. Cycle-safe (shared `seen` sets). Depth-capped (default 4).
 // Complexity: building the two adjacency indices is O(E); each BFS visits every
 // node/edge at most once ⇒ O(V + E) total, O(V + E) memory.
@@ -81,7 +95,7 @@ function boundedBfs(sources, neighboursOf, maxDepth) {
   return { seen, parent };
 }
 
-function computeBlastRadius(graph, failingNodeRaw, { maxDepth = DEFAULT_MAX_DEPTH } = {}) {
+function computeBlastRadius(graph, failingNodeRaw, { maxDepth = DEFAULT_MAX_DEPTH, isAlive = null } = {}) {
   // The id as the graph spells it — `12` for an agent, `d:5` for a switch —
   // and the string form everything below compares on.
   const failingNode = parseNodeId(failingNodeRaw) ?? failingNodeRaw;
@@ -102,10 +116,24 @@ function computeBlastRadius(graph, failingNodeRaw, { maxDepth = DEFAULT_MAX_DEPT
   // missing node would come back as node zero.
   const idOf = (k) => (idByKey.has(k) ? idByKey.get(k) : (parseNodeId(k) ?? k));
 
+  // A node that is heard from is not cut off (see the header). A predicate that
+  // throws is treated as "not known alive", which is the pre-fix behaviour.
+  const alive = (k) => {
+    if (typeof isAlive !== 'function' || k === failingKey) return false;
+    try { return Boolean(isAlive(idOf(k))); } catch { return false; }
+  };
+  const reachable = new Set();
+
   // ---- Tier 1: L2 neighbourhood (undirected) from the failing node ----------
   const t1 = boundedBfs(
     [failingKey],
-    (node) => [...(l2.get(node) || [])].map((to) => ({ to, port: null })),
+    (node) => [...(l2.get(node) || [])]
+      .filter((to) => {
+        if (!alive(to)) return true;
+        reachable.add(to);
+        return false;
+      })
+      .map((to) => ({ to, port: null })),
     depthCap,
   );
   const l2PathTo = (node) => {
@@ -157,6 +185,9 @@ function computeBlastRadius(graph, failingNodeRaw, { maxDepth = DEFAULT_MAX_DEPT
     depthCap,
     directly_isolated,
     dependency_affected,
+    // Neighbours the L2 walk stopped at because they are known to be up. Empty
+    // when no `isAlive` was given.
+    known_reachable: [...reachable].map(idOf).sort(compareNodes),
     totals: { directly_isolated: directly_isolated.length, dependency_affected: dependency_affected.length },
   };
 }

@@ -14,7 +14,7 @@ Facebook / …" without inspecting any packet payload.
 
 | Kind | Source | Examples | Reliability |
 | ---- | ------ | -------- | ----------- |
-| `port` | the agent's `byPort` summary (in stored result payloads) | DNS, Web, SSH, NTP, VoIP, VPN | **Exact** (port 53 *is* DNS) |
+| `port` | the agent's `byPort` summary (in stored result payloads) | DNS, Web, SSH, NTP, VoIP, VPN, Industrial / OT | **Exact** (port 53 *is* DNS) |
 | `asn`  | destination ASN of geo-enriched `flow_records` | Facebook/Meta, Google, Netflix, Microsoft, Amazon, Apple, Cloudflare, Akamai | **Approximate** — CDNs/cloud blur it; one ASN can host many services |
 
 The built-in list lives in [`src/flows/categories.js`](../src/flows/categories.js)
@@ -23,6 +23,26 @@ the list at runtime** under **Settings → Traffic types** (add/remove
 categories, change the ports/ASNs per type, or reset to defaults). The edited
 list is stored in `app_settings` (`flowCategories`) and replaces the defaults
 wholesale; it takes effect on the next request, no restart.
+
+### Industrial / OT (`ot`)
+
+A port category for ICS/SCADA protocols, so a water utility's PLC traffic is
+visible as its own series rather than as unnamed ports: S7comm / ISO-TSAP 102,
+Modbus/TCP 502, Niagara Fox 1911, IEC 60870-5-104 2404, OPC UA 4840, OMRON FINS
+9600, GE SRTP 18245, DNP3 20000, PROFINET 34962–34964, EtherNet/IP 44818 and
+BACnet/IP 47808 — each the IANA registration or the vendor's documented default
+(see the comments in `src/flows/services.js`). Deliberately **not** in it:
+2222 (EtherNet/IP I/O is 2222/**udp**, but a category has no protocol and
+2222/tcp is usually an alternate SSH port — `services.js` names it for udp only),
+MQTT 1883/8883 (general IoT messaging) and Mitsubishi MELSEC (its ports are a
+configurable convention, not a standard). Like every category it is a port
+hint, not DPI: anything can listen on 502.
+
+The same service names and categories mark the **Topology** view: each flow
+edge carries `services` (its dominant service ports, top 3, each with `name`
+and `category`), `service` (the heaviest one's name) and `ot` (any OT port) —
+see `GET /api/topology` below — and the dependencies table shows a Service
+column with an **OT** badge, so a PLC↔SCADA edge reads "Modbus/TCP".
 
 ## Requirements
 
@@ -108,6 +128,18 @@ details on invalid input.
 - [`test/flowCategoriesSettings.test.js`](../test/flowCategoriesSettings.test.js)
   — editing categories (service validation, the settings route, and the flows
   route honouring an edited list).
+
+## Topology edges (`GET /api/topology`)
+
+`flowsRepository.topologyEdges` groups flows by conversation and then, in a
+second query restricted to exactly the returned pairs (a bound row-constructor
+`IN`, capped at 20 rows per edge), finds each edge's dominant service ports. The
+service end is chosen by the rule in `services.servicePortOf` — a named
+`dst_port`, else a named `src_port`, else the lower port — mirrored in SQL so
+request and reply agree. `buildTopology` (`src/analysis/topology.js`) names
+each port and classifies it against the **effective** (admin-edited) category
+list, so an edge is `ot: true` exactly when the Traffic types chart would count
+its port as OT.
 
 ## Related: per-port service names in the flow explorer
 

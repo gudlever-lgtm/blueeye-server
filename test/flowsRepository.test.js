@@ -139,3 +139,52 @@ test('PRIVACY: mapFlows reads external rows only, scoped + capped, service port 
   assert.equal(rows[1].asn, null);
   assert.equal(rows[1].port, 53);
 });
+
+test('topologyEdges attaches the dominant service ports per edge, bounded to the returned edges', async () => {
+  const queries = [];
+  const pool = {
+    async query(sql, params) {
+      queries.push({ sql, params });
+      if (queries.length === 1) {
+        return [[
+          { src_ip: '10.1.1.9', dst_ip: '10.1.1.5', ext_ip: null, internal: 1, bytes: '9000', packets: 90, flowCount: 9 },
+          { src_ip: '10.1.1.5', dst_ip: '10.1.1.9', ext_ip: null, internal: 1, bytes: 800, packets: 8, flowCount: 8 },
+        ]];
+      }
+      return [[
+        { src_ip: '10.1.1.9', dst_ip: '10.1.1.5', proto: 'tcp', svc_port: 502, bytes: '8000' },
+        { src_ip: '10.1.1.5', dst_ip: '10.1.1.9', proto: 'tcp', svc_port: '502', bytes: 800 },
+        { src_ip: '10.1.1.9', dst_ip: '10.1.1.5', proto: 'tcp', svc_port: 443, bytes: 600 },
+        { src_ip: '10.1.1.9', dst_ip: '10.1.1.5', proto: 'udp', svc_port: 161, bytes: 300 },
+        { src_ip: '10.1.1.9', dst_ip: '10.1.1.5', proto: 'tcp', svc_port: 22, bytes: 100 }, // 4th: past the cap
+        { src_ip: '10.1.1.9', dst_ip: '10.1.1.5', proto: 'icmp', svc_port: null, bytes: 50 }, // no port
+      ]];
+    },
+  };
+  const repo = createFlowsRepository({ pool });
+  const edges = await repo.topologyEdges({ from: new Date('2026-06-01T00:00:00Z'), to: new Date('2026-06-01T01:00:00Z') });
+  assert.equal(queries.length, 2);
+  const svc = queries[1];
+  // Restricted to exactly the returned pairs, via a bound row-constructor list.
+  assert.match(svc.sql, /\(src_ip, dst_ip\) IN \(\?\)/);
+  const pairs = svc.params.find((p) => Array.isArray(p) && Array.isArray(p[0]));
+  assert.deepEqual(pairs, [['10.1.1.9', '10.1.1.5'], ['10.1.1.5', '10.1.1.9']]);
+  // The named-port list is bound (twice), never interpolated; 502 is in it.
+  assert.ok(Array.isArray(svc.params[0]) && svc.params[0].includes(502));
+  assert.doesNotMatch(svc.sql, /\b502\b/);
+  // Capped: never more rows than 20 per edge.
+  assert.equal(svc.params[svc.params.length - 1], 2 * 20);
+  assert.deepEqual(edges[0].services, [
+    { port: 502, proto: 'tcp', bytes: 8000 },
+    { port: 443, proto: 'tcp', bytes: 600 },
+    { port: 161, proto: 'udp', bytes: 300 },
+  ]);
+  assert.deepEqual(edges[1].services, [{ port: 502, proto: 'tcp', bytes: 800 }]);
+});
+
+test('topologyEdges makes no second query when there are no edges', async () => {
+  const pool = makeFakePool();
+  const repo = createFlowsRepository({ pool });
+  assert.deepEqual(await repo.topologyEdges({ from: new Date(), to: new Date() }), []);
+  assert.equal(pool.queries.length, 1);
+});

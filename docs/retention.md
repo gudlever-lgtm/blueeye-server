@@ -19,14 +19,43 @@ ON by default (`RETENTION_ENABLED`) — DB hygiene is a safe default.
 - **rollupFlows** — raw `flow_records` older than `rawRetentionDays` are
   aggregated into `flow_rollup` time buckets (`rollupIntervalMinutes`) per
   `(agent, direction, peer country, peer ASN)`: summed bytes/packets/flowCount
-  plus min/max/median volume. The raw rows it covered are then deleted.
+  plus min/max/median volume. **Internal** (RFC1918↔RFC1918, LAN/OT) flows —
+  which have no country/ASN and so never reached `flow_rollup` — are aggregated
+  into `flow_internal_rollup` (migration 119) per `(agent, src_ip, dst_ip,
+  proto, service_port)`, the service port being the server end of the
+  conversation (a named well-known port on either side, else the lower port),
+  so a PLC's reply lands on the same `502` row as the SCADA poll. Bounded: per
+  agent per bucket only the top `RETENTION_INTERNAL_ROLLUP_TOP_N` (500) keys by
+  bytes are kept; the rest fold into one overflow row (`src_ip = dst_ip = '*'`,
+  `service_port = 0`), so totals still add up and a port scan cannot grow the
+  table. The raw rows before the cutoff are then deleted — always, even when
+  nothing was geolocated (it used to skip the delete then, so a LAN-only site
+  never purged `flow_records`).
 - **rollupMetrics** — metric samples extracted from result payloads are
   aggregated into `metric_rollup` per `(agent, metric)` bucket (min/max/median +
   sample count); the raw `results` are then deleted.
-- **purgeExpired** — deletes `flow_rollup`/`metric_rollup` older than
-  `rollupRetentionDays`, and findings older than `findingRetentionDays`. Finding
-  purge is conservative: **only acknowledged findings are deleted** —
-  unacknowledged findings (including CRIT) are kept regardless of age.
+- **purgeExpired** — deletes `flow_rollup`/`metric_rollup`/`flow_internal_rollup`
+  older than `rollupRetentionDays`, and findings older than
+  `findingRetentionDays`. Finding purge is conservative: **only acknowledged
+  findings are deleted** — unacknowledged findings (including CRIT) are kept
+  regardless of age. It also ages out each table below on its own window
+  (0 = keep forever):
+
+  | Table | Column | Default | Why that long |
+  | --- | --- | --- | --- |
+  | `probe_results` | `ts` | 400 d | the availability/outage reports accept ranges up to 366 days and compute uptime from these rows |
+  | `probe_outages` (**closed only**) | `resolved_at` | 400 d | same reports; an open outage is a current condition and is never purged |
+  | `speedtest_results` | `ts` | 365 d | "is the line slower than last year" |
+  | `transaction_results` | `time` | 90 d | the trend endpoint serves up to 90 days |
+  | `topology_changes` | `detected_at` | 180 d | quoted in investigations, like config snapshots |
+  | `discovered_devices` (`discovered`/`ignored` only) | `last_seen` | 90 d | a **promoted** candidate is never purged |
+  | `host_connections` | `last_seen` | 30 d | only an agent that stopped reporting leaves rows (a live one replaces its own) |
+  | `audit_events` | `last_seen_at` | 365 d | the User Logs record; a recurring row still being bumped is kept |
+
+  **`audit_log` is never purged.** It is the hash-chained, tamper-evident
+  compliance trail (`verifyChain()`, see `docs/audit-vs-logging.md`); deleting
+  its oldest rows would break the chain. `audit_events` is a separate,
+  un-chained table, which is why it can age out.
 
 > **Why the Analysis page does not slow down as findings pile up.** It reads
 > `?open=1` by default — only what nobody has accepted — through
@@ -55,10 +84,13 @@ raw-only, since rollups don't retain per-protocol detail.)
 
 ## Scheduler
 
-`createRetentionScheduler` runs rollup + purge on an interval
-(`RETENTION_JOB_INTERVAL_HOURS`, default daily), started in `server.js` and
-stopped on shutdown. It mirrors the existing periodic-job pattern (e.g. the
-license manager).
+`createRetentionScheduler` runs rollup + purge once shortly after boot
+(`RETENTION_STARTUP_DELAY_SECONDS`, default 120) and then on an interval
+(`RETENTION_JOB_INTERVAL_HOURS`, default daily); started in `server.js` and
+stopped on shutdown. The boot run matters: with only the interval, a server
+restarted more often than daily (a deploy a day) never ran retention at all.
+Both timers are unref'd, a failed run is logged and never escapes the timer,
+and the re-entrancy guard still skips a run while one is in progress.
 
 ## Configuration
 
@@ -70,9 +102,28 @@ license manager).
 | `RETENTION_FINDING_DAYS` | `365` | How long (acked) findings are kept. |
 | `RETENTION_ROLLUP_INTERVAL_MINUTES` | `60` | Rollup bucket granularity. |
 | `RETENTION_JOB_INTERVAL_HOURS` | `24` | How often the job runs. |
+| `RETENTION_STARTUP_DELAY_SECONDS` | `120` | First run after boot. |
+| `RETENTION_INTERNAL_ROLLUP_TOP_N` | `500` | Internal-flow rollup rows per agent per bucket before the overflow row. |
+| `RETENTION_PROBE_RESULT_DAYS` | `400` | `probe_results`. |
+| `RETENTION_PROBE_OUTAGE_DAYS` | `400` | Closed `probe_outages`. |
+| `RETENTION_SPEEDTEST_DAYS` | `365` | `speedtest_results`. |
+| `RETENTION_TRANSACTION_RESULT_DAYS` | `90` | `transaction_results`. |
+| `RETENTION_TOPOLOGY_CHANGE_DAYS` | `180` | `topology_changes`. |
+| `RETENTION_DISCOVERED_DEVICE_DAYS` | `90` | Unpromoted `discovered_devices`. |
+| `RETENTION_HOST_CONNECTION_DAYS` | `30` | `host_connections`. |
+| `RETENTION_AUDIT_EVENT_DAYS` | `365` | `audit_events` (0 = forever). Never `audit_log`. |
+
+The other windows (config snapshots, ARP, FDB, device events, interface
+counters/inventory/transitions, burst runs) are documented beside their
+features and in `src/analysis/retention/config.js`. Migration 120 adds the
+timestamp indexes `speedtest_results` and `transaction_results` lacked; the
+other purged columns were already indexed.
 
 ## Tests
 
-`src/analysis/retention/__tests__/` (rollup correctness + idempotency, purge
-rules incl. "unacked CRIT never deleted", scheduler ordering + re-entrancy) and
-`test/flowsCrossRead.test.js` (coherent raw+rollup series).
+`src/analysis/retention/__tests__/` (rollup correctness + idempotency incl. the
+bounded internal rollup, purge rules incl. "unacked CRIT never deleted" and the
+per-table windows, scheduler ordering + re-entrancy + the boot run, config
+defaults pinned to the report range), `test/retentionRepo.test.js` (which rows
+each purge may touch: never a promoted candidate, an open outage or
+`audit_log`) and `test/flowsCrossRead.test.js` (coherent raw+rollup series).

@@ -93,7 +93,7 @@ function classify(raw) {
   families.push('event');
   families.push('ticket');
   families.push('ipam');
-  families.push('user');    // stubbed — see resolveUser
+  families.push('user');    // no resolver yet — search() reports it as unresolved
 
   return {
     q, lower, mac, isMac: Boolean(mac), isIpExact, isIpPrefix, isAgentId, agentId, isPort,

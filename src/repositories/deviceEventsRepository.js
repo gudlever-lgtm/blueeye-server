@@ -127,6 +127,9 @@ function createDeviceEventsRepository(db) {
     maxSeverity = null,
     deviceId = null,
     agentId = null,
+    // The address the event was SENT FROM. What ties an event to a polled
+    // switch (snmp_devices.host): `device_id` here is an agent id, not a switch.
+    sourceIp = null,
     transport = null,
     eventType = null,
     q = null,
@@ -137,6 +140,7 @@ function createDeviceEventsRepository(db) {
     if (maxSeverity != null) { where.push('severity <= ?'); params.push(maxSeverity); }
     if (deviceId != null) { where.push('device_id = ?'); params.push(deviceId); }
     if (agentId != null) { where.push('agent_id = ?'); params.push(agentId); }
+    if (sourceIp) { where.push('source_ip = ?'); params.push(sourceIp); }
     if (transport) { where.push('transport = ?'); params.push(transport); }
     if (eventType) { where.push('event_type = ?'); params.push(eventType); }
     if (q) {

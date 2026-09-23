@@ -510,6 +510,11 @@ function evalCondition(model, cond, ctx) {
     if (q) return model.hasIndex(q[1], q[2]);
     q = /information_schema\.COLUMNS\b[\s\S]*table_name\s*=\s*'(\w+)'[\s\S]*column_name\s*=\s*'(\w+)'/i.exec(inner);
     if (q) return model.hasColumn(q[1], q[2]);
+    // A named constraint (a guarded ADD CONSTRAINT … FOREIGN KEY). The model
+    // keeps constraints among a table's keys under their CONSTRAINT name, so
+    // the same lookup answers it.
+    q = /information_schema\.TABLE_CONSTRAINTS\b[\s\S]*table_name\s*=\s*'(\w+)'[\s\S]*constraint_name\s*=\s*'(\w+)'/i.exec(inner);
+    if (q) return model.hasIndex(q[1], q[2]);
     throw new Error(`unsupported EXISTS(): ${inner.slice(0, 120)}`);
   }
 

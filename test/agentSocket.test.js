@@ -504,6 +504,26 @@ test('getConnectionInfo tracks the live session, then the disconnect (with close
   });
 });
 
+test('connectedAgentIds lists agents with an open socket — what the stale sweep must not flip', async () => {
+  const tracker = makeStatusTracker();
+  const agentsRepo = makeAgentsRepo({ setStatus: tracker.setStatus });
+
+  await withWsServer({ agentTokensRepo: validRepo(), agentsRepo }, async ({ port, handle }) => {
+    assert.deepEqual(handle.connectedAgentIds(), []);
+    const client = new WebSocket(`ws://127.0.0.1:${port}/ws/agent`, { headers: { Authorization: 'Bearer good' } });
+    try {
+      await withTimeout(waitOpen(client), 4000, 'did not open');
+      await withTimeout(tracker.waitFor('online'), 4000, 'online not set');
+      assert.deepEqual(handle.connectedAgentIds(), [9]);
+      client.close(1000);
+      await withTimeout(tracker.waitFor('offline'), 4000, 'offline not set');
+      assert.deepEqual(handle.connectedAgentIds(), []);
+    } finally {
+      client.close();
+    }
+  });
+});
+
 test('disconnectAgent force-closes the socket with code 4001 and returns the count', async () => {
   const tracker = makeStatusTracker();
   const agentsRepo = makeAgentsRepo({ setStatus: tracker.setStatus });

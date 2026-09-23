@@ -47,3 +47,41 @@ test('deadlineOverview ranks overdue first and counts by worst status', () => {
   assert.equal(ov.summary.upcoming, 1);
   assert.equal(ov.incidents[0].id, 2); // overdue sorts first
 });
+
+// --- submission (migration 122) ---------------------------------------------------
+
+test('a submitted stage is "submitted", says whether it was on time, and stops counting as overdue', () => {
+  const r = computeIncidentDeadlines({
+    detectedAt: at(100), notificationRequired: true,
+    earlyWarningSubmittedAt: at(90), // 10 h after detection — on time
+    notificationSubmittedAt: at(10), // 90 h after detection — 18 h late
+  }, { now: NOW });
+  const by = Object.fromEntries(r.stages.map((s) => [s.stage, s]));
+  assert.equal(by['early-warning'].status, 'submitted');
+  assert.equal(by['early-warning'].onTime, true);
+  assert.equal(by.notification.status, 'submitted');
+  assert.equal(by.notification.onTime, false, 'late is recorded, not hidden');
+  assert.equal(by['final-report'].status, 'upcoming');
+  assert.equal(r.worstStatus, 'upcoming', 'nothing open is overdue any more');
+});
+
+test('the final report is due one month after the notification was SUBMITTED, once that is known', () => {
+  const r = computeIncidentDeadlines({ detectedAt: at(100), notificationRequired: true, notificationSubmittedAt: at(40) }, { now: NOW });
+  const fin = r.stages.find((s) => s.stage === 'final-report');
+  assert.equal(fin.dueFrom, 'notification-submitted');
+  assert.equal(Date.parse(fin.dueAt), Date.parse(at(40)) + 30 * 24 * HOUR);
+  // Unknown submission: anchored on detection, which is never later than the law.
+  const before = computeIncidentDeadlines({ detectedAt: at(100), notificationRequired: true }, { now: NOW });
+  assert.equal(before.stages.find((s) => s.stage === 'final-report').dueFrom, 'detection');
+});
+
+test('everything submitted reads "submitted" and sorts after open duties', () => {
+  const done = { id: 1, detectedAt: at(800), notificationRequired: true, earlyWarningSubmittedAt: at(790), notificationSubmittedAt: at(760), finalReportSubmittedAt: at(100) };
+  const r = computeIncidentDeadlines(done, { now: NOW });
+  assert.equal(r.worstStatus, 'submitted');
+  assert.equal(r.nextDueAt, null);
+  const ov = deadlineOverview([done, { id: 2, detectedAt: at(1), nis2Relevant: true }], { now: NOW });
+  assert.equal(ov.summary.submitted, 1);
+  assert.equal(ov.summary.upcoming, 1);
+  assert.equal(ov.incidents[0].id, 2);
+});

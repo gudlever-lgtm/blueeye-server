@@ -16,7 +16,7 @@
 // numbers and drag an SLA figure down for something no network change can fix.
 const DIAGNOSTIC_TYPES = ['path_mtu', 'tls', 'rdns'];
 
-const COLUMNS = ['agent_id', 'ts', 'type', 'target', 'ok', 'rtt_ms', 'min_ms', 'max_ms', 'jitter_ms', 'loss_pct', 'status', 'cert_expiry_days', 'bytes', 'content_type', 'elements', 'hops', 'mtu', 'sizes', 'tls', 'rdns', 'detail'];
+const COLUMNS = ['agent_id', 'ts', 'type', 'target', 'ok', 'rtt_ms', 'min_ms', 'max_ms', 'jitter_ms', 'loss_pct', 'status', 'cert_expiry_days', 'bytes', 'content_type', 'elements', 'hops', 'mtu', 'sizes', 'tls', 'rdns', 'error_code', 'failure', 'resolver', 'detail'];
 
 function toRow(agentId, r) {
   const ts = r.ts instanceof Date ? r.ts : (r.ts ? new Date(r.ts) : new Date());
@@ -45,6 +45,11 @@ function toRow(agentId, r) {
     // whole by the one probe type that produces it.
     r.tls && typeof r.tls === 'object' ? JSON.stringify(r.tls) : null,
     r.rdns && typeof r.rdns === 'object' ? JSON.stringify(r.rdns) : null,
+    // Why a dns/tcp probe failed (migration 121). Bounded again here because
+    // the repository is the last thing between a caller and the column width.
+    r.errorCode != null ? String(r.errorCode).slice(0, 32) : null,
+    r.failure != null ? String(r.failure).slice(0, 16) : null,
+    r.resolver != null ? String(r.resolver).slice(0, 64) : null,
     r.detail != null ? String(r.detail).slice(0, 255) : null,
   ];
 }
@@ -89,6 +94,12 @@ function fromRow(row) {
     // "not measured", never "nothing wrong".
     tls: parseJson(row.tls),
     rdns: parseJson(row.rdns),
+    // Why a dns/tcp probe failed (migration 121). NULL on successful rows and
+    // on every row an agent that did not report it wrote — "not reported",
+    // never "no fault".
+    errorCode: row.error_code ?? null,
+    failure: row.failure ?? null,
+    resolver: row.resolver ?? null,
     detail: row.detail,
   };
 }
@@ -231,7 +242,25 @@ function createProbeResultsRepository(db) {
     return rows.map(fromRow);
   }
 
-  return { createMany, findByAgent, metricRows, latestByAgent, fleetHealth, availability };
+  // The recent runs of ONE probe (agent, type, target), newest-first, strictly
+  // before `before` when given and no older than `from`. For the diagnose ECMP
+  // check, which compares a fresh trace with the ones before it; bounded on
+  // both ends so it stays an index range scan (idx_probe_agent_type_target_id).
+  async function recentRuns({ agentId, type, target, before = null, from = null, limit = 20 }) {
+    const where = ['agent_id = ?', 'type = ?', 'target = ?'];
+    const params = [agentId, type, target];
+    if (before) { where.push('ts < ?'); params.push(before); }
+    if (from) { where.push('ts >= ?'); params.push(from); }
+    const lim = Number.isInteger(limit) && limit > 0 && limit <= 100 ? limit : 20;
+    params.push(lim);
+    const [rows] = await pool.query(
+      `SELECT * FROM probe_results WHERE ${where.join(' AND ')} ORDER BY id DESC LIMIT ?`,
+      params
+    );
+    return rows.map(fromRow);
+  }
+
+  return { createMany, findByAgent, metricRows, latestByAgent, fleetHealth, availability, recentRuns };
 }
 
 module.exports = { createProbeResultsRepository, DIAGNOSTIC_TYPES, COLUMNS, toRow, fromRow };

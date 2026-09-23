@@ -112,6 +112,12 @@ test('GET /api/flows/bidirectional 200 with data — calls exploreFlows twice (i
   assert.equal(res.body.asymmetry.totalBytes, 2500);
   assert.ok(typeof res.body.asymmetry.ratio === 'number', 'ratio is numeric');
   assert.ok(res.body.asymmetry.asymmetric === true, 'flagged asymmetric (2000 vs 500 = 80 % in)');
+  // The honest name for the same numbers. `asymmetry` stays as a deprecated
+  // alias for API clients; it never measured routing.
+  assert.equal(res.body.directionBalance.inBytes, 2000);
+  assert.equal(res.body.directionBalance.ratio, res.body.asymmetry.ratio);
+  assert.equal(res.body.directionBalance.imbalanced, true);
+  assert.equal(res.body.directionBalance.dominant, 'in');
 });
 
 test('GET /api/flows/bidirectional passes host filter to both direction calls', async () => {
@@ -142,6 +148,8 @@ test('GET /api/flows/bidirectional with no data returns 200 with empty payload',
   assert.equal(res.body.asymmetry.totalBytes, 0);
   assert.equal(res.body.asymmetry.ratio, null, 'ratio is null when no traffic');
   assert.equal(res.body.asymmetry.asymmetric, false);
+  assert.equal(res.body.directionBalance.imbalanced, false);
+  assert.equal(res.body.directionBalance.dominant, null);
 });
 
 // ---- viewer is enough; no role elevation needed ------------------------------

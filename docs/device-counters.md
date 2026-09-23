@@ -108,6 +108,22 @@ to the stored row.
 Utilisation follows it too: `NULL` when the device reported no speed, because a
 percentage of an unknown is not a number and `0` would read as an idle port.
 
+### Duplex and late collisions (migration 116)
+
+`duplex` is what EtherLike-MIB `dot3StatsDuplexStatus` said (`half` | `full` |
+`unknown`, `NULL` when the device did not answer). It is a **state**, not a
+counter, so it survives every discontinuity. `late_coll_pps` is the
+late-collision rate for the interval, computed and voided exactly like
+`fcs_pps`, and analysed by the detector as `if.<id>.duplex.collPps` (not a name
+containing "late": the changes feed and the event guide would read it as
+latency).
+
+A port reporting **half** duplex while late collisions or FCS errors are rising
+is raised as a duplex-mismatch finding (`if.<id>.duplex.mismatch`, WARN, once
+per port per hour, `src/devices/duplexMismatch.js`) whose explanation names the
+port and says what to change. The switch page shows FCS, late collisions and
+duplex beside errors and discards.
+
 ---
 
 ## The identity is the port, not the index

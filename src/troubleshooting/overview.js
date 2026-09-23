@@ -20,7 +20,7 @@
 
 const { normalizeSeverity } = require('../timeline/targetTimeline');
 const {
-  key: nodeKey, isDevice: isDeviceNode, deviceIdOf, compare: compareNodes,
+  key: nodeKey, isDevice: isDeviceNode, deviceIdOf, compare: compareNodes, deviceNode,
 } = require('../topology/nodeId');
 const { deviceState } = require('../topology/deviceNodes');
 
@@ -30,7 +30,10 @@ const SEVERITY_RANK = Object.freeze({ INFO: 1, WARN: 2, CRIT: 3 });
 //   ok                     — the agent is reporting in
 //   down                   — the agent is offline (the fault itself)
 //   unreachable_downstream — L2-isolated behind a `down` node; we cannot tell
-//                            whether it is healthy, only that we cannot hear it
+//                            whether it is healthy, only that we cannot hear it.
+//                            NEVER a node we CAN hear: an agent that is online
+//                            and reporting is reachable by definition, whatever
+//                            is offline next to it.
 const NODE_STATE = Object.freeze({
   OK: 'ok',
   DOWN: 'down',
@@ -225,6 +228,23 @@ function stateFromAgentStatus(status) {
   return String(status || '').toLowerCase() === 'offline' ? NODE_STATE.DOWN : NODE_STATE.OK;
 }
 
+// Which graph nodes are known to be up — the `isAlive` computeBlastRadius
+// takes (src/topology/blastRadius.js). An agent is alive when its row says
+// online; a switch when its last poll answered. Everything else (offline,
+// never polled, unknown) is not known alive, which is the only thing a blast
+// radius may count as cut off.
+function aliveFrom(agents = [], devices = []) {
+  const alive = new Set();
+  for (const a of asArray(agents)) {
+    const id = toNodeId(a && a.id);
+    if (id !== null && String(a.status || '').toLowerCase() === 'online') alive.add(nodeKey(id));
+  }
+  for (const d of asArray(devices)) {
+    if (d && d.id != null && deviceState(d) === 'ok') alive.add(nodeKey(deviceNode(d.id)));
+  }
+  return (id) => alive.has(nodeKey(id));
+}
+
 function worseState(a, b) {
   return (STATE_RANK[b] || 0) > (STATE_RANK[a] || 0) ? b : a;
 }
@@ -292,6 +312,14 @@ function buildTopologyView({
   }
 
   // --- 2. grey out what a `down` node cuts off ----------------------------
+  // Only nodes we cannot hear are candidates. The blast radius is a graph walk
+  // and the L2 graph is undirected, so from an offline agent it reaches the
+  // access switch and every host behind it; that is a statement about what
+  // COULD be cut off, not about what is. A node whose own state is `ok` — an
+  // agent online and reporting, a switch that answered its poll — is by
+  // definition reachable and keeps `ok`. A node already `down` stays `down`
+  // (it is a fault in its own right). What remains is a node in `unknown`
+  // (a switch never polled): that is the one the radius may grey out.
   const lookup = blastByNode instanceof Map
     ? (id) => (blastByNode.get(id) ?? blastByNode.get(Number(id)))
     : (id) => (blastByNode && typeof blastByNode === 'object' ? blastByNode[id] : undefined);
@@ -303,8 +331,10 @@ function buildTopologyView({
     for (const hit of asArray(radius.directly_isolated)) {
       if (!hit || hit.hostId == null) continue;
       const hostKey = nodeKey(hit.hostId);
-      // Never downgrade a node we already know is down.
-      if (state.get(hostKey) === NODE_STATE.DOWN) continue;
+      const current = state.get(hostKey);
+      // Never downgrade a node we already know is down, and never mark a node
+      // we can hear as unreachable.
+      if (current === NODE_STATE.DOWN || current === NODE_STATE.OK) continue;
       state.set(hostKey, NODE_STATE.UNREACHABLE_DOWNSTREAM);
     }
   }
@@ -477,6 +507,7 @@ module.exports = {
   buildSummary,
   percentVsBaseline,
   stateFromAgentStatus,
+  aliveFrom,
   worseState,
   collateBlastRadius,
   worstSeverity,

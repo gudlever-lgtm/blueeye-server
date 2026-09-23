@@ -90,3 +90,26 @@ test('the thresholds are published, so they can be argued with', () => {
   assert.ok(THRESHOLDS.Z_WARN > 0);
   assert.equal(THRESHOLDS.Z_BAD, undefined, 'latency has no bad tier');
 });
+
+// The value being judged is not part of its own baseline. It used to be: the
+// latest RTT went into the median/MAD it was then compared with, pulling the
+// centre toward itself and widening the spread by its own distance.
+test('the latest sample is excluded from the baseline it is judged against', () => {
+  const now = Date.now();
+  const history = [10, 10, 10, 10, 11, 11, 11, 11]; // median 10.5, MAD 0.5
+  const health = computeAgentHealth(rows([30].concat(history), { now }), { now });
+  assert.equal(health.metrics.baselineMs, 10.5, 'median of the history only (with 30 included it was 11)');
+  const sigma = 0.5 * 1.4826;
+  assert.equal(health.metrics.latencyZ, Math.round(((30 - 10.5) / sigma) * 10) / 10);
+  assert.equal(health.status, 'warn');
+});
+
+test('a baseline needs MIN_BASELINE samples BEFORE the one being judged', () => {
+  const now = Date.now();
+  const history = Array.from({ length: THRESHOLDS.MIN_BASELINE - 1 }, (_, i) => (i % 2 ? 10 : 11));
+  // One short of a trusted baseline: no latency verdict, however high.
+  const short = computeAgentHealth(rows([80].concat(history), { now }), { now });
+  assert.equal(short.evidence.filter((e) => e.metric === 'latency').length, 0);
+  const enough = computeAgentHealth(rows([80].concat(history, [10]), { now }), { now });
+  assert.equal(enough.evidence.filter((e) => e.metric === 'latency').length, 1);
+});

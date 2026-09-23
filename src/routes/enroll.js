@@ -180,12 +180,15 @@ function createEnrollRouter({ artifactStore, sourceStore, binaryStore, releaseSt
   }));
 
   // Build status for operator inspection (no auth required — operators may need
-  // this before a session exists; it contains no sensitive data).
+  // this before a session exists). Public, so the build's error TEXT is not
+  // relayed: it carries the cache-dir path and the tail of the packager's
+  // output. The route says which arches failed; the message is in the server
+  // log, where the store already writes it.
   router.get('/agent-binary-status', (req, res) => {
     if (!binaryStore) {
       return res.json({ configured: false });
     }
-    res.json({ configured: true, ...binaryStore.status() });
+    res.json({ configured: true, ...publicBinaryStatus(binaryStore.status()) });
   });
 
   // Serve a pre-built agent binary for a platform from the local artifacts dir.
@@ -307,4 +310,17 @@ function sendPs1(req, res, script, fileName) {
   res.send(UTF8_BOM + script);
 }
 
-module.exports = { createEnrollRouter, resolveServerUrl };
+// The build status with every error message replaced by a fixed pointer to
+// the server log. Shape unchanged: `error`/`topError` stay null when there is
+// no error, so a client that only tests them for truthiness keeps working.
+const BUILD_ERROR_PUBLIC = 'build failed — see the server log for details';
+function publicBinaryStatus(status) {
+  const s = status && typeof status === 'object' ? status : {};
+  const arches = {};
+  for (const [arch, a] of Object.entries(s.arches || {})) {
+    arches[arch] = a && a.error ? { ...a, error: BUILD_ERROR_PUBLIC } : a;
+  }
+  return { ...s, topError: s.topError ? BUILD_ERROR_PUBLIC : null, arches };
+}
+
+module.exports = { createEnrollRouter, resolveServerUrl, publicBinaryStatus };

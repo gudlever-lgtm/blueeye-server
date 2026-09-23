@@ -287,6 +287,9 @@ CREATE TABLE IF NOT EXISTS `probe_results` (
   `sizes` JSON NULL DEFAULT NULL,
   `tls` JSON NULL DEFAULT NULL,
   `rdns` JSON NULL DEFAULT NULL,
+  `error_code` VARCHAR(32) NULL DEFAULT NULL,
+  `failure` VARCHAR(16) NULL DEFAULT NULL,
+  `resolver` VARCHAR(64) NULL DEFAULT NULL,
   `detail` VARCHAR(255) NULL DEFAULT NULL,
   `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (id),
@@ -339,7 +342,8 @@ CREATE TABLE IF NOT EXISTS `speedtest_results` (
   `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (id),
   KEY idx_speedtest_agent_ts (agent_id, ts),
-  CONSTRAINT fk_speedtest_agent FOREIGN KEY (agent_id) REFERENCES agents (id) ON DELETE CASCADE
+  CONSTRAINT fk_speedtest_agent FOREIGN KEY (agent_id) REFERENCES agents (id) ON DELETE CASCADE,
+  KEY idx_speedtest_ts (ts)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- 022 — persistent audit trail for server-initiated agent actions (upgrade /
@@ -607,6 +611,14 @@ CREATE TABLE IF NOT EXISTS `blueeye_nis2_incidents` (
   `actions_taken` TEXT NULL DEFAULT NULL,
   `nis2_relevant` TINYINT(1) NOT NULL DEFAULT 0,
   `notification_required` TINYINT(1) NOT NULL DEFAULT 0,
+  `suspected_malicious` TINYINT(1) NOT NULL DEFAULT 0,
+  `cross_border_impact` TINYINT(1) NOT NULL DEFAULT 0,
+  `cross_border_details` TEXT NULL DEFAULT NULL,
+  `authority_reference` VARCHAR(128) NULL DEFAULT NULL,
+  `early_warning_submitted_at` DATETIME NULL DEFAULT NULL,
+  `notification_submitted_at` DATETIME NULL DEFAULT NULL,
+  `final_report_submitted_at` DATETIME NULL DEFAULT NULL,
+  `event_case_id` BIGINT UNSIGNED NULL DEFAULT NULL,
   `status` ENUM('open', 'investigating', 'contained', 'resolved', 'closed') NOT NULL DEFAULT 'open',
   `lessons_learned` TEXT NULL DEFAULT NULL,
   `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -615,7 +627,9 @@ CREATE TABLE IF NOT EXISTS `blueeye_nis2_incidents` (
   UNIQUE KEY uq_nis2_incident_ref (incident_id),
   KEY idx_nis2_incidents_severity (severity),
   KEY idx_nis2_incidents_status (status),
-  KEY idx_nis2_incidents_detected (detected_at)
+  KEY idx_nis2_incidents_detected (detected_at),
+  KEY idx_nis2_incidents_event_case (event_case_id),
+  CONSTRAINT fk_nis2_incidents_event_case FOREIGN KEY (event_case_id) REFERENCES event_cases (id) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- Generated reports. snapshot_json freezes the headline metrics at generation
@@ -895,7 +909,8 @@ CREATE TABLE IF NOT EXISTS `transaction_results` (
   `step_failed` TINYINT         DEFAULT NULL,
   `deviation` ENUM('normal','slower','faster') DEFAULT NULL,
   `detail` VARCHAR(255)    DEFAULT NULL,
-  INDEX idx_txr_test_agent_time (test_id, agent_id, time)
+  INDEX idx_txr_test_agent_time (test_id, agent_id, time),
+  KEY idx_txr_time (`time`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 -- Robust baseline per (test, agent, step): median + MAD over the last 7 days of
@@ -1212,6 +1227,7 @@ CREATE TABLE IF NOT EXISTS `service_dependencies` (
 CREATE TABLE IF NOT EXISTS `topology_changes` (
   `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
   `agent_id` INT UNSIGNED NOT NULL,
+  `device_id` INT UNSIGNED NULL DEFAULT NULL,
   `change_type` ENUM('neighbour_added','neighbour_removed','link_state_changed','port_moved','flapping') NOT NULL,
   `local_port` VARCHAR(190) NULL DEFAULT NULL,
   `remote_chassis_id` VARCHAR(190) NULL DEFAULT NULL,
@@ -1228,7 +1244,8 @@ CREATE TABLE IF NOT EXISTS `topology_changes` (
   KEY idx_topo_changes_agent (agent_id, detected_at),
   KEY idx_topo_changes_chassis (remote_chassis_id),
   KEY idx_topo_changes_detected (detected_at),
-  CONSTRAINT fk_topo_changes_agent FOREIGN KEY (agent_id) REFERENCES agents (id) ON DELETE CASCADE
+  CONSTRAINT fk_topo_changes_agent FOREIGN KEY (agent_id) REFERENCES agents (id) ON DELETE CASCADE,
+  KEY idx_topo_changes_device (device_id, detected_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- 068 — per-flow-pair traffic-volume baselines.
@@ -1460,10 +1477,13 @@ CREATE TABLE IF NOT EXISTS `interface_states` (
 CREATE TABLE IF NOT EXISTS `interface_state_transitions` (
   `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
   `agent_id` INT UNSIGNED NOT NULL,
+  `device_id` INT UNSIGNED NULL DEFAULT NULL,
+  `interface_id` BIGINT UNSIGNED NULL DEFAULT NULL,
   `iface` VARCHAR(190) NOT NULL,
   `from_status` VARCHAR(16) NULL DEFAULT NULL,
   `to_status` VARCHAR(16) NOT NULL,
   `oper_status` VARCHAR(32) NULL DEFAULT NULL,
+  `source` VARCHAR(16) NULL DEFAULT NULL,
   `severity` ENUM('INFO', 'WARN', 'CRIT') NOT NULL DEFAULT 'INFO',
   `summary` VARCHAR(512) NOT NULL,
   `flap_count` INT UNSIGNED NOT NULL DEFAULT 1,
@@ -1474,7 +1494,8 @@ CREATE TABLE IF NOT EXISTS `interface_state_transitions` (
   KEY idx_iface_trans_agent (agent_id, detected_at),
   KEY idx_iface_trans_detected (detected_at),
   KEY idx_iface_trans_iface (agent_id, iface, detected_at),
-  CONSTRAINT fk_iface_trans_agent FOREIGN KEY (agent_id) REFERENCES agents (id) ON DELETE CASCADE
+  CONSTRAINT fk_iface_trans_agent FOREIGN KEY (agent_id) REFERENCES agents (id) ON DELETE CASCADE,
+  KEY idx_iface_trans_device (device_id, iface, detected_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- 047 — incidents as a first-class entity, wrapping analysis findings.
@@ -2770,6 +2791,7 @@ CREATE TABLE IF NOT EXISTS `snmp_devices` (
   `community_encrypted` TEXT NULL DEFAULT NULL,
   `credential_profile_id` INT UNSIGNED NULL DEFAULT NULL,
   `display_name` VARCHAR(255) NULL DEFAULT NULL,
+  `sys_descr` VARCHAR(255) NULL DEFAULT NULL,
   `location_id` INT UNSIGNED NULL DEFAULT NULL,
   `collect` JSON NULL DEFAULT NULL,
   `interval_sec` INT UNSIGNED NOT NULL DEFAULT 300,
@@ -3071,6 +3093,7 @@ CREATE TABLE IF NOT EXISTS `device_counter_samples` (
   `alignment_errors` BIGINT UNSIGNED NULL DEFAULT NULL,
   `late_collisions` BIGINT UNSIGNED NULL DEFAULT NULL,
   `carrier_sense_errors` BIGINT UNSIGNED NULL DEFAULT NULL,
+  `duplex` VARCHAR(8) NULL DEFAULT NULL,
   `delta_sec` INT UNSIGNED NULL DEFAULT NULL,
   `in_bps` DOUBLE NULL DEFAULT NULL,
   `out_bps` DOUBLE NULL DEFAULT NULL,
@@ -3079,6 +3102,7 @@ CREATE TABLE IF NOT EXISTS `device_counter_samples` (
   `in_disc_pps` DOUBLE NULL DEFAULT NULL,
   `out_disc_pps` DOUBLE NULL DEFAULT NULL,
   `fcs_pps` DOUBLE NULL DEFAULT NULL,
+  `late_coll_pps` DOUBLE NULL DEFAULT NULL,
   `in_bcast_pps` DOUBLE NULL DEFAULT NULL,
   `in_util_pct` DOUBLE NULL DEFAULT NULL,
   `out_util_pct` DOUBLE NULL DEFAULT NULL,
@@ -3200,6 +3224,109 @@ CREATE TABLE IF NOT EXISTS `change_acks` (
   PRIMARY KEY (`user_id`, `ack_key`),
   KEY `idx_change_acks_user_time` (`user_id`, `acked_at`),
   CONSTRAINT `fk_change_acks_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- 117 — VLAN names per switch, and a short history of MAC MOVES.
+--
+-- device_vlans. The agent has sent the Q-BRIDGE VLAN names (dot1qVlanStaticName)
+-- on every topology poll and the validator has accepted them; nothing stored
+-- them. "VLAN 20" on a port or in a loop finding is a number somebody has to go
+-- and look up; "VLAN 20 (Voice)" is an answer. One row per (device, vlan),
+-- upserted on last_seen and aged out with the forwarding table it describes
+-- (RETENTION_FDB_DAYS) — a VLAN deleted from the switch simply stops being
+-- refreshed, the same ageing rule fdb_entries follows.
+--
+-- fdb_mac_moves. Migration 111 gave fdb_entries a `move_count` — monotonic,
+-- reset by nothing — and the loop detector then read that ALL-TIME count as if
+-- it were the number of moves inside its ten-minute window. A laptop that had
+-- been re-docked forty times over a month looked, to the detector, like a MAC
+-- flapping forty times in ten minutes. A window needs to know WHEN each move
+-- happened, and a single counter cannot say.
+--
+-- So the moves themselves are kept, one row per observed move, written by the
+-- same sweep that records it on fdb_entries (an INSERT … SELECT of the rows
+-- whose last_move_at is this sweep — no read-compare-write per MAC). "How many
+-- times did this MAC move in the last N minutes" is then a COUNT over an
+-- indexed range, exact for whatever window the detector asks for.
+--
+-- WHY THIS IS NOT THE "HISTORY TABLE NOBODY NEEDS" 111 WARNED AGAINST. That
+-- note was about a row per MAC per SWEEP — every observation. This is a row per
+-- MOVE, which on a quiet network is a handful a day, and it has its own SHORT
+-- retention (RETENTION_FDB_MOVE_DAYS, default 2): the question it answers is
+-- about the last few minutes, and the rows exist to answer it and then go.
+-- move_count on fdb_entries stays as the all-time figure it always was.
+CREATE TABLE IF NOT EXISTS `device_vlans` (
+  `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `device_id` INT UNSIGNED NOT NULL,
+  `vlan` SMALLINT UNSIGNED NOT NULL,
+  `name` VARCHAR(64) NOT NULL,
+  `first_seen` DATETIME NOT NULL,
+  `last_seen` DATETIME NOT NULL,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uq_device_vlans` (`device_id`, `vlan`),
+  KEY `idx_device_vlans_last_seen` (`last_seen`),
+  CONSTRAINT `fk_device_vlans_device` FOREIGN KEY (`device_id`) REFERENCES `snmp_devices` (`id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- One row per observed move of one MAC on one switch. `from_port`/`to_port` are
+-- BRIDGE port numbers, exactly as fdb_entries stores them (see 105 for why a
+-- bridge port is not an ifIndex).
+CREATE TABLE IF NOT EXISTS `fdb_mac_moves` (
+  `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `device_id` INT UNSIGNED NOT NULL,
+  `mac` CHAR(17) NOT NULL,
+  `vlan` SMALLINT UNSIGNED NOT NULL DEFAULT 0,
+  `from_port` INT UNSIGNED NULL DEFAULT NULL,
+  `to_port` INT UNSIGNED NOT NULL,
+  `moved_at` DATETIME NOT NULL,
+  PRIMARY KEY (`id`),
+  KEY `idx_fdb_moves_mac` (`device_id`, `vlan`, `mac`, `moved_at`),
+  KEY `idx_fdb_moves_device` (`device_id`, `moved_at`),
+  KEY `idx_fdb_moves_at` (`moved_at`),
+  CONSTRAINT `fk_fdb_moves_device` FOREIGN KEY (`device_id`) REFERENCES `snmp_devices` (`id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- 120 — a long-term rollup for INTERNAL flows (LAN / OT conversations).
+--
+-- WHY. The retention job rolls raw flow_records older than RETENTION_RAW_DAYS
+-- (7) into flow_rollup and then deletes them. flow_rollup is keyed on the
+-- external peer's country + ASN, which an RFC1918 peer never has (private
+-- addresses are never geolocated), so every internal conversation was simply
+-- deleted after a week with nothing kept. On an OT network that is the traffic
+-- that matters: "the SCADA server polls these PLCs on 502" had no history past
+-- seven days and no baseline to compare today against.
+--
+-- ONE ROW per hour bucket x agent x (src_ip, dst_ip, proto, service_port). The
+-- service port is the SERVER end of the conversation (a named well-known port
+-- if either end has one, else the lower port — src/flows/services.js
+-- servicePortOf), so a request and its reply land on the same row and client
+-- ephemeral ports never become keys.
+--
+-- BOUNDED. Per agent per bucket only the top N keys by bytes get their own row
+-- (RETENTION_INTERNAL_ROLLUP_TOP_N, default 500); the rest fold into one
+-- overflow row with src_ip = dst_ip = '*', proto = '' and service_port = 0,
+-- so totals still add up and a port scan cannot blow the table up. Rows expire
+-- with the other rollups (RETENTION_ROLLUP_DAYS, default 90).
+--
+-- Metadata only, like flow_records: addresses, protocol, port, counts. No
+-- payload. The unique key is what the rollup's ON DUPLICATE KEY UPDATE sums
+-- into, so a re-run of the same bucket can never double a row.
+CREATE TABLE IF NOT EXISTS `flow_internal_rollup` (
+  `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `bucket` DATETIME NOT NULL,
+  `agent_id` INT UNSIGNED NOT NULL,
+  `src_ip` VARCHAR(45) NOT NULL,
+  `dst_ip` VARCHAR(45) NOT NULL,
+  `proto` VARCHAR(16) NOT NULL DEFAULT '',
+  `service_port` INT UNSIGNED NOT NULL DEFAULT 0,
+  `bytes` BIGINT UNSIGNED NOT NULL DEFAULT 0,
+  `packets` BIGINT UNSIGNED NOT NULL DEFAULT 0,
+  `flow_count` BIGINT UNSIGNED NOT NULL DEFAULT 0,
+  `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  UNIQUE KEY uq_flow_internal_rollup (agent_id, bucket, src_ip, dst_ip, proto, service_port),
+  KEY idx_flow_internal_rollup_bucket (bucket),
+  KEY idx_flow_internal_rollup_pair (src_ip, dst_ip, bucket)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 SET FOREIGN_KEY_CHECKS = 1;

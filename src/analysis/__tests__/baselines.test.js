@@ -71,6 +71,15 @@ test('isFlat is true for 10 identical trailing values, false otherwise', () => {
   assert.equal(store.isFlat('h1', 'cpu'), false); // trailing 10 no longer identical
 });
 
+test('isFlat with a value: only a sample that CONTINUES the run is flat', () => {
+  const store = createBaselineStore({ minSamples: 1, windowSize: 50 });
+  const ts = at('2026-01-01T05:00:00Z');
+  for (let i = 0; i < 10; i += 1) store.update({ hostId: 'h1', metric: 'fcs', value: 0, ts });
+  assert.equal(store.isFlat('h1', 'fcs'), true); // history alone: flat
+  assert.equal(store.isFlat('h1', 'fcs', 0), true); // the same value again: still flat
+  assert.equal(store.isFlat('h1', 'fcs', 5), false); // a different value is the metric moving
+});
+
 test('windows are capped at windowSize (rolling)', () => {
   const store = createBaselineStore({ minSamples: 1, windowSize: 5 });
   const ts = at('2026-01-01T06:00:00Z');

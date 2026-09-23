@@ -77,6 +77,38 @@ test('a flatline yields a FLATLINE finding (WARN)', () => {
   assert.match(f.explanation, /sensor or agent stop/);
 });
 
+test('a value that breaks a flat run is judged on deviation, never FLATLINE', () => {
+  // Regression: isFlat looked only at history, so the first sample that moved
+  // off a flat run was itself reported as "unchanged".
+  const store = createBaselineStore({ minSamples: 10, windowSize: 500 });
+  for (let i = 0; i < 12; i += 1) store.update({ hostId: HOST, metric: METRIC, value: 42, ts: TS });
+  const det = createDetector({ baselines: store, config: cfg() });
+  const f = det.evaluate({ hostId: HOST, metric: METRIC, value: 50, ts: TS, labels: {} });
+  assert.ok(f);
+  assert.equal(f.kind, FindingKind.ANOMALY);
+});
+
+test('a step off a zero-spread baseline is a WARN anomaly with no fabricated sigma', () => {
+  const store = createBaselineStore({ minSamples: 10, windowSize: 500 });
+  for (let i = 0; i < 12; i += 1) store.update({ hostId: HOST, metric: 'if.3.fcs.pps', value: 0, ts: TS });
+  const det = createDetector({ baselines: store, config: cfg() });
+  // The constant itself is normal on an exempt metric: no finding at all.
+  assert.equal(det.evaluate({ hostId: HOST, metric: 'if.3.fcs.pps', value: 0, ts: TS, labels: {} }), null);
+  const f = det.evaluate({ hostId: HOST, metric: 'if.3.fcs.pps', value: 5, ts: TS, labels: {} });
+  assert.equal(f.kind, FindingKind.ANOMALY);
+  assert.equal(f.severity, Severity.WARN);
+  assert.equal(f.deviation, null);
+  assert.ok(f.explanation.includes('at 5') && f.explanation.includes('constant'));
+  assert.ok(!/Infinity|NaN/.test(f.explanation));
+});
+
+test('flatlineExempt is injectable: a metric it exempts never flatlines', () => {
+  const store = createBaselineStore({ minSamples: 10, windowSize: 500 });
+  for (let i = 0; i < 12; i += 1) store.update({ hostId: HOST, metric: METRIC, value: 42, ts: TS });
+  const det = createDetector({ baselines: store, config: cfg(), flatlineExempt: (m) => m === METRIC });
+  assert.equal(det.evaluate({ hostId: HOST, metric: METRIC, value: 42, ts: TS, labels: {} }), null);
+});
+
 test('explanation contains the actual numbers, not placeholders', () => {
   const store = warmedStore({ median: 10 });
   const det = createDetector({ baselines: store, config: cfg() });

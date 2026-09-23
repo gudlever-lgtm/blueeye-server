@@ -43,13 +43,26 @@ const testKey = (t) => `${t.direction}|${t.probeType}|${t.target}|${JSON.stringi
 //   target   — what the tests point at
 //   agentId  — the agent they run from
 //   peerAgentId — the agent at the far end, when there is one
+//   reverseTarget — where the far end probes BACK to (src/diagnose/reverseTarget.js):
+//              { address, why } or { address: null, reason }. The reverse
+//              direction measures the RETURN path, so it points at the origin
+//              agent, never at `target` — the same target from the far end is
+//              a second forward path, and comparing two forward paths says
+//              nothing about asymmetry. Without an address the reverse tests
+//              are listed in `skipped` with the reason instead of being run
+//              at the wrong place.
 function buildPlan({
   matches = [], catalog, target, agentId = null, peerAgentId = null,
+  reverseTarget = null,
   locale = DEFAULT_LOCALE, matchedBy = 'keywords',
 } = {}) {
   const causes = [];
   const tests = [];
+  const skipped = [];
   const byKey = new Map();
+  const reverseAddress = reverseTarget && reverseTarget.address ? reverseTarget.address : null;
+  const reverseSkipReason = reverseAddress ? null
+    : ((reverseTarget && reverseTarget.reason) || 'The origin agent\'s own address is unknown, so the far end has nothing to probe back to.');
 
   for (const m of matches) {
     const pb = catalog.get(m.id);
@@ -60,14 +73,24 @@ function buildPlan({
     const wantReverse = needsReverse(pb) && peerAgentId != null;
     for (const t of pb.tests) {
       for (const direction of wantReverse ? ['forward', 'reverse'] : ['forward']) {
+        const baseWhy = view.tests.find((x) => x.type === t.type)?.why ?? null;
+        if (direction === 'reverse' && !reverseAddress) {
+          if (!skipped.some((x) => x.probeType === t.type)) {
+            skipped.push({ playbookId: pb.id, direction, agentId: peerAgentId, probeType: t.type, reason: reverseSkipReason });
+          }
+          continue;
+        }
         const row = {
           playbookId: pb.id,
           direction,
           agentId: direction === 'reverse' ? peerAgentId : agentId,
           probeType: t.type,
-          target,
+          target: direction === 'reverse' ? reverseAddress : target,
           params: t.params,
-          why: view.tests.find((x) => x.type === t.type)?.why ?? null,
+          // The playbook's own `why` describes the forward test ("the outbound
+          // path"); the reverse row gets the sentence that says where it points
+          // and why that address.
+          why: direction === 'reverse' ? reverseTarget.why : baseWhy,
         };
         const key = testKey(row);
         const existing = byKey.get(key);
@@ -113,6 +136,8 @@ function buildPlan({
     peerAgentId,
     causes,
     tests: tests.map(({ index, ...t }) => ({ index, ...t })),
+    // Tests the plan wanted and deliberately did not schedule, each with why.
+    skipped,
   };
 }
 

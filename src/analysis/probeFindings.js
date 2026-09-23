@@ -6,6 +6,7 @@ const { computeAgentHealth } = require('../health/probeHealth');
 const { extractAsPath, diffAsPath } = require('./asPath');
 const { median } = require('./baselines');
 const { evaluateMtuFindings } = require('./mtuFindings');
+const { describeFailures } = require('./probeFailure');
 
 // TLS-certificate expiry thresholds (days). A site can be perfectly reachable
 // while its certificate is about to lapse, so this is judged independently of
@@ -33,11 +34,14 @@ function evaluateProbeFindings(agentId, rows, { now = () => new Date(), geoProvi
   const out = [];
 
   const health = computeAgentHealth(rows, { now: at.getTime() });
+  // WHY each failed dns/tcp target failed (src/analysis/probeFailure.js), read
+  // from the same newest rows the verdict above was formed from.
+  const failures = describeFailures(rows);
   // Severity per evidence row, not per agent: a latency warning stays a WARN
   // even when another target on the same agent is unreachable.
   for (const ev of health.evidence) {
     const severity = severityOf(ev.level);
-    if (severity) out.push(buildFinding({ hostId, at, severity, ev, health }));
+    if (severity) out.push(buildFinding({ hostId, at, severity, ev, health, failures }));
   }
 
   for (const c of certFindings(hostId, rows, at)) out.push(c);
@@ -57,7 +61,7 @@ function severityOf(level) {
 }
 
 // Maps a single verdict evidence row to a finding.
-function buildFinding({ hostId, at, severity, ev, health }) {
+function buildFinding({ hostId, at, severity, ev, health, failures = [] }) {
   const kind = ev.metric === 'latency' ? FindingKind.ANOMALY : FindingKind.THRESHOLD;
   const observed = ev.metric === 'loss' ? ev.lossPct
     : ev.metric === 'latency' ? ev.rttMs
@@ -76,8 +80,8 @@ function buildFinding({ hostId, at, severity, ev, health }) {
     baseline,
     deviation,
     window: [new Date(at.getTime() - 60000), at],
-    explanation: explain(ev, health),
-    evidence: [{ ...ev, ts: at.toISOString() }],
+    explanation: explain(ev, health, failures),
+    evidence: [{ ...ev, ...failureEvidence(ev, failures), ts: at.toISOString() }],
     correlatedWith: [],
     createdAt: at,
     acked: false,
@@ -86,15 +90,54 @@ function buildFinding({ hostId, at, severity, ev, health }) {
 
 // A concrete, human-readable explanation per signal (real numbers, no
 // placeholders) — same wording the fleet-health reason line uses.
-function explain(ev, health) {
+function explain(ev, health, failures = []) {
   const to = ev.target ? ` to ${ev.target}` : '';
   if (ev.metric === 'reachability') {
-    return `${health.metrics.unreachable}/${health.metrics.targets} probe target(s) not responding (e.g. ${ev.target}).`;
+    const head = `${health.metrics.unreachable}/${health.metrics.targets} probe target(s) not responding (e.g. ${ev.target}).`;
+    return head + explainFailures(ev, failures);
   }
   if (ev.metric === 'loss') return `Packet loss ${ev.lossPct}%${to}.`;
   if (ev.metric === 'latency') return `Latency ${ev.rttMs} ms${to} — ~${ev.baselineMs} ms normal (z=${ev.z}).`;
   if (ev.metric === 'jitter') return `Jitter ${ev.jitterMs} ms${to}.`;
   return health.reason || 'Probe health degraded.';
+}
+
+// How many failed dns/tcp targets are spelled out in one reachability finding.
+// The finding names one target; the rest are listed so an ACL that blocks three
+// ports is one sentence, not three findings — but capped, because a paragraph
+// nobody reads is not an explanation.
+const MAX_FAILURES_EXPLAINED = 3;
+
+// The "why" clause of a reachability finding: the evidence target first (it is
+// the one the finding is keyed on), then the other failed dns/tcp targets.
+// Empty when no dns/tcp target failed (only ping/trace targets down), so that
+// sentence reads exactly as it always did. A failed row from an older agent
+// that reported no code is still listed, and says so — "we do not know why" is
+// worth reading next to one that does.
+function explainFailures(ev, failures) {
+  if (!failures.length) return '';
+  const own = failures.find((f) => f.type === ev.type && f.target === ev.target);
+  const rest = failures.filter((f) => f !== own);
+  const list = (own ? [own] : []).concat(rest).slice(0, MAX_FAILURES_EXPLAINED);
+  const more = failures.length - list.length;
+  return ` ${list.map((f) => `${f.text}.`).join(' ')}${more > 0 ? ` (+${more} more failed dns/tcp target(s))` : ''}`;
+}
+
+// The same facts as structured evidence, for the evidence panel and for a rule
+// that wants to key on them: what kind of failure the named target had, which
+// resolver was asked, and whether ICMP to the same host still worked.
+function failureEvidence(ev, failures) {
+  if (ev.metric !== 'reachability' || !failures.length) return {};
+  const own = failures.find((f) => f.type === ev.type && f.target === ev.target) || null;
+  return {
+    failure: own ? own.kind : null,
+    errorCode: own ? own.code : null,
+    resolver: own ? own.resolver : null,
+    icmpOk: own ? own.icmpOk : null,
+    failures: failures.slice(0, MAX_FAILURES_EXPLAINED).map((f) => ({
+      type: f.type, target: f.target, failure: f.kind, errorCode: f.code, resolver: f.resolver, icmpOk: f.icmpOk,
+    })),
+  };
 }
 
 // Certificate findings from the newest row per target that carries a reading.

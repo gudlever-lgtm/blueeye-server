@@ -6,6 +6,7 @@ const META_MAX_BYTES = 65535;
 const MONITOR_SOURCES = ['proc', 'snmp', 'netflow', 'sflow'];
 const SNMP_VERSIONS = ['1', '2c'];
 const MAX_INTERVAL_MS = 24 * 60 * 60 * 1000; // 1 day
+const { BULK_CAPABILITY_LIMITS, capabilitiesForStorage } = require('../lib/agentCapabilities');
 
 // Validates monitor_config (server-managed): which traffic source the agent
 // should use and, for SNMP, how to reach the device. Returns the normalised
@@ -202,9 +203,22 @@ function validateCapabilities(raw, errors) {
       ? { ...value, releaseKeyFingerprint: String(fp).toLowerCase() }
       : { ...value, releaseKeyFingerprint: null };
   }
+  // The ingest tables (ARP, connections, LLDP) are bounded by COUNT, not by
+  // the 64 KB metadata cap: a host with a busy ARP table would otherwise get a
+  // 400 on its whole report, capabilities included. They are fed to their own
+  // tables by the route and never stored in agents.capabilities
+  // (capabilitiesForStorage). A table that is not an array, or is over its
+  // bound, is dropped rather than refused — like the fingerprint above.
+  for (const [key, max] of Object.entries(BULK_CAPABILITY_LIMITS)) {
+    if (value[key] === undefined) continue;
+    if (!Array.isArray(value[key]) || value[key].length > max) {
+      value = { ...value };
+      delete value[key];
+    }
+  }
   let serialized;
   try {
-    serialized = JSON.stringify(value);
+    serialized = JSON.stringify(capabilitiesForStorage(value));
   } catch {
     serialized = undefined;
   }
@@ -214,6 +228,7 @@ function validateCapabilities(raw, errors) {
   }
   return value;
 }
+
 
 // Validates the server-managed fields of an agent. Only these four fields are
 // accepted; any agent-reported fields in the body are ignored. Omitted fields

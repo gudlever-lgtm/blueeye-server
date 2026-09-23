@@ -613,6 +613,17 @@ function attachAgentWebSocket({
     };
   }
 
+  // Ids of every agent with an OPEN socket on this process. The periodic
+  // stale-offline sweep leaves these alone: a live socket is proof of life even
+  // when last_seen lags (its throttled touch is best-effort and can fail).
+  function connectedAgentIds() {
+    const ids = new Set();
+    for (const ws of wss.clients) {
+      if (ws.agentId != null && ws.readyState === ws.OPEN) ids.add(ws.agentId);
+    }
+    return [...ids];
+  }
+
   // Force-closes an agent's live socket(s) so the agent re-dials on its own
   // (its client reconnects with backoff, re-runs its reconcile and reloads its
   // transaction config). This is the only "reconnect" the server can offer —
@@ -631,7 +642,7 @@ function attachAgentWebSocket({
     return closed;
   }
 
-  return { wss, sendCommand, sendCommandAndWait, broadcast, close, connectionCount, getSflowStatus, pushTransactionConfig, getConnectionInfo, disconnectAgent };
+  return { wss, sendCommand, sendCommandAndWait, broadcast, close, connectionCount, getSflowStatus, pushTransactionConfig, getConnectionInfo, disconnectAgent, connectedAgentIds };
 }
 
 module.exports = { attachAgentWebSocket, traceHopPayload };

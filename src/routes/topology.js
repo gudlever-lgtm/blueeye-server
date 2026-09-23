@@ -17,7 +17,7 @@ const DEFAULT_TOP_N = 50;
 // Flow-derived dependency / topology map. Mounted at /api/topology behind the
 // user JWT. Builds a who-talks-to-whom graph from the ingested 5-tuple flows
 // (whole fleet, or one agent via ?agentId=), over a ?minutes window. viewer+.
-function createTopologyRouter({ flowsRepo = null, agentsRepo = null, locationsRepo = null, centroids = null, lldpNeighborsRepo = null, serviceDependenciesRepo = null, serviceDependencyJob = null, blastRadiusService = null, topologyChangesRepo = null, flowPairBaselinesRepo = null, flowPairBaselineJob = null, snmpDevicesRepo = null }) {
+function createTopologyRouter({ flowsRepo = null, agentsRepo = null, locationsRepo = null, centroids = null, lldpNeighborsRepo = null, serviceDependenciesRepo = null, serviceDependencyJob = null, blastRadiusService = null, topologyChangesRepo = null, flowPairBaselinesRepo = null, flowPairBaselineJob = null, snmpDevicesRepo = null, getCategories = null }) {
   const router = express.Router();
   const reader = requireRole(ROLES.VIEWER, ROLES.OPERATOR, ROLES.ADMIN);
   const writer = requireRole(ROLES.OPERATOR, ROLES.ADMIN);
@@ -234,12 +234,20 @@ function createTopologyRouter({ flowsRepo = null, agentsRepo = null, locationsRe
       }
 
       const rows = await flowsRepo.topologyEdges({ agentId, locationId, from, to });
+      // The effective (admin-editable) traffic categories classify each edge's
+      // service ports, so an edited OT port list marks edges the same way the
+      // Traffic types chart counts them. A settings read that fails falls back
+      // to the built-in list rather than failing the map.
+      let categories = null;
+      if (typeof getCategories === 'function') {
+        try { categories = await getCategories(); } catch { categories = null; }
+      }
       res.json({
         from: from.toISOString(),
         to: to.toISOString(),
         agentId,
         locationId,
-        ...buildTopology(rows, { centroids }),
+        ...buildTopology(rows, { centroids, categories }),
       });
     })
   );

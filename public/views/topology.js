@@ -88,6 +88,22 @@
       function kindBadge(kind) {
         return ui.badge(kind === 'external' ? 'warn' : 'ok', kind || '?');
       }
+      // What an edge carries: the dominant service name (or port/proto when the
+      // port has no well-known name), with an OT badge when any of its service
+      // ports is an industrial-control protocol — a PLC<->SCADA edge should read
+      // "Modbus/TCP" and stand out from office traffic.
+      function serviceText(e) {
+        var list = (e && e.services) || [];
+        if (!list.length) return '\u2014';
+        return list.map(function (s) { return s.name || (s.port + '/' + (s.proto || '?')); }).join(', ');
+      }
+      function serviceCell(e) {
+        var text = ui.meta(serviceText(e));
+        if (!e || !e.ot) return text;
+        var badge = ui.badge('info', t('topo.ot.badge'));
+        badge.title = t('topo.ot.hint');
+        return el('span', {}, badge, ' ', text);
+      }
 
       // ---- Toolbar -----------------------------------------------------------
       var siteSel = null;
@@ -319,6 +335,7 @@
         var depRows = sortRows((data.edges || []).slice(0, 100), 'deps', {
           from: function (e) { return label(e.from).toLowerCase(); },
           to: function (e) { return label(e.to).toLowerCase(); },
+          service: function (e) { return (e.ot ? '0' : '1') + serviceText(e).toLowerCase(); },
           bytes: function (e) { return Number(e.bytes) || 0; },
           flows: function (e) { return Number(e.flows) || 0; },
         });
@@ -338,6 +355,7 @@
               columns: [
                 { key: 'from', label: t('topo.col.from'), width: '190px', sortable: true },
                 { key: 'to', label: t('topo.col.to'), width: '240px', sortable: true },
+                { key: 'service', label: t('topo.col.service'), width: '200px', sortable: true },
                 { key: 'peer', label: t('topo.col.peer'), width: '110px' },
                 { key: 'bytes', label: t('topo.col.bytes'), width: '120px', sortable: true, num: true },
                 { key: 'flows', label: t('topo.col.flows'), width: '100px', sortable: true, num: true },
@@ -348,6 +366,7 @@
                   cells: {
                     from: ui.meta(label(e.from)),
                     to: ui.meta(label(e.to)),
+                    service: serviceCell(e),
                     peer: kindBadge(byId[e.to] && byId[e.to].kind),
                     bytes: deps.fmtBytes(e.bytes),
                     flows: String(e.flows),

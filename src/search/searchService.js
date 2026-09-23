@@ -548,7 +548,10 @@ function createSearchService({
 
   // 12. Username.
   //
-  // NOT IMPLEMENTED — and deliberately left empty rather than approximated.
+  // NOT IMPLEMENTED — and deliberately NOT REGISTERED rather than approximated.
+  // There is no resolver for the `user` family below; the family stays in the
+  // classifier so search() reports it in `unresolved` instead of running a stub
+  // that pretends to have looked.
   //
   // The Fase 0 audit found no end-user identity source anywhere in this product:
   // `users` holds dashboard STAFF logins (admin/operator/viewer), and LDAP/OIDC/
@@ -567,10 +570,8 @@ function createSearchService({
   //   3. AD/LDAP computer objects (user → assigned workstation name)
   // Whichever lands, it should produce hits keyed to the existing types (host/
   // ip/mac) rather than a new one — the technician wants the DEVICE, and the
-  // username is just the way in.
-  async function resolveUser() {
-    return [];
-  }
+  // username is just the way in. Register it in RESOLVERS then; until that
+  // exists the `user` family is reported as unresolved.
 
   // --- fan-out ---------------------------------------------------------------
 
@@ -587,14 +588,18 @@ function createSearchService({
     { family: 'ticket', name: 'ticketRef', run: resolveTicketRef },
     { family: 'ticket', name: 'itsm', run: resolveItsm },
     { family: 'ipam', name: 'ipam', run: resolveIpam },
-    { family: 'user', name: 'user', run: resolveUser },
+    // No `user` resolver — see "12. Username" above.
   ];
+  // A family the classifier asks for that no resolver serves has no data source
+  // wired: named in `unresolved`, never silently answered with zero hits.
+  const unresolvedFamilies = (families) => [...new Set(families)]
+    .filter((f) => !RESOLVERS.some((r) => r.family === f));
 
   // Runs the search. Returns
   //   { query, hits, total, truncated, partial, failedSources, unresolved }
   //
-  // `unresolved` names the resolver families that exist but have no data source
-  // wired (today: `user`). Surfacing it beats silently returning nothing — the
+  // `unresolved` names the families the query was classified into that no
+  // resolver serves, because no data source exists (today: `user`). Surfacing it beats silently returning nothing — the
   // technician learns the field cannot answer that question, instead of
   // concluding their search term was wrong.
   async function search(rawQuery, { limit = DEFAULT_LIMIT, now = new Date() } = {}) {
@@ -622,7 +627,7 @@ function createSearchService({
     });
 
     const ordered = dedupe(hits).sort(compareHits);
-    const unresolved = ctx.families.includes('user') ? ['user'] : [];
+    const unresolved = unresolvedFamilies(ctx.families);
 
     return {
       query: ctx.q,

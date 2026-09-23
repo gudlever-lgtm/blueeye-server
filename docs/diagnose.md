@@ -146,11 +146,11 @@ one file: `FACT_SCHEMA` (every path a playbook may name) and `buildFacts()`
 | --- | --- |
 | `ping.*`, `ping.size_<N>.*` | the ping probe, including the don't-fragment size sweep |
 | `path_mtu.*` | the path_mtu probe |
-| `traceroute.*` | hop count, branch count (ECMP), sustained loss, worst hop |
+| `traceroute.*` | hop count, branch count (ECMP), sustained loss, worst hop, a lost ECMP member (`lost_member_*`) |
 | `dns.*`, `http.*`, `tcp.*` | the other probes |
 | `iface.*` | `computeInterfaceHealth()` for the session's agent, including `late_coll_per_sec` (EtherLike-MIB, SNMP only) |
 | `reverse.*` | the same measurements taken from the FAR end |
-| `path_compare.*` | whether the two directions traverse the same hops |
+| `path_compare.*` | whether the two directions traverse the same routers (`same_hops`, plus `matched_hops`, `match_ratio`, `method`) |
 
 **A value is present only when it was measured.** Anything else is left out
 rather than defaulted to zero — a zero would be a lie that reads as a verdict.
@@ -162,6 +162,37 @@ Three judgements worth knowing about:
   does *not* continue is the router rate-limiting its own ICMP replies while
   forwarding everything else perfectly. That is the single most common way a
   traceroute is misread, and it is encoded here rather than left to the reader.
+- **ECMP comes from the path, not from one run.** `branch_count` is
+  `ecmpAnalysis()` (`src/analysis/pathGraph.js`) over the session's trace AND
+  the last 24 h / 20 runs of the same probe (`probeResultsRepo.recentRuns`),
+  counting every member seen at one TTL — across runs, and within a run when
+  the agent reports `hop.ips`. It used to count addresses inside ONE result,
+  which was always 1 and ruled ECMP out on every path. One address per hop from
+  an older agent with no history is *not* a measured single path, so the fact
+  is then absent (inconclusive), not 1. A **lost member** is a hop that
+  answered from N addresses (each seen ≥ 2 times) in the earlier runs and now
+  answers from fewer, *while* end-to-end or worst-hop loss rose ≥ 5 points or
+  more hops timed out; the missing address is the evidence
+  (`lost_member_ips`, `lost_member_explain`) and it confirms
+  `ecmp_member_link`. Limits: a hop probed fewer times than it has members is
+  not judged, and a Paris-style trace pins one member by design.
+- **The reverse test probes BACK to the origin agent.** With a peer agent, the
+  `reverse` rows run on the peer against the origin's own address (from its
+  `capabilities.ips`, chosen by `src/diagnose/reverseTarget.js`: same family as
+  the target, same private/public scope, never a container bridge, longest
+  prefix shared with the peer — and the choice is written into the test's
+  `why`). With no known origin address the reverse tests are listed in the
+  plan's `skipped` with the reason instead of being aimed at the forward
+  target, which measured a second forward path and never the return path.
+- **`path_compare` survives ingress-interface addressing.** Routers answer a
+  traceroute from the interface the probe arrived on, so a symmetric path
+  shows different addresses in each direction. The reverse trace is reversed,
+  the endpoints dropped, and hops matched in order (LCS) by the same address or
+  the same /24 (IPv4) / /64 (IPv6) — the two ends of a router-to-router link
+  share a small subnet. ≥ 60 % of the shorter path lining up is "the same
+  path". A provider numbering links from one shared /24 pool over-matches;
+  links numbered from unrelated subnets under-match. The comparison assumes
+  the forward target sits at or next to the far-end agent.
 - **Virtual interfaces are excluded.** A docker bridge with no carrier would
   otherwise confirm `physical_errors` on every container host in the fleet.
 - **`busy_port_count`** counts ports busy *at once*. One busy port is a

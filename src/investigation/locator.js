@@ -163,45 +163,61 @@ function createLocator({ agentsRepo, findingStore, locationsRepo = null, flowsRe
   }
 
   // Step 1: Resolve which agents belong to the locationRef.
+  //
+  // Returns { agents, unresolvable } — `unresolvable` is a sentence saying WHY
+  // the reference cannot be mapped to any agent, or null. A reference that
+  // cannot be resolved yields NO agents, never "all of them": investigating the
+  // whole fleet under the name of one subnet or one interface would put a
+  // confident verdict on a place nobody measured.
   async function resolveAgents(locationRef) {
     const all = await agentsRepo.findAll();
-    if (!Array.isArray(all) || all.length === 0) return [];
+    if (!Array.isArray(all) || all.length === 0) return { agents: [], unresolvable: null };
+    const found = (agents) => ({ agents, unresolvable: null });
 
     const { type, value } = locationRef;
     const v = String(value || '').trim();
     const vLower = v.toLowerCase();
 
     if (type === 'agent') {
-      return all.filter(
+      return found(all.filter(
         (a) => String(a.id) === v || (a.hostname || '').toLowerCase() === vLower
-      );
+      ));
     }
 
     if (type === 'site') {
-      return all.filter(
+      return found(all.filter(
         (a) => String(a.location_id) === v ||
           (a.location_name || '').toLowerCase() === vLower
-      );
+      ));
     }
 
     if (type === 'subnet') {
-      // Best-effort: match via agent meta JSON or hostname. Falls back to all
-      // agents when no match can be established (no IPAM; subnet→agent mapping
-      // is not persisted).
+      // Best-effort: match via agent meta JSON or hostname. There is no IPAM
+      // and the subnet→agent mapping is not persisted, so no match means the
+      // subnet cannot be placed — said so, rather than widened to every agent.
       const byMeta = all.filter((a) => {
         const meta = a.meta && typeof a.meta === 'object' ? JSON.stringify(a.meta) : '';
         return meta.includes(v) || (a.hostname || '').toLowerCase().includes(vLower);
       });
-      return byMeta.length > 0 ? byMeta : all;
+      if (byMeta.length > 0) return found(byMeta);
+      return {
+        agents: [],
+        unresolvable: `No agent could be matched to subnet "${v}": no agent reports an address in it, `
+          + 'and subnet-to-agent mapping is not stored on this server (no IPAM source).',
+      };
     }
 
     if (type === 'interface') {
-      // Interfaces are ephemeral (not persisted). Return all agents and note the
-      // limitation in the explanation; the caller sets low confidence.
-      return all;
+      // Interfaces are ephemeral (computed from results, never persisted), so
+      // an interface name alone does not say which agent owns it.
+      return {
+        agents: [],
+        unresolvable: `Interface "${v}" cannot be mapped to an agent: interfaces are not stored `
+          + 'on this server, so an interface name alone does not identify where it is.',
+      };
     }
 
-    return [];
+    return found([]);
   }
 
   // Step 2: Resolve neighbor agents (all agents NOT in the local set).
@@ -226,7 +242,7 @@ function createLocator({ agentsRepo, findingStore, locationsRepo = null, flowsRe
   }
 
   // Step 4: Classify and build InvestigationResult.
-  function classify({ localAgents, neighborAgents, localFindings, neighborFindings, locationRef, from, to }) {
+  function classify({ localAgents, neighborAgents, localFindings, neighborFindings, locationRef, from, to, unresolvable = null }) {
     const id = crypto.randomUUID();
     const window = { from: from.toISOString(), to: to.toISOString() };
     const windowMinutes = Math.round((to - from) / 60000);
@@ -236,6 +252,23 @@ function createLocator({ agentsRepo, findingStore, locationsRepo = null, flowsRe
     const localEvidence = localFindings.slice(0, 15).map((f) => findingToEvidence(f, 'local'));
     // Friendly name for the investigated location (resolves ids → agent/site name).
     const locLabel = locationLabel(locationRef, localAgents);
+
+    // --- INSUFFICIENT_DATA: referencen kan ikke placeres (subnet/interface) ---
+    if (localAgents.length === 0 && unresolvable) {
+      return {
+        id, locationRef, window,
+        classification: 'INSUFFICIENT_DATA',
+        confidence: 0,
+        explanation: `${unresolvable} Cannot determine fault location for a reference that does not resolve to any agent.`,
+        evidence: [metaEvidence(toISO)],
+        suspectedSegment: null,
+        relatedFindingIds: [],
+        workaroundHints: [
+          'Investigate the agent or site that owns this subnet/interface instead.',
+          'Register a BlueEyes agent inside the subnet so its address can be matched.',
+        ],
+      };
+    }
 
     // --- INSUFFICIENT_DATA: ingen agenter fundet ---
     if (localAgents.length === 0) {
@@ -460,9 +493,12 @@ function createLocator({ agentsRepo, findingStore, locationsRepo = null, flowsRe
     const to = now;
 
     // Steps 1-2: topology resolution
-    const localAgents = await resolveAgents(locationRef);
+    const { agents: localAgents, unresolvable } = await resolveAgents(locationRef);
     const localAgentIds = localAgents.map((a) => String(a.id));
-    const neighborAgents = await resolveNeighbors(localAgentIds);
+    // An unresolvable reference has no "neighbours" either: with no local set,
+    // every agent would count as one, and their findings would be misread as
+    // downstream evidence for a place that was never located.
+    const neighborAgents = unresolvable ? [] : await resolveNeighbors(localAgentIds);
 
     // Cap neighbor lookup to 20 agents to avoid N+1 database explosion.
     const sampledNeighborIds = neighborAgents.slice(0, 20).map((a) => String(a.id));
@@ -482,6 +518,7 @@ function createLocator({ agentsRepo, findingStore, locationsRepo = null, flowsRe
       locationRef,
       from,
       to,
+      unresolvable,
     });
   }
 

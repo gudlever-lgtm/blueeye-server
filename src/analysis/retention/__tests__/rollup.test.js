@@ -98,3 +98,73 @@ test('rollupMetrics extracts metrics from payloads and discards raw results', as
   assert.equal(cpu[4], 50); // min
   assert.equal(cpu[5], 70); // max
 });
+
+// ---- internal (LAN/OT) flows -------------------------------------------------
+
+// The same fake, plus the internal dimension: raw rows flagged internal, and a
+// store for flow_internal_rollup.
+function fakeRepoWithInternal(init = {}) {
+  const repo = fakeRepo(init);
+  repo.state.internalRollups = [];
+  repo.getRawInternalFlowsBatch = async (beforeTs, afterId, limit) =>
+    repo.state.rawFlows
+      .filter((r) => r.internal && r.ts < beforeTs && r.id > afterId)
+      .sort((a, b) => a.id - b.id)
+      .slice(0, limit);
+  repo.insertInternalFlowRollups = async (rows) => { for (const r of rows) repo.state.internalRollups.push(r); return rows.length; };
+  return repo;
+}
+
+function lanFlow(id, bytes, over = {}) {
+  return {
+    id, agent_id: 9, ts: new Date('2026-01-01T00:30:00Z'), internal: 1, country: null,
+    src_ip: '10.1.1.9', dst_ip: '10.1.1.5', proto: 'TCP', src_port: 51000, dst_port: 502,
+    bytes, packets: 1, flows: 1, ...over,
+  };
+}
+
+test('internal flows are rolled up per (agent, hour, src, dst, proto, service port) before the raw delete', async () => {
+  const repo = fakeRepoWithInternal({ rawFlows: [
+    lanFlow(1, 100),
+    lanFlow(2, 200, { ts: new Date('2026-01-01T00:50:00Z') }),
+    // The PLC's reply: ports reversed, same conversation, same service row.
+    lanFlow(3, 50, { src_ip: '10.1.1.5', dst_ip: '10.1.1.9', src_port: 502, dst_port: 51000 }),
+  ] });
+  const res = await createRollup({ repo, config: cfg }).rollupFlows(BEFORE);
+  assert.equal(res.internalBuckets, 2);
+  assert.equal(res.rawDeleted, 3);
+  assert.equal(repo.state.rawFlows.length, 0);
+  // columns: [bucket, agent_id, src_ip, dst_ip, proto, service_port, bytes, packets, flow_count]
+  const poll = repo.state.internalRollups.find((r) => r[2] === '10.1.1.9');
+  assert.equal(poll[0].toISOString(), BUCKET.toISOString());
+  assert.deepEqual(poll.slice(1), [9, '10.1.1.9', '10.1.1.5', 'tcp', 502, 300, 2, 2]);
+  const reply = repo.state.internalRollups.find((r) => r[2] === '10.1.1.5');
+  assert.equal(reply[5], 502); // the service end, not the ephemeral 51000
+});
+
+test('the internal rollup is bounded: top-N per agent-hour, the rest folded into one overflow row', async () => {
+  const flows = [];
+  for (let i = 1; i <= 5; i += 1) flows.push(lanFlow(i, i * 100, { dst_ip: `10.1.1.${i}` }));
+  const repo = fakeRepoWithInternal({ rawFlows: flows });
+  await createRollup({ repo, config: { ...cfg, internalRollupTopN: 2 } }).rollupFlows(BEFORE);
+  const rows = repo.state.internalRollups;
+  assert.equal(rows.length, 3); // 2 kept + 1 overflow
+  assert.deepEqual(rows.slice(0, 2).map((r) => r[3]), ['10.1.1.5', '10.1.1.4']); // heaviest kept
+  const overflow = rows[2];
+  assert.deepEqual(overflow.slice(2, 6), ['*', '*', '', 0]);
+  assert.equal(overflow[6], 100 + 200 + 300); // totals still add up
+});
+
+test('raw flows are deleted even when none were geolocated (a LAN-only site used to never purge)', async () => {
+  const repo = fakeRepoWithInternal({ rawFlows: [lanFlow(1, 10), { ...lanFlow(2, 10), internal: 0 }] });
+  const res = await createRollup({ repo, config: cfg }).rollupFlows(BEFORE);
+  assert.equal(res.buckets, 0);
+  assert.equal(res.rawDeleted, 2);
+});
+
+test('a repo without the internal dimension still rolls up external flows as before', async () => {
+  const repo = fakeRepo({ rawFlows: [flow(1, 100)] });
+  const res = await createRollup({ repo, config: cfg }).rollupFlows(BEFORE);
+  assert.equal(res.buckets, 1);
+  assert.equal(res.internalBuckets, 0);
+});

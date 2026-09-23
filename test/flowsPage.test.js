@@ -252,6 +252,24 @@ test('bidirectional mode calls its own endpoint and says the split', async (t) =
   assert.equal(new window.URLSearchParams(window.location.search).get('mode'), 'bidi');
 });
 
+test('the bidirectional banner is a traffic-direction split, never a routing verdict', async (t) => {
+  // The old wording — "Asymmetric traffic … replies may be arriving on a
+  // different path" — fired on every download-heavy host and claimed a routing
+  // fault a byte ratio cannot see. The fixture above is the OLD server shape
+  // (`asymmetry` only), which must keep working; this one is the new field.
+  const bidi = { ...BIDI, directionBalance: { ratio: 0.9, imbalanced: true, dominant: 'in', totalBytes: 100, inBytes: 90, outBytes: 10 } };
+  delete bidi.asymmetry;
+  const { doc, window } = boot({ t, routes: SESSION({ 'GET /api/flows/bidirectional': bidi }) });
+  await settle();
+  tabs(doc)[1].dispatchEvent(new window.Event('click', { bubbles: true }));
+  await settle();
+  const note = doc.querySelector('#view .inline-note.is-warn');
+  assert.ok(note, 'the imbalance note is shown');
+  assert.match(note.textContent, /90% ingress/);
+  assert.match(note.textContent, /direction imbalance/i);
+  assert.doesNotMatch(note.textContent, /asymmetric|different path/i);
+});
+
 test('map mode calls its own endpoint, and the scope control replaces the peer filter', async (t) => {
   const { doc, window, log } = boot({ t, routes: SESSION() });
   await settle();

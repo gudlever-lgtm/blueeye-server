@@ -79,7 +79,7 @@
         }
 
         var cidrs = el('textarea', { rows: '4', placeholder: '10.0.0.0/24\n192.168.1.0/24' }, (cfg.cidrs || []).join('\n'));
-        var ports = el('input', { type: 'text', value: (cfg.ports || []).join(', '), placeholder: '22, 80, 161, 443, 3389' });
+        var ports = el('input', { type: 'text', value: (cfg.ports || []).join(', '), placeholder: '22, 80, 102, 161, 443, 502, 2404, 3389, 4840, 20000, 44818' });
         var rate = el('input', { type: 'number', min: '1', max: '10000', value: String(cfg.rateLimit == null ? 50 : cfg.rateLimit) });
         var cap = el('input', { type: 'number', min: '1', max: '16777216', value: String(cfg.addressCap == null ? 65536 : cfg.addressCap) });
         var interval = el('input', { type: 'number', min: '1', max: '10080', value: String(cfg.intervalMinutes == null ? 360 : cfg.intervalMinutes) });

@@ -72,6 +72,29 @@
       return v >= 1 ? 'crit' : 'warn';
     }
 
+    // One error rate as a cell: a dash when the device could not report it,
+    // coloured when it is anything but zero.
+    function rateCell(v) {
+      if (v == null) return '–';
+      return el('span', { class: errorTone(v) ? 'num-' + errorTone(v) : '' }, fmtRate(v, '/s'));
+    }
+
+    // Duplex as the device reported it (EtherLike-MIB). HALF is the one worth a
+    // colour, and it turns critical when late collisions or FCS errors are
+    // rising with it — that combination is a duplex mismatch, the fault this
+    // column exists to make visible. NULL is a dash: the device did not answer,
+    // which is not the same as answering "unknown".
+    function duplexCell(c) {
+      if (!c || c.duplex == null) return '–';
+      if (c.duplex === 'half') {
+        var mismatch = (c.lateCollPps || 0) > 0 || (c.fcsPps || 0) > 0;
+        var badge = ui.badge(mismatch ? 'crit' : 'warn', t('snmpdev.duplex.half'));
+        if (mismatch) badge.setAttribute('title', t('snmpdev.duplex.mismatch'));
+        return badge;
+      }
+      return ui.badge(c.duplex === 'full' ? 'ok' : 'neutral', t('snmpdev.duplex.' + c.duplex));
+    }
+
     function view(deviceId) {
       var page = ui.page();
       var host = el('div', {});
@@ -128,6 +151,12 @@
           },
         ]));
 
+        // What the switch says it is — model, OS, firmware — so nobody has to
+        // log in to it to find out which box this page is about.
+        if (device.sysDescr) {
+          body.append(el('p', { class: 'meta' }, t('snmpdev.sysDescr', { descr: device.sysDescr })));
+        }
+
         if (device.lastError) {
           body.append(ui.inlineNote(t('snmpdev.lastError', { error: device.lastError }), 'crit'));
         }
@@ -149,6 +178,12 @@
               { key: 'util', label: t('snmpdev.col.util'), width: '80px', num: true },
               { key: 'errors', label: t('snmpdev.col.errors'), width: '90px', num: true },
               { key: 'discards', label: t('snmpdev.col.discards'), width: '90px', num: true },
+              // The EtherLike columns. Errors and discards say a port is
+              // broken; these say HOW — FCS is the cable or the optic, late
+              // collisions with half duplex is a duplex mismatch.
+              { key: 'fcs', label: t('snmpdev.col.fcs'), width: '80px', num: true },
+              { key: 'lateColl', label: t('snmpdev.col.lateColl'), width: '90px', num: true },
+              { key: 'duplex', label: t('snmpdev.col.duplex'), width: '80px' },
               { key: 'alias', label: t('snmpdev.col.alias') },
             ],
             rows: ports.map(function (p) {
@@ -176,6 +211,9 @@
                     : el('span', { class: errorTone(errs) ? 'num-' + errorTone(errs) : '' }, fmtRate(errs, '/s')),
                   discards: disc == null ? '–'
                     : el('span', { class: errorTone(disc) ? 'num-' + errorTone(disc) : '' }, fmtRate(disc, '/s')),
+                  fcs: rateCell(c.fcsPps),
+                  lateColl: rateCell(c.lateCollPps),
+                  duplex: duplexCell(c),
                   alias: p.ifAlias || '',
                 },
                 raw: p,
@@ -193,6 +231,28 @@
         }));
 
         body.append(chartHost);
+
+        // The VLAN names the switch reported. Only when there are any: a
+        // switch without Q-BRIDGE names is common, and an empty panel for it
+        // would be noise on a page that is about ports.
+        var vlans = data.vlans || [];
+        if (vlans.length) {
+          body.append(ui.panel({
+            title: t('snmpdev.vlans.title'),
+            note: t('snmpdev.vlans.note'),
+            children: [ui.dataTable({
+              dense: true,
+              columns: [
+                { key: 'vlan', label: t('snmpdev.col.vlan'), width: '90px', num: true },
+                { key: 'name', label: t('snmpdev.col.vlanName') },
+              ],
+              rows: vlans.map(function (v) {
+                return { cells: { vlan: String(v.vlan), name: v.name } };
+              }),
+            })],
+          }));
+        }
+
         host.replaceChildren(body);
 
         function openChart(port, minutes) {

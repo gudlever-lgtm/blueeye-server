@@ -178,13 +178,20 @@ function createBaselineStore({
   // True when the most recent FLAT_RUN values are identical for any of a
   // host/metric's buckets — a sensor/agent stall indicator (the metric stopped
   // changing). Checking per bucket keeps the values time-ordered.
-  function isFlat(hostId, metric) {
+  //
+  // `value` (optional) is the sample being judged. When it is given, the run
+  // only counts as flat if that sample CONTINUES it: a value that differs from
+  // the run is the metric changing, which is the opposite of a stall. Looking
+  // at history alone called the first real error on a zero counter a flatline
+  // and hid it for one whole interval.
+  function isFlat(hostId, metric, value) {
     for (const [k, win] of windows) {
       const [h, m] = k.split('|');
       if (h !== hostId || m !== metric) continue;
       if (win.length >= FLAT_RUN) {
         const tail = win.slice(-FLAT_RUN);
-        if (tail.every((v) => v === tail[0])) return true;
+        if (!tail.every((v) => v === tail[0])) continue;
+        if (value === undefined || value === tail[0]) return true;
       }
     }
     return false;

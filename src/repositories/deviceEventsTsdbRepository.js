@@ -128,11 +128,12 @@ function createDeviceEventsTsdbRepository(tsdb) {
   // Builds the shared WHERE for the reads below. The time bound is never
   // optional: an unbounded scan of a hypertable is the one query shape the
   // storage split forbids (see the closing note in 001_init.sql).
-  function buildFilter({ maxSeverity, deviceId, agentId, transport, eventType, q }, params) {
+  function buildFilter({ maxSeverity, deviceId, agentId, sourceIp, transport, eventType, q }, params) {
     const where = [];
     if (maxSeverity != null) { params.push(maxSeverity); where.push(`severity <= $${params.length}`); }
     if (deviceId != null) { params.push(deviceId); where.push(`device_id = $${params.length}`); }
     if (agentId != null) { params.push(agentId); where.push(`agent_id = $${params.length}`); }
+    if (sourceIp) { params.push(sourceIp); where.push(`source_ip = $${params.length}`); }
     if (transport) { params.push(transport); where.push(`transport = $${params.length}`); }
     if (eventType) { params.push(eventType); where.push(`event_type = $${params.length}`); }
     if (q) {
@@ -145,12 +146,12 @@ function createDeviceEventsTsdbRepository(tsdb) {
 
   async function list({
     minutes = 120, limit = 100, offset = 0,
-    maxSeverity = null, deviceId = null, agentId = null,
+    maxSeverity = null, deviceId = null, agentId = null, sourceIp = null,
     transport = null, eventType = null, q = null,
   } = {}) {
     const params = [minutes];
     const where = ['ts >= now() - make_interval(mins => $1::int)'];
-    where.push(...buildFilter({ maxSeverity, deviceId, agentId, transport, eventType, q }, params));
+    where.push(...buildFilter({ maxSeverity, deviceId, agentId, sourceIp, transport, eventType, q }, params));
     params.push(limit);
     const limitIdx = params.length;
     params.push(offset);

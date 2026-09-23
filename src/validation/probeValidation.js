@@ -158,6 +158,45 @@ function rdnsBlock(r) {
 
 const str = (v, max) => (v == null || v === '' ? null : String(v).slice(0, max));
 
+// How a failed TCP connect ended, as the agent classifies it. Anything else is
+// dropped rather than stored: the finding text switches on this value, and a
+// word it does not know would read as "no classification" while looking like
+// data.
+const TCP_FAILURES = ['refused', 'timeout', 'unreachable', 'error'];
+// Every responding address at one TTL (ECMP members answering within one run).
+// Bounded: a hop answering from more addresses than this is not a load balancer
+// any operator can act on, and the list is stored on every hop of every run.
+const MAX_HOP_IPS = 8;
+
+// A resolver/socket errno as the platform names it (ENOTFOUND, ETIMEOUT,
+// ESERVFAIL, ECONNREFUSED, EAI_AGAIN …). Only the errno shape is accepted —
+// this string ends up in a finding sentence, so free text has no business here.
+function errorCodeOf(v) {
+  if (v == null || v === '') return null;
+  const s = String(v).trim().toUpperCase();
+  return /^[A-Z0-9_]{1,32}$/.test(s) ? s : null;
+}
+
+function tcpFailureOf(v) {
+  const s = v == null ? '' : String(v).toLowerCase();
+  return TCP_FAILURES.includes(s) ? s : null;
+}
+
+// The distinct responding addresses on one hop, first == the hop's own `ip`
+// (null for a silent hop). Readers that just want the members use
+// hopMembers() in src/analysis/pathGraph.js, which falls back to `ip`.
+function hopIpsOf(h, ip) {
+  const out = [];
+  if (ip) out.push(ip);
+  for (const raw of Array.isArray(h && h.ips) ? h.ips : []) {
+    if (raw == null || raw === '') continue;
+    const s = String(raw).slice(0, 45);
+    if (!out.includes(s)) out.push(s);
+    if (out.length >= MAX_HOP_IPS) break;
+  }
+  return out.length ? out : null;
+}
+
 // Normalizes an http-probe target to a canonical http(s) URL string (defaulting
 // a bare host to https), or null when it isn't a valid http(s) URL. The URL is
 // passed to the agent's `fetch`, never a shell, so the HOST_RE CLI-flag guard
@@ -216,22 +255,35 @@ function validateProbeResults(body) {
       // MTR-style hops carry per-hop loss/jitter and the sent/recv probe counts
       // (the path-visualisation overlay). Older agents send only { hop, ip, rttMs };
       // the extra fields normalise to null and are simply absent on the graph.
-      hops = r.hops.map((h) => ({
-        hop: numOrNull(h && h.hop),
-        ip: h && h.ip ? String(h.ip).slice(0, 45) : null,
-        rttMs: numOrNull(h && h.rttMs),
-        minMs: numOrNull(h && h.minMs),
-        maxMs: numOrNull(h && h.maxMs),
-        jitterMs: numOrNull(h && h.jitterMs),
-        lossPct: numOrNull(h && h.lossPct),
-        sent: intOrNull(h && h.sent),
-        recv: intOrNull(h && h.recv),
-        // path_mtu adds the largest packet that reached this hop and what that
-        // means. Null on a traceroute row, exactly as the latency fields above
-        // are null on a path_mtu one — one hop shape, two kinds of measurement.
-        maxMtu: sizeOrNull(h && (h.max_mtu ?? h.maxMtu)),
-        status: mtuStatusOf(h && h.status),
-      }));
+      hops = r.hops.map((h) => {
+        // An agent that sends `ips` but no `ip` still names the hop: the first
+        // member is its representative, exactly as the agent defines it.
+        const ip0 = h && h.ip ? String(h.ip).slice(0, 45)
+          : (h && Array.isArray(h.ips) && h.ips[0] ? String(h.ips[0]).slice(0, 45) : null);
+        return {
+          hop: numOrNull(h && h.hop),
+          ip: ip0,
+          // Every address that answered at this TTL in THIS run. Two members
+          // of an ECMP group answering one run is a fork the path graph and the
+          // diagnose rules can see without waiting for a second run. Null when
+          // the agent did not send the list (older agents): "one address was
+          // reported" and "one address answered" are different claims, and
+          // only the second may rule ECMP out.
+          ips: h && Array.isArray(h.ips) ? hopIpsOf(h, ip0) : null,
+          rttMs: numOrNull(h && h.rttMs),
+          minMs: numOrNull(h && h.minMs),
+          maxMs: numOrNull(h && h.maxMs),
+          jitterMs: numOrNull(h && h.jitterMs),
+          lossPct: numOrNull(h && h.lossPct),
+          sent: intOrNull(h && h.sent),
+          recv: intOrNull(h && h.recv),
+          // path_mtu adds the largest packet that reached this hop and what that
+          // means. Null on a traceroute row, exactly as the latency fields above
+          // are null on a path_mtu one — one hop shape, two kinds of measurement.
+          maxMtu: sizeOrNull(h && (h.max_mtu ?? h.maxMtu)),
+          status: mtuStatusOf(h && h.status),
+        };
+      });
     }
     // The ping size sweep. The row's own rtt/loss columns describe the SMALLEST
     // size, so this is the only place the size dependence lives.
@@ -286,6 +338,12 @@ function validateProbeResults(body) {
       // (separate from the stored `detail`) so ingestion can audit a genuine
       // "agent cannot perform this task" without flagging every host-down probe.
       execError: r.error != null ? String(r.error).slice(0, 255) : null,
+      // WHY a dns/tcp probe failed (migration 121). Optional: older agents omit
+      // them and the finding falls back to "not responding". `failure` is the
+      // TCP probe's own classification, so only a tcp row may carry it.
+      errorCode: (type === 'dns' || type === 'tcp') ? errorCodeOf(r.errorCode ?? r.error_code) : null,
+      failure: type === 'tcp' ? tcpFailureOf(r.failure) : null,
+      resolver: type === 'dns' && isSafeHost(r.resolver) ? String(r.resolver).trim().slice(0, 64) : null,
     });
   }
   return { value: { results: out } };
@@ -534,4 +592,4 @@ function validateProbeSpec(body) {
   return { value: spec };
 }
 
-module.exports = { validateProbeResults, validateProbeSpec, PROBE_TYPES, MAX_PING_SIZES, MAX_PAYLOAD_BYTES, MTU_HOP_STATUSES, MAX_PACKET_SIZE };
+module.exports = { validateProbeResults, validateProbeSpec, PROBE_TYPES, MAX_PING_SIZES, MAX_PAYLOAD_BYTES, MTU_HOP_STATUSES, MAX_PACKET_SIZE, TCP_FAILURES, MAX_HOP_IPS };

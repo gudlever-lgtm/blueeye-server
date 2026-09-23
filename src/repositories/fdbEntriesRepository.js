@@ -10,6 +10,16 @@
 const BASE_COLUMNS = `id, device_id, mac, vlan, bridge_port, prev_bridge_port,
   move_count, last_move_at, if_index, if_name,
   status, port_mac_count, first_seen, last_seen`;
+const PREFIXED_COLUMNS = BASE_COLUMNS.split(',').map((c) => `f.${c.trim()}`).join(', ');
+
+// `last_move_at` is a DATETIME without fractions, and the sweep's own rows are
+// found again by comparing against it — so the sweep's timestamp is cut to the
+// whole second BEFORE it is written. A Date with milliseconds would be rounded
+// by MySQL on the way in and then never compare equal on the way out.
+function wholeSecond(at) {
+  const d = at instanceof Date ? at : new Date(at);
+  return new Date(Math.floor(d.getTime() / 1000) * 1000);
+}
 
 function toIso(v) {
   if (v == null) return null;
@@ -37,6 +47,10 @@ function mapRow(row) {
     portMacCount: Number(row.port_mac_count),
     firstSeen: toIso(row.first_seen),
     lastSeen: toIso(row.last_seen),
+    // How many times it moved INSIDE the window the caller asked about —
+    // present only on movingMacs(). Deliberately not `moveCount`, which is the
+    // all-time figure and was once read as this one (see migration 117).
+    movesInWindow: row.moves_in_window == null ? undefined : Number(row.moves_in_window),
     // Joined columns, present only on the reads that ask for them.
     deviceName: row.device_name ?? undefined,
     deviceHost: row.device_host ?? undefined,
@@ -60,6 +74,7 @@ function createFdbEntriesRepository(db) {
   async function upsertMany(deviceId, entries, { at = new Date() } = {}) {
     const rows = Array.isArray(entries) ? entries : [];
     if (!rows.length) return 0;
+    const sweepAt = wholeSecond(at);
 
     const placeholders = [];
     const params = [];
@@ -68,7 +83,7 @@ function createFdbEntriesRepository(db) {
       params.push(
         deviceId, e.mac, e.vlan ?? 0, e.bridgePort,
         e.ifIndex ?? null, e.ifName ?? null,
-        e.status || 'learned', e.portMacCount ?? 1, at, at, at,
+        e.status || 'learned', e.portMacCount ?? 1, at, at, sweepAt,
       );
     }
 
@@ -97,6 +112,20 @@ function createFdbEntriesRepository(db) {
          port_mac_count   = VALUES(port_mac_count),
          last_seen        = VALUES(last_seen)`,
       params,
+    );
+
+    // THE MOVES THIS SWEEP SAW, kept (migration 117). The rows that moved are
+    // exactly the ones whose last_move_at is this sweep AND that have moved at
+    // least once — a MAC seen for the first time also carries this sweep's
+    // time in last_move_at, but with move_count 0, and a first sighting is not
+    // a move. One INSERT … SELECT, so the sweep stays two statements however
+    // many MACs moved.
+    await pool.query(
+      `INSERT INTO fdb_mac_moves (device_id, mac, vlan, from_port, to_port, moved_at)
+       SELECT device_id, mac, vlan, prev_bridge_port, bridge_port, last_move_at
+         FROM fdb_entries
+        WHERE device_id = ? AND last_move_at = ? AND move_count > 0`,
+      [deviceId, sweepAt],
     );
     return Number(res.affectedRows || 0);
   }
@@ -146,18 +175,115 @@ function createFdbEntriesRepository(db) {
     return rows.map(mapRow);
   }
 
-  // The MACs on one device that have moved recently. The ONLY query the loop
-  // detector makes against this table: a count and the two ports, never a
-  // history.
+  // The MACs on one device that moved inside the window, each with HOW MANY
+  // TIMES it moved in that window (`movesInWindow`). The only query the loop
+  // detector makes against this table.
+  //
+  // Counted from fdb_mac_moves rather than read off move_count: move_count is
+  // all-time and reset by nothing, so a MAC re-docked forty times over a month
+  // would otherwise count as forty moves in ten minutes (migration 117).
   async function movingMacs(deviceId, { since, limit = 500 } = {}) {
     const [rows] = await pool.query(
-      `SELECT ${BASE_COLUMNS} FROM fdb_entries
-        WHERE device_id = ? AND last_move_at IS NOT NULL AND last_move_at >= ?
-        ORDER BY move_count DESC, last_move_at DESC
+      `SELECT ${PREFIXED_COLUMNS}, COUNT(m.id) AS moves_in_window
+         FROM fdb_entries f
+         JOIN fdb_mac_moves m
+           ON m.device_id = f.device_id AND m.vlan = f.vlan AND m.mac = f.mac AND m.moved_at >= ?
+        WHERE f.device_id = ?
+        GROUP BY f.id
+        ORDER BY moves_in_window DESC, f.last_move_at DESC
         LIMIT ?`,
-      [deviceId, since, limit],
+      [since, deviceId, limit],
     );
     return rows.map(mapRow);
+  }
+
+  // The recorded moves are history with their own, SHORT retention: they answer
+  // a question about the last few minutes and exist for nothing else.
+  async function purgeMovesBefore(cutoff, { batchSize = 5000 } = {}) {
+    let removed = 0;
+    for (;;) {
+      const [res] = await pool.query(
+        'DELETE FROM fdb_mac_moves WHERE moved_at < ? ORDER BY moved_at LIMIT ?',
+        [cutoff, batchSize],
+      );
+      const n = Number(res.affectedRows || 0);
+      removed += n;
+      if (n < batchSize) break;
+    }
+    return removed;
+  }
+
+  // VLAN names off Q-BRIDGE (migration 117). Upserted per sweep and aged out on
+  // last_seen with the forwarding table, so a VLAN removed from the switch
+  // simply stops being refreshed. Not a replace: a sweep whose VLAN walk came
+  // back empty (the table is optional on plenty of switches) must not erase
+  // names an earlier sweep read.
+  async function upsertVlans(deviceId, vlans, { at = new Date() } = {}) {
+    const rows = (Array.isArray(vlans) ? vlans : []).filter((v) => v && Number.isInteger(v.vlan) && v.name);
+    if (!rows.length) return 0;
+    const placeholders = [];
+    const params = [];
+    for (const v of rows) {
+      placeholders.push('(?, ?, ?, ?, ?)');
+      params.push(deviceId, v.vlan, String(v.name).slice(0, 64), at, at);
+    }
+    const [res] = await pool.query(
+      `INSERT INTO device_vlans (device_id, vlan, name, first_seen, last_seen)
+       VALUES ${placeholders.join(', ')}
+       ON DUPLICATE KEY UPDATE
+         name      = VALUES(name),
+         last_seen = VALUES(last_seen)`,
+      params,
+    );
+    return Number(res.affectedRows || 0);
+  }
+
+  async function listVlans(deviceId, { limit = 4096 } = {}) {
+    const [rows] = await pool.query(
+      `SELECT vlan, name, first_seen, last_seen FROM device_vlans
+        WHERE device_id = ? ORDER BY vlan ASC LIMIT ?`,
+      [deviceId, limit],
+    );
+    return rows.map((r) => ({
+      vlan: Number(r.vlan),
+      name: r.name,
+      firstSeen: toIso(r.first_seen),
+      lastSeen: toIso(r.last_seen),
+    }));
+  }
+
+  async function purgeVlansBefore(cutoff) {
+    const [res] = await pool.query('DELETE FROM device_vlans WHERE last_seen < ?', [cutoff]);
+    return Number(res.affectedRows || 0);
+  }
+
+  // Every learned MAC on a port that is operationally UP, fleet-wide — the
+  // coverage report's input for "hosts behind a switch port that nothing
+  // monitors" (src/coverage/). Three columns and the port's MAC count rather
+  // than whole rows: the report only counts, and it reads this once instead
+  // of once per switch.
+  //
+  // Joined on the port NAME, which is the interface's identity here (an
+  // ifIndex moves over a reboot; see deviceInterfacesRepository). A port the
+  // interface table has never seen is left out rather than guessed up.
+  // Bounded: a capped answer is a smaller count, and the caller says so.
+  async function listUpPortMacs({ since, limit = 20000 } = {}) {
+    const lim = Number.isInteger(limit) && limit > 0 && limit <= 200000 ? limit : 20000;
+    const [rows] = await pool.query(
+      `SELECT f.device_id, f.if_name, f.mac, f.port_mac_count
+         FROM fdb_entries f
+         JOIN device_interfaces i ON i.device_id = f.device_id AND i.if_name = f.if_name
+        WHERE i.oper_status = 'up' AND f.status = 'learned' AND f.last_seen >= ?
+        ORDER BY f.device_id ASC, f.if_name ASC, f.mac ASC
+        LIMIT ?`,
+      [since, lim],
+    );
+    return rows.map((r) => ({
+      deviceId: Number(r.device_id),
+      ifName: r.if_name,
+      mac: r.mac,
+      portMacCount: Number(r.port_mac_count) || 1,
+    }));
   }
 
   // The first row inserted for a device has no move to record; this makes the
@@ -192,8 +318,13 @@ function createFdbEntriesRepository(db) {
     listForDevice,
     listForPort,
     movingMacs,
+    listUpPortMacs,
     countForDevice,
     purgeBefore,
+    purgeMovesBefore,
+    upsertVlans,
+    listVlans,
+    purgeVlansBefore,
   };
 }
 

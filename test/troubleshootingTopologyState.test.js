@@ -7,6 +7,7 @@ const {
   buildTopologyView,
   stateFromAgentStatus,
   worseState,
+  aliveFrom,
   NODE_STATE,
 } = require('../src/troubleshooting/overview');
 
@@ -36,17 +37,53 @@ test('worseState ranks down above unreachable above ok', () => {
   assert.equal(worseState(NODE_STATE.OK, NODE_STATE.OK), NODE_STATE.OK);
 });
 
-test('an offline agent is down; its L2-isolated hosts go unreachable_downstream', () => {
-  // 1 (down) - 2 - 3 ; both 2 and 3 are cut off behind 1.
+// This test used to assert the OPPOSITE: that 2 and 3 went
+// unreachable_downstream because the blast radius of offline agent 1 named
+// them. That locked in the mis-attribution the fault-scenario audit found
+// (docs/audit/fejlscenarie-audit.md, scenario 12): the L2 walk is undirected,
+// so a leaf host whose agent stopped "isolated" every healthy neighbour, and
+// the map greyed out agents that were online and reporting. An agent that is
+// reporting is reachable by definition — the radius cannot overrule it.
+test('an offline agent is down; ONLINE neighbours stay ok even when a radius names them', () => {
+  // 1 (down) - 2 - 3 ; 2 and 3 are online, so they are heard, so they are ok.
   const view = buildTopologyView({
     graph: { nodes: [node(1), node(2), node(3)], edges: [l2(1, 2), l2(2, 3)] },
     agents: [agent(1, 'offline'), agent(2, 'online'), agent(3, 'online')],
     blastByNode: new Map([[1, radius([2, 3])]]),
   });
   assert.equal(stateOf(view, 1), NODE_STATE.DOWN);
-  assert.equal(stateOf(view, 2), NODE_STATE.UNREACHABLE_DOWNSTREAM);
-  assert.equal(stateOf(view, 3), NODE_STATE.UNREACHABLE_DOWNSTREAM);
-  assert.deepEqual(view.counts, { ok: 0, down: 1, unreachable_downstream: 2 });
+  assert.equal(stateOf(view, 2), NODE_STATE.OK);
+  assert.equal(stateOf(view, 3), NODE_STATE.OK);
+  assert.deepEqual(view.counts, { ok: 2, down: 1, unreachable_downstream: 0 });
+});
+
+test('only a node we cannot hear goes unreachable_downstream: a never-polled switch behind a down one', () => {
+  // d:1 failed its poll (down); d:2 has never answered (unknown) and sits behind
+  // it; agent 3 behind d:2 is online and stays ok.
+  const view = buildTopologyView({
+    graph: { nodes: [node('d:1', 'sw-a'), node('d:2', 'sw-b'), node(3)], edges: [l2('d:1', 'd:2'), l2('d:2', 3)] },
+    agents: [agent(3, 'online')],
+    devices: [{ id: 1, lastError: 'timeout' }, { id: 2, lastOkAt: null, lastError: null }],
+    blastByNode: new Map([['d:1', radius(['d:2', 3])]]),
+  });
+  assert.equal(stateOf(view, 'd:1'), NODE_STATE.DOWN);
+  assert.equal(stateOf(view, 'd:2'), NODE_STATE.UNREACHABLE_DOWNSTREAM);
+  assert.equal(stateOf(view, 3), NODE_STATE.OK);
+});
+
+test('aliveFrom: online agents and answering switches are alive; offline, unpolled and unknown are not', () => {
+  const alive = aliveFrom(
+    [agent(1, 'online'), agent(2, 'offline'), agent(3, null)],
+    [{ id: 5, lastOkAt: '2026-01-01T00:00:00Z' }, { id: 6, lastError: 'x' }, { id: 7 }],
+  );
+  assert.equal(alive(1), true);
+  assert.equal(alive('1'), true);
+  assert.equal(alive(2), false);
+  assert.equal(alive(3), false);
+  assert.equal(alive('d:5'), true);
+  assert.equal(alive('d:6'), false);
+  assert.equal(alive('d:7'), false);
+  assert.equal(alive(99), false);
 });
 
 test('a node that is itself down is never downgraded to unreachable', () => {

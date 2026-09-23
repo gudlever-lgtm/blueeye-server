@@ -9,6 +9,7 @@ const assert = require('node:assert/strict');
 const { loadCatalog } = require('../src/diagnose/catalog');
 const { buildFacts, sustainedLossFromHop, ifaceFacts, comparePaths } = require('../src/diagnose/facts');
 const { evaluatePlaybook, evaluateSession, fillFix, VERDICTS, REASONS } = require('../src/diagnose/evaluate');
+const { ecmpAnalysis } = require('../src/analysis/pathGraph');
 
 const catalog = loadCatalog();
 const pb = (id) => catalog.get(id);
@@ -32,9 +33,24 @@ const CASES = {
     rule_out: { ping: { loss_pct: 0 }, reverse: { ping: { loss_pct: 0 } } },
     open: { ping: { loss_pct: 0 } },
   },
+  // DELIBERATELY CHANGED. This used to inject `branch_count: 2` by hand, which
+  // is how the suite stayed green while the real evaluation could never produce
+  // anything but 1 (branches were counted inside ONE result, one IP per hop).
+  // The facts are now BUILT from hops the way the route builds them: the
+  // confirm case is a run whose hop 2 answered from two members, the rule-out
+  // case three runs that all agree on one path.
   ecmp_member_link: {
-    confirm: { ping: { loss_pct: 25 }, traceroute: { branch_count: 2 } },
-    rule_out: { traceroute: { branch_count: 1 } },
+    confirm: buildFacts({
+      results: [
+        { type: 'ping', ok: true, lossPct: 25 },
+        { type: 'traceroute', ok: true, hops: [{ hop: 1, ip: '10.0.0.1', ips: ['10.0.0.1'], rttMs: 1 }, { hop: 2, ip: '203.0.113.10', ips: ['203.0.113.10', '203.0.113.20'], rttMs: 8 }] },
+      ],
+    }),
+    rule_out: (() => {
+      const hops = [{ hop: 1, ip: '10.0.0.1', rttMs: 1 }, { hop: 2, ip: '203.0.113.10', rttMs: 8 }];
+      const latest = { type: 'traceroute', ok: true, hops };
+      return buildFacts({ results: [latest], ecmp: { traceroute: ecmpAnalysis([{ hops }, { hops }], { latest }) } });
+    })(),
     open: { ping: { loss_pct: 25 } },
   },
   physical_errors: {
@@ -251,9 +267,113 @@ test('busy_port_count counts ports that are busy AT ONCE — no single interface
 });
 
 test('comparing two paths says whether the question was asked at all', () => {
+  // DELIBERATELY CHANGED from deepEqual: the result now also carries how it
+  // decided (matched_hops, match_ratio, method), so only the verdict is pinned.
   assert.deepEqual(comparePaths({ hops: [{ ip: 'a' }] }, null), { compared: false });
-  assert.deepEqual(comparePaths({ hops: [{ ip: 'a' }, { ip: 'b' }] }, { hops: [{ ip: 'b' }, { ip: 'a' }] }), { compared: true, same_hops: true });
-  assert.deepEqual(comparePaths({ hops: [{ ip: 'a' }, { ip: 'b' }] }, { hops: [{ ip: 'x' }, { ip: 'y' }] }), { compared: true, same_hops: false });
+  assert.equal(comparePaths({ hops: [{ ip: 'a' }, { ip: 'b' }] }, { hops: [{ ip: 'b' }, { ip: 'a' }] }).same_hops, true);
+  const differ = comparePaths({ hops: [{ ip: 'a' }, { ip: 'b' }] }, { hops: [{ ip: 'x' }, { ip: 'y' }] });
+  assert.equal(differ.compared, true);
+  assert.equal(differ.same_hops, false);
+  assert.ok(differ.method.length > 20, 'the comparison says how it decided');
+});
+
+test('a symmetric path seen through ingress interfaces is recognised as the same path', () => {
+  // Origin → R1 → R2 → R3 → far end. Going out, each router answers from the
+  // interface facing the origin; coming back, from the one facing the far end.
+  // Not ONE address is shared, and the old raw-overlap check called it
+  // asymmetric. Each link is a /30, so the two answers per router pair share
+  // a /24 — which is what the comparison now keys on.
+  const forward = { target: '198.51.100.9', hops: [
+    { ip: '10.1.1.1' }, { ip: '192.0.2.2' }, { ip: '192.0.2.6' }, { ip: '198.51.100.9' },
+  ] };
+  const reverse = { target: '10.1.1.50', hops: [
+    { ip: '198.51.100.1' }, { ip: '192.0.2.5' }, { ip: '192.0.2.1' }, { ip: '10.1.1.1' }, { ip: '10.1.1.50' },
+  ] };
+  const r = comparePaths(forward, reverse);
+  assert.equal(r.exact_matches, 1, 'only the LAN gateway is literally shared');
+  assert.equal(r.same_hops, true, JSON.stringify(r));
+  assert.ok(r.match_ratio >= 0.6);
+});
+
+test('a really different middle is still different, even with the same ends', () => {
+  const forward = { target: '198.51.100.9', hops: [
+    { ip: '10.1.1.1' }, { ip: '192.0.2.2' }, { ip: '192.0.2.6' }, { ip: '203.0.113.2' }, { ip: '198.51.100.9' },
+  ] };
+  const reverse = { target: '10.1.1.50', hops: [
+    { ip: '198.51.100.1' }, { ip: '100.64.7.1' }, { ip: '100.64.9.1' }, { ip: '172.20.0.1' }, { ip: '10.1.1.1' }, { ip: '10.1.1.50' },
+  ] };
+  const r = comparePaths(forward, reverse);
+  assert.equal(r.same_hops, false, JSON.stringify(r));
+});
+
+test('asymmetric routing is confirmed from built facts when the return path differs', () => {
+  const facts = buildFacts({
+    results: [{ type: 'traceroute', ok: true, target: '198.51.100.9', hops: [{ hop: 1, ip: '10.1.1.1' }, { hop: 2, ip: '192.0.2.2' }, { hop: 3, ip: '192.0.2.6' }, { hop: 4, ip: '198.51.100.9' }] }],
+    reverse: [{ type: 'traceroute', ok: true, target: '10.1.1.50', hops: [{ hop: 1, ip: '198.51.100.1' }, { hop: 2, ip: '100.64.7.1' }, { hop: 3, ip: '100.64.9.1' }, { hop: 4, ip: '172.20.0.1' }, { hop: 5, ip: '10.1.1.50' }] }],
+  });
+  assert.equal(facts.path_compare.same_hops, false);
+  const r = evaluatePlaybook(pb('asymmetric_routing'), facts);
+  assert.equal(r.verdict, VERDICTS.CONFIRMED);
+  assert.ok(r.decidedBy.includes('paths_differ'));
+});
+
+// --- ECMP: branches from the path, not from one hand-written number ------------
+
+test('an older agent with one address per hop and no history does NOT rule ECMP out', () => {
+  // The bug in one line: this used to produce branch_count 1 → "ruled out".
+  const facts = buildFacts({ results: [
+    { type: 'ping', ok: true, lossPct: 30 },
+    { type: 'traceroute', ok: true, hops: [{ hop: 1, ip: '10.0.0.1', rttMs: 1 }, { hop: 2, ip: '203.0.113.10', rttMs: 8 }] },
+  ] });
+  assert.equal(facts.traceroute.branch_count, undefined, 'one address REPORTED is not one path MEASURED');
+  assert.equal(verdictOf('ecmp_member_link', facts), VERDICTS.INCONCLUSIVE);
+});
+
+test('ECMP members seen across earlier runs count as branches', () => {
+  const hop = (ip) => [{ hop: 1, ip: '10.0.0.1', rttMs: 1 }, { hop: 2, ip, rttMs: 8 }, { hop: 3, ip: '93.184.216.34', rttMs: 12 }];
+  const latest = { id: 9, type: 'traceroute', ok: true, lossPct: 0, hops: hop('203.0.113.10') };
+  const history = [{ id: 8, hops: hop('203.0.113.20'), lossPct: 0 }, { id: 7, hops: hop('203.0.113.10'), lossPct: 0 }];
+  const ecmp = ecmpAnalysis(history, { latest });
+  assert.equal(ecmp.branchCount, 2);
+  const facts = buildFacts({ results: [{ type: 'ping', ok: true, lossPct: 30 }, latest], ecmp: { traceroute: ecmp } });
+  assert.equal(facts.traceroute.branch_count, 2);
+  assert.equal(facts.traceroute.lost_member_count, 0, 'history was there and nothing went missing — a measured zero');
+  assert.equal(verdictOf('ecmp_member_link', facts), VERDICTS.CONFIRMED);
+});
+
+test('a dead ECMP member is named: the missing address is the evidence', () => {
+  const hops = (members, extra = {}) => [
+    { hop: 1, ip: '10.0.0.1', ips: ['10.0.0.1'], rttMs: 1, lossPct: 0, sent: 3 },
+    { hop: 2, ip: members[0], ips: members, rttMs: 8, lossPct: 0, sent: 3, ...extra },
+    { hop: 3, ip: '93.184.216.34', ips: ['93.184.216.34'], rttMs: 12, lossPct: 0, sent: 3 },
+  ];
+  const both = ['203.0.113.10', '203.0.113.20'];
+  const history = [1, 2, 3].map((id) => ({ id, lossPct: 0, hops: hops(both) }));
+  const latest = { id: 4, type: 'traceroute', ok: true, lossPct: 33, hops: hops(['203.0.113.10']) };
+  const ecmp = ecmpAnalysis(history, { latest });
+  assert.equal(ecmp.lostMembers.length, 1);
+  assert.deepEqual(ecmp.lostMembers[0].missingIps, ['203.0.113.20']);
+  assert.equal(ecmp.lostMembers[0].hop, 2);
+  assert.match(ecmp.lostMembers[0].explain, /203\.0\.113\.20 is missing/);
+  assert.match(ecmp.lostMembers[0].explain, /loss rose from 0% to 33%/);
+
+  const facts = buildFacts({ results: [{ type: 'ping', ok: true, lossPct: 5 }, latest], ecmp: { traceroute: ecmp } });
+  assert.equal(facts.traceroute.lost_member_count, 1);
+  assert.equal(facts.traceroute.lost_member_ips, '203.0.113.20');
+  assert.equal(facts.traceroute.lost_member_hop, 2);
+  const r = evaluatePlaybook(pb('ecmp_member_link'), facts);
+  assert.equal(r.verdict, VERDICTS.CONFIRMED);
+  assert.ok(r.decidedBy.includes('member_went_missing'));
+});
+
+test('a member not seen this time is NOT a dead member when the path is as healthy as usual', () => {
+  const hops = (members) => [{ hop: 1, ip: members[0], ips: members, rttMs: 5, lossPct: 0, sent: 3 }];
+  const history = [1, 2].map((id) => ({ id, lossPct: 0, hops: hops(['192.0.2.1', '192.0.2.2']) }));
+  const latest = { id: 3, lossPct: 0, hops: hops(['192.0.2.1']) };
+  assert.deepEqual(ecmpAnalysis(history, { latest }).lostMembers, [], 'hashing missed it; nothing got worse');
+  // And a hop probed fewer times than it has members cannot see them all.
+  const thin = { id: 4, lossPct: 50, hops: [{ hop: 1, ip: '192.0.2.1', ips: ['192.0.2.1'], rttMs: 5, lossPct: 50, sent: 1 }] };
+  assert.deepEqual(ecmpAnalysis(history, { latest: thin }).lostMembers, []);
 });
 
 // --- fixes -------------------------------------------------------------------

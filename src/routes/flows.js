@@ -29,11 +29,15 @@ function cleanPeer(v) {
 const TARGET_BUCKETS = 60;
 const MIN_BUCKET_MS = 60 * 1000;
 const DEFAULT_SPAN_MS = 6 * 60 * 60 * 1000; // last 6h when no range is given
+// A direction share at or beyond this (either way) marks the traffic as
+// one-directional in the bidirectional inspector: 0.2 ⇒ ≥ 80 % one way.
+const DIRECTION_IMBALANCE = 0.2;
 
 // Traffic-type breakdown over time, for ONE agent. Port categories (DNS, Web,
 // ...) come from the agent's `byPort` summary (stored result payloads);
 // organisation categories (Facebook, Google, ...) come from the destination ASN
 // of geo-enriched flows. Both are metadata only — no payload/DPI. viewer+.
+
 function createFlowsRouter({ resultsRepo, agentsRepo, flowsRepo, getCategories, centroids = null }) {
   const router = express.Router();
   // Categories are loaded per request so admin edits (via settings) take effect
@@ -316,8 +320,8 @@ function createFlowsRouter({ resultsRepo, agentsRepo, flowsRepo, getCategories, 
 
   // GET /api/flows/bidirectional?agentId=&host=&from=&to=
   // Bidirectional flow inspector: runs the flow explorer separately for ingress
-  // (direction='in') and egress (direction='out') and returns both sides plus an
-  // asymmetry indicator (inBytes / totalBytes). Optional `host` filters to one IP
+  // (direction='in') and egress (direction='out') and returns both sides plus a
+  // traffic-direction balance (inBytes / totalBytes). Optional `host` filters to one IP
   // peer so you can focus on a specific conversation partner. Metadata only;
   // includes internal RFC1918 conversations (never geolocated). viewer+.
   router.get('/bidirectional', requireAuth, reader, asyncHandler(async (req, res) => {
@@ -356,6 +360,25 @@ function createFlowsRouter({ resultsRepo, agentsRepo, flowsRepo, getCategories, 
     const outBytes = egress.totals.bytes;
     const totalBytes = inBytes + outBytes;
     const ratio = totalBytes > 0 ? inBytes / totalBytes : null;
+    // WHAT THIS IS, AND WHAT IT IS NOT. A byte-volume split between the two
+    // directions. It says nothing about ROUTING: any download-heavy host (a
+    // backup target, a workstation streaming video) sits at 90 % ingress on a
+    // perfectly symmetric path. It used to be called "asymmetry" and was shown
+    // as "replies may be arriving on a different path", which sent people
+    // looking for a routing fault on every busy client. Asymmetric routing is a
+    // two-ended path question, answered by diagnose (reverse traceroute from
+    // the far-end agent).
+    const imbalanced = ratio !== null && (ratio <= DIRECTION_IMBALANCE || ratio >= 1 - DIRECTION_IMBALANCE);
+    const balance = {
+      inBytes,
+      outBytes,
+      totalBytes,
+      // fraction of the total that is ingress (0.5 = even)
+      ratio,
+      // ≥ 80 % of the bytes flow one way
+      imbalanced,
+      dominant: ratio === null ? null : (ratio > 0.5 ? 'in' : (ratio < 0.5 ? 'out' : null)),
+    };
 
     res.json({
       agentId,
@@ -364,15 +387,11 @@ function createFlowsRouter({ resultsRepo, agentsRepo, flowsRepo, getCategories, 
       host,
       ingress,
       egress,
-      asymmetry: {
-        inBytes,
-        outBytes,
-        totalBytes,
-        // ratio = fraction of total that is ingress (0.5 = symmetric)
-        ratio,
-        // flag when ≥ 80 % of traffic flows one way — typical of asymmetric routing
-        asymmetric: ratio !== null && (ratio <= 0.2 || ratio >= 0.8),
-      },
+      directionBalance: balance,
+      // DEPRECATED alias of `directionBalance`, kept for API clients written
+      // against the old name (same numbers; `asymmetric` === `imbalanced`). It
+      // never measured asymmetric routing — see above.
+      asymmetry: { inBytes, outBytes, totalBytes, ratio, asymmetric: imbalanced },
     });
   }));
 

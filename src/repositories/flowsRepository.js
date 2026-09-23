@@ -1,5 +1,11 @@
 'use strict';
 
+const { WELL_KNOWN } = require('../flows/services');
+
+// How many service ports topologyEdges() keeps per edge — the dominant few are
+// what a reader needs ("Modbus/TCP, then HTTPS"); the long tail is noise.
+const SERVICES_PER_EDGE = 3;
+
 const COLUMNS = [
   'agent_id', 'ts', 'src_ip', 'dst_ip', 'ext_ip', 'direction', 'proto',
   'src_port', 'dst_port', 'bytes', 'packets', 'flows', 'internal',
@@ -47,6 +53,22 @@ function createFlowsRepository(db) {
   const q = (sql, params) => pool.query(sql, params).then(([r]) => r);
   const numOf = (v) => Number(v) || 0;
   const normAsn = (v) => (v ? Number(v) : null);
+
+  // The newest raw flow record per agent — the coverage report's "has this
+  // agent produced flows lately" (src/coverage/). GROUP BY agent_id with
+  // MAX(ts) is answered from idx_flows_agent_ts as a loose index scan (one
+  // probe per agent, not a scan of the window), and the result is one row per
+  // agent that has EVER had a raw record, so it is bounded by the fleet.
+  async function lastFlowAtByAgent() {
+    const rows = await q(
+      'SELECT agent_id, MAX(ts) AS last_ts FROM flow_records GROUP BY agent_id',
+      [],
+    );
+    return rows.map((r) => ({
+      agentId: Number(r.agent_id),
+      lastFlowAt: r.last_ts == null ? null : new Date(r.last_ts).toISOString(),
+    }));
+  }
 
   // Per-ASN byte time-series for one agent over [from, to], bucketed into
   // `bucketSec`-wide windows on the epoch grid (so bucket * bucketSec is the
@@ -302,11 +324,48 @@ function createFlowsRepository(db) {
        GROUP BY src_ip, dst_ip, ext_ip ORDER BY bytes DESC LIMIT ?`,
       [...params, lim]
     );
-    return rows.map((r) => ({
+    const edges = rows.map((r) => ({
       srcIp: r.src_ip, dstIp: r.dst_ip, extIp: r.ext_ip, internal: !!r.internal,
       asn: normAsn(r.asn), asnName: r.asnName ?? null, country: r.country ?? null,
       bytes: numOf(r.bytes), packets: numOf(r.packets), flowCount: numOf(r.flowCount),
+      services: [],
     }));
+    if (!edges.length) return edges;
+
+    // WHAT each edge carries: the dominant service ports per (src, dst), so a
+    // PLC<->SCADA edge reads "Modbus/TCP" and not just "10.1.1.5 -> 10.1.1.9".
+    // A second query, restricted to exactly the edges above (row-constructor
+    // IN), so it is bounded by the edges returned (20 rows each at most) rather
+    // than by the window. The
+    // service end is chosen in SQL by the same rule as services.servicePortOf:
+    // a named dst_port, else a named src_port, else the lower port. The named
+    // list is bound as parameters, never interpolated. Top SERVICES_PER_EDGE per
+    // edge are kept; the rest of an edge's bytes stay in its total only.
+    const named = [...WELL_KNOWN.keys()];
+    const pairs = [...new Set(edges.map((e) => `${e.srcIp}\0${e.dstIp}`))].map((k) => k.split('\0'));
+    const svcRows = await q(
+      `SELECT src_ip, dst_ip, proto,
+              (CASE WHEN dst_port IS NULL THEN src_port
+                    WHEN src_port IS NULL THEN dst_port
+                    WHEN dst_port IN (?) THEN dst_port
+                    WHEN src_port IN (?) THEN src_port
+                    ELSE LEAST(src_port, dst_port) END) AS svc_port,
+              SUM(bytes) AS bytes
+       FROM flow_records WHERE ${where.join(' AND ')} AND (src_ip, dst_ip) IN (?)
+       GROUP BY src_ip, dst_ip, proto, svc_port ORDER BY bytes DESC LIMIT ?`,
+      [named, named, ...params, pairs, Math.min(pairs.length * 20, 20000)]
+    );
+    const byPair = new Map();
+    for (const r of svcRows) {
+      const port = r.svc_port == null ? null : Number(r.svc_port);
+      if (!Number.isInteger(port) || port < 1) continue;
+      const key = `${r.src_ip}\0${r.dst_ip}`;
+      const list = byPair.get(key) || [];
+      if (list.length < SERVICES_PER_EDGE) list.push({ port, proto: r.proto ?? null, bytes: numOf(r.bytes) });
+      byPair.set(key, list);
+    }
+    for (const e of edges) e.services = byPair.get(`${e.srcIp}\0${e.dstIp}`) || [];
+    return edges;
   }
 
   // Service-dependency input: TCP conversations aggregated by (src_ip, dst_ip,
@@ -383,7 +442,7 @@ function createFlowsRepository(db) {
     return [...new Set(rows.map((r) => r.agent_id))];
   }
 
-  return { insertMany, aggregateExternalDestinations, destinationExists, agentIdsForDestination, selectFlows, exploreFlows, mapFlows, topologyEdges, tcpServiceFlows, agentIdsForIp, agentIdsForPort, asnSeries };
+  return { insertMany, aggregateExternalDestinations, destinationExists, agentIdsForDestination, selectFlows, exploreFlows, mapFlows, topologyEdges, tcpServiceFlows, agentIdsForIp, agentIdsForPort, asnSeries, lastFlowAtByAgent };
 }
 
 module.exports = { createFlowsRepository, toRow };

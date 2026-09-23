@@ -40,11 +40,31 @@ const iface = (over) => Object.assign({
   rxErrors: 0, txErrors: 0, rxDrop: 0, txDrop: 0,
 }, over);
 
+// ONE RESULT ELEMENT, EXACTLY AS THE AGENT POSTS IT — blueeye-agent
+// src/testRunner.js returns { name, commandId, ok, startedAt, finishedAt,
+// traffic, system } and the report sends that object unchanged, so `traffic`
+// is at the TOP LEVEL. These tests used to post `{ payload: { traffic } }`, a
+// shape no agent sends; the service read only that shape, so in production it
+// never saw an interface and never recorded a transition, while every test
+// here passed. The helper now posts the real thing.
+function agentResult(ifaces, over = {}) {
+  return {
+    name: 'auto-report',
+    commandId: null,
+    ok: true,
+    startedAt: '2026-07-28T11:59:00.000Z',
+    finishedAt: '2026-07-28T12:00:00.000Z',
+    traffic: traffic(ifaces),
+    system: { cpuPct: 3, memPct: 41 },
+    ...over,
+  };
+}
+
 function postResults(app, ifaces) {
   return request(app)
     .post('/agents/results')
     .set('Authorization', 'Bearer agent-tok')
-    .send({ results: [{ payload: { traffic: traffic(ifaces) } }] });
+    .send({ results: [agentResult(ifaces)] });
 }
 
 // ------------------------------------------------------------------ pure diff
@@ -197,7 +217,7 @@ test('a transition outside the flap window is a fresh row, not a collapse', asyn
     flapWindowSeconds: 300,
     now: () => clock,
   });
-  const results = (over) => [{ payload: { traffic: traffic([iface(over)]) } }];
+  const results = (over) => [agentResult([iface(over)])];
 
   await service.processResults(9, results({}));                       // ok
   await service.processResults(9, results({ operStatus: 'down' }));    // down
@@ -214,14 +234,44 @@ test('the LAST traffic sample in a batch wins', async () => {
   const interfaceStatesRepo = makeInterfaceStatesRepo();
   const service = createInterfaceStateService({ interfaceStatesRepo });
 
-  await service.processResults(9, [{ payload: { traffic: traffic([iface()]) } }]);
+  await service.processResults(9, [agentResult([iface()])]);
   await service.processResults(9, [
-    { payload: { traffic: traffic([iface({ operStatus: 'down' })]) } },
-    { payload: { traffic: traffic([iface({ operStatus: 'up' })]) } },
+    agentResult([iface({ operStatus: 'down' })]),
+    agentResult([iface({ operStatus: 'up' })]),
   ]);
 
   assert.equal(interfaceStatesRepo.transitions.length, 0, 'it ended where it started');
   assert.equal(interfaceStatesRepo.states[0].status, 'ok');
+});
+
+test('the REAL agent shape (traffic at the top level) records a transition', async () => {
+  const interfaceStatesRepo = makeInterfaceStatesRepo();
+  const service = createInterfaceStateService({ interfaceStatesRepo });
+  await service.processResults(9, [agentResult([iface()])]);
+  const out = await service.processResults(9, [agentResult([iface({ operStatus: 'down' })])]);
+  assert.equal(out.transitions.length, 1);
+  assert.equal(interfaceStatesRepo.transitions[0].to_status, 'down');
+});
+
+test('the older wrapped shape (payload.traffic) is still read', async () => {
+  // Nothing current sends it, but nothing that did must break.
+  const interfaceStatesRepo = makeInterfaceStatesRepo();
+  const service = createInterfaceStateService({ interfaceStatesRepo });
+  await service.processResults(9, [{ payload: { traffic: traffic([iface()]) } }]);
+  await service.processResults(9, [{ payload: { traffic: traffic([iface({ operStatus: 'down' })]) } }]);
+  assert.equal(interfaceStatesRepo.transitions.length, 1);
+});
+
+test('a batch mixing both shapes still takes the LAST traffic sample', async () => {
+  const interfaceStatesRepo = makeInterfaceStatesRepo();
+  const service = createInterfaceStateService({ interfaceStatesRepo });
+  await service.processResults(9, [agentResult([iface()])]);
+  await service.processResults(9, [
+    { payload: { traffic: traffic([iface({ operStatus: 'up' })]) } },
+    agentResult([iface({ operStatus: 'down' })]),
+  ]);
+  assert.equal(interfaceStatesRepo.transitions.length, 1);
+  assert.equal(interfaceStatesRepo.states[0].status, 'down');
 });
 
 test('a report with no traffic payload is a no-op', async () => {
@@ -229,6 +279,7 @@ test('a report with no traffic payload is a no-op', async () => {
   const service = createInterfaceStateService({ interfaceStatesRepo });
 
   await service.processResults(9, [{ payload: { probes: [] } }]);
+  await service.processResults(9, [agentResult([], { traffic: null })]);
   await service.processResults(9, []);
   await service.processResults(9, null);
 

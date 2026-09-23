@@ -125,8 +125,34 @@ function validateIncidentInput(body) {
   value.notificationRequired = bool(input.notificationRequired);
   value.status = input.status === undefined ? 'open' : reqEnum(input, 'status', INCIDENT_STATUSES, errors);
   value.lessonsLearned = optString(input, 'lessonsLearned', 2000, errors);
+  // Art. 23(4)(a): the early warning says whether the incident is suspected of
+  // being caused by an unlawful or malicious act, and whether it could have a
+  // cross-border impact (migration 122).
+  value.suspectedMalicious = bool(input.suspectedMalicious);
+  value.crossBorderImpact = bool(input.crossBorderImpact);
+  value.crossBorderDetails = optString(input, 'crossBorderDetails', 2000, errors);
+  // The CSIRT / competent authority's own case reference.
+  value.authorityReference = optString(input, 'authorityReference', 128, errors);
+  // When each report actually went to the authority — what turns a deadline
+  // from "overdue" into "submitted" (src/nis2/deadlines.js).
+  for (const f of SUBMISSION_FIELDS) value[f] = optDateTime(input, f, errors);
+  // A report cannot have been sent before the incident was known about. Both
+  // are normalised to the same 'YYYY-MM-DD HH:MM:SS' form, so they compare as
+  // strings.
+  if (value.detectedAt) {
+    for (const f of SUBMISSION_FIELDS) {
+      if (value[f] && !errors[f] && value[f] < value.detectedAt) errors[f] = `${f} must not be before detectedAt`;
+    }
+  }
   return done(errors, value);
 }
+
+// The three Art. 23 submission timestamps, in stage order.
+const SUBMISSION_FIELDS = ['earlyWarningSubmittedAt', 'notificationSubmittedAt', 'finalReportSubmittedAt'];
+// The Art. 23 fields added in migration 122. A PUT that does not mention one
+// keeps the stored value (see src/routes/nis2/incidents.js), so an API client
+// written before they existed cannot wipe a recorded submission by omission.
+const INCIDENT_ART23_FIELDS = ['suspectedMalicious', 'crossBorderImpact', 'crossBorderDetails', 'authorityReference', ...SUBMISSION_FIELDS];
 
 function validateEvidenceInput(body) {
   const input = obj(body);
@@ -208,4 +234,6 @@ module.exports = {
   validateEvidenceInput,
   validateReportRequest,
   validateCustomReportSpec,
+  INCIDENT_ART23_FIELDS,
+  SUBMISSION_FIELDS,
 };

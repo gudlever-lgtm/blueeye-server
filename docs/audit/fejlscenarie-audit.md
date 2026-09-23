@@ -345,3 +345,76 @@ Forudsætninger for alle tests:
 
 Scenarie 2 (flapping), 5 (asymmetrisk routing), 6 (ECMP) og 10 (ny enhed) er markeret Ikke dækket, Kun
 spec eller Kun UI. De har derfor ingen lab-test her.
+
+---
+
+## 8. Afhjælpning (server 0.188.0 / agent 0.39.1)
+
+Rettet efter auditten. Hver linje henviser til det fund, den lukker. Numrene i parentes er top 10-hullerne i afsnit 6.
+
+### Fejl rettet
+
+| Fund | Rettelse |
+|---|---|
+| Interface-transitioner registreres aldrig | `interfaceStateService` læser `traffic` på selve result-elementet (og stadig `payload.traffic`). Testen poster nu agentens rigtige form |
+| FLATLINE-støj og fejlklassificering af den første fejl | En prøve, der bryder en flad serie, vurderes på afvigelse. Switchport-rater (fejl, discards, FCS, broadcast, udnyttelse, late collisions) er undtaget flatline. Nul-spredning giver ANOMALY/WARN i stedet for division med 0 |
+| Trap-hændelser sendes kun med syslog slået til (5) | Én fælles flush-timer, der starter, når syslog ELLER traps binder |
+| Trap-allowlist matcher ikke hostnavne | Hostnavne på pollede switches slås op til adresser |
+| ifName-resolver kun fyldt af tvungen poll | Planlagte SNMP-cyklusser fodrer den. En 401 bliver fatal i stedet for at blive slugt |
+| `clusterAlertGate` ikke koblet i probe-pipelinen (8) | Koblet. Samme logik som analysepipelinen |
+| Severity-regler når ikke alarmen (8) | Alarm, publish og event case bruger den gemte, regeljusterede finding |
+| Nyt event case ca. hver 30. min ved vedvarende fejl | Probe-cooldown er afledt af case-vinduet (10 min < 15 min) |
+| Probe-baseline indeholder den aktuelle prøve | Prøven, der vurderes, er ikke med i sin egen baseline |
+| Søgningens rate-limiter når ikke routeren | Sendes nu gennem `createApp` |
+| Duplex-status kasseres; late collisions analyseres ikke (6) | Kolonnerne `duplex` og `late_coll_pps` (migration 116). Finding `duplex.mismatch` ved half duplex med stigende late collisions/FCS. Switch-UI viser FCS, late collisions og duplex |
+| VLAN-navne og sysDescr gemmes ikke | `device_vlans` (117) og `snmp_devices.sys_descr` (116). Vises på switch-siden |
+| L2-loop: kumulativ `move_count`, forkert id i STP-opslag, ingen alarm | `fdb_mac_moves` tæller flytninger i vinduet (117). STP-events matches på afsender-IP. Broadcast-storm alene giver en loop-mistanke (WARN). Findings går til alarm og event case |
+| ECMP altid udelukket | Agenten sender alle IP'er pr. hop (`ips`). Diagnose og sti-graf tæller forgreninger i kørslen og over 24 t. Et forsvundet ECMP-medlem vises med den manglende IP som bevis |
+| Reverse-test for asymmetrisk routing prober samme mål | Reverse-testen prober tilbage til origin-agentens adresse. Stier sammenlignes hop for hop på IP eller /24 (/64) |
+| Flow-"asymmetri" kaldes asymmetrisk routing | Omdøbt til trafikretningsubalance (`directionBalance`). `asymmetry` er beholdt som alias |
+| DNS-timeout klassificeres som `error` | `ETIMEOUT` og `ETIMEDOUT` er timeout |
+| Blast radius gråner online naboer (9) | En agent, der rapporterer, markeres aldrig `unreachable_downstream`. De tre tests, der låste fejlen fast, er rettet |
+| Stale-sweep kun ved opstart | Kører hvert 60. s |
+| Retention kører først efter 24 t; otte tabeller ryddes aldrig | Første kørsel 120 s efter opstart. Purge af `probe_results` (400 d), `speedtest_results`, `transaction_results`, lukkede `probe_outages`, `topology_changes`, `discovered_devices`, `host_connections` og `audit_events`. `audit_log` (hash-kæden) ryddes bevidst ikke |
+| Store ARP-tabeller giver 400 på hele capabilities-rapporten | ARP, forbindelser og LLDP er begrænset på antal, ikke af grænsen på 64 KB, og gemmes ikke i `agents.capabilities` |
+| Offentligt build-status-endpoint viser stier og compiler-output | Fejltekst erstattes af en henvisning til serverloggen |
+| Investigation-routen lækker SQL-fejl i 500-svar | Generisk 500. Detaljen logges |
+| Locator returnerer ALLE agenter ved subnet/interface uden match | `INSUFFICIENT_DATA` med begrundelse |
+| Død kode | `SYSTEM_PROMPT` er én kilde. Ubrugte eksporter er fjernet. User-søgestubben er afregistreret |
+
+### Huller lukket
+
+| Hul | Nu |
+|---|---|
+| Ingen OT-protokolgenkendelse (1) | Portnavne for S7comm, Modbus/TCP, IEC-104, DNP3, EtherNet/IP, BACnet, OPC UA, PROFINET, MQTT, FINS, Niagara Fox og GE SRTP. Kategorien `ot`. Topologi-kanter viser tjeneste og et OT-mærke. Discovery prober OT-porte (server og agent) og ICMP |
+| Ny enhed udløser ingen alarm (2) | Finding `device.new` fra ARP (pr. site, MAC) og discovery, med IP, MAC, producent-hint, agent og site. Baseline-vagt på 24 t og loft på 20/t pr. agent. Vises i Changes. Lokal ARP rapporteres nu hvert 5. min |
+| Interne flows slettes efter 7 d (3) | `flow_internal_rollup` (119), timevis top 500 pr. agent + overløbsrække, 90 d |
+| Switchport link down/flap giver ingen alarm (4) | Port-historik fra polls og traps/syslog (118). Finding ved uplink down (CRIT) og flapping (≥3 skift i vinduet). Access-port down er kun en INFO-række |
+| Ingen rapport over dækningshuller (7) | `GET /api/coverage` og skærmen Administration → Coverage gaps: 19 slags huller (sites, agenter, switches, porte med ukendte MAC'er, uovervågede naboer, /24'er uden agent, discovery og flow-dækning) med bevis og forslag |
+| Agent død eller netværk nede (9) | Finding `agent.offline` efter 5 min med verdict ud fra site-naboer, andre agenters prober mod værten, switchport-status via FDB/ARP og forbindelsesdiagnose |
+| NIS2-frister vises ikke; felter mangler (10) | Art. 23-kolonne med status pr. frist, indsendelsestidspunkter, mistanke om ondsindet handling, grænseoverskridende virkning og myndighedsreference (122). Knappen "Draft NIS2 incident" fra et event case (123). NIS2-udkast for probe-outages i UI |
+| Topologiændringer fodres ikke | Agenten sender lokal LLDP (lldpd). SNMP-naboændringer diff'es pr. switch (118) |
+| DNS/TCP-fejl skelnes ikke (7, 11) | Agenten sender `errorCode`, `failure` og `resolver`. Findings siger NXDOMAIN, timeout, SERVFAIL, RST eller silent drop, og "ICMP ok, TCP/<port> blocked" |
+
+### Verifikation
+
+- Server: `scripts/gate.sh --force` er grøn. `npm test` giver 5972 bestået, 1 sprunget over (TSDB) og 0 fejl.
+- Agent: `npm test` giver 870/870.
+- MySQL 8.4 (samme image som CI):
+  - `npm run verify-schema`: schema.sql matcher migrationskæden (112 tabeller, 1341 kolonner, 378 indeks, 116 fremmednøgler).
+  - `npm run verify-repositories`: 23 tjek, heraf 9 nye for den nye SQL (retention-rollup og -purges, ny-enhed-opslag, probe-fejlfelter, NIS2 art. 23, switch-historik, agent-offline).
+  - Migration 116–123 er genkørt direkte på en migreret database uden fejl.
+
+### Står tilbage
+
+- Aktiv DHCP-test: kræver root og rå sockets på port 67/68.
+- L2-sti fra A til B.
+- CDP, IP-MIB-ARP, ENTITY-MIB og afkodning af sFlow counter-samples.
+- Lokal duplex og `/proc`-frame/carrier.
+- Cluster-nøglen indeholder stadig ikke mål, så to uafhængige fejl på samme site i samme vindue slås sammen (scenarie 13). Event cases kender ikke clusters.
+- Transaktionsalarmer og probe-outages giver stadig ingen finding eller event case.
+- `ALERTING_ENABLED` er bevidst stadig `false` som standard.
+- OIDC/SAML-administration uden UI. Migration 041 (password-historik) er ubrugt. Timescale-hypertables `flow_records`, `probe_results` og `speedtest_results` skrives ikke.
+- Setup-tjeklisten viser "todo" i stedet for "unknown", når et repository fejler.
+- Tests kører stadig mod syntetiske fixtures. Der er ingen optagne pcap-filer eller SNMP-walks.
+- Go-agenten er ikke i CI.

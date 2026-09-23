@@ -5,6 +5,31 @@ const { extractCycleSamples } = require('./deviceIngest');
 
 const silentLogger = { info() {}, warn() {}, error() {}, debug() {} };
 
+// The ids of findings whose individual alert + ITSM emit are suppressed because
+// their host is already covered by an open medium/high cluster. Shared with the
+// probe pipeline so both finding sources apply the gate the same way. A null
+// gate suppresses nothing; a gate that cannot refresh is used as it stands.
+async function clusterSuppressedIds(clusterAlertGate, produced) {
+  if (!clusterAlertGate || typeof clusterAlertGate.suppressedCluster !== 'function') return new Set();
+  try {
+    if (typeof clusterAlertGate.ensureFresh === 'function') await clusterAlertGate.ensureFresh();
+  } catch { /* stale gate is fine — falls back to per-finding alerting */ }
+  const set = new Set();
+  for (const f of produced) {
+    if (clusterAlertGate.suppressedCluster(f)) set.add(f.id);
+  }
+  return set;
+}
+
+// What FindingStore.save() returns is the finding AS STORED — with the severity
+// rules (migration 086) applied. That, not the detector's draft, is what gets
+// published, grouped and alerted: a rule that downgrades a metric to INFO exists
+// precisely so it does not page. A store that returns nothing (older fakes)
+// leaves the draft in place.
+function storedOr(saved, draft) {
+  return saved && typeof saved === 'object' ? saved : draft;
+}
+
 // Glues the detector + finding store + WS publish behind the analysis feature
 // flag, so the ingest handler can call a single method. It does NOT duplicate
 // the ingest pipeline — it runs AFTER the existing persistence on the samples
@@ -84,19 +109,7 @@ function createAnalysisPipeline({
     }
   }
 
-  // The ids of findings whose individual alert + ITSM emit are suppressed because
-  // their host is already covered by an open medium/high cluster.
-  async function suppressedFindingIds(produced) {
-    if (!clusterAlertGate || typeof clusterAlertGate.suppressedCluster !== 'function') return new Set();
-    try {
-      if (typeof clusterAlertGate.ensureFresh === 'function') await clusterAlertGate.ensureFresh();
-    } catch { /* stale gate is fine — falls back to per-finding alerting */ }
-    const set = new Set();
-    for (const f of produced) {
-      if (clusterAlertGate.suppressedCluster(f)) set.add(f.id);
-    }
-    return set;
-  }
+  const suppressedFindingIds = (produced) => clusterSuppressedIds(clusterAlertGate, produced);
 
   // Evaluates every metric sample in a batch of result payloads; saves and
   // publishes any findings. Resilient: a failure on one finding doesn't abort
@@ -119,11 +132,11 @@ function createAnalysisPipeline({
       }
       if (!finding) continue;
       try {
-        await findingStore.save(finding);
-        produced.push(finding);
+        const stored = storedOr(await findingStore.save(finding), finding);
+        produced.push(stored);
         // Push to UI over the SAME WebSocket as a 'finding' event.
         try {
-          publishFinding(finding.hostId, { type: 'finding', payload: finding });
+          publishFinding(stored.hostId, { type: 'finding', payload: stored });
         } catch (err) {
           logger.warn(`analysis: publish failed (${err.message})`);
         }
@@ -228,4 +241,4 @@ function createAnalysisPipeline({
   return { processResults, processDeviceSamples, evaluateSamples };
 }
 
-module.exports = { createAnalysisPipeline };
+module.exports = { createAnalysisPipeline, clusterSuppressedIds, storedOr };

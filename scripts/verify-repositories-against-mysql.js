@@ -45,6 +45,7 @@ const { createSnmpDevicesRepository } = require(path.join(ROOT, 'src/repositorie
 const { createUsersRepository } = require(path.join(ROOT, 'src/repositories/usersRepository'));
 const { createDeviceInterfacesRepository } = require(path.join(ROOT, 'src/repositories/deviceInterfacesRepository'));
 const { createDeviceCounterSamplesRepository } = require(path.join(ROOT, 'src/repositories/deviceCounterSamplesRepository'));
+const { createFdbEntriesRepository } = require(path.join(ROOT, 'src/repositories/fdbEntriesRepository'));
 const { createSnmpCredentialProfilesRepository } = require(path.join(ROOT, 'src/repositories/snmpCredentialProfilesRepository'));
 const { AUTH_PROTOS, PRIV_PROTOS } = require(path.join(ROOT, 'src/validation/snmpProfileValidation'));
 
@@ -463,6 +464,13 @@ check('snmp devices: the credential chain resolves on the server, once per devic
   assert.strictEqual(failed.lastError, 'timeout');
   assert.ok(failed.lastOkAt, 'a failure must KEEP the last good time');
 
+  // sysDescr (migration 116) is COALESCEd: an agent too old to send it must
+  // not erase what a newer one read.
+  await repo.recordPoll(own.id, { ok: true, sysDescr: 'Cisco IOS Software, C2960X, 15.2(7)E3' });
+  await repo.recordPoll(own.id, { ok: true });
+  const described = await repo.findById(own.id);
+  assert.strictEqual(described.sysDescr, 'Cisco IOS Software, C2960X, 15.2(7)E3');
+
   assert.strictEqual(await profiles.deviceCount(profile.id), 1, 'the device/profile FK did not join');
   assert.strictEqual(await repo.remove(viaProfile.id), true);
 });
@@ -501,6 +509,22 @@ check('device interfaces: the port NAME is the identity, and a move is reported'
 
   const listed = await repo.listForDevice(device.id, { limit: 10 });
   assert.strictEqual(listed.length, 2);
+
+  // The link state the upsert used to overwrite without a trace (migration
+  // 118): a port whose status moved is REPORTED, with its row id.
+  const third = await repo.upsertMany(device.id, [
+    { ifName: 'Gi0/1', ifIndex: 10001, speedMbps: 1000, operStatus: 'up', adminStatus: 'up' },
+    { ifName: 'Gi0/2', ifIndex: 2, speedMbps: 1000, operStatus: 'up', adminStatus: 'up' },
+  ]);
+  const gi2 = third.statusChanges.find((c) => c.ifName === 'Gi0/2');
+  assert.ok(gi2, 'a port that came up was not reported');
+  assert.strictEqual(gi2.interfaceId, byName.get('Gi0/2'));
+  assert.strictEqual(gi2.from.operStatus, 'down');
+  assert.strictEqual(gi2.to.operStatus, 'up');
+
+  // A trap's news is written onto the row, so the next poll does not repeat it.
+  assert.strictEqual(await repo.setStatus(byName.get('Gi0/2'), { operStatus: 'down' }), true);
+  assert.strictEqual((await repo.findById(byName.get('Gi0/2'))).operStatus, 'down');
 });
 
 check('device counter samples: a wide insert, a grouped self-join, and a window', async (pool) => {
@@ -569,6 +593,455 @@ check('device counter samples: a wide insert, a grouped self-join, and a window'
 
   const purged = await repo.purgeBefore(new Date(Date.now() - 90000));
   assert.strictEqual(purged, 2, 'the batched delete did not remove the old rows');
+
+  // Duplex (a string) and the late-collision rate (migration 116) round-trip.
+  await repo.insertMany([{
+    ts: new Date(), deviceId: device.id, interfaceId: p2, lateCollisions: 70,
+    duplex: 'half', lateCollPps: 1, fcsPps: 0.5, deltaSec: 60, discontinuity: null,
+  }]);
+  const withDuplex = (await repo.latestForDevice(device.id)).get(p2);
+  assert.strictEqual(withDuplex.duplex, 'half');
+  assert.strictEqual(withDuplex.lateCollPps, 1);
+  assert.strictEqual(withDuplex.lateCollisions, 70);
+});
+
+check('fdb entries: a sweep records its moves, the window counts them, VLAN names upsert', async (pool) => {
+  const devices = createSnmpDevicesRepository({ pool }, { secretBox: fakeSecretBox });
+  const repo = createFdbEntriesRepository({ pool });
+  const device = await devices.create({ host: '10.14.0.40', displayName: 'Loop switch' });
+  const mac = '00:1b:44:11:3a:b7';
+
+  // Three sweeps, one second apart, the MAC on 12 → 24 → 12: two moves. The
+  // sweep time carries milliseconds on purpose — the repository must cut it to
+  // the second, or the INSERT … SELECT that records the move finds nothing.
+  const base = Date.now() - 10000;
+  await repo.upsertMany(device.id, [{ mac, vlan: 20, bridgePort: 12 }], { at: new Date(base + 123) });
+  await repo.upsertMany(device.id, [{ mac, vlan: 20, bridgePort: 24 }], { at: new Date(base + 1456) });
+  await repo.upsertMany(device.id, [{ mac, vlan: 20, bridgePort: 12 }], { at: new Date(base + 2789) });
+
+  const [[moves]] = await pool.query('SELECT COUNT(*) AS n FROM fdb_mac_moves WHERE device_id = ?', [device.id]);
+  assert.strictEqual(Number(moves.n), 2, 'a first sighting is not a move, and each real move is one row');
+
+  const moving = await repo.movingMacs(device.id, { since: new Date(base - 1000), limit: 10 });
+  assert.strictEqual(moving.length, 1);
+  assert.strictEqual(moving[0].movesInWindow, 2, 'the grouped JOIN did not count the window');
+  assert.strictEqual(moving[0].moveCount, 2);
+  const later = await repo.movingMacs(device.id, { since: new Date(base + 60000), limit: 10 });
+  assert.strictEqual(later.length, 0, 'moves before the window must not count');
+
+  await repo.upsertVlans(device.id, [{ vlan: 20, name: 'Voice' }, { vlan: 10, name: 'Data' }]);
+  await repo.upsertVlans(device.id, [{ vlan: 20, name: 'Voice-2' }]);
+  const vlans = await repo.listVlans(device.id);
+  assert.deepStrictEqual(vlans.map((v) => [v.vlan, v.name]), [[10, 'Data'], [20, 'Voice-2']]);
+
+  assert.strictEqual(await repo.purgeMovesBefore(new Date(Date.now() + 60000)), 2);
+  assert.strictEqual(await repo.purgeVlansBefore(new Date(Date.now() + 60000)), 2);
+});
+
+check('coverage reads: last flow per agent, ARP per /24, MACs for IPs, MACs on up ports', async (pool) => {
+  const { createFlowsRepository } = require(path.join(ROOT, 'src/repositories/flowsRepository'));
+  const { createArpEntriesRepository } = require(path.join(ROOT, 'src/repositories/arpEntriesRepository'));
+  const { createFdbEntriesRepository } = require(path.join(ROOT, 'src/repositories/fdbEntriesRepository'));
+  const [agentRow] = await pool.query(
+    "INSERT INTO agents (hostname, platform, arch) VALUES ('be-coverage-01', 'linux', 'x64')",
+  );
+  const agentId = agentRow.insertId;
+
+  const flows = createFlowsRepository({ pool });
+  await flows.insertMany([{ agentId, ts: new Date(Date.now() - 60000), dstIp: '10.0.0.9', bytes: 1 }]);
+  const last = (await flows.lastFlowAtByAgent()).find((r) => r.agentId === agentId);
+  assert.ok(last && last.lastFlowAt, 'the grouped MAX(ts) did not come back');
+
+  const arp = createArpEntriesRepository({ pool });
+  await arp.upsertMany(agentId, [
+    { ip: '10.77.1.5', mac: 'aa:bb:cc:00:00:01' },
+    { ip: '10.77.1.6', mac: 'aa:bb:cc:00:00:02' },
+    { ip: 'fe80::1', mac: 'aa:bb:cc:00:00:03' },
+  ]);
+  const subnets = await arp.subnetSummary({ since: new Date(Date.now() - 3600000), limit: 10 });
+  const s = subnets.find((r) => r.prefix === '10.77.1');
+  assert.ok(s, 'the /24 aggregate did not come back');
+  assert.strictEqual(s.ips, 2);
+  assert.ok(!subnets.some((r) => r.prefix.includes(':')), 'an IPv6 address became a /24');
+  const macs = await arp.macsForIps(['10.77.1.5', '10.77.9.9']);
+  assert.deepStrictEqual(macs.map((m) => m.mac), ['aa:bb:cc:00:00:01']);
+
+  const devices = createSnmpDevicesRepository({ pool }, { secretBox: fakeSecretBox });
+  const ifaces = createDeviceInterfacesRepository({ pool });
+  const fdb = createFdbEntriesRepository({ pool });
+  const device = await devices.create({ host: '10.77.1.1', displayName: 'Coverage switch' });
+  await ifaces.upsertMany(device.id, [
+    { ifName: 'Gi0/1', ifIndex: 1, operStatus: 'up' },
+    { ifName: 'Gi0/2', ifIndex: 2, operStatus: 'down' },
+  ]);
+  await fdb.upsertMany(device.id, [
+    { mac: 'aa:bb:cc:00:00:10', bridgePort: 1, ifIndex: 1, ifName: 'Gi0/1' },
+    { mac: 'aa:bb:cc:00:00:11', bridgePort: 2, ifIndex: 2, ifName: 'Gi0/2' },
+  ]);
+  const up = await fdb.listUpPortMacs({ since: new Date(Date.now() - 3600000), limit: 100 });
+  assert.deepStrictEqual(up.filter((r) => r.deviceId === device.id).map((r) => r.mac), ['aa:bb:cc:00:00:10'],
+    'only the MAC on the UP port should come back');
+});
+
+// ============================================ agents, probes, history, NIS2
+// The statements added alongside migrations 118–123: the agent-offline sweep
+// and its peer-probe read, the probe failure columns, the switch-port and
+// switch-LLDP history rows, the Art. 23 incident fields and their event-case
+// FK, the new-device detector's reads, and the per-edge services query.
+
+const repoOf = (file, factory) => require(path.join(ROOT, 'src/repositories', file))[factory];
+const newAgent = async (pool, hostname, cols = {}) => {
+  const names = ['hostname', 'platform', 'arch', ...Object.keys(cols)];
+  const [res] = await pool.query(
+    `INSERT INTO agents (${names.join(', ')}) VALUES (${names.map(() => '?').join(', ')})`,
+    [hostname, 'linux', 'x64', ...Object.values(cols)],
+  );
+  return res.insertId;
+};
+const ago = (ms) => new Date(Date.now() - ms);
+const DAY = 86400000;
+
+check('agents: the offline sweep flips only the stale, spares live sockets, and peers are read', async (pool) => {
+  const repo = repoOf('agentsRepository', 'createAgentsRepository')({ pool });
+  const stale = await newAgent(pool, 'be-stale', { status: 'online', last_seen: ago(600000) });
+  const never = await newAgent(pool, 'be-never', { status: 'online' });
+  const fresh = await newAgent(pool, 'be-fresh', { status: 'online', last_seen: new Date() });
+  const socket = await newAgent(pool, 'be-socket', { status: 'online', last_seen: ago(600000) });
+
+  const flipped = await repo.sweepStaleOffline({ olderThanSec: 300, exceptIds: [socket, 'x', -1] });
+  assert.deepStrictEqual([...flipped].sort((a, b) => a - b), [stale, never].sort((a, b) => a - b));
+  assert.deepStrictEqual(await repo.sweepStaleOffline({ olderThanSec: 300, exceptIds: [socket] }), [],
+    'a second sweep must find nothing left to flip');
+  // The one-shot form (boot) has no exceptions: the socket agent goes too.
+  assert.strictEqual(await repo.markStaleOffline({ olderThanSec: 300 }), 1);
+  const [states] = await pool.query('SELECT id, status FROM agents WHERE id IN (?)', [[stale, never, fresh, socket]]);
+  const statusOf = new Map(states.map((r) => [Number(r.id), r.status]));
+  assert.strictEqual(statusOf.get(fresh), 'online', 'a fresh agent was flipped');
+  assert.strictEqual(statusOf.get(socket), 'offline');
+
+  // Peer probes: another agent's reachability probe towards the stale agent's
+  // address counts; its own, a diagnostic type, and an old one do not.
+  const probes = repoOf('probeResultsRepository', 'createProbeResultsRepository')({ pool });
+  await probes.createMany(fresh, [
+    { type: 'ping', target: '10.20.0.5', ok: true, rttMs: 1.1, ts: ago(60000) },
+    { type: 'tls', target: '10.20.0.5', ok: true, ts: ago(60000) },
+    { type: 'ping', target: '10.20.0.5', ok: false, ts: ago(3 * 3600000) },
+    { type: 'ping', target: '10.20.0.99', ok: true, ts: ago(60000) },
+  ]);
+  await probes.createMany(stale, [{ type: 'ping', target: '10.20.0.5', ok: true, ts: ago(60000) }]);
+  const peers = await repo.peerProbesTowards({
+    targets: ['10.20.0.5', ' 10.20.0.5 ', ''], from: ago(3600000), excludeAgentId: stale,
+  });
+  assert.strictEqual(peers.length, 1, 'own, diagnostic, old or other-target probes were counted');
+  assert.strictEqual(peers[0].agentId, fresh);
+  assert.strictEqual(peers[0].agentName, 'be-fresh', 'the LEFT JOIN did not name the agent');
+  assert.strictEqual(peers[0].ok, true);
+  assert.deepStrictEqual(await repo.peerProbesTowards({ targets: [], from: ago(3600000) }), []);
+});
+
+check('probe results: failure reason, resolver and ECMP hop ips round-trip; recentRuns is bounded', async (pool) => {
+  const repo = repoOf('probeResultsRepository', 'createProbeResultsRepository')({ pool });
+  const agentId = await newAgent(pool, 'be-probe');
+  const hops = [{ ttl: 1, ip: '10.0.0.1', rttMs: 0.4 }, { ttl: 2, ip: '192.0.2.1', ips: ['192.0.2.1', '192.0.2.2'], rttMs: 3.1 }];
+  const written = await repo.createMany(agentId, [
+    { type: 'dns', target: 'intranet.kunde.dk', ok: false, lossPct: 100, errorCode: 'ENOTFOUND', resolver: '10.0.0.53', ts: ago(50000) },
+    { type: 'tcp', target: '10.0.0.9:443', ok: false, errorCode: 'ECONNREFUSED', failure: 'refused-and-then-some', ts: ago(40000) },
+    { type: 'traceroute', target: '192.0.2.200', ok: true, hops: hops.slice(0, 1), ts: ago(30000) },
+    { type: 'traceroute', target: '192.0.2.200', ok: true, hops, ts: ago(20000) },
+    { type: 'traceroute', target: '192.0.2.200', ok: true, hops, ts: ago(10000) },
+  ]);
+  assert.strictEqual(written, 5);
+
+  const rows = await repo.findByAgent({ agentId, from: ago(3600000) });
+  const dns = rows.find((r) => r.type === 'dns');
+  assert.strictEqual(dns.errorCode, 'ENOTFOUND');
+  assert.strictEqual(dns.resolver, '10.0.0.53');
+  assert.strictEqual(dns.failure, null, 'not reported must read back as null');
+  const tcp = rows.find((r) => r.type === 'tcp');
+  assert.strictEqual(tcp.failure, 'refused-and-then', 'bounded to the VARCHAR(16) the column has');
+
+  const all = await repo.recentRuns({ agentId, type: 'traceroute', target: '192.0.2.200' });
+  assert.strictEqual(all.length, 3);
+  assert.deepStrictEqual(all[0].hops[1].ips, ['192.0.2.1', '192.0.2.2'], 'the per-hop ips did not survive the JSON column');
+  const before = await repo.recentRuns({
+    agentId, type: 'traceroute', target: '192.0.2.200', before: ago(15000), from: ago(25000), limit: 5,
+  });
+  assert.strictEqual(before.length, 1, 'the before/from bounds were not both applied');
+  assert.strictEqual(before[0].hops[1].ips.length, 2);
+  assert.strictEqual((await repo.recentRuns({ agentId, type: 'traceroute', target: '192.0.2.200', limit: 1 })).length, 1);
+});
+
+check('nis2 incidents: Art. 23 fields round-trip, the event-case link survives edits and its case', async (pool) => {
+  const repo = repoOf('nis2IncidentsRepository', 'createNis2IncidentsRepository')({ pool });
+  const [ec] = await pool.query(
+    "INSERT INTO event_cases (host_id, title, first_event_at, last_event_at) VALUES ('agent:1', 'Core down', NOW(), NOW())",
+  );
+  const caseId = ec.insertId;
+  const ew = '2026-03-01T10:15:30.000Z';
+  const created = await repo.create({
+    title: 'Ransomware on file server', severity: 'high', status: 'open',
+    detectedAt: '2026-03-01T08:00:00Z', nis2Relevant: true, notificationRequired: true,
+    suspectedMalicious: true, crossBorderImpact: true, crossBorderDetails: 'Sister site in SE',
+    authorityReference: 'CFCS-2026-0042', earlyWarningSubmittedAt: ew, eventCaseId: caseId,
+  });
+  assert.match(created.incidentId, /^INC-\d{4}-\d{4}$/);
+  assert.strictEqual(created.suspectedMalicious, true);
+  assert.strictEqual(created.crossBorderImpact, true);
+  assert.strictEqual(created.crossBorderDetails, 'Sister site in SE');
+  assert.strictEqual(created.authorityReference, 'CFCS-2026-0042');
+  assert.strictEqual(created.earlyWarningSubmittedAt, ew, 'the submission time did not round-trip');
+  assert.strictEqual(created.notificationSubmittedAt, null);
+  assert.strictEqual(created.eventCaseId, caseId);
+
+  // An edit form that does not carry the link must not sever it.
+  const updated = await repo.update(created.id, {
+    title: 'Ransomware on file server', severity: 'critical', status: 'contained',
+    suspectedMalicious: false, notificationSubmittedAt: new Date('2026-03-03T09:00:00Z'),
+  });
+  assert.strictEqual(updated.severity, 'critical');
+  assert.strictEqual(updated.suspectedMalicious, false);
+  assert.strictEqual(updated.earlyWarningSubmittedAt, null, 'update is a full replace of the editable fields');
+  assert.strictEqual(updated.notificationSubmittedAt, '2026-03-03T09:00:00.000Z');
+  assert.strictEqual(updated.eventCaseId, caseId, 'an edit severed the event-case link');
+
+  const other = await repo.create({ title: 'Unrelated', severity: 'low', status: 'open' });
+  assert.strictEqual(other.eventCaseId, null);
+  const linked = await repo.findByEventCase(caseId);
+  assert.deepStrictEqual(linked.map((i) => i.id), [created.id]);
+  assert.deepStrictEqual(await repo.findByEventCase(caseId + 1000), []);
+
+  // The FK: a case that does not exist is refused; deleting the case keeps the
+  // regulatory record and only clears the link (ON DELETE SET NULL).
+  await assert.rejects(
+    () => repo.create({ title: 'Dangling', severity: 'low', status: 'open', eventCaseId: caseId + 1000 }),
+    (err) => err.code === 'ER_NO_REFERENCED_ROW_2',
+  );
+  await pool.query('DELETE FROM event_cases WHERE id = ?', [caseId]);
+  const orphan = await repo.findById(created.id);
+  assert.ok(orphan, 'deleting the case deleted the NIS2 incident');
+  assert.strictEqual(orphan.eventCaseId, null);
+  assert.ok((await repo.findAll({})).length >= 2);
+});
+
+check('switch history: port transitions and switch LLDP rows stay out of the agent\'s own lookups', async (pool) => {
+  const states = repoOf('interfaceStatesRepository', 'createInterfaceStatesRepository')({ pool });
+  const changes = repoOf('topologyChangesRepository', 'createTopologyChangesRepository')({ pool });
+  const devices = createSnmpDevicesRepository({ pool }, { secretBox: fakeSecretBox });
+  const agentId = await newAgent(pool, 'be-poller');
+  const device = await devices.create({ host: '10.14.0.60', displayName: 'History switch' });
+
+  // Same name on purpose: the agent's NIC and the switch port are both "eth0".
+  const own = await states.insertTransition(agentId, {
+    iface: 'eth0', fromStatus: 'up', toStatus: 'down', severity: 'WARN', summary: 'nic down', detectedAt: ago(20000),
+  });
+  const port = await states.insertTransition(agentId, {
+    deviceId: device.id, interfaceId: 4242, source: 'trap', iface: 'eth0', fromStatus: 'up', toStatus: 'down',
+    operStatus: 'down', severity: 'WARN', summary: 'port down', detectedAt: ago(10000),
+  });
+  const agentLatest = await states.latestForIface({ agentId, iface: 'eth0', since: ago(60000) });
+  assert.strictEqual(agentLatest.id, own, 'a switch port was read as the agent\'s own interface');
+  assert.strictEqual(agentLatest.deviceId, null);
+  const portLatest = await states.latestForDeviceIface({ deviceId: device.id, iface: 'eth0', since: ago(60000) });
+  assert.strictEqual(portLatest.id, port);
+  assert.strictEqual(portLatest.source, 'trap');
+  assert.strictEqual(portLatest.interfaceId, 4242);
+  assert.strictEqual(await states.latestForDeviceIface({ deviceId: device.id, iface: 'eth0', since: new Date(Date.now() + 60000) }), null);
+  assert.deepStrictEqual((await states.list({ deviceId: device.id })).map((t) => t.id), [port]);
+
+  const ownChange = await changes.insert({
+    agentId, changeType: 'neighbour_added', localPort: 'eth0', remoteChassisId: 'aa:bb', summary: 'agent lldp', detectedAt: ago(20000),
+  });
+  const devChange = await changes.insert({
+    agentId, deviceId: device.id, changeType: 'neighbour_removed', localPort: 'Gi0/1', remoteChassisId: 'cc:dd',
+    remotePort: 'Gi0/48', summary: 'switch lldp', detectedAt: ago(10000),
+  });
+  const forAgent = await changes.recentForAgent({ agentId, since: ago(60000) });
+  assert.deepStrictEqual(forAgent.map((c) => Number(c.id)), [Number(ownChange)], 'recentForAgent read a switch row');
+  const forDevice = await changes.recentForDevice({ deviceId: device.id, since: ago(60000) });
+  assert.deepStrictEqual(forDevice.map((c) => Number(c.id)), [Number(devChange)]);
+  assert.strictEqual(forDevice[0].deviceId, device.id);
+  assert.strictEqual((await changes.listForAgent({ agentId })).length, 2, 'the per-agent history still lists both');
+});
+
+check('device events: the sourceIp filter ties the log to a polled switch', async (pool) => {
+  const repo = repoOf('deviceEventsRepository', 'createDeviceEventsRepository')({ pool });
+  const agentId = await newAgent(pool, 'be-syslog');
+  const e = (sourceIp, summary) => ({
+    sourceIp, receivedAt: ago(5000), severity: 3, eventType: 'link.down', summary, transport: 'trap',
+  });
+  await repo.createMany(agentId, [e('10.14.0.61', 'Gi0/1 down'), e('10.14.0.62', 'Gi0/2 down')]);
+  const rows = await repo.list({ minutes: 10, sourceIp: '10.14.0.61', agentId, transport: 'trap' });
+  assert.deepStrictEqual(rows.map((r) => r.summary), ['Gi0/1 down']);
+  assert.strictEqual((await repo.list({ minutes: 10, agentId })).length, 2, 'an absent sourceIp must not filter');
+});
+
+check('new-device detector reads: known MACs per agent and per site, first-seen baselines, candidate by IP', async (pool) => {
+  const arp = repoOf('arpEntriesRepository', 'createArpEntriesRepository')({ pool });
+  const discovered = repoOf('discoveredDevicesRepository', 'createDiscoveredDevicesRepository')({ pool });
+  const [site] = await pool.query("INSERT INTO locations (name) VALUES ('Odense')");
+  const a1 = await newAgent(pool, 'be-odense-1', { location_id: site.insertId });
+  const a2 = await newAgent(pool, 'be-odense-2', { location_id: site.insertId });
+  const elsewhere = await newAgent(pool, 'be-elsewhere');
+
+  assert.strictEqual(await arp.oldestFirstSeen(a1), null, 'no rows must be null, not the epoch');
+  await arp.upsertMany(a1, [{ ip: '10.30.0.5', mac: 'de:ad:be:ef:00:01' }]);
+  await arp.upsertMany(a2, [{ ip: '10.30.0.6', mac: 'de:ad:be:ef:00:02' }]);
+  await arp.upsertMany(elsewhere, [{ ip: '10.40.0.7', mac: 'de:ad:be:ef:00:03' }]);
+  assert.ok(await arp.oldestFirstSeen(a1) instanceof Date);
+
+  const macs = ['de:ad:be:ef:00:01', 'de:ad:be:ef:00:02', 'de:ad:be:ef:00:03', 'de:ad:be:ef:00:04'];
+  const mine = await arp.knownMacs({ macs, agentId: a1 });
+  assert.deepStrictEqual([...mine], ['de:ad:be:ef:00:01']);
+  const atSite = await arp.knownMacs({ macs, locationId: site.insertId });
+  assert.deepStrictEqual([...atSite].sort(), ['de:ad:be:ef:00:01', 'de:ad:be:ef:00:02'], 'the site JOIN is wrong');
+  assert.strictEqual((await arp.knownMacs({ macs: [], agentId: a1 })).size, 0);
+
+  assert.strictEqual(await discovered.findByIp('10.30.0.50'), null);
+  const seenAt = new Date(Math.floor(Date.now() / 1000) * 1000 - 5000);
+  await discovered.upsertCandidate({ ip: '10.30.0.50', hostname: 'printer', openPorts: [80, 9100], seenAt, foundByAgentId: a1 });
+  const found = await discovered.findByIp('10.30.0.50');
+  assert.strictEqual(found.hostname, 'printer');
+  assert.deepStrictEqual(found.openPorts, [80, 9100]);
+  assert.strictEqual(found.foundByAgentId, a1);
+  const oldest = await discovered.oldestFirstSeen();
+  assert.ok(oldest instanceof Date && oldest.getTime() <= seenAt.getTime());
+});
+
+check('flows: topology edges carry their dominant service ports, chosen in SQL', async (pool) => {
+  const flows = repoOf('flowsRepository', 'createFlowsRepository')({ pool });
+  const agentId = await newAgent(pool, 'be-ot');
+  const f = (srcIp, srcPort, dstIp, dstPort, proto, bytes) => ({
+    agentId, ts: ago(600000), srcIp, dstIp, srcPort, dstPort, proto, bytes, packets: 1, flows: 1, internal: true,
+  });
+  await flows.insertMany([
+    f('10.1.1.5', 50123, '10.1.1.9', 502, 'tcp', 3000),
+    f('10.1.1.5', 50999, '10.1.1.9', 502, 'tcp', 2000), // same service, other ephemeral port
+    f('10.1.1.5', 50124, '10.1.1.9', 443, 'tcp', 1000),
+    f('10.1.1.5', 40001, '10.1.1.9', 40002, 'udp', 500), // nothing named: the lower port
+    f('10.1.1.5', 51000, '10.1.1.9', 22, 'tcp', 10), // a fourth service: past SERVICES_PER_EDGE
+    f('10.1.1.5', null, '10.1.1.9', null, 'icmp', 5), // no port at all: no service
+    f('10.1.1.9', 502, '10.1.1.5', 50123, 'tcp', 800), // the reply: its own edge, still 502
+  ]);
+  const edges = await flows.topologyEdges({ agentId, from: ago(3600000), to: new Date() });
+  const fwd = edges.find((e) => e.srcIp === '10.1.1.5' && e.dstIp === '10.1.1.9');
+  const rev = edges.find((e) => e.srcIp === '10.1.1.9' && e.dstIp === '10.1.1.5');
+  assert.strictEqual(fwd.bytes, 6515, 'the edge total must still hold every service');
+  assert.deepStrictEqual(fwd.services, [
+    { port: 502, proto: 'tcp', bytes: 5000 },
+    { port: 443, proto: 'tcp', bytes: 1000 },
+    { port: 40001, proto: 'udp', bytes: 500 },
+  ]);
+  assert.deepStrictEqual(rev.services, [{ port: 502, proto: 'tcp', bytes: 800 }]);
+  assert.deepStrictEqual(await flows.topologyEdges({ agentId, from: ago(60000), to: ago(30000) }), []);
+});
+
+check('retention: internal flows roll up bounded (top-N + one overflow row) and re-runs sum', async (pool) => {
+  const { createRetentionRepo } = require(path.join(ROOT, 'src/analysis/retention/repo'));
+  const { createRollup } = require(path.join(ROOT, 'src/analysis/retention/rollup'));
+  const { createFlowsRepository } = require(path.join(ROOT, 'src/repositories/flowsRepository'));
+  const repo = createRetentionRepo({ pool });
+  const rollup = createRollup({ repo, config: { rollupIntervalMinutes: 60, internalRollupTopN: 2, batchSize: 3 } });
+  const flows = createFlowsRepository({ pool });
+  const agentId = await newAgent(pool, 'be-rollup');
+  const ts = new Date(Math.floor(Date.now() / 3600000) * 3600000 - 2 * 3600000 + 60000); // inside one old bucket
+  const f = (srcPort, dstIp, dstPort, bytes, extra = {}) => ({
+    agentId, ts, srcIp: '10.2.0.5', dstIp, srcPort, dstPort, proto: 'TCP', bytes, packets: 2, flows: 1, internal: true, ...extra,
+  });
+  await flows.insertMany([
+    f(50123, '10.2.0.9', 502, 2000), f(50999, '10.2.0.9', 502, 1000), // one key: port 502, 3000 bytes
+    f(50124, '10.2.0.10', 443, 2000),
+    f(50125, '10.2.0.11', 22, 500), f(50126, '10.2.0.12', 80, 100), // below the top 2: folded
+    f(50127, '8.8.8.8', 53, 70, { internal: false, country: 'US', asn: 15169, direction: 'out', extIp: '8.8.8.8' }),
+  ]);
+
+  const out = await rollup.rollupFlows(new Date());
+  assert.ok(out.rawDeleted >= 6, 'the raw rows before the cutoff were not deleted');
+  const read = async () => {
+    const [rows] = await pool.query(
+      'SELECT src_ip, dst_ip, proto, service_port, bytes, packets, flow_count FROM flow_internal_rollup WHERE agent_id = ? ORDER BY bytes DESC',
+      [agentId],
+    );
+    return rows.map((r) => [r.src_ip, r.dst_ip, r.proto, Number(r.service_port), Number(r.bytes), Number(r.flow_count)]);
+  };
+  assert.deepStrictEqual(await read(), [
+    ['10.2.0.5', '10.2.0.9', 'tcp', 502, 3000, 2],
+    ['10.2.0.5', '10.2.0.10', 'tcp', 443, 2000, 1],
+    ['*', '*', '', 0, 600, 2],
+  ]);
+  const [[ext]] = await pool.query('SELECT COUNT(*) AS n FROM flow_rollup WHERE agent_id = ?', [agentId]);
+  assert.strictEqual(Number(ext.n), 1, 'the external rollup must still run beside the internal one');
+
+  // A late row in the same bucket: ON DUPLICATE KEY sums into the kept row.
+  await flows.insertMany([f(51000, '10.2.0.9', 502, 400)]);
+  await rollup.rollupFlows(new Date());
+  assert.deepStrictEqual((await read())[0], ['10.2.0.5', '10.2.0.9', 'tcp', 502, 3400, 3]);
+  const [[left]] = await pool.query('SELECT COUNT(*) AS n FROM flow_records WHERE agent_id = ?', [agentId]);
+  assert.strictEqual(Number(left.n), 0);
+});
+
+check('retention: every new purge deletes exactly the expired rows it owns', async (pool) => {
+  const { createRetentionRepo } = require(path.join(ROOT, 'src/analysis/retention/repo'));
+  const { createPurge } = require(path.join(ROOT, 'src/analysis/retention/purge'));
+  const devices = createSnmpDevicesRepository({ pool }, { secretBox: fakeSecretBox });
+  const agentId = await newAgent(pool, 'be-purge');
+  const deviceId = (await devices.create({ host: '10.14.0.70', displayName: 'Purge switch' })).id;
+  const old = ago(40 * DAY);
+  const recent = ago(DAY);
+
+  // One expired and one current row per table, plus the rows a purge must
+  // never take whatever their age.
+  const ins = (sql, rows) => Promise.all(rows.map((p) => pool.query(sql, p)));
+  await ins('INSERT INTO flow_internal_rollup (bucket, agent_id, src_ip, dst_ip) VALUES (?, ?, ?, ?)',
+    [[old, agentId, 'a', 'b'], [recent, agentId, 'a', 'b']]);
+  await ins("INSERT INTO probe_results (agent_id, ts, type, target) VALUES (?, ?, 'ping', 'x')",
+    [[agentId, old], [agentId, recent]]);
+  await ins('INSERT INTO speedtest_results (agent_id, ts) VALUES (?, ?)', [[agentId, old], [agentId, recent]]);
+  await ins("INSERT INTO transaction_results (`time`, test_id, agent_id, status) VALUES (?, 1, ?, 'ok')",
+    [[old, agentId], [recent, agentId]]);
+  await ins("INSERT INTO probe_outages (agent_id, metric, severity, started_at, resolved_at, affected_target) VALUES (?, 'reachability', 'critical', ?, ?, 'x')",
+    [[agentId, old, old], [agentId, old, recent], [agentId, old, null]]); // closed-old, closed-recent, still OPEN
+  await ins("INSERT INTO topology_changes (agent_id, change_type, summary, detected_at) VALUES (?, 'neighbour_added', 's', ?)",
+    [[agentId, old], [agentId, recent]]);
+  await ins('INSERT INTO discovered_devices (ip, status, first_seen, last_seen) VALUES (?, ?, ?, ?)', [
+    ['10.99.0.1', 'discovered', old, old], ['10.99.0.2', 'ignored', old, old],
+    ['10.99.0.3', 'promoted', old, old], ['10.99.0.4', 'discovered', old, recent],
+  ]);
+  await ins("INSERT INTO host_connections (agent_id, src_ip, dst_ip, dst_port, last_seen) VALUES (?, '10.0.0.1', ?, 443, ?)",
+    [[agentId, '10.0.0.2', old], [agentId, '10.0.0.3', recent]]);
+  await ins("INSERT INTO audit_events (actor_type, action, ts, first_seen_at, last_seen_at) VALUES ('system', 'x', ?, ?, ?)",
+    [[old, old, old], [old, old, recent]]); // the second still recurs: kept
+  await ins("INSERT INTO device_vlans (device_id, vlan, name, first_seen, last_seen) VALUES (?, ?, 'v', ?, ?)",
+    [[deviceId, 10, old, old], [deviceId, 20, old, recent]]);
+  await ins("INSERT INTO fdb_mac_moves (device_id, mac, to_port, moved_at) VALUES (?, 'aa:aa:aa:aa:aa:aa', 1, ?)",
+    [[deviceId, old], [deviceId, recent]]);
+
+  const days = 30;
+  const purge = createPurge({
+    repo: createRetentionRepo({ pool }),
+    config: {
+      rollupRetentionDays: days, findingRetentionDays: 365, fdbRetentionDays: days, fdbMoveRetentionDays: days,
+      probeResultRetentionDays: days, probeOutageRetentionDays: days, speedtestRetentionDays: days,
+      transactionResultRetentionDays: days, topologyChangeRetentionDays: days, discoveredDeviceRetentionDays: days,
+      hostConnectionRetentionDays: days, auditEventRetentionDays: days,
+    },
+  });
+  const out = await purge.purgeExpired();
+  const expect = {
+    internalFlowRollups: 1, probeResults: 1, speedtestResults: 1, transactionResults: 1, probeOutages: 1,
+    topologyChanges: 1, discoveredDevices: 2, hostConnections: 1, auditEvents: 1, deviceVlans: 1, fdbMoves: 1,
+  };
+  for (const [k, n] of Object.entries(expect)) assert.strictEqual(out[k], n, `${k}: purged ${out[k]}, expected ${n}`);
+
+  const count = async (sql, p = []) => Number((await pool.query(sql, p))[0][0].n);
+  assert.strictEqual(await count('SELECT COUNT(*) AS n FROM probe_outages WHERE agent_id = ? AND resolved_at IS NULL', [agentId]), 1,
+    'an OPEN outage was purged');
+  assert.deepStrictEqual(
+    (await pool.query("SELECT ip FROM discovered_devices WHERE ip LIKE '10.99.0.%' ORDER BY ip"))[0].map((r) => r.ip),
+    ['10.99.0.3', '10.99.0.4'], 'a promoted or recently seen candidate was purged');
+  assert.strictEqual(await count("SELECT COUNT(*) AS n FROM audit_events WHERE action = 'x'"), 1, 'a still-recurring audit event was purged');
+
+  const again = await purge.purgeExpired();
+  for (const k of Object.keys(expect)) assert.strictEqual(again[k], 0, `${k} is not idempotent`);
 });
 
 async function main() {

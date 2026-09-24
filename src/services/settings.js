@@ -512,11 +512,27 @@ function createSettingsService({ settingsRepo, config, liveAnalysis = null, live
   //
   // `defaultTrafficSource` / `defaultSflowHsflowd`: the traffic source stamped
   // onto each agent when it enrolls (its monitor_config), so a fleet can be
-  // brought up on e.g. sFlow without editing every agent by hand. `proc` (the
-  // built-in default) leaves the agent unstamped; per-agent Edit always wins.
-  // `defaultSflowHsflowd` only applies to an sFlow default: it self-provisions
-  // the agent's local hsflowd exporter so sFlow collects out of the box.
-  const AGENTS_DEFAULTS = { autoInstallTools: false, defaultTrafficSource: 'proc', defaultSflowHsflowd: false };
+  // brought up on e.g. sFlow without editing every agent by hand. Per-agent
+  // Edit always wins.
+  //
+  // THE DEFAULT IS sFlow, AND hsflowd COMES WITH IT. `proc` reads
+  // /proc/net/dev: interface byte counters, and nothing else. It cannot answer
+  // who talked to whom, on which port — so every flow screen on a fresh install
+  // was empty, under a message explaining that the agent would have to be
+  // reconfigured before the product's central feature worked at all. A default
+  // that makes the main screens say "nothing here" is the wrong default.
+  //
+  // The two values are one decision, not two. An sFlow source with no exporter
+  // collects nothing: the agent binds its collector and waits for datagrams
+  // that never come, which is WORSE than proc, because proc at least produces
+  // interface rates. `defaultSflowHsflowd` self-provisions the agent's local
+  // hsflowd so the host samples its own packets into that collector. Turning
+  // the source on without it would be shipping the empty screen again.
+  //
+  // Docker agents defer to the hsflowd sidecar and are unaffected by the
+  // second flag; a host where hsflowd cannot be built reports the reason
+  // through sflow.status and keeps running.
+  const AGENTS_DEFAULTS = { autoInstallTools: false, defaultTrafficSource: 'sflow', defaultSflowHsflowd: true };
 
   function validateAgents(patch) {
     const p = patch && typeof patch === 'object' ? patch : {};

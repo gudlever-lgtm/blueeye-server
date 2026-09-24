@@ -107,11 +107,16 @@ test('GET /api/settings includes throughput defaults (disabled)', async () => {
 });
 
 // ---- PUT /api/settings/agents (default traffic source for new agents) ------
-test('GET /api/settings includes agent defaults (proc, hsflowd off)', async () => {
+// The two values are ONE decision. An sFlow source with no exporter binds a
+// collector and waits for datagrams that never arrive — worse than proc, which
+// at least produces interface rates. If the source default ever moves without
+// the exporter default moving with it, a fresh install ships empty flow
+// screens, which is the state this default was changed to fix.
+test('a fresh install defaults to sFlow, with the local exporter that makes it collect', async () => {
   const res = await request(makeApp()).get('/api/settings').set('Authorization', admin());
   assert.ok(res.body.agents);
-  assert.equal(res.body.agents.defaultTrafficSource, 'proc');
-  assert.equal(res.body.agents.defaultSflowHsflowd, false);
+  assert.equal(res.body.agents.defaultTrafficSource, 'sflow');
+  assert.equal(res.body.agents.defaultSflowHsflowd, true, 'sFlow without an exporter collects nothing');
 });
 
 test('PUT /api/settings/agents saves the default traffic source and GET reflects it (admin)', async () => {

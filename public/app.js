@@ -1650,6 +1650,7 @@ function getAgentsPage() {
     update: updateAgent,
     windowsUpdate: showWindowsUpdateCommand,
     bulkUpdate: bulkUpdateAgents,
+    editSnmp: editAgentSnmp,
     showResults,
     showFlows: showAgentFlows,
     showConnection,
@@ -11470,6 +11471,72 @@ async function loadSnmpProfiles() {
   }
 }
 
+// SNMP settings for one agent, on their own.
+//
+// WHY THIS IS A SEPARATE DIALOG. These five fields apply to ONE traffic source
+// out of four, and they sat in the middle of the main Edit form — pushing the
+// sFlow sampling rate and exporter toggle below the fold for every agent that
+// has nothing to do with SNMP. The common case was paying for the rare one.
+//
+// It edits ONLY the snmp block: the source, the collector ports and the
+// exporter settings stay exactly as they were, so opening this on a netflow
+// agent and saving cannot move it onto SNMP by accident. Setting a host here
+// does not switch the source either — that is a separate, deliberate choice in
+// Edit agent.
+async function editAgentSnmp(a) {
+  const mc = a.monitor_config || {};
+  const snmp = mc.snmp || {};
+  const profiles = await loadSnmpProfiles();
+  const grantsThis = (p) => !Array.isArray(p.agentIds) || p.agentIds.includes(Number(a.id));
+  const profileOptions = profiles.length ? [
+    { value: '', label: t('ag.snmp.profile.none') },
+    ...profiles.map((p) => ({
+      value: String(p.id),
+      label: grantsThis(p) ? p.name : `${p.name} ${t('ag.snmp.profile.ungranted')}`,
+    })),
+  ] : null;
+
+  openModal(t('ag.snmp.title', { agent: a.display_name || a.hostname || `#${a.id}` }), [
+    { name: 'snmp_host', label: t('ag.snmp.host'), value: snmp.host || '', hint: t('ag.snmp.host.hint') },
+    ...(profileOptions ? [{
+      name: 'snmp_profile_id', label: t('ag.snmp.profile'), type: 'select',
+      value: snmp.profileId ? String(snmp.profileId) : '',
+      options: profileOptions, hint: t('ag.snmp.profile.hint'),
+    }] : []),
+    { name: 'snmp_community', label: 'SNMP community',
+      value: snmp.community || (snmp.profileId ? '' : 'public'),
+      hint: profileOptions ? t('ag.snmp.community.hint') : undefined },
+    { name: 'snmp_version', label: 'SNMP version', type: 'select', value: snmp.version || '2c',
+      options: ['1', '2c'].map((x) => ({ value: x, label: x })) },
+    { name: 'snmp_port', label: 'SNMP port', type: 'number', value: String(snmp.port || 161) },
+  ], async (v) => {
+    const host = String(v.snmp_host || '').trim();
+    // Clearing the host clears the block. An agent whose source is SNMP cannot
+    // have it cleared from under it, though — that would leave a source with
+    // nothing to poll, which the server would refuse anyway.
+    if (!host) {
+      if (mc.source === 'snmp') throw new Error(t('ag.snmp.cantClear'));
+      await api(`/agents/${a.id}`, { method: 'PUT', body: { monitor_config: { ...mc, snmp: undefined } } });
+      closeModal(); toast(t('ag.snmp.cleared')); render();
+      return;
+    }
+    // A named credential wins, and the literal field is then not stored at all
+    // — the secret lives in the profile and is resolved for the one hop that
+    // needs it. An operator who cannot see the picker keeps whatever credential
+    // the agent was already given.
+    const picked = profileOptions ? v.snmp_profile_id : (snmp.profileId ? String(snmp.profileId) : '');
+    const snmpCfg = { host, version: v.snmp_version, port: Number(v.snmp_port) || 161 };
+    if (picked) snmpCfg.profileId = Number(picked);
+    else snmpCfg.community = v.snmp_community || 'public';
+
+    // Keep the rest of monitor_config byte for byte. This dialog is about the
+    // credential, not about which source the agent runs.
+    const body = { monitor_config: { ...mc, source: mc.source || 'sflow', snmp: snmpCfg } };
+    await api(`/agents/${a.id}`, { method: 'PUT', body });
+    closeModal(); toast(mc.source === 'snmp' ? t('ag.snmp.saved') : t('ag.snmp.savedUnused')); render();
+  });
+}
+
 async function editAgent(a) {
   const mc = a.monitor_config || {};
   const snmp = mc.snmp || {};
@@ -11488,26 +11555,38 @@ async function editAgent(a) {
   const sflowHs = (mc.sflow && mc.sflow.hsflowd) || null;
   const hsObj = sflowHs && typeof sflowHs === 'object' ? sflowHs : {};
   const caps = a.capabilities && Array.isArray(a.capabilities.sources) ? a.capabilities.sources : [];
-  // Only offer sources the agent says it supports (fall back to both if unknown).
-  const sourceOptions = (caps.length ? caps : ['proc', 'snmp']).map((s) => ({ value: s, label: s }));
+  // Only offer sources the agent says it supports. The fallback used to be
+  // ['proc','snmp'], which hid netflow and sflow from every agent whose
+  // capabilities had not landed yet — including brand-new ones, which is
+  // exactly when the source gets chosen.
+  // One literal key per source, never a key built by joining a prefix to a
+  // variable: the UI gate sweeps this file's source text for the keys it must
+  // find in both catalogues, and a concatenated key is invisible to it — the
+  // sweep would pass while a locale was missing an option label. (Writing the
+  // concatenated form even inside a comment is enough to confuse the sweep,
+  // which is why this note describes it instead of showing it.)
+  const SOURCE_LABEL = {
+    sflow: () => t('ag.source.sflow'),
+    netflow: () => t('ag.source.netflow'),
+    proc: () => t('ag.source.proc'),
+    snmp: () => t('ag.source.snmp'),
+  };
+  const sourceOptions = (caps.length ? caps : ['sflow', 'netflow', 'proc', 'snmp'])
+    .map((src) => ({ value: src, label: SOURCE_LABEL[src] ? SOURCE_LABEL[src]() : src }));
+  // THE SNMP FIELDS ARE NOT HERE. They are five of the fifteen this form used
+  // to carry, they apply to one source out of four, and they pushed the
+  // sampling and exporter settings below the fold — so the common case paid
+  // for the rare one. They live behind "SNMP settings" in the row menu now
+  // (editAgentSnmp), and this form carries the existing snmp block forward
+  // untouched so switching source here can never silently discard a
+  // credential somebody configured there.
   openModal(`Edit agent ${a.id}`, [
     { name: 'display_name', label: 'Display name', value: a.display_name || '' },
     { name: 'location_id', label: 'Location', type: 'select', value: a.location_id ? String(a.location_id) : '',
       options: [{ value: '', label: '(none)' }, ...locationCache.map((l) => ({ value: String(l.id), label: l.name }))] },
     { name: 'notes', label: 'Notes', type: 'textarea', value: a.notes || '' },
-    { name: 'source', label: 'Traffic source', type: 'select', value: mc.source || 'proc', options: sourceOptions },
-    { name: 'snmp_host', label: 'SNMP host (only for snmp)', value: snmp.host || '' },
-    ...(profileOptions ? [{
-      name: 'snmp_profile_id', label: t('ag.snmp.profile'), type: 'select',
-      value: snmp.profileId ? String(snmp.profileId) : '',
-      options: profileOptions, hint: t('ag.snmp.profile.hint'),
-    }] : []),
-    { name: 'snmp_community', label: 'SNMP community',
-      value: snmp.community || (snmp.profileId ? '' : 'public'),
-      hint: profileOptions ? t('ag.snmp.community.hint') : undefined },
-    { name: 'snmp_version', label: 'SNMP version', type: 'select', value: snmp.version || '2c',
-      options: ['1', '2c'].map((s) => ({ value: s, label: s })) },
-    { name: 'snmp_port', label: 'SNMP port', type: 'number', value: String(snmp.port || 161) },
+    { name: 'source', label: t('ag.source.label'), type: 'select', value: mc.source || 'sflow', options: sourceOptions,
+      hint: t('ag.source.hint') },
     { name: 'netflow_port', label: 'NetFlow UDP port (only for netflow)', type: 'number',
       value: String((mc.netflow && mc.netflow.port) || 2055) },
     { name: 'sflow_port', label: 'sFlow UDP port (only for sflow)', type: 'number',
@@ -11522,20 +11601,15 @@ async function editAgent(a) {
   ], async (v) => {
     let monitor_config = null;
     if (v.source === 'snmp') {
-      if (!v.snmp_host.trim()) throw new Error('SNMP host is required for source "snmp"');
-      // A named credential wins, and the literal field is then not stored at
-      // all — the secret lives in the profile and is resolved for the one hop
-      // that needs it. An operator who cannot see the picker keeps whatever
-      // credential the agent was already given.
-      const picked = profileOptions ? v.snmp_profile_id : (snmp.profileId ? String(snmp.profileId) : '');
-      const snmpCfg = {
-        host: v.snmp_host.trim(),
-        version: v.snmp_version,
-        port: Number(v.snmp_port) || 161,
-      };
-      if (picked) snmpCfg.profileId = Number(picked);
-      else snmpCfg.community = v.snmp_community || 'public';
-      monitor_config = { source: 'snmp', snmp: snmpCfg };
+      // The SNMP block is whatever the SNMP popup last stored. Selecting the
+      // source here never edits it, and never invents one: an agent pointed at
+      // SNMP with nothing configured is told where to configure it, rather than
+      // being refused by a validation message about a field this form no longer
+      // shows.
+      if (!snmp.host) {
+        throw new Error(t('ag.snmp.needed'));
+      }
+      monitor_config = { source: 'snmp', snmp: { ...snmp } };
     } else if (v.source === 'netflow') {
       const netflow = { port: Number(v.netflow_port) || 2055 };
       if (v.collector_bind && v.collector_bind.trim()) netflow.bindAddress = v.collector_bind.trim();

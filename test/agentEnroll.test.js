@@ -47,16 +47,37 @@ test('POST /agents/enroll stamps the fleet-wide default traffic source onto the 
   assert.deepEqual(received.monitorConfig, { source: 'sflow', sflow: { hsflowd: true } });
 });
 
-test('POST /agents/enroll passes a null monitor config when the default is proc', async () => {
+test('POST /agents/enroll stamps a new agent with sFlow AND its local exporter', async () => {
   let received;
   const enrollmentStore = makeEnrollmentStore({
     claimAndEnroll: async (input) => { received = input; return { status: 'ok', agentId: 6 }; },
   });
-  // Default (empty store) is proc → the agent is left unstamped.
+  // A fresh install (empty settings store) now enrolls agents onto sFlow, so
+  // the flow screens have something to show without anyone editing an agent.
   const res = await request(makeApp({ enrollmentStore })).post('/agents/enroll').send(validBody);
 
   assert.equal(res.status, 201);
-  assert.equal(received.monitorConfig, null);
+  // The exporter is not optional decoration: an sFlow source with nothing
+  // sampling into it binds a collector and waits for datagrams that never
+  // arrive, which is worse than the proc default it replaced.
+  assert.deepEqual(received.monitorConfig, { source: 'sflow', sflow: { hsflowd: true } });
+});
+
+test('an explicit proc default still leaves the agent unstamped', async () => {
+  let received;
+  const enrollmentStore = makeEnrollmentStore({
+    claimAndEnroll: async (input) => { received = input; return { status: 'ok', agentId: 7 }; },
+  });
+  // The real settings service over a seeded store, so this exercises the same
+  // resolution path production uses rather than a stubbed answer.
+  const settingsService = makeSettingsService({
+    initial: { agents: { defaultTrafficSource: 'proc', defaultSflowHsflowd: false } },
+  });
+  const res = await request(makeApp({ enrollmentStore, settingsService }))
+    .post('/agents/enroll').send({ ...validBody, hostname: 'proc-host' });
+
+  assert.equal(res.status, 201);
+  assert.equal(received.monitorConfig, null, 'proc means "leave it alone", as before');
 });
 
 test('a failing settings read does not break enrollment (falls back to unstamped)', async () => {

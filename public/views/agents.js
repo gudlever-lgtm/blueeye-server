@@ -121,6 +121,10 @@
           // …and the ones that change something.
           deps.canWrite() ? '-' : null,
           deps.canWrite() ? { label: t('ag.act.edit'), onclick: function () { deps.edit(a); } } : null,
+          // SNMP is optional and applies to one source out of four, so it lives
+          // here rather than in the middle of the Edit form where it pushed the
+          // settings most agents DO use below the fold.
+          deps.canWrite() ? { label: t('ag.act.snmp'), onclick: function () { deps.editSnmp(a); } } : null,
           deps.canDelete() ? updateEntry(a, target, behind) : null,
           deps.canDelete() ? '-' : null,
           deps.canDelete() ? { label: t('ag.act.delete'), danger: true, onclick: function () { deps.remove(a); } } : null,

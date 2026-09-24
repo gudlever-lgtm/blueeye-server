@@ -453,6 +453,11 @@ main#view .card { width: auto; padding: 18px 20px; box-shadow: var(--shadow); }
 @media (prefers-reduced-motion: reduce) { .topo-layers .topo-node.flapping circle { animation: none; } }
 .topo-dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; background: var(--warn); }
 .topo-dot.flapping { background: var(--bad); }
+/* An agent that is not connected: a thick dashed red ring and a hollow fill,
+   so the state reads without telling red from green. */
+.topo-layers .topo-node.down circle { stroke: var(--bad); stroke-width: 3; stroke-dasharray: 2 2; fill: var(--panel); }
+.topo-dot.down { background: transparent; border: 2px dashed var(--bad); box-sizing: border-box; }
+.topo-node-slot { margin-top: 10px; }
 /* What-if / blast-radius result panel. */
 .blast-slot { margin-top: 10px; }
 .blast-panel { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 12px 14px; }
@@ -2175,3 +2180,8 @@ button.ghost.small:has(> .icon-glyph) {
 .rec-block { margin: 0 0 10px; }
 .rec-block p { margin: 4px 0 0; }
 .ts-cause-hosts { margin: 4px 0 0; font-size: var(--fs-sm, 13px); }
+
+/* Address with a copy button (copyable in app.js). */
+.copyable { display: inline-flex; align-items: center; gap: 4px; }
+.copy-btn { border: 0; background: transparent; color: var(--muted); cursor: pointer; padding: 0 2px; font-size: 12px; line-height: 1; }
+.copy-btn:hover, .copy-btn:focus-visible { color: var(--text); }

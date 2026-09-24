@@ -229,7 +229,7 @@
               e.occurrences > 1 ? [t('devlog.field.occurrences'), String(e.occurrences)] : null,
             ])),
             ui.drawerSection(t('devlog.drawer.who'), ui.keyValues([
-              [t('devlog.field.sender'), e.sourceIp],
+              [t('devlog.field.sender'), deps.copyable ? deps.copyable(e.sourceIp) : e.sourceIp],
               e.deviceName ? [t('devlog.field.device'), e.deviceName] : null,
               e.deviceHostname ? [t('devlog.field.selfName'), e.deviceHostname] : null,
               [t('devlog.field.receivedBy'), e.agentName || ('#' + e.agentId)],

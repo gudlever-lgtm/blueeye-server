@@ -303,6 +303,19 @@ function copyText(text) {
     fallbackCopy(text, done);
   }
 }
+// An address with a copy button beside it: IPs, MACs and hop addresses are
+// what a technician pastes into a terminal next, and selecting text inside a
+// clickable row opens the row instead.
+function copyable(text) {
+  if (text == null || text === '') return el('span', { class: 'muted' }, '–');
+  const value = String(text);
+  return el('span', { class: 'copyable' },
+    el('code', {}, value),
+    el('button', {
+      type: 'button', class: 'copy-btn', title: t('common.copy'), 'aria-label': t('common.copyValue', { v: value }),
+      onclick: (e) => { e.stopPropagation(); e.preventDefault(); copyText(value); },
+    }, '⧉'));
+}
 function fallbackCopy(text, done) {
   const ta = el('textarea', { style: 'position:fixed;opacity:0' });
   ta.value = text;
@@ -5261,7 +5274,7 @@ function pathGraph(graph, pgOpts = {}) {
       el('div', { class: 'pg-panel-head' },
         el('span', { class: `pg-dot ${n.severity}` }),
         el('strong', {}, n.kind === 'source' ? 'Agent (origin)' : (n.kind === 'dest' ? `Destination · hop ${n.hop}` : `Hop ${n.hop}`)),
-        el('span', { class: 'mono' }, n.ip || (n.unresponsive ? '* * * (silent)' : '–'))),
+        n.ip ? copyable(n.ip) : el('span', { class: 'mono' }, n.unresponsive ? '* * * (silent)' : '–')),
       el('div', { class: 'muted' }, n.explain),
       loc ? el('div', {}, loc) : (n.private ? el('div', { class: 'muted' }, 'Private / RFC1918 — not geolocated') : null),
       el('div', { class: 'pg-stats' },
@@ -5932,7 +5945,7 @@ function mtuDetail(r) {
       : h.status === 'ok' ? 'good' : 'unknown';
     return el('tr', { class: h.hop === dropAt ? 'mtu-drop' : null },
       el('td', { class: 'muted' }, `#${h.hop}`),
-      el('td', { class: 'mono' }, h.ip || '* * *'),
+      el('td', { class: 'mono' }, h.ip ? copyable(h.ip) : '* * *'),
       el('td', { class: 'mtu-bar-cell' },
         el('div', { class: 'mtu-bar' }, el('div', { class: `mtu-bar-fill ${cls}`, style: `width:${pct}%` })),
         // The hop the path narrows at is marked in text as well as colour —
@@ -6033,7 +6046,7 @@ async function probeDetail(r, agentId) {
     const hops = r.hops || [];
     const hopRow = (h) => el('tr', {},
       el('td', { class: 'muted' }, `#${h.hop}`),
-      el('td', { class: 'mono' }, h.ip || '* * *'),
+      el('td', { class: 'mono' }, h.ip ? copyable(h.ip) : '* * *'),
       el('td', { class: 'num' }, h.rttMs != null ? `${h.rttMs} ms` : '–'),
       el('td', { class: 'num' }, h.lossPct != null ? `${h.lossPct}%` : '–'),
       el('td', { class: 'num' }, h.jitterMs != null ? `${h.jitterMs} ms` : '–'));
@@ -6203,8 +6216,9 @@ function topoGraphSvg(nodes, edges, { label, kindBadge, actionBtns } = {}) {
       el('div', { class: 'pg-stat' }, el('span', { class: 'k' }, 'Out'), el('span', { class: 'v' }, fmtBytes(n.bytesOut))),
     ];
     const peerInfo = label(n.id) === n.id ? null : el('span', { class: 'mono' }, label(n.id));
+    const idCopy = copyable(n.id);
     panel.replaceChildren(
-      ...[el('div', { class: 'pg-panel-head' }, kindBadge(n.kind), el('strong', {}, n.id), peerInfo),
+      ...[el('div', { class: 'pg-panel-head' }, kindBadge(n.kind), el('strong', {}, idCopy), peerInfo),
         el('div', { class: 'pg-stats' }, ...rows),
         actionBtns ? actionBtns(n.id) : null].filter(Boolean));
   }
@@ -6549,7 +6563,27 @@ async function drawTopoMapInto(host, { data, locations, siteId }) {
 
 // Layers mode: the unified resilience graph (LLDP l2_link + service_dep). The
 // graph is fetched once and cached; the layer choice re-renders locally.
-const topoLayersState = { graph: null, changeSets: null, api: null };
+const topoLayersState = { graph: null, changeSets: null, api: null, agents: null };
+
+// The panel under the Layers graph for the node that was clicked: what it is,
+// whether it is up, and the way into its own page and the fault tools. The
+// graph used to highlight the neighbourhood and lead nowhere.
+function topoNodePanel(id) {
+  const node = ((topoLayersState.graph && topoLayersState.graph.nodes) || []).find((x) => String(x.id) === String(id));
+  const label = node ? node.label : String(id);
+  const device = /^d:(\d+)$/.exec(String(id));
+  const agent = !device ? (topoLayersState.agents || []).find((a) => String(a.id) === String(id)) : null;
+  const status = agent ? agent.status : null;
+  return el('div', { class: 'pg-panel topo-node-panel' },
+    el('div', { class: 'pg-panel-head' },
+      status ? el('span', { class: `badge ${status === 'online' ? 'online' : 'offline'}` }, status) : null,
+      el('strong', {}, label)),
+    el('div', { class: 'ui ctx-actions' },
+      device
+        ? ui.button('primary', t('topo.node.openDevice'), { size: 'xs', onclick: () => openSnmpDevice(Number(device[1])) })
+        : ui.button('primary', t('topo.node.openAgent'), { size: 'xs', onclick: () => openAgent(Number(id)) })),
+    !device ? contextActions({ agentId: Number(id) }) : null);
+}
 
 async function drawTopoLayersInto(host, opts) {
   const render = () => {
@@ -6570,10 +6604,26 @@ async function drawTopoLayersInto(host, opts) {
       focusId: opts.focus,
       onNodeClick: (id) => {
         if (opts.whatIf) runTopoBlast(host, id, opts);
-        else if (topoLayersState.api) topoLayersState.api.neighbourhood(id);
+        else if (topoLayersState.api) {
+          topoLayersState.api.neighbourhood(id);
+          const slot = host.querySelector('.topo-node-slot');
+          if (slot) slot.replaceChildren(topoNodePanel(id));
+        }
       },
     });
     topoLayersState.api = api2;
+    // State on the node itself: an agent that is not connected gets a dashed
+    // red ring and says so in its tooltip — the shape carries it as well as
+    // the colour.
+    const offline = new Set((topoLayersState.agents || []).filter((a) => a.status && a.status !== 'online').map((a) => String(a.id)));
+    api2.nodeEls.forEach((g, id) => {
+      const down = offline.has(String(id));
+      g.classList.toggle('down', down);
+      if (down) {
+        const tip = g.querySelector('title');
+        if (tip && !/offline/.test(tip.textContent)) tip.textContent += `\n${t('topo.node.offline')}`;
+      }
+    });
     // Recently-changed + flapping hosts (operator+ data) flagged on their nodes.
     if (topoLayersState.changeSets) {
       api2.nodeEls.forEach((g, id) => {
@@ -6588,10 +6638,12 @@ async function drawTopoLayersInto(host, opts) {
       topoLayersState.changeSets && (topoLayersState.changeSets.changed.size || topoLayersState.changeSets.flapping.size)
         ? el('span', { class: 'lg' }, el('span', { class: 'topo-dot flapping' }), t('topo.legend.changed'))
         : null,
+      offline.size ? el('span', { class: 'lg' }, el('span', { class: 'topo-dot down' }), t('topo.legend.offline', { n: offline.size })) : null,
       el('span', { class: 'lg muted' }, t('topo.legend.totals', {
         nodes: totals.nodes, links: totals.l2_link, deps: totals.service_dep,
       })));
     const children = [el('div', { class: 'pg-head' }, legend), api2.wrap];
+    if (!opts.whatIf) children.push(el('div', { class: 'topo-node-slot' }));
     if (opts.whatIf) children.push(el('div', { class: 'blast-slot' }, el('div', { class: 'muted small' }, t('topo.whatIf.prompt'))));
     host.replaceChildren(...children);
     if (opts.whatIf && opts.focus != null) runTopoBlast(host, opts.focus, opts);
@@ -6600,7 +6652,9 @@ async function drawTopoLayersInto(host, opts) {
   render();
   if (topoLayersState.graph) return;
   try {
-    topoLayersState.graph = await api('/api/topology/graph');
+    const [graph, agents] = await Promise.all([api('/api/topology/graph'), api('/agents').catch(() => null)]);
+    topoLayersState.graph = graph;
+    topoLayersState.agents = agents;
   } catch (e) {
     host.replaceChildren(el('div', { class: 'error' }, errText(e)));
     return;
@@ -7098,6 +7152,7 @@ function getDeviceLogView() {
     state: deviceLogState,
     onContext: writeContextParams,
     agentName: agentLabel,
+    copyable,
     fetchAgents: () => api('/agents').catch(() => []),
     help: () => {
       const info = PAGE_INFO.deviceLog || {};
@@ -8660,6 +8715,7 @@ function getSnmpDeviceView() {
     fetchCounters: (id) => api(`/api/snmp-devices/${id}/counters`),
     fetchSeries: (id, interfaceId, minutes) =>
       api(`/api/snmp-devices/${id}/interfaces/${interfaceId}/series?minutes=${minutes}`),
+    copyable,
   });
   return snmpDeviceView;
 }
@@ -8821,6 +8877,16 @@ async function globalSearch(q) {
 
   const kids = [title()];
   const hits = data.hits || [];
+
+  // An address or a host name is also something to TEST, not only to look
+  // up: the probe and Diagnose open with it as the target.
+  if (/^[0-9a-f.:]+$/i.test(q) || /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/i.test(q)) {
+    const go = (view) => () => { closeModal(); openInContext(view, { target: q }); };
+    kids.push(el('div', { class: 'ui ctx-actions' },
+      el('span', { class: 'meta-xs' }, t('ctx.label')),
+      viewAllowed('probes') ? ui.button('secondary', t('search.probeTarget'), { size: 'xs', onclick: go('probes') }) : null,
+      viewAllowed('diagnose') ? ui.button('secondary', t('ctx.diagnose'), { size: 'xs', onclick: go('diagnose') }) : null));
+  }
 
   if (data.partial && (data.failedSources || []).length) {
     kids.push(el('p', { class: 'warn small' }, t('search.partial', { sources: data.failedSources.join(', ') })));
@@ -9011,7 +9077,9 @@ function stopFleet() { if (fleetState.timer) { clearInterval(fleetState.timer); 
 // Shared by the Overview and the Delta/Changes view — one state, one URL, not a
 // per-view copy. Any view that reads it does so through this module-level var.
 let fleetFilter = FleetFilter.parseQuery(window.location.search);
-let fleetSortByHealth = false;
+// Worst-first by default: the help text promised it, and on a fleet of fifty
+// the broken agent is the one row anybody opened the page to find.
+let fleetSortByHealth = true;
 // The query keys the global filter owns — cleared before re-serialising so a
 // dropped dimension leaves the URL, without disturbing OTHER views' params
 // (topology ?layer/?focus, delta ?changeTypes). This merge is what lets the
@@ -17334,6 +17402,7 @@ function routeIdFor(view) {
     case 'location': return selectedLocationId;
     case 'event': return selectedEventId;
     case 'cluster': return selectedClusterId;
+    case 'snmpDevice': return selectedSnmpDeviceId;
     default: return null;
   }
 }
@@ -17354,6 +17423,9 @@ function setRouteId(view, id) {
   else if (view === 'location') selectedLocationId = id;
   else if (view === 'event') selectedEventId = id;
   else if (view === 'cluster') selectedClusterId = id;
+  // A switch page is linked to from alerts, topology and troubleshooting; the
+  // id in its address was read by nothing, so a link opened "No device".
+  else if (view === 'snmpDevice') selectedSnmpDeviceId = id;
 }
 
 // Read the address into view state. Returns false when the path names no screen

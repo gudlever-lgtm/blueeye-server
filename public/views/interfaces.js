@@ -98,6 +98,8 @@
       });
       if (!list.length) return emptyFor(source);
       return ui.dataTable({
+        // Dense: a host or switch has many ports, and a technician scans them.
+        dense: true,
         columns: [
           { key: 'iface', label: t('iface.col.iface'), width: '150px' },
           { key: 'status', label: t('iface.col.status'), width: '96px' },

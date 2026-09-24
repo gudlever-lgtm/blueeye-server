@@ -134,11 +134,23 @@
 
         // ---- the ports ------------------------------------------------------
         var chartHost = el('div', {});
-
-        body.append(ui.panel({
-          title: t('snmpdev.ports.title'),
-          note: counters ? t('snmpdev.ports.note') : t('snmpdev.ports.noCounters'),
-          children: [ports.length ? ui.dataTable({
+        // A 48-port switch is a long table; the filter narrows it by name,
+        // alias or status as it is typed.
+        var portQuery = '';
+        var portTableHost = el('div', {});
+        var portSearch = el('input', {
+          type: 'search', placeholder: t('snmpdev.ports.searchPlaceholder'),
+          'aria-label': t('snmpdev.ports.search'), size: '18',
+          oninput: function (e) { portQuery = String(e.target.value || '').trim().toLowerCase(); drawPorts(); },
+        });
+        function drawPorts() {
+          var all = ports;
+          var ports_ = portQuery ? all.filter(function (p) {
+            return [p.ifName, p.ifAlias, p.operStatus, p.adminStatus].some(function (v) {
+              return v != null && String(v).toLowerCase().indexOf(portQuery) >= 0;
+            });
+          }) : all;
+          portTableHost.replaceChildren(ports_.length ? ui.dataTable({
             dense: true,
             columns: [
               { key: 'name', label: t('snmpdev.col.port'), width: '190px' },
@@ -151,7 +163,7 @@
               { key: 'discards', label: t('snmpdev.col.discards'), width: '90px', num: true },
               { key: 'alias', label: t('snmpdev.col.alias') },
             ],
-            rows: ports.map(function (p) {
+            rows: ports_.map(function (p) {
               var c = byInterface[p.id] || {};
               var errs = c.inErrPps == null && c.outErrPps == null
                 ? null : (c.inErrPps || 0) + (c.outErrPps || 0);
@@ -192,10 +204,75 @@
             kind: 'nodata',
             title: t('snmpdev.ports.empty.title'),
             body: t('snmpdev.ports.empty.body'),
-          })],
+          }));
+        }
+
+        body.append(ui.panel({
+          title: t('snmpdev.ports.title'),
+          note: counters ? t('snmpdev.ports.note') : t('snmpdev.ports.noCounters'),
+          actions: [portSearch],
+          children: [portTableHost],
         }));
+        drawPorts();
 
         body.append(chartHost);
+
+        // ---- the forwarding table -------------------------------------------
+        // Which MAC sits behind which port — the question "where is that
+        // device plugged in?" answered on the switch that knows. The count on
+        // the stat strip used to be all the page showed of it.
+        if (fdb.length) {
+          var fdbQuery = '';
+          var fdbHost = el('div', {});
+          var copy = deps.copyable || function (v) { return el('code', {}, v); };
+          var fdbSearch = el('input', {
+            type: 'search', placeholder: t('snmpdev.fdb.searchPlaceholder'),
+            'aria-label': t('snmpdev.fdb.search'), size: '18',
+            oninput: function (e) { fdbQuery = String(e.target.value || '').trim().toLowerCase(); drawFdb(); },
+          });
+          var drawFdb = function () {
+            var q = fdbQuery.replace(/[-.]/g, ':');
+            var rows = fdbQuery ? fdb.filter(function (f) {
+              return [f.mac, f.ifName, f.bridgePort, f.vlan].some(function (v) {
+                return v != null && String(v).toLowerCase().replace(/[-.]/g, ':').indexOf(q) >= 0;
+              });
+            }) : fdb;
+            fdbHost.replaceChildren(rows.length ? ui.dataTable({
+              dense: true,
+              columns: [
+                { key: 'mac', label: t('snmpdev.fdb.mac'), width: '190px' },
+                { key: 'port', label: t('snmpdev.fdb.port'), width: '150px' },
+                { key: 'vlan', label: t('snmpdev.fdb.vlan'), width: '70px', num: true },
+                { key: 'portMacs', label: t('snmpdev.fdb.portMacs'), width: '120px', num: true },
+                { key: 'moves', label: t('snmpdev.fdb.moves'), width: '90px', num: true },
+                { key: 'seen', label: t('snmpdev.fdb.lastSeen'), time: true },
+              ],
+              rows: rows.map(function (f) {
+                return {
+                  cells: {
+                    mac: copy(f.mac),
+                    port: f.ifName ? el('code', {}, f.ifName) : ui.meta('#' + f.bridgePort),
+                    vlan: f.vlan ? String(f.vlan) : '–',
+                    portMacs: String(f.portMacCount || '–'),
+                    // A MAC that keeps moving between ports is how a loop
+                    // looks from here; it carries the tone.
+                    moves: f.moveCount > 0
+                      ? el('span', { class: f.moveCount >= 3 ? 'num-crit' : 'num-warn' }, String(f.moveCount))
+                      : '0',
+                    seen: f.lastSeen ? new Date(f.lastSeen).toLocaleString() : '–',
+                  },
+                };
+              }),
+            }) : ui.emptyState({ kind: 'nodata', title: t('snmpdev.fdb.none') }));
+          };
+          body.append(ui.panel({
+            title: t('snmpdev.fdb.title'),
+            note: t('snmpdev.fdb.note', { shown: fdb.length, total: data.fdbTotal || fdb.length }),
+            actions: [fdbSearch],
+            children: [fdbHost],
+          }));
+          drawFdb();
+        }
         host.replaceChildren(body);
 
         function openChart(port, minutes) {

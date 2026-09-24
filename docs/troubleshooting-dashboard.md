@@ -22,7 +22,7 @@ its own API and its own tests:
 
 ## The API
 
-### `GET /api/troubleshooting/overview` — operator+
+### `GET /api/troubleshooting/overview` — viewer+ (filtered by role)
 
 One request returns every block the view needs.
 
@@ -74,7 +74,7 @@ Status codes: `200` · `400` invalid query · `401` unauthenticated · `403` vie
 `/overview` deliberately does **not** carry the raw alarm rows — only the
 `activeFaults` figure. See *The fault list is opt-in* below.
 
-### `GET /api/troubleshooting/faults` — operator+
+### `GET /api/troubleshooting/faults` — viewer+
 
 The rows behind `summary.activeFaults`: the member findings of every live root
 cause, with the evidence the rollup drops (explanation, observed/baseline,
@@ -217,10 +217,24 @@ baseline is zero or absent, because no meaningful ratio exists.
 ### RBAC: aggregating must never widen access
 
 The underlying domains sit at three different levels — `neighbors`/`graph`/
-`dependencies` at viewer+, `changes`/`blast-radius`/`flow-baselines` at operator+,
-and discovery at admin. The endpoint therefore adopts **operator+**, the strictest
-non-admin level its data requires, and includes the admin-only discovery candidates
-**only for admins** — as an empty list, not a `403` that would deny the whole screen.
+`dependencies`, the situations and their findings at viewer+, `changes`/
+`blast-radius`/`flow-baselines` at operator+, and discovery at admin. The screen is
+the first place a viewer (first line, the person on the phone) should look when
+something is down, so the endpoint is **viewer+** and each domain is included only
+for the roles that may read it on its own:
+
+| Role | Root causes · topology · agent events | Baseline deviations · topology changes · blast radius | Discovery |
+| --- | --- | --- | --- |
+| viewer | yes | **empty**, listed in `restricted` | empty |
+| operator | yes | yes | empty |
+| admin | yes | yes | yes |
+
+Left-out domains are empty lists, never a `403` that would deny the whole screen,
+and `restricted: ['anomalies', 'topologyChanges', 'blastRadius']` tells the client
+why they are empty; the page says so above the panels and does not offer *Show
+path* (it walks the blast radius). Without blast radius a viewer's topology marks
+nodes `down`, never `unreachable_downstream`. `GET /faults` is viewer+ for the same
+reason: its rows are findings, which `/api/findings` serves to viewers too.
 
 ### Read-only
 
@@ -274,3 +288,34 @@ which is what it does.
 | View | `views.troubleshooting` + `tshootTopologySvg` in `public/app.js`; `.ts-*` in `public/styles.css` |
 | Bulk member read | `FindingStore.listByIds()` in `src/analysis/findings.js` |
 | Tests | `test/troubleshooting{RootCauses,TopologyState,Anomalies,OverviewService,OverviewApi,ViewModel,Faults}.test.js` |
+
+---
+
+## Hand-offs between the fault screens
+
+A fault is chased across several screens — Troubleshooting, an event or a
+situation, Probes, Diagnose, Investigate, Device log. They share one **fault
+context**: an agent, a target and a time window. `openInContext(view, ctx)` in
+`public/app.js` opens a screen with it already chosen, and writes it to the
+address, so the link opens on the same thing for a colleague:
+
+    /diagnose?agent=12&target=10.0.0.1
+    /investigate?agent=12&window=240
+    /device-log?agent=12&window=120
+
+| From | Hand-off row offers |
+| --- | --- |
+| Event page | Probe (agent + the anomaly's target), Diagnose, Investigate, Device log — window from before the first anomaly |
+| Situation page | the same, from the first affected agent and the situation's first-seen time |
+| Troubleshooting root cause | the same, from the cause's anchor or first affected agent |
+| Changes drawer | the same, from the row's agent and time |
+| Agent page | the same, for that agent |
+| Investigate result | Probe, Diagnose, Device log |
+| Search for an IP or host name | Probe this address, Diagnose |
+
+The window a screen gets is the smallest it offers that still covers the fault,
+with a quarter added in front so the minutes before it are in view. A screen
+opened on its own reads the same parameters (`applyContextFromUrl`), and a
+choice made on it is mirrored back into the address. Parameters that belong to
+one record's chart (`from`, `to`, `metric`, `overlay`) are dropped on a path
+change, so they cannot override the next screen's window.

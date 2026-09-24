@@ -336,9 +336,13 @@
      nobody reads; a chart that needs more needs splitting. Derived from the
      palette's own semantic colours plus two neutral hues, so every theme gets a
      set that holds together rather than a fixed brand ramp. */
+  /* Accent then warn: blue/orange is the pair that stays apart for red-green
+     colour blindness, and the first two series are the ones most charts have
+     (in/out, RX/TX). Green and red come later, so a two-line chart never asks
+     the reader to tell them apart. */
   --series-0: var(--accent);
-  --series-1: var(--ok);
-  --series-2: var(--warn);
+  --series-1: var(--warn);
+  --series-2: var(--ok);
   --series-3: var(--bad);
   --series-4: color-mix(in srgb, var(--accent) 55%, var(--ok));
   --series-5: color-mix(in srgb, var(--bad) 55%, var(--accent));

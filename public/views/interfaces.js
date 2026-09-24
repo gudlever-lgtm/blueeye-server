@@ -55,9 +55,14 @@
       return ui.badge(TONE[s] || 'neutral', label === key ? String(s || '–') : label);
     }
 
+    function rate(v, unit) {
+      if (deps.fmtUnit) return deps.fmtUnit(v, unit);
+      return unit === 'B/s' ? deps.fmtBytes(v) + '/s' : String(v);
+    }
+
     function linkText(i) {
       if (!i.speedMbps && !i.operStatus) return '–';
-      var sp = i.speedMbps ? (i.speedMbps >= 1000 ? (i.speedMbps / 1000) + ' Gb/s' : i.speedMbps + ' Mb/s') : '';
+      var sp = i.speedMbps ? (i.speedMbps >= 1000 ? (i.speedMbps / 1000) + ' Gbit/s' : i.speedMbps + ' Mbit/s') : '';
       return [sp, i.operStatus].filter(Boolean).join(' · ');
     }
 
@@ -115,12 +120,15 @@
               util: i.utilPct != null
                 ? el('div', { class: 'util' }, deps.usageBar(i.utilPct), ui.metaXs(i.utilPct + '%'))
                 : ui.meta('–'),
-              rx: deps.fmtBytes(i.rxBytesPerSec) + '/s',
-              tx: deps.fmtBytes(i.txBytesPerSec) + '/s',
+              // Bits per second, like the switch-port table and the link
+              // speed beside it: KB/s here against Mbit/s there made the same
+              // link read as two different numbers.
+              rx: rate(i.rxBytesPerSec, 'B/s'),
+              tx: rate(i.txBytesPerSec, 'B/s'),
               // A port dropping frames is the reason this screen exists, so the
               // number carries the tone rather than sitting grey beside a badge.
-              err: el('span', { class: i.errPerSec > 0 ? 'num-crit' : null }, String(i.errPerSec)),
-              drop: el('span', { class: i.dropPerSec > 0 ? 'num-warn' : null }, String(i.dropPerSec)),
+              err: el('span', { class: i.errPerSec > 0 ? 'num-crit' : null }, rate(i.errPerSec, '/s')),
+              drop: el('span', { class: i.dropPerSec > 0 ? 'num-warn' : null }, rate(i.dropPerSec, '/s')),
             },
           };
         }),

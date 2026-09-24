@@ -56,11 +56,13 @@
 
       var data = null;
       var graphEl = null;
-      var brush = null; // { fromMs, toMs } or null
+      // The time selection and the open fault list are kept on deps.state, so
+      // a rebuild (auto-refresh, leaving and coming back) restores them.
+      var brush = state.brush || null; // { fromMs, toMs } or null
       // A fleet can carry tens of thousands of raw alarms behind its root
       // causes, so this list is opt-in and paged; the overview read never
       // touches it.
-      var faults = { open: false, rows: [], total: 0, loading: false, error: null, loaded: false };
+      var faults = { open: !!state.faultsOpen, rows: [], total: 0, loading: false, error: null, loaded: false };
 
       var info = deps.help();
       page.append(ui.pageHeader({
@@ -89,7 +91,7 @@
               ['60', t('tshoot.window.1h')], ['360', t('tshoot.window.6h')],
               ['1440', t('tshoot.window.24h')], ['10080', t('tshoot.window.7d')],
             ],
-            onchange: function (e) { state.window = e.target.value; load(); },
+            onchange: function (e) { state.window = e.target.value; state.brush = null; load(); },
           }))],
           actions: [refreshBtn],
         }));
@@ -389,12 +391,14 @@
       }
       function openFaults() {
         faults.open = true;
+        state.faultsOpen = true;
         drawStrip();
         drawFaults();
         if (!faults.loaded) loadFaultPage();
       }
       function closeFaults() {
         faults.open = false;
+        state.faultsOpen = false;
         drawFaults();
         drawStrip();
       }
@@ -412,7 +416,7 @@
         }
         var listHost = el('div', { class: 'ts-events' });
         var b = deps.brushSvg(all, bounds, {
-          onBrush: function (next) { brush = next; paint(); },
+          onBrush: function (next) { brush = next; state.brush = next; paint(); },
         });
 
         function paint() {
@@ -426,7 +430,7 @@
                 ? t('tshoot.timeline.selected', { shown: shown.length, total: all.length })
                 : t('tshoot.timeline.count', { n: all.length })),
               brush ? ui.button('ghost', t('tshoot.timeline.clear'), {
-                size: 'xs', onclick: function () { brush = null; paint(); },
+                size: 'xs', onclick: function () { brush = null; state.brush = null; paint(); },
               }) : null),
             shown.length ? ul : ui.emptyState({ kind: 'nodata', title: t('tshoot.timeline.noneInWindow') }));
         }
@@ -446,7 +450,7 @@
         return deps.fetchOverview(state.window)
           .then(function (d) {
             data = d;
-            brush = null;
+            brush = state.brush || null;
             // The fault set belongs to the rollup we just replaced, so the held
             // pages are stale. Drop them; if the list was open, page 1 of the
             // NEW set is fetched rather than silently showing the old one.

@@ -28,8 +28,10 @@
     // Still live, so still resolvable — the same pair the server calls
     // LIVE_STATUSES in src/routes/eventClusters.js.
     var LIVE = ['open', 'acknowledged'];
-    var STATUS_TONE = { open: 'info', acknowledged: 'warn', resolved: 'ok', closed: 'neutral' };
-    var CONF_TONE = { high: 'crit', medium: 'warn', low: 'neutral' };
+    // The same tones as the situation page (views/situation.js). High
+    // confidence was red here and green there — the same value, two answers.
+    var STATUS_TONE = { open: 'crit', acknowledged: 'warn', resolved: 'ok', closed: 'neutral' };
+    var CONF_TONE = { high: 'ok', medium: 'warn', low: 'neutral' };
     var CONF_RANK = { high: 3, medium: 2, low: 1 };
 
     function view() {

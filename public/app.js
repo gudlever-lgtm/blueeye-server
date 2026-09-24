@@ -214,7 +214,22 @@ async function api(path, { method = 'GET', body } = {}) {
     err.data = data;
     throw err;
   }
+  if (path === '/agents' && Array.isArray(data)) rememberAgentNames(data);
   return data;
+}
+
+// Every screen fetches /agents on its own; the names it returns are remembered
+// here so a row that only carries an agent id (a finding's hostId, an alert's
+// host) can still say WHICH machine instead of printing a bare number.
+const agentNames = new Map();
+function rememberAgentNames(list) {
+  for (const a of list) {
+    if (a && a.id != null) agentNames.set(String(a.id), a.display_name || a.hostname || a.name || null);
+  }
+}
+function agentLabel(id) {
+  if (id == null || id === '') return '–';
+  return agentNames.get(String(id)) || `agent ${id}`;
 }
 
 // Authenticated fetch for responses api() cannot parse — blobs (CSV/PDF/PNG
@@ -812,13 +827,27 @@ function showSigningKeySetupPrompt() {
 // Labels mirror the top nav. A link whose target tab is hidden (licence/role)
 // degrades to plain text, so the help never offers a dead end.
 const VIEW_LABELS = {
-  fleet: 'Overview', overview: 'Traffic', map: 'Sites', geo: 'Destinations', agents: 'Agents',
+  fleet: 'Fleet', overview: 'Traffic', map: 'Sites', geo: 'Destinations', agents: 'Agents',
   interfaces: 'Interfaces', probes: 'Probes', tests: 'Tests', flows: 'Flows',
   findings: 'Analysis', reporting: 'Reporting', locations: 'Locations', enrollment: 'Enrollment', settings: 'Settings',
-  docs: 'Documentation', investigation: 'Troubleshooting', nics: 'NICs', events: 'Events',
+  docs: 'Documentation', investigation: 'Investigate', troubleshooting: 'Troubleshooting', diagnose: 'Diagnose', deviceLog: 'Device log', nics: 'NICs', events: 'Events',
   serviceAssurance: 'Service Assurance', guide: 'Guides',
   logs: 'System Logs', userLogs: 'User Logs',
 };
+// The five records a fault can show up as, side by side. Each list page has its
+// own help, and none said how the others relate — so a technician met "finding",
+// "event", "situation", "probe outage" and "incident" as five separate ideas.
+function conceptGlossary() {
+  return el('div', { class: 'concept-glossary' },
+    el('h4', {}, t('glossary.title')),
+    el('dl', {},
+      ...['finding', 'event', 'situation', 'outage', 'incident'].flatMap((k) => {
+        const term = `glossary.${k}.term`;
+        const desc = `glossary.${k}.desc`;
+        return [el('dt', {}, t(term)), el('dd', {}, t(desc))];
+      })));
+}
+
 function gotoView(viewKey) {
   closeDrawer();
   // Probes and Tests share one view now; a 'tests' link opens the packages sub-tab.
@@ -1276,6 +1305,7 @@ const PAGE_INFO = {
     title: 'Analysis — errors & anomalies',
     body: () => [
       el('p', {}, 'The server analyses agent measurements locally (no cloud, no ML library) and raises a finding when a metric deviates significantly from its own baseline, flatlines (sensor/agent stop) or correlates with other errors.'),
+      conceptGlossary(),
       el('h4', {}, 'Overview & filtering'),
       el('p', {}, 'The page opens with an ', el('strong', {}, 'Overview'), ' — total and unacknowledged counts, a severity breakdown, and per-metric / per-host tables with average and peak deviation (σ). Filter by host, severity or metric from the header (or by clicking a severity chip / metric row in the overview), and click any column header to sort the list.'),
       el('h4', {}, 'Severity'),
@@ -2902,9 +2932,17 @@ function attachBrush(svg, { W, padL, padR, padT, padB, H, onSelect, onClear }) {
   svg.append(rect);
   let startX = null;
   const toViewX = (clientX) => { const r = svg.getBoundingClientRect(); return Math.max(padL, Math.min(W - padR, ((clientX - r.left) / r.width) * W)); };
-  svg.addEventListener('mousedown', (e) => { startX = toViewX(e.clientX); rect.setAttribute('x', startX); rect.setAttribute('width', 0); rect.setAttribute('visibility', 'visible'); });
-  svg.addEventListener('mousemove', (e) => { if (startX === null) return; const cx = toViewX(e.clientX); rect.setAttribute('x', Math.min(startX, cx)); rect.setAttribute('width', Math.abs(cx - startX)); });
-  svg.addEventListener('mouseup', (e) => {
+  // Pointer events, not mouse events: the same drag now works with a finger on
+  // a tablet in a wiring closet. touch-action keeps a horizontal drag from
+  // scrolling the page instead.
+  svg.style.touchAction = 'pan-y';
+  svg.addEventListener('pointerdown', (e) => {
+    if (e.button != null && e.button > 0) return;
+    startX = toViewX(e.clientX); rect.setAttribute('x', startX); rect.setAttribute('width', 0); rect.setAttribute('visibility', 'visible');
+    try { svg.setPointerCapture(e.pointerId); } catch { /* not all engines */ }
+  });
+  svg.addEventListener('pointermove', (e) => { if (startX === null) return; const cx = toViewX(e.clientX); rect.setAttribute('x', Math.min(startX, cx)); rect.setAttribute('width', Math.abs(cx - startX)); });
+  svg.addEventListener('pointerup', (e) => {
     if (startX === null) return;
     const cx = toViewX(e.clientX); const x0 = Math.min(startX, cx); const x1 = Math.max(startX, cx);
     startX = null; rect.setAttribute('visibility', 'hidden');
@@ -2912,7 +2950,7 @@ function attachBrush(svg, { W, padL, padR, padT, padB, H, onSelect, onClear }) {
     const denom = W - padL - padR;
     onSelect((x0 - padL) / denom, (x1 - padL) / denom);
   });
-  svg.addEventListener('mouseleave', () => { startX = null; rect.setAttribute('visibility', 'hidden'); });
+  svg.addEventListener('pointercancel', () => { startX = null; rect.setAttribute('visibility', 'hidden'); });
   if (onClear) svg.addEventListener('contextmenu', (e) => { e.preventDefault(); onClear(); });
 }
 
@@ -2941,7 +2979,7 @@ function multiChart(seriesList, { height = 320, xLabels = null, onBrush = null, 
     const yy = y(max * frac);
     svg.append(mk('line', { class: 'grid', x1: pad.l, y1: yy, x2: W - pad.r, y2: yy }));
     const label = mk('text', { x: 6, y: yy + 4, class: 'axis' });
-    label.textContent = `${fmtBytes(max * frac)}/s`;
+    label.textContent = fmtUnit(max * frac, 'B/s');
     svg.append(label);
   }
   // Optional x (time) gridlines at each non-empty tick — drawn under the data.
@@ -2988,13 +3026,99 @@ function multiChart(seriesList, { height = 320, xLabels = null, onBrush = null, 
 
 // Metric/traffic types selectable in the history view.
 const METRIC_DEFS = [
-  ['rx', 'RX (bytes/s)'], ['tx', 'TX (bytes/s)'],
+  ['rx', 'RX (bit/s)'], ['tx', 'TX (bit/s)'],
   ['cpu', 'CPU %'], ['mem', 'Mem %'], ['load1', 'Load1'],
 ];
 const histState = { agentId: '', metrics: new Set(['rx', 'tx']) };
 
 // (toLocalInput(Date) lives with the other datetime-local helpers below.)
-function fmtNum(v) { return v >= 1024 ? fmtBytes(v) : String(Math.round(v * 10) / 10); }
+// A value with its unit, the way a network engineer reads it. Every chart
+// axis, hover readout and rate column goes through this, so one screen cannot
+// say KB/s while the next says Mbit/s about the same link.
+//
+//   'ms'    latency / RTT / load time — switches to seconds past 1000 ms
+//   'B/s'   a byte rate — SHOWN IN BITS (Mbit/s), because links are sold in bits
+//   'bit/s' a bit rate
+//   'B'     a byte count (per bucket, total)
+//   '%'     a percentage
+//   '/s'    an event rate (errors/s, discards/s, pps)
+//   ''      a plain number, compacted with k / M / G
+function fmtBits(bps) {
+  const v = Number(bps);
+  if (!Number.isFinite(v)) return '–';
+  if (v >= 1e9) return `${(v / 1e9).toFixed(2)} Gbit/s`;
+  if (v >= 1e6) return `${(v / 1e6).toFixed(1)} Mbit/s`;
+  if (v >= 1e3) return `${(v / 1e3).toFixed(1)} kbit/s`;
+  return `${Math.round(v)} bit/s`;
+}
+function fmtUnit(value, unit = '') {
+  const v = Number(value);
+  if (value == null || !Number.isFinite(v)) return '–';
+  const r1 = (x) => String(Math.round(x * 10) / 10);
+  switch (unit) {
+    case 'ms': return v >= 1000 ? `${(v / 1000).toFixed(2)} s` : `${r1(v)} ms`;
+    case 'B/s': return fmtBits(v * 8);
+    case 'bit/s': case 'bps': return fmtBits(v);
+    case 'B': return fmtBytes(v);
+    case '%': return `${r1(v)} %`;
+    case '/s': case 'pps': return `${v > 0 && v < 1 ? v.toFixed(2) : r1(v)} /s`;
+    default:
+      if (Math.abs(v) >= 1e9) return `${r1(v / 1e9)}G`;
+      if (Math.abs(v) >= 1e6) return `${r1(v / 1e6)}M`;
+      if (Math.abs(v) >= 1e4) return `${r1(v / 1e3)}k`;
+      return r1(v);
+  }
+}
+// Kept for the callers that pass no unit: a plain number, never bytes. It used
+// to turn anything >= 1024 into bytes, so an RTT of 1500 ms read "1.5 KB".
+function fmtNum(v) { return fmtUnit(v, ''); }
+
+// Hover readout for the time-axis charts: move over the plot and a line marks
+// the nearest sample while a small box lists every series' value there, with
+// its unit and time. Pointer events, so it works for a finger as well as a
+// mouse. Returns nothing; it decorates `svg` and `wrap` in place.
+function attachReadout(svg, wrap, { W, padL, padR, padT, H, padB, fromMs, toMs, series, format }) {
+  const ns = 'http://www.w3.org/2000/svg';
+  const span = Math.max(1, toMs - fromMs);
+  const line = document.createElementNS(ns, 'line');
+  line.setAttribute('class', 'chart-readout-line');
+  line.setAttribute('y1', padT); line.setAttribute('y2', H - padB);
+  line.setAttribute('visibility', 'hidden');
+  svg.append(line);
+  const box = el('div', { class: 'chart-readout', hidden: true });
+  wrap.classList.add('has-readout');
+  wrap.append(box);
+  const nearest = (pts, t) => {
+    let lo = 0; let hi = pts.length - 1;
+    if (hi < 0) return null;
+    while (hi - lo > 1) { const mid = (lo + hi) >> 1; if (pts[mid].t < t) lo = mid; else hi = mid; }
+    return Math.abs(pts[lo].t - t) <= Math.abs(pts[hi].t - t) ? pts[lo] : pts[hi];
+  };
+  const sorted = series.map((s) => ({ s, pts: (s.points || []).filter((p) => Number.isFinite(p.t)).slice().sort((a, b) => a.t - b.t) }));
+  const hide = () => { box.hidden = true; line.setAttribute('visibility', 'hidden'); };
+  svg.addEventListener('pointermove', (e) => {
+    const r = svg.getBoundingClientRect();
+    if (!r.width) return;
+    const vx = ((e.clientX - r.left) / r.width) * W;
+    if (vx < padL || vx > W - padR) { hide(); return; }
+    const t = fromMs + ((vx - padL) / (W - padL - padR)) * span;
+    const hits = sorted.map(({ s, pts }) => ({ s, p: nearest(pts, t) })).filter((h) => h.p);
+    if (!hits.length) { hide(); return; }
+    const at = hits[0].p.t;
+    const lx = padL + ((at - fromMs) / span) * (W - padL - padR);
+    line.setAttribute('x1', lx); line.setAttribute('x2', lx);
+    line.setAttribute('visibility', 'visible');
+    box.replaceChildren(
+      el('div', { class: 'chart-readout-time' }, fmtDate(at)),
+      ...hits.map((h) => el('div', {},
+        h.s.color ? el('span', { class: 'dot', style: `background:${h.s.color}` }) : null,
+        `${h.s.label || ''}${h.s.label ? ': ' : ''}${format(h.p.y)}`)));
+    box.hidden = false;
+    const px = e.clientX - wrap.getBoundingClientRect().left;
+    box.style.left = `${Math.max(0, Math.min(px + 12, wrap.clientWidth - box.offsetWidth - 4))}px`;
+  });
+  svg.addEventListener('pointerleave', hide);
+}
 function fmtTimeShort(ms) {
   return new Date(ms).toLocaleString('en-GB', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
 }
@@ -3040,7 +3164,8 @@ function findingMarkers(findings) {
 
 // Time-axis chart. Optional `band` ({lo,hi,mid}) shades a normal range (#6);
 // optional `markers` ([{t,kind,label}]) draws event lines (#7).
-function historyChart(seriesList, { fromMs, toMs, onBrush, height = 300, band = null, markers = null }) {
+function historyChart(seriesList, { fromMs, toMs, onBrush, height = 300, band = null, markers = null, unit = '' }) {
+  const fmtY = (v) => fmtUnit(v, unit);
   const W = 1000;
   const H = height;
   const pad = { l: 64, r: 12, t: 14, b: 28 };
@@ -3058,7 +3183,7 @@ function historyChart(seriesList, { fromMs, toMs, onBrush, height = 300, band = 
   for (const frac of [0, 0.5, 1]) {
     const yy = yOf(max * frac);
     svg.append(mk('line', { class: 'grid', x1: pad.l, y1: yy, x2: W - pad.r, y2: yy }));
-    const lbl = mk('text', { x: 6, y: yy + 4, class: 'axis' }); lbl.textContent = fmtNum(max * frac); svg.append(lbl);
+    const lbl = mk('text', { x: 6, y: yy + 4, class: 'axis' }); lbl.textContent = fmtY(max * frac); svg.append(lbl);
   }
   for (const frac of [0, 0.5, 1]) {
     const t = fromMs + frac * span; const xx = xOf(t);
@@ -3130,7 +3255,9 @@ function historyChart(seriesList, { fromMs, toMs, onBrush, height = 300, band = 
   if (onBrush) {
     attachBrush(svg, { W, padL: pad.l, padR: pad.r, padT: pad.t, padB: pad.b, H, onSelect: (f0, f1) => onBrush(Math.round(fromMs + f0 * span), Math.round(fromMs + f1 * span)) });
   }
-  return el('div', { class: 'big-chart' }, svg);
+  const wrap = el('div', { class: 'big-chart' }, svg);
+  attachReadout(svg, wrap, { W, padL: pad.l, padR: pad.r, padT: pad.t, padB: pad.b, H, fromMs, toMs, series: seriesList, format: fmtY });
+  return wrap;
 }
 
 // Historical traffic for one agent over a date range, with selectable metric
@@ -3232,7 +3359,11 @@ function trafficHistorySection({ onData = () => {} } = {}) {
     const legend = legendFor(seriesList);
     // Band (#6) only when a single metric is shown (otherwise scales clash).
     const band = seriesList.length === 1 ? robustBand(seriesList[0].points) : null;
-    chartHost.replaceChildren(historyChart(seriesList, { fromMs: lastFromMs, toMs: lastToMs, band, markers: lastMarkers, onBrush: (f, t) => { fromI.value = toLocalInput(new Date(f)); toI.value = toLocalInput(new Date(t)); load({ fromMs: f, toMs: t }); } }), legend);
+    // One axis, one unit: only when every chosen metric shares it.
+    const unitOf = (k) => (k === 'rx' || k === 'tx' ? 'B/s' : k === 'cpu' || k === 'mem' ? '%' : '');
+    const units = [...new Set(chosen.map(([k]) => unitOf(k)))];
+    const unit = units.length === 1 ? units[0] : '';
+    chartHost.replaceChildren(historyChart(seriesList, { unit, fromMs: lastFromMs, toMs: lastToMs, band, markers: lastMarkers, onBrush: (f, t) => { fromI.value = toLocalInput(new Date(f)); toI.value = toLocalInput(new Date(t)); load({ fromMs: f, toMs: t }); } }), legend);
   }
 
   // Called from the live graph's brush: load the actual stored data for the
@@ -3417,7 +3548,7 @@ function trafficTypeSection() {
     }));
     const legend = legendFor(seriesList);
     chartHost.replaceChildren(
-      seriesList.length ? historyChart(seriesList, { fromMs, toMs }) : el('div', { class: 'empty' }, 'Select one or more types above.'),
+      seriesList.length ? historyChart(seriesList, { fromMs, toMs, unit: 'B' }) : el('div', { class: 'empty' }, 'Select one or more types above.'),
       legend);
   }
 
@@ -3801,7 +3932,8 @@ PAGE_INFO.events = {
   title: 'Events — grouped anomalies, tracked end-to-end',
   body: () => [
     el('p', {}, 'Each event wraps the analysis findings (anomalies) that fired close together on one device. Status moves open → investigating → resolved → closed, and an open event can go straight to resolved when there is nothing to investigate; a closed event can be reopened with a comment (recorded in the audit trail).'),
-    el('p', {}, 'BlueEyes deliberately stops at the event. An event is a technical observation the monitoring owns; an ', el('strong', {}, 'event'), ' is a service-desk record with a number, an SLA and an owner, and it belongs in your ITSM. Connect one under Settings → Integrations and an event can open an event there.'),
+    el('p', {}, 'On the network side BlueEyes stops at the event: a technical observation the monitoring owns. A service-desk ', el('strong', {}, 'ticket'), ' with a number, an SLA and an owner belongs in your ITSM — connect one under Settings → Integrations and an event can open a ticket there. (Service Assurance is the exception: it tracks incidents on the public services it tests.)'),
+    conceptGlossary(),
     el('p', {}, 'The detail page shows the event timeline, the device-config change suspected to have triggered it, similar past events, and — when the EU AI assistant is enabled — a chat that answers questions using only masked, aggregated context.'),
     el('p', { class: 'muted' }, 'Status changes, config history and the AI chat are operator/admin only.'),
   ],
@@ -4355,6 +4487,7 @@ PAGE_INFO.clusters = {
     el('p', {}, 'When a fault hits many agents at the same time, BlueEyes clusters their findings into one situation instead of N look-alike alerts. Each situation carries a confidence tier (how independent the grouping signals were) and a suspected common cause.'),
     el('p', {}, 'The detail page is the “one common picture”: what changed in the minutes before the first finding, the evidence that drove the grouping, and a single timeline merging findings, agent events, playbook runs and config changes across every affected agent.'),
     el('p', { class: 'muted' }, 'Everyone can view; acknowledging and resolving are operator/admin and are recorded in the audit trail.'),
+    conceptGlossary(),
   ],
 };
 
@@ -5239,7 +5372,7 @@ function pvChart(seriesList, { fromMs, toMs, render = 'line', unit = '', height 
     for (const frac of [0, 0.5, 1]) {
       const yy = yOf(max * frac);
       svg.append(mk('line', { class: 'grid', x1: pad.l, y1: yy, x2: W - pad.r, y2: yy }));
-      const lbl = mk('text', { x: 6, y: yy + 4, class: 'axis' }); lbl.textContent = fmtNum(max * frac); svg.append(lbl);
+      const lbl = mk('text', { x: 6, y: yy + 4, class: 'axis' }); lbl.textContent = fmtUnit(max * frac, unit); svg.append(lbl);
     }
     for (const frac of [0, 0.5, 1]) {
       const t = fromMs + frac * span; const xx = xOf(t);
@@ -5271,7 +5404,9 @@ function pvChart(seriesList, { fromMs, toMs, render = 'line', unit = '', height 
     }
   });
   if (onBrush) attachBrush(svg, { W, padL: pad.l, padR: pad.r, padT: pad.t, padB: pad.b, H, onSelect: (f0, f1) => onBrush(Math.round(fromMs + f0 * span), Math.round(fromMs + f1 * span)), onClear: () => onBrush(null, null) });
-  return el('div', { class: `pv-chart${overview ? ' pv-ov' : ''}` }, svg);
+  const wrap = el('div', { class: `pv-chart${overview ? ' pv-ov' : ''}` }, svg);
+  if (!overview) attachReadout(svg, wrap, { W, padL: pad.l, padR: pad.r, padT: pad.t, padB: pad.b, H, fromMs, toMs, series: seriesList, format: (v) => fmtUnit(v, unit) });
+  return wrap;
 }
 
 // Turns a server timeseries response into chart series (per-agent overlay gets
@@ -5704,7 +5839,7 @@ async function probeDetail(r, agentId) {
   const metricLabel = isPageload ? 'Load time (ms)' : isTx ? 'Total time (ms)' : 'RTT (ms)';
   const histTitle = isPageload ? 'Load-time history' : isTx ? 'Transaction-time history' : 'RTT history';
   const chart = el('details', { class: 'sec', open: true }, el('summary', {}, `${histTitle} — ${r.type} → ${r.target} `, el('span', { class: 'muted' }, '· band = normal range (median±MAD)')),
-    el('div', { class: 'overview-chart' }, pts.length ? historyChart([{ id: 'rtt', label: metricLabel, color: '#06b6d4', points: pts }], { fromMs, toMs, band, markers }) : el('div', { class: 'empty' }, 'No history yet — run a few measurements.')));
+    el('div', { class: 'overview-chart' }, pts.length ? historyChart([{ id: 'rtt', label: metricLabel, color: ui.token('--series-0'), points: pts }], { fromMs, toMs, band, markers, unit: 'ms' }) : el('div', { class: 'empty' }, 'No history yet — run a few measurements.')));
   if (!isPageload && !isTx) return chart;
   return el('div', {},
     el('details', { class: 'sec', open: true }, el('summary', {}, `${isTx ? 'Steps' : 'Page elements'} — ${r.target} `, el('span', { class: 'muted' }, isTx ? '· per-step status · size · time' : '· per-resource status · size · load time')), pageloadWaterfall(r)),
@@ -6539,7 +6674,7 @@ function investigationCard(inv) {
           el('dt', {}, 'Description'), el('dd', {}, d.businessImpact || '–')),
         el('p', { class: 'muted' },
           'Edit the draft under ',
-          el('a', { href: '#', onclick: (ev) => { ev.preventDefault(); switchView('reporting'); } },
+          el('a', { href: '#', onclick: (ev) => { ev.preventDefault(); reportingState.section = 'nis2'; gotoView('reporting'); } },
             'Reporting → NIS2 Incidents'), '.')));
   } else if (inv.nis2DraftError) {
     nis2El = el('div', { class: 'inv-nis2-error muted' },
@@ -7021,7 +7156,7 @@ function getInterfacesPage() {
   if (interfacesPage) return interfacesPage;
   if (typeof window === 'undefined' || !window.InterfacesPage || !ui) return null;
   interfacesPage = window.InterfacesPage.create({
-    el, t, ui, errText, usageBar, fmtBytes, viewLink,
+    el, t, ui, errText, usageBar, fmtBytes, fmtUnit, viewLink,
     state: interfacesPageState,
     help: () => ({ title: t('iface.info.title'), body: () => [
       el('p', {}, t('iface.info.p1')),
@@ -8549,17 +8684,19 @@ function getChangesView() {
   if (changesView) return changesView;
   if (typeof window === 'undefined' || !window.ChangesView || !ui) return null;
   changesView = window.ChangesView.create({
-    el, api, t, errText, openAgent, ui,
+    el, api, t, errText, openAgent, openEvent, openCluster, ui,
     WINDOWS: CHANGES_WINDOWS.map((w) => [w, w === CHANGES_LAST_SEEN ? t('changes.window.lastSeen') : w]),
     LAST_SEEN: CHANGES_LAST_SEEN,
     getWindow: () => changesWindow,
     setWindow: (w) => { if (CHANGES_WINDOWS.includes(w)) changesWindow = w; },
     feedPath: () => `/api/changes?${changesQuery().toString()}`,
+    filterState: () => changesFilterState,
     exportCsv: () => exportChangesCsv(),
   });
   return changesView;
 }
 
+const changesFilterState = {};
 views.changes = async () => {
   const v = getChangesView();
   return v ? v.view() : el('div', { class: 'empty error' }, t('changes.error', { message: 'view module not loaded' }));
@@ -8839,9 +8976,12 @@ function fleetIssues(w) {
   if (!w) return el('div', {});
   const count = (n) => el('span', { class: 'muted fi-count' }, n ? ` · ${n}` : '');
 
-  const inc = el('div', { class: 'card' }, el('h3', {}, 'Active events', count(w.events.active)));
-  if (!w.events.recent.length) inc.append(el('p', { class: 'muted' }, 'No active events.'));
-  else inc.append(el('table', { class: 'adv-table' }, el('tbody', {}, ...w.events.recent.map((i) =>
+  // The server names this widget `probeOutages`; it was read as `events`, which
+  // threw, and the catch around the fetch emptied the whole rollup.
+  const po = w.probeOutages || { active: 0, recent: [] };
+  const inc = el('div', { class: 'card' }, el('h3', {}, 'Active probe outages', count(po.active)));
+  if (!po.recent.length) inc.append(el('p', { class: 'muted' }, 'No active probe outages.'));
+  else inc.append(el('table', { class: 'adv-table' }, el('tbody', {}, ...po.recent.map((i) =>
     el('tr', i.agentId ? { class: 'clickable', onclick: () => openAgent(i.agentId) } : {},
       el('td', {}, el('span', { class: `badge ${i.severity === 'critical' ? 'crit' : 'warn'}` }, i.severity)),
       el('td', {}, i.agentName || `agent ${i.agentId}`, i.locationName ? el('span', { class: 'muted' }, ` · ${i.locationName}`) : null),
@@ -8851,9 +8991,9 @@ function fleetIssues(w) {
   const fnd = el('div', { class: 'card' }, el('h3', {}, 'Recent findings', count(w.findings.open)));
   if (!w.findings.recent.length) fnd.append(el('p', { class: 'muted' }, 'No open analysis findings.'));
   else fnd.append(el('table', { class: 'adv-table' }, el('tbody', {}, ...w.findings.recent.map((x) =>
-    el('tr', {},
+    el('tr', x.hostId != null ? { class: 'clickable', onclick: () => openAgent(x.hostId) } : {},
       el('td', {}, el('span', { class: `badge ${x.severity === 'CRIT' ? 'crit' : x.severity === 'WARN' ? 'warn' : 'grace'}` }, x.severity)),
-      el('td', {}, x.hostId, el('span', { class: 'muted' }, ` · ${x.metric}`)),
+      el('td', {}, agentLabel(x.hostId), el('span', { class: 'muted' }, ` · ${x.metric}`)),
       el('td', { class: 'muted' }, x.explanation || x.kind || ''))))));
 
   // First-class events (event_cases) — open/investigating cases; click a
@@ -8928,7 +9068,8 @@ function getFleetView() {
     // panels are simply omitted, so the core Overview always renders.
     issues: async () => {
       if (!featureEntitled('dashboard_advanced')) return null;
-      return fleetIssues((await api('/api/dashboard/advanced')).widgets);
+      const [adv] = await Promise.all([api('/api/dashboard/advanced'), api('/agents').catch(() => null)]);
+      return fleetIssues(adv.widgets);
     },
     noc: (data) => nocDashboard(data, {}),
     // Rendered once per view entry: the poll redraws the grid, and rebuilding
@@ -9489,9 +9630,9 @@ function agentDetailFolds(id, agent) {
     let markers = [];
     try { const fs = await api(`/api/findings?hostId=${encodeURIComponent(id)}&since=${new Date(series[0].t).toISOString()}`); markers = findingMarkers(fs); } catch { markers = []; }
     trafficHost.replaceChildren(historyChart([
-      { id: 'rx', label: '↓ RX', color: '#06b6d4', points: series.map((s) => ({ t: s.t, y: s.rx })) },
-      { id: 'tx', label: '↑ TX', color: '#10b981', points: series.map((s) => ({ t: s.t, y: s.tx })) },
-    ], { fromMs: series[0].t, toMs: series[series.length - 1].t, markers }));
+      { id: 'rx', label: '↓ RX', color: ui.token('--series-0'), points: series.map((s) => ({ t: s.t, y: s.rx })) },
+      { id: 'tx', label: '↑ TX', color: ui.token('--series-1'), points: series.map((s) => ({ t: s.t, y: s.tx })) },
+    ], { fromMs: series[0].t, toMs: series[series.length - 1].t, markers, unit: 'B/s' }));
   }
 
   async function refreshHealth() {
@@ -9622,7 +9763,7 @@ function getFlowsPage() {
     chart: (points, { markers, onBrush }) => el('div', { class: 'overview-chart' },
       historyChart([{ id: 'b', label: t('flows.col.bytes'), color: ui.token('--series-0'), points }], {
         fromMs: points[0].t, toMs: points[points.length - 1].t,
-        band: robustBand(points), markers, onBrush,
+        band: robustBand(points), markers, onBrush, unit: 'B',
       })),
     fetchExplore: async ({ window: w, agentId, peer, port, proto, direction, internal }) => {
       const qp = new URLSearchParams({ agentId, from: iso(w.fromMs), to: iso(w.toMs) });
@@ -11397,7 +11538,7 @@ const DOCS = [
           docsTable(['Group', 'Use it for'], [
             [viewLink('fleet', 'Monitoring'), 'Overview (fleet health at a glance), Traffic, Sites (map) and Destinations (external traffic by country/ASN).'],
             [el('strong', {}, 'Fleet'), ['Per-', viewLink('agents', 'Agent'), ' drill-down, ', viewLink('interfaces', 'Interfaces'), ' health and NIC firmware inventory.']],
-            [el('strong', {}, 'Diagnostics'), ['Ad-hoc ', viewLink('probes', 'Probes & Tests'), ', ', viewLink('flows', 'Flows'), ', Topology, the ', viewLink('investigation', 'Troubleshooting'), ' investigator — and this Documentation.']],
+            [el('strong', {}, 'Diagnostics'), ['Ad-hoc ', viewLink('probes', 'Probes & Tests'), ', ', viewLink('flows', 'Flows'), ', Topology, ', viewLink('troubleshooting', 'Troubleshooting'), ', the ', viewLink('investigation', 'Investigate'), ' investigator — and this Documentation.']],
             [el('strong', {}, 'Insights'), ['Anomaly ', viewLink('findings', 'Analysis'), ', ', viewLink('events', 'Events'), ', ', viewLink('clusters', 'Situations'), ' (one event across many agents) and ', viewLink('reporting', 'Reporting'), ' (incl. NIS2).']],
             [el('strong', {}, 'Administration'), ['Locations, Enrollment, Logs and ', viewLink('settings', 'Settings'), '.']],
           ]),
@@ -11546,7 +11687,7 @@ const DOCS = [
           docsSteps([
             ['Open ', viewLink('map', 'Sites'), '. Locations are coloured by the health of the agents at them — click the site to list its agents.'],
             ['Switch to ', viewLink('fleet', 'Overview'), ' and click the count chips (Critical / Warning) to filter the fleet to just the unhealthy agents — is it every agent at the site (shared uplink/DNS) or one?'],
-            ['Use the ', viewLink('investigation', 'Troubleshooting'), ' investigator (operator+): pick ', el('strong', {}, 'Site/location'), ' as the scope and a time window. It correlates the anomalies at that site into one explained picture.'],
+            ['Use the ', viewLink('investigation', 'Investigate'), ' investigator (operator+): pick ', el('strong', {}, 'Site/location'), ' as the scope and a time window. It correlates the anomalies at that site into one explained picture.'],
             ['Check ', viewLink('geo', 'Destinations'), ' / Topology to see whether the site lost a key dependency (a DNS resolver, a SaaS endpoint, an upstream ASN).'],
           ]),
           docsExpect('A site anomaly that hits every agent simultaneously is almost always shared infrastructure (WAN link, firewall, DNS, power). A single agent standing out while its neighbours are green is a host- or NIC-local problem — jump to “Investigate an interface”.'),
@@ -17318,13 +17459,39 @@ function noteRefreshFailure(err) {
 }
 
 // ---- Auto-refresh ---------------------------------------------------------
+// A silent refresh rebuilds the whole screen. That is right for a list that is
+// only being watched and wrong for one somebody is working in: it wiped a
+// half-typed Diagnose description, dropped an Investigate result, reset filters
+// and closed every drawer, every five seconds. So a tick is skipped while
+//   * the screen is a form or an on-demand result (nothing there to refresh),
+//   * a drawer, popover or row menu is open,
+//   * focus is in a field on the screen, or
+//   * text on the screen is selected (somebody is copying an address).
+const NO_AUTOREFRESH_VIEWS = new Set([
+  'diagnose', 'investigation', 'guide', 'docs', 'settings', 'about', 'enrollment',
+  'reporting', 'discovery', 'users', 'kitchenSink',
+]);
+function autoRefreshShouldWait() {
+  if (NO_AUTOREFRESH_VIEWS.has(currentView)) return true;
+  if (ui && typeof ui.overlayOpen === 'function' && ui.overlayOpen()) return true;
+  if (drawerEls) return true; // the help drawer
+  const view = document.getElementById('view');
+  const active = document.activeElement;
+  if (view && active && view.contains(active)) {
+    const tag = (active.tagName || '').toLowerCase();
+    if (tag === 'input' || tag === 'textarea' || tag === 'select' || active.isContentEditable) return true;
+  }
+  const sel = typeof window.getSelection === 'function' ? window.getSelection() : null;
+  if (view && sel && !sel.isCollapsed && sel.anchorNode && view.contains(sel.anchorNode)) return true;
+  return false;
+}
 let autoTimer = null;
 function setAutoRefresh(on) {
   if (autoTimer) { clearInterval(autoTimer); autoTimer = null; }
   if (on) {
     autoTimer = setInterval(() => {
       // Don't disrupt an open editing modal; refresh quietly otherwise.
-      if (token && !modalOpen()) render({ silent: true });
+      if (token && !modalOpen() && !autoRefreshShouldWait()) render({ silent: true });
     }, 5000);
   }
 }

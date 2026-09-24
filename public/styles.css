@@ -2152,3 +2152,16 @@ button.ghost.small:has(> .icon-glyph) {
   .about-item-meta { flex: 0 0 auto; flex-direction: row; align-items: center; gap: 8px; }
 
 }
+
+/* Help-drawer glossary: the five fault records side by side (conceptGlossary). */
+.concept-glossary dl { display: grid; grid-template-columns: max-content 1fr; gap: 4px 12px; margin: 0; }
+.concept-glossary dt { font-weight: 600; }
+.concept-glossary dd { margin: 0; }
+
+/* Chart hover readout (attachReadout in app.js): the nearest sample's time and
+   every series' value, with its unit. */
+.has-readout { position: relative; }
+.chart-readout { position: absolute; top: 4px; z-index: var(--z-inline); pointer-events: none; padding: 6px 8px; border-radius: var(--radius-xs); background: var(--panel); border: 1px solid var(--border); font-size: 12px; line-height: 1.4; white-space: nowrap; }
+.chart-readout .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; }
+.chart-readout-time { color: var(--muted); }
+.chart-readout-line { stroke: var(--muted); stroke-width: 1; stroke-dasharray: 3 3; pointer-events: none; }

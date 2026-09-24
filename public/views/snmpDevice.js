@@ -171,7 +171,10 @@
                   speed: p.speedMbps == null ? '–' : p.speedMbps + ' Mbit/s',
                   inRate: fmtBps(c.inBps),
                   outRate: fmtBps(c.outBps),
-                  util: fmtPct(c.inUtilPct),
+                  // The busier direction: an uplink saturated outbound read
+                  // as idle when only the in-direction was shown.
+                  util: fmtPct(c.inUtilPct == null && c.outUtilPct == null ? null
+                    : Math.max(c.inUtilPct || 0, c.outUtilPct || 0)),
                   errors: errs == null ? '–'
                     : el('span', { class: errorTone(errs) ? 'num-' + errorTone(errs) : '' }, fmtRate(errs, '/s')),
                   discards: disc == null ? '–'
@@ -212,6 +215,13 @@
                 return { y: s[field] == null ? 0 : s[field], label: new Date(s.ts).toLocaleTimeString() };
               });
             };
+            // Errors and discards are charted in + out, the same sum the port
+            // table shows — a port dropping only on egress was a flat line here.
+            var pickSum = function (a, b) {
+              return usable.map(function (s) {
+                return { y: (s[a] || 0) + (s[b] || 0), label: new Date(s.ts).toLocaleTimeString() };
+              });
+            };
             chartHost.replaceChildren(ui.panel({
               title: t('snmpdev.chart.title', { port: port.ifName }),
               note: t('snmpdev.chart.note', { n: out.total || samples.length, step: out.step || 1 }),
@@ -225,6 +235,7 @@
                   form: 'line',
                   height: 220,
                   title: t('snmpdev.chart.traffic'),
+                  format: fmtBps,
                   series: [
                     { name: t('snmpdev.col.in'), points: pick('inBps') },
                     { name: t('snmpdev.col.out'), points: pick('outBps') },
@@ -243,9 +254,10 @@
                     form: 'line',
                     height: 160,
                     title: t('snmpdev.chart.errors'),
+                    format: function (v) { return fmtRate(v, '/s'); },
                     series: [
-                      { name: t('snmpdev.col.errors'), points: pick('inErrPps') },
-                      { name: t('snmpdev.col.discards'), points: pick('inDiscPps') },
+                      { name: t('snmpdev.col.errors'), points: pickSum('inErrPps', 'outErrPps') },
+                      { name: t('snmpdev.col.discards'), points: pickSum('inDiscPps', 'outDiscPps') },
                     ],
                   })
                   : el('p', { class: 'meta' }, t('snmpdev.chart.noErrors')),

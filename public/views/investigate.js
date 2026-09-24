@@ -140,7 +140,10 @@
                   hint: t('inv.windowHint'),
                   control: ui.select({
                     id: 'inv-window', label: t('inv.window'), value: state.window,
-                    options: [['15', t('inv.window.15')], ['30', t('inv.window.30')], ['60', t('inv.window.60')]],
+                    // The API takes up to a day; a fault that started before
+                    // lunch was out of reach with an hour.
+                    options: [['15', t('inv.window.15')], ['30', t('inv.window.30')], ['60', t('inv.window.60')],
+                      ['240', t('inv.window.240')], ['1440', t('inv.window.1440')]],
                     onchange: function (e) { state.window = e.target.value; },
                   }),
                 }),
@@ -163,11 +166,10 @@
         }));
         deps.run({ type: state.type, value: value, windowMinutes: Number(state.window) })
           .then(function (inv) {
-            resultHost.replaceChildren(ui.panel({
-              title: t('inv.result'),
-              note: t('inv.resultNote', { window: state.window }),
-              children: [deps.card(inv)],
-            }));
+            // Kept on state: the result is the reason somebody pressed the
+            // button, and a rebuild used to drop it.
+            state.lastResult = { inv: inv, window: state.window };
+            showResult();
             return loadHistory();
           })
           .catch(function (e) {
@@ -183,6 +185,16 @@
             runBtn.disabled = false;
             runBtn.textContent = t('inv.run');
           });
+      }
+
+      function showResult() {
+        var last = state.lastResult;
+        if (!last) return;
+        resultHost.replaceChildren(ui.panel({
+          title: t('inv.result'),
+          note: t('inv.resultNote', { window: last.window }),
+          children: [deps.card(last.inv)],
+        }));
       }
 
       // ---- history -----------------------------------------------------------
@@ -261,13 +273,14 @@
           agents = d.agents || [];
           locations = d.locations || [];
           drawForm();
+          showResult();
           return loadHistory();
         })
         .then(function () { return page; })
         .catch(function (e) {
           formHost.replaceChildren(ui.panel({
             children: [ui.errorState({
-              title: t('inv.err.targets'), body: deps.errText(e), detail: 'GET /agents',
+              title: t('inv.err.targets'), body: deps.errText(e), detail: 'GET /agents · GET /locations',
             })],
           }));
           return page;

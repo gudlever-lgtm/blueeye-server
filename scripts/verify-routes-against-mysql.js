@@ -205,7 +205,7 @@ const ALLOWED_5XX = {
 
 // Routes that do not answer JSON when they succeed.
 const NON_JSON = [
-  /\.(csv|html|sh|ps1|tgz)$/,
+  /\.(csv|html|sh|ps1|tgz|sha256)$/,
   /^GET \/,\/index\.html$/,
   /^GET \/enroll\/agent\/:platform$/,
   /^GET \/enroll\/agent-binary\/:arch$/,

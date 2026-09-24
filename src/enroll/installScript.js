@@ -164,12 +164,33 @@ main() {
   TARBALL="$TMP/agent-source.tgz"
 
   log "downloading agent source from $SERVER_URL/enroll/agent-source.tgz"
-  $CURL -fsSL "$SERVER_URL/enroll/agent-source.tgz" -o "$TARBALL" || fail "download failed"
+  # ?sha= is what keeps the tarball and the checksum embedded in this script in
+  # step. They arrive in two separate requests, so they can only disagree when
+  # something changed or was cached in between: the query makes the URL unique per
+  # server build (nothing in the path can answer it with an older tarball), and a
+  # server that has repackaged since answers 409 rather than handing over bytes
+  # this script would then call corrupt.
+  if ! $CURL -fsSL "$SERVER_URL/enroll/agent-source.tgz?sha=$SOURCE_SHA256" -o "$TARBALL"; then
+    LIVE=$($CURL -fsSL "$SERVER_URL/enroll/agent-source.sha256" 2>/dev/null | tr -d '\r' | head -n1 || true)
+    if [ -n "$LIVE" ] && [ "$LIVE" != "$SOURCE_SHA256" ]; then
+      fail "this install script is out of date: it expects agent source $SOURCE_SHA256, but the server now serves $LIVE — re-run the one-liner from the dashboard to get a current script"
+    fi
+    fail "download failed"
+  fi
 
   pick_sha_tool
   ACTUAL=$($SHA256 "$TARBALL" | awk '{print $1}')
   if [ "$ACTUAL" != "$SOURCE_SHA256" ]; then
-    fail "checksum mismatch (expected $SOURCE_SHA256, got $ACTUAL) — refusing to install"
+    # Name the side that is stale. "checksum mismatch" on its own sends operators
+    # hunting for a corrupted download, which is almost never what happened.
+    LIVE=$($CURL -fsSL "$SERVER_URL/enroll/agent-source.sha256" 2>/dev/null | tr -d '\r' | head -n1 || true)
+    if [ "$LIVE" = "$ACTUAL" ]; then
+      fail "this install script is out of date: it expects agent source $SOURCE_SHA256, but the server now serves $LIVE — which is what was just downloaded. Re-run the one-liner from the dashboard."
+    fi
+    if [ "$LIVE" = "$SOURCE_SHA256" ]; then
+      fail "the agent source that arrived is not what the server says it serves (expected $SOURCE_SHA256, got $ACTUAL) — something between this host and the server returned a stale or altered copy. Check any proxy or cache in the path, then retry."
+    fi
+    fail "checksum mismatch (expected $SOURCE_SHA256, got $ACTUAL) — refusing to install. The server currently serves: \${LIVE:-unknown (the server could not be asked)}"
   fi
   log "checksum OK ($SOURCE_SHA256)"
 

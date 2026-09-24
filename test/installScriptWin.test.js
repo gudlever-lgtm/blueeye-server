@@ -89,7 +89,7 @@ test('renderInstallPs1 prints the uninstall command up front, not only at the en
   const script = renderInstallPs1({ serverUrl: 'https://blueeye.example.dk', code: 'C', sourceSha: SHA });
   const lines = script.split('\n');
   const earlyIdx = lines.findIndex((l) => /to remove the agent at any time/.test(l));
-  const downloadIdx = lines.findIndex((l) => /downloading agent source/.test(l));
+  const downloadIdx = lines.findIndex((l) => /Get-AgentSource \$Tarball/.test(l));
   assert.ok(earlyIdx !== -1, 'must echo an uninstall hint');
   assert.ok(earlyIdx < downloadIdx, 'uninstall hint must come before the download line');
   assert.match(lines[earlyIdx], /uninstall\.ps1'' -OutFile/);
@@ -224,8 +224,29 @@ test('renderUpdatePs1 refuses to run where there is no installed, enrolled agent
   assert.match(script, /Add agent/); // points at the real install path
   // Both checks come before anything is downloaded or changed.
   const tokenIdx = script.indexOf('no enrollment token was found');
-  const downloadIdx = script.indexOf('downloading agent source');
+  const downloadIdx = script.indexOf("Get-AgentSource $Tarball");
   assert.ok(tokenIdx !== -1 && downloadIdx !== -1 && tokenIdx < downloadIdx);
+});
+
+// The mismatch an operator actually hits: the script was generated before the
+// server repackaged the agent source (a redeploy, a reload), so the checksum
+// baked into it is old while the download is current. The script has to name the
+// stale side instead of only reporting that the two disagree — and it asks for
+// the bundle by checksum, so nothing in the path can answer with an older build.
+test('the PowerShell scripts fetch the source by checksum and diagnose a mismatch', () => {
+  for (const script of [
+    renderInstallPs1({ serverUrl: 'http://x', code: 'C', sourceSha: SHA }),
+    renderUpdatePs1({ serverUrl: 'http://x', sourceSha: SHA }),
+  ]) {
+    assert.match(script, /agent-source\.tgz\?sha=\$want/);
+    assert.match(script, /enroll\/agent-source\.sha256/);
+    assert.match(script, /this script is out of date/);
+    assert.match(script, /not what the server says it serves/);
+    // A server that has already repackaged answers 409 — that is not a network
+    // failure and must not be reported as one.
+    assert.match(script, /\(409\)/);
+    assert.match(script, /repackaged the agent source since this script was generated/);
+  }
 });
 
 test('renderUpdatePs1 keeps the agent identity: the state dir is never touched', () => {
@@ -240,7 +261,10 @@ test('renderUpdatePs1 verifies the download, stops the agent, then restarts it',
   const script = renderUpdatePs1({ serverUrl: 'http://x', sourceSha: SHA });
   assert.match(script, /Invoke-WebRequest -UseBasicParsing/);
   assert.match(script, /Get-FileHash -Algorithm SHA256/);
-  assert.match(script, /refusing to update/); // checksum mismatch aborts
+  // The download + checksum verification is Get-AgentSource (PS_COMMON); the
+  // update passes its verb so the abort reads "refusing to update".
+  assert.match(script, /Get-AgentSource \$Tarball 'update'/);
+  assert.match(script, /refusing to \$verb/); // checksum mismatch aborts
   assert.match(script, /BLUEEYE_DRY_RUN/); // same inspection hook as the installer
   const stopIdx = script.indexOf('Stop-ScheduledTask -TaskName $ServiceName');
   const extractIdx = script.indexOf('extracting the new agent source');
@@ -307,7 +331,7 @@ test('renderInstallPs1 refuses a non-elevated session BEFORE enrolling, with the
   assert.match(script, /WindowsBuiltInRole\]::Administrator/);
   const check = script.indexOf("Assert-Elevated '");
   assert.ok(check > 0, 'calls Assert-Elevated');
-  assert.ok(check < script.indexOf('agent-source.tgz'), 'elevation is checked before the download');
+  assert.ok(check < script.indexOf("Get-AgentSource $Tarball"), 'elevation is checked before the download');
   assert.ok(check < script.indexOf('$enrollArgs'), 'elevation is checked before enrollment consumes the code');
   const call = script.split('\n').find((l) => l.startsWith('Assert-Elevated '));
   assert.match(call, /install\.ps1/, 'the retry hint is the install one-liner');
@@ -333,7 +357,7 @@ test('renderUpdatePs1 and renderUninstallPs1 refuse a non-elevated session too',
   const call = upd.split('\n').find((l) => l.startsWith('Assert-Elevated '));
   assert.ok(call, 'update calls Assert-Elevated');
   assert.match(call, /update\.ps1/);
-  assert.ok(upd.indexOf("Assert-Elevated '") < upd.indexOf('agent-source.tgz'));
+  assert.ok(upd.indexOf("Assert-Elevated '") < upd.indexOf("Get-AgentSource $Tarball"));
   for (const l of upd.split('\n').filter((x) => /(Register|Start)-ScheduledTask -TaskName/.test(x))) {
     assert.match(l, /-ErrorAction Stop/, l);
   }

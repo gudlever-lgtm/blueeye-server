@@ -46,6 +46,7 @@ const PUBLIC_ROUTES = new Set([
   'GET /enroll/config',
   'GET /enroll/agent-release-key',
   'GET /enroll/agent-source.tgz',
+  'GET /enroll/agent-source.sha256',
   'GET /enroll/agent-release',
   'GET /enroll/agent-release.tgz',
   'GET /enroll/uninstall.sh',

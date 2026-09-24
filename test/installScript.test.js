@@ -143,6 +143,84 @@ test('install script ABORTS on checksum mismatch (real sha256 verification)', ()
   assert.match(stderr, /checksum mismatch/);
 });
 
+// The mismatch an operator actually hits: the script was generated before the
+// server repackaged the agent source (a redeploy, a reload), so the checksum
+// baked into it is old while the download is current. "checksum mismatch" alone
+// reads like a corrupted or tampered download — it has to name the stale side.
+test('install script names the stale SCRIPT when the server has moved on', () => {
+  const bytes = 'the-real-bytes';
+  const sha = crypto.createHash('sha256').update(bytes).digest('hex');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'blueeye-curl-'));
+  const curl = path.join(dir, 'fake-curl');
+  // Answers the tarball with the CURRENT bytes and /agent-source.sha256 with
+  // their checksum — i.e. a server one build ahead of this script.
+  fs.writeFileSync(curl, `#!/bin/sh
+out=""
+url=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -o) out="$2"; shift 2 ;;
+    http*) url="$1"; shift ;;
+    *) shift ;;
+  esac
+done
+case "$url" in
+  *agent-source.sha256) printf '%s\\n' "${sha}" ;;
+  *) printf '%s' "${bytes}" > "$out" ;;
+esac
+`, { mode: 0o755 });
+  fs.chmodSync(curl, 0o755);
+
+  const script = renderInstallScript({ serverUrl: 'http://x', code: 'C', sourceSha: '0'.repeat(64) });
+  let stderr = '';
+  assert.throws(() => runScript(script, { BLUEEYE_CURL: curl, BLUEEYE_DRY_RUN: '1' }), (err) => {
+    stderr = String(err.stderr || '');
+    return true;
+  });
+  assert.match(stderr, /install script is out of date/);
+  assert.match(stderr, new RegExp(`now serves ${sha}`));
+});
+
+// The reverse: the server says it serves exactly what this script expects, but
+// the bytes that arrived are something else — a cache or proxy in the path.
+test('install script names the stale DOWNLOAD when the server agrees with the script', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'blueeye-curl-'));
+  const curl = path.join(dir, 'fake-curl');
+  const expected = '0'.repeat(64);
+  fs.writeFileSync(curl, `#!/bin/sh
+out=""
+url=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -o) out="$2"; shift 2 ;;
+    http*) url="$1"; shift ;;
+    *) shift ;;
+  esac
+done
+case "$url" in
+  *agent-source.sha256) printf '%s\\n' "${expected}" ;;
+  *) printf '%s' "stale-cached-bytes" > "$out" ;;
+esac
+`, { mode: 0o755 });
+  fs.chmodSync(curl, 0o755);
+
+  const script = renderInstallScript({ serverUrl: 'http://x', code: 'C', sourceSha: expected });
+  let stderr = '';
+  assert.throws(() => runScript(script, { BLUEEYE_CURL: curl, BLUEEYE_DRY_RUN: '1' }), (err) => {
+    stderr = String(err.stderr || '');
+    return true;
+  });
+  assert.match(stderr, /not what the server says it serves/);
+  assert.match(stderr, /proxy or cache/);
+});
+
+// The tarball is asked for by checksum, so no cache in the path can answer with
+// an older build under the same URL.
+test('install script requests the source bundle by checksum (?sha=)', () => {
+  const script = renderInstallScript({ serverUrl: 'http://x', code: 'C', sourceSha: 'a'.repeat(64) });
+  assert.match(script, /agent-source\.tgz\?sha=\$SOURCE_SHA256/);
+});
+
 test('install script verifies a correct checksum and stops at dry-run', () => {
   const bytes = 'the-real-bytes';
   const sha = crypto.createHash('sha256').update(bytes).digest('hex');

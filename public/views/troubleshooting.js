@@ -235,7 +235,9 @@
       function nodeLabel(id) {
         var nodes = (data.topology && data.topology.nodes) || [];
         var n = nodes.filter(function (x) { return String(x.id) === String(id); })[0];
-        return n && n.label ? n.label : String(id);
+        if (n && n.label) return n.label;
+        // Not on the graph (no LLDP yet): an agent id still has a name.
+        return deps.agentName && /^\d+$/.test(String(id)) ? deps.agentName(id) : String(id);
       }
       function affectedList(m) {
         var ids = m.affectedDeviceIds || [];

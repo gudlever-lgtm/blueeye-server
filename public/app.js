@@ -4792,7 +4792,11 @@ function getSituationPage() {
       el('p', {}, t('sit.info.p2')),
       el('p', { class: 'muted' }, t('sit.info.p3')),
     ],
-    fetchDetail: async (id) => (await api(`/api/event-clusters/${id}`)).cluster,
+    // /agents alongside, so the affected-agents panel names them.
+    fetchDetail: async (id) => {
+      const [d] = await Promise.all([api(`/api/event-clusters/${id}`), api('/agents').catch(() => null)]);
+      return d.cluster;
+    },
     ack: async (id) => {
       try { await api(`/api/event-clusters/${id}/ack`, { method: 'POST' }); toast(t('sit.acked')); render(); }
       catch (err) { toast(errText(err), true); }
@@ -7177,6 +7181,11 @@ function getDeviceLogView() {
 
 views.deviceLog = async () => {
   applyContextFromUrl('deviceLog');
+  // The scope line names the agent; opened from a link, nothing has fetched
+  // the names yet.
+  if (deviceLogState && deviceLogState.agentId != null && !agentNames.has(String(deviceLogState.agentId))) {
+    await api('/agents').catch(() => null);
+  }
   const v = getDeviceLogView();
   if (!v) return el('div', { class: 'empty error' }, t('devlog.err.title'));
   return v.view();
@@ -7433,7 +7442,15 @@ function getTroubleshootingView() {
       const info = PAGE_INFO.troubleshooting || {};
       return { lead: info.hero || '', title: info.title || t('tshoot.title'), body: info.body || (() => []) };
     },
-    fetchOverview: async (minutes) => api(`/api/troubleshooting/overview?minutes=${encodeURIComponent(minutes)}`),
+    // /agents alongside, so devices the topology does not carry are still named.
+    fetchOverview: async (minutes) => {
+      const [d] = await Promise.all([
+        api(`/api/troubleshooting/overview?minutes=${encodeURIComponent(minutes)}`),
+        api('/agents').catch(() => null),
+      ]);
+      return d;
+    },
+    agentName: agentLabel,
     fetchFaults: async (limit, offset) => api(`/api/troubleshooting/faults?limit=${limit}&offset=${offset}`),
     blastRadius: async (anchorId) => {
       const radius = await api(`/api/topology/blast-radius/${encodeURIComponent(anchorId)}`);

@@ -127,7 +127,7 @@ test('the router name wins over GeoIP when it passes the RTT check', () => {
   const g = locateHop({ ip: '62.115.1.1', hostname: 'ae3.cph-bb1.telia.net', rttMs: 1.2 }, { geoProvider, centroids, origin: CPH });
   assert.equal(g.country, 'SE', 'the registration stays what GeoIP says');
   assert.equal(g.asn, 1299);
-  assert.deepEqual(g.place, { city: 'Copenhagen', country: 'DK', precision: 'city', source: 'rdns', code: 'cph' });
+  assert.deepEqual(g.place, { city: 'Copenhagen', country: 'DK', precision: 'city', source: 'rdns', code: 'cph', certainty: 'exact' });
   assert.equal(g.lat, 55.6761);
   assert.equal(g.hostname, 'ae3.cph-bb1.telia.net');
   assert.equal(g.rejected, null);
@@ -135,25 +135,36 @@ test('the router name wins over GeoIP when it passes the RTT check', () => {
 
 test('a name the RTT rules out falls back to city GeoIP, then the country', () => {
   const cityProvider = { lookup: () => ({ city: 'Stockholm', country: 'SE', lat: 59.3293, lng: 18.0686 }) };
-  // 1 ms from Copenhagen: Frankfurt (~680 km) is impossible, Stockholm (~520 km) too.
+  // 1 ms from Copenhagen: Frankfurt (~680 km) is impossible as a point, and so
+  // is Stockholm (~520 km). Both are CITIES — precise claims — so both are
+  // rejected outright.
   const g = locateHop({ ip: '62.115.1.1', hostname: 'ffm-bb2-link.ip.twelve99.net', rttMs: 1 }, { geoProvider, cityProvider, centroids, origin: CPH });
-  assert.equal(g.place, null);
-  assert.equal(g.lat, null);
-  assert.deepEqual(g.rejected.map((r) => r.source), ['rdns', 'geoip-city', 'geoip-country']);
-  // 8 ms: Frankfurt fits.
+  assert.deepEqual(g.rejected.map((r) => r.source), ['rdns', 'geoip-city']);
+
+  // The country centroid is NOT rejected with them, and that is the point of
+  // testing a region as a region: "somewhere in DE" is feasible from Copenhagen
+  // in 1 ms, because the German border is a couple of hundred km away even
+  // though the centroid is 680. The hop is drawn there and marked as a guess —
+  // dropping it would leave a hole in the path, which reads as a broken trace.
+  assert.equal(g.place.source, 'geoip-country');
+  assert.equal(g.place.certainty, 'approximate');
+  assert.ok(Number.isFinite(g.lat));
+
+  // 8 ms: Frankfurt fits as a point, and an exact candidate always wins.
   const ok = locateHop({ ip: '62.115.1.1', hostname: 'ffm-bb2-link.ip.twelve99.net', rttMs: 8 }, { geoProvider, cityProvider, centroids, origin: CPH });
   assert.equal(ok.place.city, 'Frankfurt');
+  assert.equal(ok.place.certainty, 'exact');
 });
 
 test('without a useful name, city GeoIP places the hop', () => {
   const cityProvider = { lookup: () => ({ city: 'Hamburg', country: 'DE', lat: 53.5511, lng: 9.9937 }) };
   const g = locateHop({ ip: '80.1.1.1', hostname: 'edge.example.net', rttMs: 12 }, { geoProvider, cityProvider, centroids, origin: CPH });
-  assert.deepEqual(g.place, { city: 'Hamburg', country: 'DE', precision: 'city', source: 'geoip-city' });
+  assert.deepEqual(g.place, { city: 'Hamburg', country: 'DE', precision: 'city', source: 'geoip-city', certainty: 'exact' });
 });
 
 test('without name or city data, the country centroid is used as before', () => {
   const g = locateHop({ ip: '80.1.1.1', rttMs: 12 }, { geoProvider, centroids, origin: CPH });
-  assert.deepEqual(g.place, { city: null, country: 'DE', precision: 'country', source: 'geoip-country' });
+  assert.deepEqual(g.place, { city: null, country: 'DE', precision: 'country', source: 'geoip-country', certainty: 'exact' });
   assert.equal(g.lat, 51);
 });
 
@@ -396,7 +407,7 @@ test('GET /api/probes/path returns the placement per hop (200)', async () => {
   assert.equal(res.status, 200);
   const [, h1, h2, h3] = res.body.nodes;
   assert.equal(h1.private, true);
-  assert.deepEqual(h2.place, { city: 'Copenhagen', country: 'DK', precision: 'city', source: 'rdns', code: 'cph' });
+  assert.deepEqual(h2.place, { city: 'Copenhagen', country: 'DK', precision: 'city', source: 'rdns', code: 'cph', certainty: 'exact' });
   assert.equal(h2.hostname, 'ae3.cph-bb1.telia.net');
   assert.equal(h3.lat, null);
   assert.equal(h3.geoRejected[0].source, 'geoip-country');

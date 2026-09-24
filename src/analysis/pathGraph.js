@@ -25,6 +25,20 @@ const T = {
   latency: { warn: 120, bad: 250 },
 };
 
+// Severity order, shared. `muted` sits BELOW `ok` because it is not a degree of
+// badness at all — it means NOT MEASURED (a silent router that never answers
+// ICMP, which is normal). Ranking it above `ok` turns the most ordinary path
+// there is into a warning.
+//
+// The dashboard keeps its own copy (public/views/destinations.js RANK): it is
+// vanilla browser JS with no build step, so it cannot import this. The copies
+// are pinned to each other by test/pathSeverityRank.test.js — they drifted
+// once, and the screen then called a silent router the worst hop under a
+// sentence reading "(silent router — normal)".
+const SEVERITY_RANK = Object.freeze({ bad: 3, warn: 2, ok: 1, muted: 0 });
+// The floor for naming a worst hop. Below it there is no worst hop at all.
+const WORST_MIN_RANK = SEVERITY_RANK.warn;
+
 function median(xs) {
   const a = xs.filter((v) => typeof v === 'number' && Number.isFinite(v)).sort((x, y) => x - y);
   if (!a.length) return null;
@@ -170,6 +184,16 @@ function buildPathGraph(results, { geoProvider = null, cityProvider = null, cent
       hostname: geo.hostname,
       place: geo.place,
       geoRejected: geo.rejected,
+      // 'exact' | 'approximate' | null. `approximate` means the hop IS drawn,
+      // but on a country centroid the reply time says it cannot literally be
+      // standing on — the country is feasible, the pin is a guess. The map
+      // marks it rather than dropping it, because a path with a hole in it
+      // reads as a broken trace (src/geo/hopLocation.js).
+      placeCertainty: geo.place ? (geo.place.certainty || 'exact') : null,
+      placeOffByKm: geo.place && Number.isFinite(geo.place.offByKm) ? geo.place.offByKm : null,
+      // Nothing could be placed, but the reply time still bounds it: the
+      // responder is provably inside this radius of the agent.
+      withinKm: Number.isFinite(geo.withinKm) ? geo.withinKm : null,
       rttMs,
       jitterMs,
       lossPct,
@@ -198,13 +222,13 @@ function buildPathGraph(results, { geoProvider = null, cityProvider = null, cent
 
   // Worst hop (highest-severity real node) — lets the Troubleshooting view
   // pre-highlight the failing hop. bad(3) > warn(2) > ok(1) > muted(0).
-  const sevRank = { bad: 3, warn: 2, ok: 1, muted: 0 };
+  const sevRank = SEVERITY_RANK;
   let worstHopIndex = null;
   let worstRank = 0;
   for (const n of nodes) {
     if (n.kind === 'source') continue;
     const r = sevRank[n.severity] || 0;
-    if (r > worstRank && r >= sevRank.warn) { worstRank = r; worstHopIndex = n.index; }
+    if (r > worstRank && r >= WORST_MIN_RANK) { worstRank = r; worstHopIndex = n.index; }
   }
 
   const branches = buildBranches(runs, byPos, maxPos, { ...geoDeps, names, fastest });
@@ -479,4 +503,5 @@ function describeLiveHop(h, { geoProvider = null, cityProvider = null, centroids
 module.exports = {
   buildPathGraph, describeLiveHop, PATH_PROBE_TYPES, buildBranches, hopMembers, ecmpAnalysis,
   THRESHOLDS: T, ECMP_MIN_SIGHTINGS, ECMP_LOSS_RISE_PCT,
+  SEVERITY_RANK, WORST_MIN_RANK,
 };

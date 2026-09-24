@@ -61,11 +61,13 @@ function createSnmpProfilesRouter({
   async function audit(req, action, profile, label) {
     if (!auditLogger || typeof auditLogger.record !== 'function') return;
     try {
+      // The compliance logger's own shape — category + target — which the
+      // audit_log columns require (`category` is NOT NULL).
       await auditLogger.record(req, {
+        category: 'snmp',
         action,
-        targetType: 'snmp_profile',
-        targetId: String(profile),
-        targetLabel: label,
+        target: String(profile),
+        detail: label,
       });
     } catch (err) {
       if (logger) logger.warn(`snmp-profiles: audit failed (${err.message})`);

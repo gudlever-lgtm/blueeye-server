@@ -62,12 +62,32 @@ function memberRef(f) {
   };
 }
 
+// A linked event case, as the Situation page lists it.
+function caseRef(c) {
+  return {
+    id: c.id,
+    title: c.title ?? null,
+    status: c.status ?? null,
+    severity: c.severity ?? null,
+    hostId: c.hostId ?? null,
+    agentName: c.agentName ?? null,
+    locationName: c.locationName ?? null,
+    firstEventAt: c.firstEventAt ?? null,
+    lastEventAt: c.lastEventAt ?? null,
+  };
+}
+
 // Plain-language summary of WHICH signals drove the grouping and why — the
-// human-readable companion to the confidence breakdown.
-function evidenceSummary(breakdown, hostIds, commonType) {
+// human-readable companion to the confidence breakdown. A cluster that stored
+// its grouping basis (migration 130) names the actual relations — shared
+// target, same switch, upstream switch, same site, LLDP; an older one is
+// explained from its tier, which then could only mean a shared site.
+function evidenceSummary(breakdown, hostIds, commonType, grouping = null) {
   const drivers = [];
   if (breakdown.signals.time) drivers.push(`${hostIds.length} agents fired within the correlation window (time proximity)`);
-  if (breakdown.signals.topology) drivers.push('the agents share a site (topology)');
+  const why = grouping && Array.isArray(grouping.why) ? grouping.why.filter(Boolean) : [];
+  if (why.length) drivers.push(...why);
+  else if (breakdown.signals.topology) drivers.push('the agents share a site (topology)');
   if (breakdown.signals.type && commonType) drivers.push(`≥2 agents reported the same finding-type (${commonType})`);
   return {
     drivers,
@@ -80,10 +100,13 @@ function evidenceSummary(breakdown, hostIds, commonType) {
 // Assembles the full cluster-detail payload. `cluster` is a mapped repo row;
 // `members` are the hydrated finding objects (in cluster member order, missing
 // ones already filtered out by the caller).
-function buildClusterDetail(cluster, members = []) {
+// `eventCases` are the event cases linked to the cluster (migration 129), in
+// the compact shape the Situation page lists.
+function buildClusterDetail(cluster, members = [], eventCases = []) {
   const hostIds = [...new Set(members.map((f) => f.hostId).filter((h) => h != null).map(String))];
   const metrics = members.map((f) => f.metric).filter(Boolean);
-  const breakdown = confidenceBreakdown(cluster.confidence, members);
+  const grouping = cluster.groupingBasis || null;
+  const breakdown = confidenceBreakdown(cluster.confidence, members, grouping);
   const rootCause = classifyRootCauseLayer(metrics);
 
   // Recompute the single shared finding-type (if any) for the summary.
@@ -121,8 +144,10 @@ function buildClusterDetail(cluster, members = []) {
       commonCause: cluster.suspectedCommonCause ?? null,
     },
     advisory: cluster.advisory ?? null,
-    evidenceSummary: evidenceSummary(breakdown, hostIds, commonType),
+    groupingBasis: grouping,
+    evidenceSummary: evidenceSummary(breakdown, hostIds, commonType, grouping),
+    eventCases: (Array.isArray(eventCases) ? eventCases : []).map(caseRef),
   };
 }
 
-module.exports = { classifyRootCauseLayer, buildClusterDetail, memberRef, evidenceSummary };
+module.exports = { classifyRootCauseLayer, buildClusterDetail, memberRef, caseRef, evidenceSummary };

@@ -14,7 +14,7 @@
 // resolution is the one loop here (the resolver only answers one device at a
 // time — the setup checklist makes the same walk) and it is capped too.
 //
-// Cost, for the record: one query per source (thirteen, run concurrently),
+// Cost, for the record: one query per source (fourteen, run concurrently),
 // plus one resolver call per enabled switch without its own community, up to
 // MAX_CREDENTIAL_LOOKUPS. Nothing here scales with traffic volume: flows are
 // read as MAX(ts) per agent, ARP as one row per /24, the forwarding table as
@@ -27,12 +27,15 @@ const PORT_MAC_LIMIT = 20000;
 const DEVICE_MAC_LIMIT = 50000;
 const NEIGHBOUR_LIMIT = 20000;
 const ARP_SUBNET_LIMIT = 500;
+const SFLOW_EXPORTER_LIMIT = 500;
 const MAX_CREDENTIAL_LOOKUPS = 500;
 // Neighbour-table and forwarding rows older than this describe a network that
 // may no longer exist; ARP rows are refreshed less often, hence the week.
 const FDB_WINDOW_MS = 24 * 3600 * 1000;
 const NEIGHBOUR_WINDOW_MS = 7 * 24 * 3600 * 1000;
 const ARP_WINDOW_MS = 7 * 24 * 3600 * 1000;
+// An sFlow exporter heard within the flow window is a live one.
+const SFLOW_EXPORTER_WINDOW_MS = 24 * 3600 * 1000;
 
 function createCoverageService({
   agentsRepo = null,
@@ -46,6 +49,7 @@ function createCoverageService({
   lldpNeighborsRepo = null,
   arpEntriesRepo = null,
   discoveredDevicesRepo = null,
+  sflowExportersRepo = null,
   logger = silentLogger,
   now = () => new Date(),
 } = {}) {
@@ -104,6 +108,9 @@ function createCoverageService({
         () => lldpNeighborsRepo.listAll({ since: ago(NEIGHBOUR_WINDOW_MS), limit: NEIGHBOUR_LIMIT }), NEIGHBOUR_LIMIT),
       read('arpSubnets', has(arpEntriesRepo, 'subnetSummary'),
         () => arpEntriesRepo.subnetSummary({ since: ago(ARP_WINDOW_MS), limit: ARP_SUBNET_LIMIT }), ARP_SUBNET_LIMIT),
+      read('sflowExporters', has(sflowExportersRepo, 'listRecent'),
+        () => sflowExportersRepo.listRecent({ since: ago(SFLOW_EXPORTER_WINDOW_MS), limit: SFLOW_EXPORTER_LIMIT }),
+        SFLOW_EXPORTER_LIMIT),
       read('discovered', has(discoveredDevicesRepo, 'list'), async () => {
         const rows = await discoveredDevicesRepo.list({ status: 'discovered', limit });
         // The total, so a capped list still counts every candidate. A store
@@ -155,5 +162,6 @@ module.exports = {
   DEVICE_MAC_LIMIT,
   NEIGHBOUR_LIMIT,
   ARP_SUBNET_LIMIT,
+  SFLOW_EXPORTER_LIMIT,
   MAX_CREDENTIAL_LOOKUPS,
 };

@@ -2,6 +2,8 @@
 
 const { createCrossAgentCorrelator, DEFAULT_WINDOW_MS } = require('./crossAgentCorrelator');
 const { EVENT_INSUFFICIENT_ANSWER } = require('./assistant');
+const { computeBlastRadius } = require('../topology/blastRadius');
+const { deviceNode } = require('../topology/nodeId');
 
 const silentLogger = { info() {}, warn() {}, error() {}, debug() {} };
 
@@ -43,6 +45,21 @@ function createCrossAgentClusterService({
   // clusters keep per-finding alerting (nothing to roll up). Nullable → legacy
   // single cluster-alert via maybeAlert.
   notifier = null,
+  // Opt-in "upstream" topology: the blast-radius service (unified LLDP +
+  // switch graph). When a finding is about a switch, the agents it cuts off are
+  // downstream of it, and their findings in the same window join its
+  // situation. Nullable → no upstream relation.
+  blastRadiusService = null,
+  // How long one read of the blast-radius graph is reused across sweeps.
+  // graph() is six full-table reads (devices, links, LLDP, agents, ...) and the
+  // sweep runs about once a minute whenever a device finding is in the window;
+  // switch topology does not change on that scale, and a link that does change
+  // is picked up within this TTL. 0 → read every sweep.
+  graphTtlMs = 5 * 60 * 1000,
+  // Opt-in event-case link (migration 129): the event cases of a cluster's
+  // member findings are stamped with the cluster, so a case says which
+  // situation it is part of and its auto-resolve waits for the situation.
+  eventCasesRepo = null,
   // Fase 6: read-only evidence snapshot engine. On cluster-open it captures a
   // diagnostic snapshot from each affected target (best-effort, fire-and-forget —
   // a slow/offline agent NEVER delays clustering). Nullable → no capture.
@@ -73,25 +90,104 @@ function createCrossAgentClusterService({
     return (hostId) => (map.has(String(hostId)) ? map.get(String(hostId)) : null);
   }
 
-  // Builds the LLDP topology resolver for a sweep: refresh the cached graph (at
-  // most once per TTL), then hand the correlator a sync `related(a, b)`. Returns
-  // null when no graph is wired, so the correlator falls back to site-only.
-  async function buildTopologyResolver() {
-    if (!topologyGraph || typeof topologyGraph.relation !== 'function') return null;
-    try {
-      if (typeof topologyGraph.ensureFresh === 'function') await topologyGraph.ensureFresh();
-    } catch (err) {
-      logger.warn(`cross-agent: LLDP graph refresh failed (${err.message})`);
-    }
-    return { related: (a, b) => topologyGraph.relation(a, b) };
+  // The blast-radius graph, cached for graphTtlMs (see above). A failed read
+  // is not cached, so the next sweep tries again.
+  let graphCache = null; // { graph, at }
+  async function upstreamGraph() {
+    const t = now().getTime();
+    if (graphCache && graphTtlMs > 0 && t - graphCache.at < graphTtlMs) return graphCache.graph;
+    const graph = await blastRadiusService.graph();
+    graphCache = { graph, at: t };
+    return graph;
   }
 
-  // Finds an open cluster whose member set OVERLAPS the candidate's (shares >=1
-  // finding id) — that is "the same finding set" for dedup purposes. Returns the
+  // Builds the topology resolver for a sweep: the LLDP graph (refreshed at most
+  // once per TTL) as a sync `related(a, b)`, and — when findings in the window
+  // are about a switch — the agents downstream of each such switch from ONE
+  // read of the blast-radius graph. Returns null when neither is wired, so the
+  // correlator relates on subject + site only.
+  async function buildTopologyResolver(recent) {
+    const out = {};
+    if (topologyGraph && typeof topologyGraph.relation === 'function') {
+      try {
+        if (typeof topologyGraph.ensureFresh === 'function') await topologyGraph.ensureFresh();
+      } catch (err) {
+        logger.warn(`cross-agent: LLDP graph refresh failed (${err.message})`);
+      }
+      out.related = (a, b) => topologyGraph.relation(a, b);
+    }
+    const deviceIds = [...new Set(recent.map((f) => f.deviceId).filter((d) => d != null).map(Number))];
+    if (deviceIds.length && blastRadiusService && typeof blastRadiusService.graph === 'function') {
+      const downstream = new Map();
+      try {
+        const g = await upstreamGraph();
+        for (const id of deviceIds) {
+          const r = computeBlastRadius(g, deviceNode(id), { maxDepth: blastRadiusService.maxDepth });
+          // Agents only: a switch cut off by a switch is not an agent's finding.
+          const agents = [...r.directly_isolated, ...r.dependency_affected]
+            .map((x) => x.hostId).filter((h) => typeof h === 'number' || /^\d+$/.test(String(h))).map(String);
+          downstream.set(id, new Set(agents));
+        }
+      } catch (err) {
+        logger.warn(`cross-agent: upstream graph unavailable (${err.message})`);
+      }
+      out.downstreamOf = (id) => downstream.get(Number(id)) || null;
+    }
+    return Object.keys(out).length ? out : null;
+  }
+
+  // Finds the open cluster a candidate continues: one whose member set
+  // OVERLAPS the candidate's (shares >=1 finding id), or — for a recurring
+  // fault whose earlier members have scrolled out of the detection window —
+  // one that is about the SAME subject (a stored grouping basis names it).
+  // Agent-level subjects never match on their own: "cpu on agent 3" recurring
+  // is only the same situation while it still shares findings. Returns the
   // matching open cluster or null.
+  const SUBJECT_MATCH = /^(target|mac|port|device|transaction):/;
   function findOverlap(candidate, open) {
     const wanted = new Set(candidate.memberFindingIds);
-    return open.find((c) => c.memberFindingIds.some((id) => wanted.has(id))) || null;
+    const byId = open.find((c) => c.memberFindingIds.some((id) => wanted.has(id)));
+    if (byId) return byId;
+    const subjects = new Set(((candidate.grouping && candidate.grouping.subjects) || []).filter((k) => SUBJECT_MATCH.test(k)));
+    if (!subjects.size) return null;
+    return open.find((c) => c.groupingBasis && (c.groupingBasis.subjects || []).some((k) => subjects.has(k))) || null;
+  }
+
+  // The union of a stored grouping basis and a fresh candidate's: every
+  // subject and every reason either one named, de-duplicated.
+  function mergeGrouping(stored, fresh) {
+    if (!fresh) return stored || null;
+    if (!stored) return fresh;
+    const reasons = [];
+    const seen = new Set();
+    for (const r of [...(stored.reasons || []), ...(fresh.reasons || [])]) {
+      const k = `${r.kind}|${r.detail}`;
+      if (seen.has(k)) continue;
+      seen.add(k);
+      reasons.push(r);
+    }
+    return {
+      subjects: [...new Set([...(stored.subjects || []), ...(fresh.subjects || [])])],
+      reasons,
+      why: [...new Set([...(stored.why || []), ...(fresh.why || [])])],
+    };
+  }
+
+  // Stamps the cluster on the event cases of its member findings (migration
+  // 129). Best-effort: a failed link costs the "part of situation" label, never
+  // the cluster.
+  async function linkCases(clusterId, memberFindingIds, membersById) {
+    if (!eventCasesRepo || typeof eventCasesRepo.linkCluster !== 'function') return;
+    const caseIds = memberFindingIds
+      .map((id) => membersById.get(id))
+      .filter((f) => f && f.eventCaseId != null)
+      .map((f) => f.eventCaseId);
+    if (!caseIds.length) return;
+    try {
+      await eventCasesRepo.linkCluster(caseIds, clusterId);
+    } catch (err) {
+      logger.warn(`cross-agent: could not link event cases to cluster ${clusterId} (${err.message})`);
+    }
   }
 
   // Compact evidence reference for a member finding — surfaced ALONGSIDE the advisory
@@ -220,7 +316,11 @@ function createCrossAgentClusterService({
     const summary = { created: 0, updated: 0 };
     let recent = [];
     try {
-      const since = new Date(now().getTime() - windowMs);
+      // TWO windows back: two related findings may sit up to one window apart,
+      // and the sweep runs every ~60s, so reading only one window would see
+      // such a pair together only if a sweep happened to land in the instant
+      // before the older one aged out.
+      const since = new Date(now().getTime() - 2 * windowMs);
       recent = await findingStore.list(undefined, since); // all hosts within the window
     } catch (err) {
       logger.warn(`cross-agent: could not load recent findings (${err.message})`);
@@ -230,7 +330,7 @@ function createCrossAgentClusterService({
     const membersById = new Map(recent.map((f) => [f.id, f]));
 
     const siteOf = await buildSiteLookup();
-    const topology = await buildTopologyResolver();
+    const topology = await buildTopologyResolver(recent);
     let candidates = [];
     try {
       candidates = correlator.detect(recent, { siteOf, topology });
@@ -254,10 +354,12 @@ function createCrossAgentClusterService({
         if (existing) {
           // Merge member sets (union) and re-evaluate; bump detected_at.
           const merged = [...new Set([...existing.memberFindingIds, ...candidate.memberFindingIds])];
+          const groupingBasis = mergeGrouping(existing.groupingBasis, candidate.grouping);
           const ok = await clustersRepo.updateMembership(existing.id, {
             confidence: candidate.confidence,
             memberFindingIds: merged,
             suspectedCommonCause: candidate.suspectedCommonCause,
+            groupingBasis,
             detectedAt: candidate.detectedAt,
           });
           if (ok) {
@@ -265,6 +367,8 @@ function createCrossAgentClusterService({
             const prevMemberIds = existing.memberFindingIds; // pre-merge
             const newIds = merged.filter((mid) => !prevMemberIds.includes(mid));
             existing.memberFindingIds = merged; // keep local view consistent for later candidates
+            existing.groupingBasis = groupingBasis;
+            await linkCases(existing.id, merged, membersById);
             publishCluster({ ...candidate, id: existing.id, status: 'open', memberFindingIds: merged, updated: true });
             const mergedCandidate = { ...candidate, memberFindingIds: merged };
             const advisory = await maybeAdvise(existing.id, mergedCandidate, membersById, existing.advisory);
@@ -285,15 +389,17 @@ function createCrossAgentClusterService({
             confidence: candidate.confidence,
             memberFindingIds: candidate.memberFindingIds,
             suspectedCommonCause: candidate.suspectedCommonCause,
+            groupingBasis: candidate.grouping || null,
             status: 'open',
             detectedAt: candidate.detectedAt,
           });
           summary.created += 1;
+          await linkCases(id, candidate.memberFindingIds, membersById);
           const created = { ...candidate, id, status: 'open' };
           // Seed the local open-list entry with alert state so a later candidate
           // overlapping this just-created cluster in the same sweep sees it as
           // already-opened (no duplicate opened alert).
-          open.push({ id, memberFindingIds: candidate.memberFindingIds, status: 'open', alertLastAt: now(), alertLastSeverity: candidate.severity, alertMemberCount: candidate.memberFindingIds.length });
+          open.push({ id, memberFindingIds: candidate.memberFindingIds, groupingBasis: candidate.grouping || null, status: 'open', alertLastAt: now(), alertLastSeverity: candidate.severity, alertMemberCount: candidate.memberFindingIds.length });
           publishCluster(created);
           // Fase 6: capture a read-only evidence snapshot per affected target on
           // open. Fire-and-forget — never blocks the sweep, alerting or the page.

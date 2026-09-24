@@ -81,6 +81,17 @@ submitted on time = ok, submitted late = warn, upcoming = neutral — the shared
 badge palette), the due date in the tooltip. The New/Edit form carries the
 Art. 23 fields. An incident drafted from an event case links back to it.
 
+**In the printed register** — `GET /export/incident.html` (Reporting → NIS2 →
+Export) prints the overview table it always had, then an *Article 23
+reporting* table (`incidentRegisterSections` in `src/nis2/report.js`): suspected
+malicious, cross-border impact (with its details), the authority reference,
+when each of the three reports was sent — marked *late* when it missed its
+deadline — the worst open deadline stage (`not required` for an incident with
+no reporting duty) and the linked event case. The deadlines are computed with
+the same `computeIncidentDeadlines` the dashboard uses, so the printout and the
+screen cannot disagree. Both locales (`art23.*`, `col.*`, `deadlineStatus.*` in
+`src/nis2/i18n.js`). `incidents.csv` already carried the raw fields.
+
 **Drafting** — an event case page has a *Draft NIS2 incident* action (operator+)
 that calls `POST /incidents/from-event-case/:id` and opens the register. The
 Overview's *Open issues → Active events* (probe outages) has a *NIS2 draft*

@@ -13,7 +13,7 @@
 const SEVERITY_RANK = { INFO: 0, WARN: 1, CRIT: 2 };
 const OPEN_STATUSES = ['open', 'investigating']; // an event still absorbing findings
 
-const BASE_COLUMNS = `id, host_id, title, status, severity, primary_finding_id, config_change_id,
+const BASE_COLUMNS = `id, host_id, title, status, severity, primary_finding_id, config_change_id, cluster_id,
   first_event_at, last_event_at, resolved_at, created_by, closed_by, created_at`;
 
 // The same columns, qualified for a query that joins (`ic` is this table).
@@ -67,6 +67,8 @@ function mapRow(row) {
     severity: row.severity,
     primaryFindingId: row.primary_finding_id ?? null,
     configChangeId: row.config_change_id == null ? null : Number(row.config_change_id),
+    // The situation (cross-agent cluster, migration 129) this case is part of.
+    clusterId: row.cluster_id == null ? null : Number(row.cluster_id),
     firstEventAt: toIso(row.first_event_at),
     lastEventAt: toIso(row.last_event_at),
     resolvedAt: toIso(row.resolved_at),
@@ -171,16 +173,60 @@ function createEventCasesRepository(db) {
     return res.affectedRows > 0;
   }
 
+  // Links event cases to the situation (event_clusters row) their findings were
+  // grouped into (migration 129). The FIRST live situation wins: a case already
+  // part of another situation that is still open/acknowledged keeps it, while
+  // one whose situation has since been resolved moves to the new one. Returns
+  // the number of rows changed.
+  async function linkCluster(caseIds, clusterId) {
+    const ids = [...new Set((Array.isArray(caseIds) ? caseIds : [])
+      .map(Number).filter((n) => Number.isInteger(n) && n > 0))];
+    if (!ids.length || clusterId == null) return 0;
+    const [res] = await pool.query(
+      `UPDATE event_cases SET cluster_id = ?
+       WHERE id IN (${ids.map(() => '?').join(', ')})
+         AND (cluster_id IS NULL OR cluster_id = ?
+              OR NOT EXISTS (SELECT 1 FROM event_clusters c
+                             WHERE c.id = event_cases.cluster_id AND c.status IN ('open', 'acknowledged')))`,
+      [clusterId, ...ids, clusterId]
+    );
+    return Number(res.affectedRows || 0);
+  }
+
+  // The event cases linked to one situation, oldest first, with the device
+  // identity — the "cases in this situation" panel on the Situation page.
+  async function listByCluster(clusterId, limit = 200) {
+    const lim = Number.isInteger(limit) && limit > 0 && limit <= 1000 ? limit : 200;
+    const [rows] = await pool.query(
+      `SELECT ${IC_COLUMNS}, ${DEVICE_COLUMNS}
+       FROM event_cases ic ${DEVICE_JOIN}
+       WHERE ic.cluster_id = ?
+       ORDER BY ic.first_event_at ASC, ic.id ASC
+       LIMIT ?`,
+      [clusterId, lim]
+    );
+    return rows.map(mapRow);
+  }
+
   // Investigating events whose last activity is older than `olderThan` — the
   // auto-resolve candidates (no new anomalies linked within the inactivity
   // window). Oldest-first so the job processes the stalest first.
-  async function listStaleInvestigating(olderThan, limit = 500) {
+  //
+  // `holdClustersActiveSince` (optional) leaves out cases whose situation is
+  // live (open/acknowledged) AND active since that time — the auto-resolve job
+  // holds those, and returning them would let a large held set fill the LIMIT
+  // and starve every case behind it.
+  async function listStaleInvestigating(olderThan, limit = 500, { holdClustersActiveSince = null } = {}) {
     const lim = Number.isInteger(limit) && limit > 0 && limit <= 5000 ? limit : 500;
+    const hold = holdClustersActiveSince
+      ? ` AND (cluster_id IS NULL OR NOT EXISTS (SELECT 1 FROM event_clusters c
+            WHERE c.id = event_cases.cluster_id AND c.status IN ('open', 'acknowledged') AND c.detected_at >= ?))`
+      : '';
     const [rows] = await pool.query(
       `SELECT ${BASE_COLUMNS} FROM event_cases
-       WHERE status = 'investigating' AND last_event_at < ?
+       WHERE status = 'investigating' AND last_event_at < ?${hold}
        ORDER BY last_event_at ASC LIMIT ?`,
-      [olderThan, lim]
+      holdClustersActiveSince ? [olderThan, holdClustersActiveSince, lim] : [olderThan, lim]
     );
     return rows.map(mapRow);
   }
@@ -249,7 +295,10 @@ function createEventCasesRepository(db) {
     return rows.map((row) => ({ ...mapRow(row), primaryMetric: row.primary_metric ?? null }));
   }
 
-  return { create, findById, findOpenByHost, updateActivity, updateStatus, setConfigChange, listStaleInvestigating, listResolvedClosed, list };
+  return {
+    create, findById, findOpenByHost, updateActivity, updateStatus, setConfigChange,
+    linkCluster, listByCluster, listStaleInvestigating, listResolvedClosed, list,
+  };
 }
 
 module.exports = { createEventCasesRepository, mapRow, deviceIdentity, isWorse, SEVERITY_RANK, OPEN_STATUSES };

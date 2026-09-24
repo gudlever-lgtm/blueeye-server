@@ -99,3 +99,23 @@ test('events with an unparseable timestamp are dropped, not emitted null', () =>
   assert.ok(events.every((e) => e.timestamp != null));
   assert.equal(events.length, 1);
 });
+
+test('an agent\'s probe outages appear on the cluster timeline (the source was never exercised)', () => {
+  // Every other test passed `events: []`, so the call into the outage mapper —
+  // imported under a name targetTimeline no longer exported — never ran, and
+  // GET /api/event-clusters/:id/timeline answered 500 whenever an agent in the
+  // cluster had an outage in the window (found by scripts/verify-routes).
+  const { events } = buildEventTimeline({
+    memberFindings: [],
+    agentSources: [{
+      agentId: '1', agentEvents: [], playbookRuns: [], configChanges: [],
+      events: [{ id: 7, metric: 'reachability', severity: 'CRIT', affectedTarget: '10.0.0.5', startedAt: at(-60000), resolvedAt: at(60000), durationSeconds: 120 }],
+    }],
+    statusChanges: [],
+    firstFindingAt: at(0),
+    lookbackMs: 30 * 60 * 1000,
+  });
+  const probe = events.filter((e) => e.source === 'probe');
+  assert.deepEqual(probe.map((e) => e.type).sort(), ['probe.reachability', 'probe.reachability.resolved']);
+  assert.ok(probe.every((e) => e.target === '1' && e.ref_id === 7));
+});

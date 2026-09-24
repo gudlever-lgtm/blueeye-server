@@ -225,6 +225,14 @@ function validateDeviceEventQuery(query, errors) {
     else out.agentId = n;
   }
 
+  // The polled switch that SENT the events (migration 133) — an snmp_devices
+  // id, a different space from deviceId (an agent id).
+  if (q0.snmpDeviceId !== undefined && q0.snmpDeviceId !== '') {
+    const n = Number(q0.snmpDeviceId);
+    if (!Number.isInteger(n) || n < 1) errs.snmpDeviceId = 'snmpDeviceId must be a positive integer';
+    else out.snmpDeviceId = n;
+  }
+
   if (q0.transport !== undefined && q0.transport !== '') {
     if (!TRANSPORTS.includes(q0.transport)) {
       errs.transport = `transport must be one of: ${TRANSPORTS.join(', ')}`;

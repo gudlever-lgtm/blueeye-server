@@ -111,6 +111,7 @@ and the re-entrancy guard still skips a run while one is in progress.
 | `RETENTION_TOPOLOGY_CHANGE_DAYS` | `180` | `topology_changes`. |
 | `RETENTION_DISCOVERED_DEVICE_DAYS` | `90` | Unpromoted `discovered_devices`. |
 | `RETENTION_HOST_CONNECTION_DAYS` | `30` | `host_connections`. |
+| `RETENTION_KNOWN_DEVICE_DAYS` | `400` | `known_devices` — the new-device detector's memory of every MAC a site has had, on `last_seen` (migration 131; docs/discovery.md). |
 | `RETENTION_AUDIT_EVENT_DAYS` | `365` | `audit_events` (0 = forever). Never `audit_log`. |
 
 The other windows (config snapshots, ARP, FDB, device events, interface

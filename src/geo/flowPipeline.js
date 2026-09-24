@@ -17,6 +17,8 @@ function createFlowPipeline({
   config = {},
   extract = extractFlows,
   logger = silentLogger,
+  // TimescaleDB mirror (docs/storage-split-audit.md); null unless TSDB_ENABLED.
+  flowsTsdbRepo = null,
 }) {
   // Extracts, enriches and stores flow records for a batch of result payloads.
   // Returns the number of flow rows stored.
@@ -34,18 +36,42 @@ function createFlowPipeline({
       }
       if (!raw.length) continue;
       try {
-        for (const rec of enricher.enrichMany(raw)) enriched.push(rec);
+        // The enricher builds its record from the fields it knows; the layer-2
+        // ones (VLAN, exporter in/out ifIndex) are carried across by position,
+        // since enrichMany is a 1:1 map of its input.
+        const out = enricher.enrichMany(raw);
+        out.forEach((rec, i) => {
+          const src = raw[i] || {};
+          enriched.push({
+            ...rec,
+            vlan: rec.vlan ?? src.vlan ?? null,
+            inIf: rec.inIf ?? src.inIf ?? null,
+            outIf: rec.outIf ?? src.outIf ?? null,
+          });
+        });
       } catch (err) {
         logger.warn(`geo: enrichment failed (${err.message})`);
       }
     }
     if (enriched.length === 0) return 0;
+    let stored;
     try {
-      return await flowsRepo.insertMany(enriched);
+      stored = await flowsRepo.insertMany(enriched);
     } catch (err) {
       logger.error(`geo: could not store flow records (${err.message})`);
       return 0;
     }
+    // Mirror into the TSDB best-effort, and only what MySQL accepted: MySQL is
+    // the source of truth during rollout, so a TSDB failure is logged and never
+    // reaches ingest (the same rule as the results mirror in agentReports.js).
+    if (flowsTsdbRepo) {
+      try {
+        await flowsTsdbRepo.insertMany(enriched);
+      } catch (err) {
+        logger.warn(`tsdb: flow_records mirror write failed (${err.message}); MySQL is source of truth`);
+      }
+    }
+    return stored;
   }
 
   return { processResults };

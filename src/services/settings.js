@@ -2,11 +2,13 @@
 
 const { DEFAULT_CATEGORIES, listCategories } = require('../flows/categories');
 const { baseUrlBlockedReason } = require('../integrations/ssrfGuard');
+const { resolveAlertingEnabled, refreshEffectiveEnabled } = require('../analysis/alerting/config');
 const {
   isProviderId, resolveBaseUrl, defaultModel, inferProvider, listProvidersSafe, getProvider,
 } = require('../analysis/assistantProviders');
 const { MONITOR_SOURCES } = require('../validation/agentValidation');
 const { parseCidr } = require('../discovery/cidr');
+const { normalizeSecurity, validateSecurity, mergeSecurity } = require('../auth/securityPolicy');
 
 // Traffic sources that make sense as a fleet-wide default. SNMP is excluded: it
 // needs a per-device host, so it can only be configured per agent, never as a
@@ -659,6 +661,36 @@ function createSettingsService({ settingsRepo, config, liveAnalysis = null, live
   // Normalises any config-ish object into the full effective shape (with secrets).
   // Used both for the env defaults (liveAlerting) and for a stored override, so a
   // value missing from either falls back to a sensible built-in default.
+  //
+  // The master switch is `enabledMode`: 'auto' (on iff a channel is
+  // configured), 'on' or 'off' — see analysis/alerting/config.js. `enabled` in
+  // this shape is the EFFECTIVE answer, derived from the mode and the channels.
+  const ENABLED_MODES = ['auto', 'on', 'off'];
+  // Whether the operator switched alerting off in the environment
+  // (ALERTING_ENABLED=false), captured once at construction — liveAlerting is
+  // later overwritten in place by stored settings, so it cannot be asked again.
+  const envExplicitOff = !!liveAlerting && liveAlerting.enabledSetting === false;
+  function modeOf(a) {
+    if (ENABLED_MODES.includes(a.enabledMode)) return a.enabledMode;
+    // The running config (env-loaded or live-applied) carries the setting as
+    // true | false | null.
+    if (Object.prototype.hasOwnProperty.call(a, 'enabledSetting')) {
+      return a.enabledSetting === true ? 'on' : a.enabledSetting === false ? 'off' : 'auto';
+    }
+    // A row stored before the switch had three states. `true` was somebody
+    // switching alerting on. `false` cannot be told apart from "never touched":
+    // every channel-card save wrote the then-default false along with the
+    // channel, which is exactly how a configured channel ended up silent. So a
+    // stored false reads as automatic — on once a channel is configured — and
+    // an explicit Off is one click away in the same screen that now says why.
+    // EXCEPT when the environment says ALERTING_ENABLED=false: that is an
+    // explicit operator Off, and an ambiguous legacy false must not turn
+    // alerting on over it after an upgrade. (A legacy `true` was an admin
+    // switching it on in the UI, which always replaced the env default.)
+    if (a.enabled === true) return 'on';
+    return envExplicitOff ? 'off' : 'auto';
+  }
+  const settingOf = (mode) => (mode === 'on' ? true : mode === 'off' ? false : null);
   function normAlerting(src) {
     const a = src && typeof src === 'object' ? src : {};
     const ch = a.channels || {};
@@ -666,8 +698,9 @@ function createSettingsService({ settingsRepo, config, liveAnalysis = null, live
     const w = ch.webhook || {};
     const m = ch.matrix || {};
     const s = ch.syslog || {};
-    return {
-      enabled: !!a.enabled,
+    const out = {
+      enabledMode: modeOf(a),
+      enabled: false,
       cooldownMs: Number.isFinite(a.cooldownMs) ? a.cooldownMs : DEFAULT_COOLDOWN_MS,
       channels: {
         email: {
@@ -686,6 +719,12 @@ function createSettingsService({ settingsRepo, config, liveAnalysis = null, live
         },
       },
     };
+    out.enabled = effectiveOf(out).enabled;
+    return out;
+  }
+  // The effective switch + reason for a normalised config.
+  function effectiveOf(cfg) {
+    return resolveAlertingEnabled({ enabledSetting: settingOf(cfg.enabledMode), channels: cfg.channels });
   }
 
   // Effective alerting config INCLUDING the raw secrets — server-internal only
@@ -701,8 +740,14 @@ function createSettingsService({ settingsRepo, config, liveAnalysis = null, live
   function redactAlerting(cfg) {
     const e = cfg.channels.email; const w = cfg.channels.webhook; const m = cfg.channels.matrix;
     const mask = (k) => (k ? `••••${k.slice(-4)}` : '');
+    const eff = effectiveOf(cfg);
     return {
-      enabled: cfg.enabled, cooldownMs: cfg.cooldownMs,
+      // `enabled` is the effective answer (a boolean, as it always was);
+      // `enabledMode` is the switch the admin sets and `enabledReason` why the
+      // two agree or not.
+      enabled: eff.enabled, enabledMode: cfg.enabledMode, enabledReason: eff.reason,
+      configuredChannels: eff.configuredChannels,
+      cooldownMs: cfg.cooldownMs,
       channels: {
         email: {
           enabled: e.enabled, minSeverity: e.minSeverity, to: e.to, from: e.from,
@@ -732,7 +777,15 @@ function createSettingsService({ settingsRepo, config, liveAnalysis = null, live
     const errors = {};
     const value = {};
 
-    if (p.enabled !== undefined) value.enabled = p.enabled === true || p.enabled === 'true';
+    // The master switch: `enabledMode` (auto | on | off), or the older boolean
+    // `enabled` (true → on, false → off, null/'auto' → auto).
+    if (p.enabledMode !== undefined) {
+      if (!ENABLED_MODES.includes(p.enabledMode)) errors.enabledMode = 'enabledMode must be auto, on or off';
+      else value.enabledMode = p.enabledMode;
+    } else if (p.enabled !== undefined) {
+      if (p.enabled === null || p.enabled === 'auto') value.enabledMode = 'auto';
+      else value.enabledMode = p.enabled === true || p.enabled === 'true' ? 'on' : 'off';
+    }
     if (p.cooldownMs !== undefined) {
       const n = Number(p.cooldownMs);
       if (!Number.isInteger(n) || n < 0 || n > MAX_COOLDOWN_MS) errors.cooldownMs = `cooldownMs must be an integer between 0 and ${MAX_COOLDOWN_MS}`;
@@ -881,7 +934,7 @@ function createSettingsService({ settingsRepo, config, liveAnalysis = null, live
   // Deep-merges the validated partial `value` onto the current full config.
   function mergeAlertingPatch(cur, value) {
     const out = JSON.parse(JSON.stringify(cur));
-    if (value.enabled !== undefined) out.enabled = value.enabled;
+    if (value.enabledMode !== undefined) out.enabledMode = value.enabledMode;
     if (value.cooldownMs !== undefined) out.cooldownMs = value.cooldownMs;
     for (const name of ['email', 'webhook', 'matrix', 'syslog']) {
       const v = value[name];
@@ -891,6 +944,7 @@ function createSettingsService({ settingsRepo, config, liveAnalysis = null, live
         else out.channels[name][k] = v[k];
       }
     }
+    out.enabled = effectiveOf(out).enabled;
     return out;
   }
 
@@ -900,7 +954,7 @@ function createSettingsService({ settingsRepo, config, liveAnalysis = null, live
   function applyAlertingToLive(m) {
     const live = liveAlerting;
     if (!live) return;
-    live.enabled = m.enabled;
+    live.enabledSetting = settingOf(m.enabledMode);
     live.cooldownMs = m.cooldownMs;
     live.channels = live.channels || {};
     for (const name of ['email', 'webhook', 'matrix', 'syslog']) {
@@ -915,6 +969,9 @@ function createSettingsService({ settingsRepo, config, liveAnalysis = null, live
         }
       }
     }
+    // The effective switch depends on the channels just applied (automatic
+    // mode), so it is recomputed last.
+    refreshEffectiveEnabled(live);
   }
 
   // Validates + persists the (partial) alerting config and live-applies it onto
@@ -1064,6 +1121,28 @@ function createSettingsService({ settingsRepo, config, liveAnalysis = null, live
     return getDiscovery();
   }
 
+  // ---- Baseline security (Settings → Authentication → Security) -----------
+  // Password history depth, the opt-in password max age and the role-based IP
+  // allowlist (migration 041). Always on, never licence-gated. The pure rules
+  // live in src/auth/securityPolicy.js, shared with the request gate that
+  // enforces them; the lock-out guard (an admin may not save an admin allowlist
+  // that excludes the address they are saving from) needs the request, so it is
+  // in src/routes/authSecurity.js.
+  // `strict` lets a read error THROW instead of reading as "nothing stored":
+  // the request gate's cache uses it to keep the last-known policy through a
+  // database hiccup rather than silently dropping every allowlist.
+  async function getSecurity({ strict = false } = {}) {
+    return normalizeSecurity(strict ? await settingsRepo.get('security') : await loadOverride('security'));
+  }
+
+  async function setSecurity(patch) {
+    const { errors, value } = validateSecurity(patch || {});
+    if (errors) throw badRequest('invalid security settings', errors);
+    const merged = mergeSecurity(await getSecurity(), value);
+    await settingsRepo.set('security', merged);
+    return merged;
+  }
+
   return {
     getMap, setMap, validateMap,
     getGeoip, setGeoip, validateGeoip, recordGeoipBuild,
@@ -1072,6 +1151,7 @@ function createSettingsService({ settingsRepo, config, liveAnalysis = null, live
     getAnalysis, setAnalysis, validateAnalysis,
     getRetention, setRetention, validateRetention,
     getDiscovery, setDiscovery, validateDiscovery,
+    getSecurity, setSecurity, validateSecurity,
     getThroughput, setThroughput, validateThroughput,
     getAgents, setAgents, validateAgents, getDefaultMonitorConfig,
     getAssistant, getAssistantSafe, setAssistant, validateAssistant,

@@ -2,7 +2,41 @@
 
 Phase 9. Turns findings into action by forwarding them to configurable channels.
 Built on the FindingStore + correlator (phases 1–6); runs after a finding is
-saved and correlated, behind the `ALERTING_ENABLED` flag (default off).
+saved and correlated, behind the master switch `ALERTING_ENABLED` — which is
+**automatic by default**: on as soon as one channel is configured (below).
+
+## The master switch: automatic, on, off
+
+`ALERTING_ENABLED` used to default to `false`, so a customer who configured an
+e-mail or webhook channel — and nothing else — got no alert at all, and nothing
+said why. The switch now has three states (`src/analysis/alerting/config.js`):
+
+| `ALERTING_ENABLED` / Settings → Alerting | Effective |
+| --- | --- |
+| unset, empty or `auto` / **Automatic** | **on iff at least one channel is configured** |
+| `true`/`1`/`yes`/`on` / **On** | on (even with no channel configured — nothing is sent until one is) |
+| `false`/`0`/`no`/`off` / **Off** | off, even with channels configured |
+
+A channel counts as **configured** when it is enabled *and* has somewhere to send
+to: e-mail needs `to` + an SMTP host, webhook a URL, Matrix homeserver + room +
+token, syslog a host. Channels come from the env (`ALERT_*`) or, once an admin has
+saved Settings → Alerting, from the stored settings — whichever is in force.
+
+The effective answer carries its **reason** — `explicit-on`, `explicit-off`,
+`auto-channels` or `auto-no-channels` — returned by `GET /api/alerting/config`
+(`enabled`, `enabledSetting` true/false/null, `enabledReason`,
+`configuredChannels`) and shown at the top of Settings → Alerting ("Alerting is ON
+— automatic, because these channels are configured: webhook."). The settings API
+reports the admin's choice as `enabledMode` (`auto`/`on`/`off`) beside the
+effective `enabled` boolean; `PUT /api/settings/alerting` takes `enabledMode`, or
+the older boolean `enabled` (`true` → on, `false` → off, `null`/`"auto"` → auto).
+
+**Stored settings from before the tri-state.** A stored `enabled: true` reads as
+**On**. A stored `enabled: false` reads as **Automatic**: every channel-card save
+used to write the then-default `false` along with the channel, so it cannot be told
+apart from "never touched" — and that is exactly how a configured channel ended up
+silent. An install that really wants alerting off sets **Off** (or
+`ALERTING_ENABLED=false` with no stored override); the screen says which is in force.
 
 ## Channels (`src/analysis/alerting/channels/`)
 
@@ -51,13 +85,25 @@ All share the interface `send(finding, group) → { ok, detail }`.
   never stops the others.
 
 Hooked into the analysis pipeline after `findingStore.save()` + correlation,
-behind `ALERTING_ENABLED`. Dispatch is best-effort and never breaks ingestion.
+behind the master switch. Dispatch is best-effort and never breaks ingestion.
+
+Every finding producer reaches the dispatcher the same way — store, publish,
+event case, alert, integrations. Two sources that used to bypass that:
+
+- **Transaction tests** (`transaction.fail` / `.latency` / `.deviation`) were
+  dispatched directly from the agent socket with no finding and no event case. A
+  crossed threshold is now a finding raised through the finding sink
+  (`src/devices/findingSink.js`), and that sink is the only thing that alerts on it.
+  See `src/analysis/transactionAlerts.js`.
+- **Probe outages** (`probe_outages`) were never dispatched at all. Opening (and an
+  escalation) raises a `probe_outage.<metric>` finding; closing dispatches one
+  recovery alert (kind `RECOVERED`). See `docs/probe-outages.md`.
 
 ## API
 
 | Method | Path | Description |
 | --- | --- | --- |
-| `GET` | `/api/alerting/config` | Active channels + rules, **without secrets** (viewer+). |
+| `GET` | `/api/alerting/config` | Active channels + rules, **without secrets**, plus the effective master switch and why (`enabled`, `enabledSetting`, `enabledReason`, `configuredChannels`) (viewer+). |
 | `POST` | `/api/alerting/test` | `{ channel }` — send a test finding to one channel. `404` unknown channel, `400` missing, `200` + result (operator+). |
 | `GET` | `/api/settings` | Includes `alerting` — the full editable config, **secret-safe** (admin). |
 | `PUT` | `/api/settings/alerting` | Update channel config (admin, licence-gated). Partial patches merge; secrets are write-only. |
@@ -90,5 +136,7 @@ dispatch through.
 `src/analysis/alerting/__tests__/` (dispatcher rules, throttling, isolation,
 channel HMAC/syslog format/email + transport rebuild) and `test/alertingApi.test.js`,
 `test/alertingPipeline.test.js` + `test/alertingSettings.test.js` (runtime config:
-secret-safe reads, live-apply to the dispatcher/channels, licence gate). All
+secret-safe reads, live-apply to the dispatcher/channels, licence gate),
+`test/alertingEnabledDefault.test.js` (the tri-state switch: unset + channel,
+unset + none, explicit false, explicit true, stored legacy rows, the API). All
 outgoing calls are mocked — no real emails/webhooks/syslog in tests.

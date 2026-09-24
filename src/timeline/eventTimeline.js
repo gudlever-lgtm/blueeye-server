@@ -21,7 +21,7 @@
 //     target — the agent id the event concerns (null for cluster-level status)
 
 const {
-  mapFinding, mapEvent, mapAgentEvent, mapPlaybookRun,
+  mapFinding, mapProbeOutage, mapAgentEvent, mapPlaybookRun,
   SOURCES,
 } = require('./targetTimeline');
 
@@ -190,7 +190,8 @@ function buildEventTimeline({
     const agentId = src && src.agentId;
     for (const e of (src && src.agentEvents) || []) events.push(...withTarget(mapAgentEvent(e), agentId));
     for (const r of (src && src.playbookRuns) || []) events.push(...withTarget(mapPlaybookRun(r), agentId));
-    for (const i of (src && src.events) || []) events.push(...withTarget(mapEvent(i), agentId));
+    // `events` are the agent's probe outages (eventTimelineService.fetchEvents).
+    for (const i of (src && src.events) || []) events.push(...withTarget(mapProbeOutage(i), agentId));
     for (const c of (src && src.configChanges) || []) events.push(...withTarget(mapConfigChange(c), agentId));
   }
   // Cluster lifecycle transitions + verification runs are not tied to a single agent.

@@ -163,11 +163,43 @@ function createSeverityRulesRouter({ severityRulesRepo, findingStore, serviceTes
     });
   }));
 
-  // What a rule WOULD do to one event, without storing anything. The dashboard
-  // uses it to show the effect while the admin is still typing.
+  // What a rule WOULD do, without storing anything. Two questions:
+  //
+  //   { rule, event }        — what it does to this one event;
+  //   { rule, scope:'open' } — how many OPEN events it would match and change
+  //                            now. The editor asks this before Save, so an
+  //                            admin sees "matches 412 open events" while the
+  //                            rule is still a draft. The same dry-run count
+  //                            apply-to-open makes for a saved rule — nothing
+  //                            is written either way.
   router.post('/preview', requireAuth, read, asyncHandler(async (req, res) => {
     const { value, errors } = validateRule(req.body && req.body.rule);
     if (errors) return res.status(400).json({ error: 'Validation failed', details: errors });
+    if (req.body && req.body.scope === 'open' && req.body.event === undefined) {
+      // Counting the estate's open events is the editor's question, and the
+      // editor is admin-only; a viewer keeps the one-event preview.
+      if (!req.user || req.user.role !== ROLES.ADMIN) {
+        return res.status(403).json({ error: 'Forbidden', requiredRoles: [ROLES.ADMIN] });
+      }
+      const repo = value.source === 'finding' ? findingStore : serviceTestIncidentsRepo;
+      if (!repo || typeof repo.applySeverityRule !== 'function') {
+        return res.status(404).json({ error: 'That kind of event cannot be previewed on this server' });
+      }
+      const draft = { ...value, id: 0, enabled: true };
+      const result = await repo.applySeverityRule(draft, { dryRun: true });
+      return res.json({
+        scope: 'open',
+        matched: result.matched,
+        changed: result.changed,
+        severity: value.severity,
+        explanation: describeDecision({
+          changed: true,
+          original_severity: value.severity === 'CRIT' ? 'WARN' : 'CRIT',
+          severity: value.severity,
+          rule: draft,
+        }),
+      });
+    }
     const event = (req.body && req.body.event) || null;
     if (!event || typeof event !== 'object') {
       return res.status(400).json({ error: 'Validation failed', details: { event: 'an event is required' } });

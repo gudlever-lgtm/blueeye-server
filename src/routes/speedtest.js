@@ -14,7 +14,7 @@ const CHUNK = 64 * 1024;
 // Agent-facing speed-test endpoints (agent-token auth). The agent measures the
 // download then the upload to compute Mbps, and posts the result back. These
 // transfer synthetic zero-filled bytes — metadata only; nothing is inspected.
-function createSpeedtestRouter({ agentAuth, speedtestResultsRepo }) {
+function createSpeedtestRouter({ agentAuth, speedtestResultsRepo, speedtestResultsTsdbRepo = null, logger = null }) {
   const router = express.Router();
 
   // GET /speedtest/download?bytes=N — stream N zero bytes (capped). Backpressure
@@ -45,6 +45,12 @@ function createSpeedtestRouter({ agentAuth, speedtestResultsRepo }) {
   // upload rate. Bypasses express.json (different content-type) so nothing is
   // buffered in memory beyond a chunk at a time.
   router.post('/upload', agentAuth, (req, res) => {
+    // A body parser got there first (a JSON or form content-type): the stream
+    // is already consumed, 'end' never fires and the request would hang until
+    // the client gave up. The upload is octet-stream only — say so.
+    if (req._body || req.readableEnded) {
+      return res.status(415).json({ error: 'upload must be sent as application/octet-stream' });
+    }
     let received = 0;
     let done = false;
     const finish = (status, body) => { if (done) return; done = true; res.status(status).json(body); };
@@ -60,7 +66,18 @@ function createSpeedtestRouter({ agentAuth, speedtestResultsRepo }) {
   router.post('/results', agentAuth, asyncHandler(async (req, res) => {
     const { value, errors } = validateSpeedtestResult(req.body);
     if (errors) return res.status(400).json({ error: 'Validation failed', details: errors });
-    const id = await speedtestResultsRepo.create(req.agent.agentId, value);
+    // One timestamp for both stores, so the mirror row is the same measurement.
+    const result = { ...value, ts: value.ts || new Date() };
+    const id = await speedtestResultsRepo.create(req.agent.agentId, result);
+    // Storage split: mirror into the TSDB best-effort — MySQL is the source of
+    // truth during rollout, so a TSDB failure never fails the agent's POST.
+    if (speedtestResultsTsdbRepo) {
+      try {
+        await speedtestResultsTsdbRepo.create(req.agent.agentId, result);
+      } catch (err) {
+        if (logger) logger.warn(`tsdb: speedtest_results mirror write failed (${err.message}); MySQL is source of truth`);
+      }
+    }
     res.status(201).json({ id });
   }));
 

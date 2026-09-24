@@ -58,6 +58,11 @@ const FACT_SCHEMA = [
   // merely being consistent with one. SNMP only (EtherLike-MIB), so it is
   // absent far more often than it is zero, and the two must stay apart.
   'iface.late_coll_per_sec',
+  // The host NIC's own duplex and error detail (agent proc source, 0.40+):
+  // `/sys/class/net/<if>/duplex` and the frame/colls/carrier columns of
+  // /proc/net/dev. Absent — never 0 — wherever the source cannot read them, for
+  // the same reason as late collisions: a zero is what rules a fault out.
+  'iface.duplex', 'iface.collisions_per_sec', 'iface.frame_err_per_sec', 'iface.carrier_err_per_sec',
   // The same measurements taken from the FAR end, for the faults that only show
   // up when you ask the question in both directions.
   'reverse.ping.ok', 'reverse.ping.loss_pct', 'reverse.ping.rtt_ms',
@@ -280,6 +285,12 @@ function ifaceFacts(interfaces) {
     // a rule over it reads `unknown`, which is the honest answer, instead of an
     // all-clear that would rule the fault out on no evidence at all.
     late_coll_per_sec: num(worst.lateCollPerSec),
+    // 'full' | 'half' | 'unknown' — the kernel's own words. Only a string the
+    // interface layer vetted gets through; anything else is "not measured".
+    duplex: ['full', 'half', 'unknown'].includes(worst.duplex) ? worst.duplex : undefined,
+    collisions_per_sec: num(worst.collPerSec),
+    frame_err_per_sec: num(worst.frameErrPerSec),
+    carrier_err_per_sec: num(worst.carrierErrPerSec),
     // How many ports are busy AT ONCE. One busy port is a file transfer; several
     // unrelated ones at the same moment is what a broadcast storm looks like from
     // the outside, and no single interface can show you that.

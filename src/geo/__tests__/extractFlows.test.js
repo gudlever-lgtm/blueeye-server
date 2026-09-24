@@ -53,3 +53,18 @@ test('parsePair extracts two endpoints or null', () => {
   assert.equal(parsePair('only 1.2.3.4'), null);
   assert.equal(parsePair(null), null);
 });
+
+test('carries the optional VLAN and exporter in/out ifIndex; invalid values are null', () => {
+  const out = extractFlows(7, { traffic: { flows: [
+    { srcIp: '10.0.0.5', dstIp: '10.0.1.9', vlan: 120, inIf: 3, outIf: 70001 },
+    { srcIp: '10.0.0.5', dstIp: '10.0.1.9', vlan: 4095, inIf: 0, outIf: -1 },
+    { srcIp: '10.0.0.5', dstIp: '10.0.1.9', vlan: '12', inIf: 'x' },
+    { srcIp: '10.0.0.5', dstIp: '10.0.1.9' }, // an older agent / NetFlow v5
+  ] } }, NOW);
+  assert.deepEqual(out.map((r) => [r.vlan, r.inIf, r.outIf]), [
+    [120, 3, 70001],
+    [null, null, null],
+    [12, null, null],
+    [null, null, null],
+  ]);
+});

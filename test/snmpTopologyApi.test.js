@@ -386,22 +386,129 @@ test('editing a display name does not wipe the credential', async () => {
   assert.equal(withSecret.community, 'public', 'the credential survived the rename');
 });
 
-test('poll-now is operator+, 202, and 409 when the agent is not connected', async () => {
+// poll-now waits (bounded) for the agent's correlated command-result and
+// returns it. Deliberately changed from "operator+, 202": the command used to
+// go out without an id, so the agent's answer was dropped by the socket and
+// the dashboard could never show it (E2E finding N2).
+const pollReply = (over = {}) => ({
+  type: 'command-result', id: 's1', ok: true, devices: 2, polled: 2, failed: 0, configRefreshed: true, deviceAssigned: true,
+  snmp: { polled: 2, failed: 0, big: 'x'.repeat(5000) }, counters: { polled: 2 }, ...over,
+});
+
+test('poll-now is operator+, sends a CORRELATED poll-snmp and returns the agent\'s result', async () => {
   const snmpDevicesRepo = await seededDevices();
+  const calls = [];
   const app = makeApp({
     agentsRepo: agentsRepo(),
     snmpDevicesRepo,
-    agentCommander: makeAgentCommander({ sendCommand: () => true }),
+    agentCommander: makeAgentCommander({
+      sendCommand: () => { throw new Error('poll-snmp must not go out uncorrelated'); },
+      sendCommandAndWait: async (agentId, command, opts) => {
+        calls.push({ agentId, command, opts });
+        return { delivered: 1, acked: true, reply: pollReply() };
+      },
+    }),
   });
   assert.equal((await request(app).post('/api/snmp-devices/1/poll').set('Authorization', authHeader('viewer'))).status, 403);
+  assert.equal((await request(app).post('/api/snmp-devices/1/poll')).status, 401);
   const ok = await request(app).post('/api/snmp-devices/1/poll').set('Authorization', authHeader('operator'));
-  assert.equal(ok.status, 202, 'the agent does the polling; the table refreshes a moment later');
+  assert.equal(ok.status, 200);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].agentId, 9);
+  assert.deepEqual(calls[0].command, { name: 'poll-snmp', deviceId: 1 });
+  assert.equal(calls[0].opts.timeoutMs, 20000, 'bounded');
+  assert.equal(ok.body.pending, false);
+  assert.deepEqual(ok.body.result, {
+    devices: 2, polled: 2, failed: 0, configRefreshed: true, deviceAssigned: true, detail: null, error: null,
+  }, 'only the bounded summary reaches the browser — not the per-device breakdown');
+});
 
+test('poll-now says when the device is not assigned to the agent it was sent to', async () => {
+  const app = makeApp({
+    agentsRepo: agentsRepo(),
+    snmpDevicesRepo: await seededDevices(),
+    agentCommander: makeAgentCommander({
+      sendCommandAndWait: async () => ({
+        delivered: 1, acked: true,
+        reply: pollReply({ devices: 0, polled: 0, deviceAssigned: false, detail: 'no SNMP devices are assigned to this agent' }),
+      }),
+    }),
+  });
+  const res = await request(app).post('/api/snmp-devices/1/poll').set('Authorization', authHeader('operator'));
+  assert.equal(res.status, 200);
+  assert.equal(res.body.result.deviceAssigned, false);
+  assert.equal(res.body.result.devices, 0);
+  assert.equal(res.body.result.detail, 'no SNMP devices are assigned to this agent');
+});
+
+test('poll-now that outlives the bound is 202 pending — the cycle still runs, it is not an error', async () => {
+  const app = makeApp({
+    agentsRepo: agentsRepo(),
+    snmpDevicesRepo: await seededDevices(),
+    agentCommander: makeAgentCommander({ sendCommandAndWait: async () => ({ delivered: 1, acked: false, reply: null, timedOut: true }) }),
+  });
+  const res = await request(app).post('/api/snmp-devices/1/poll').set('Authorization', authHeader('operator'));
+  assert.equal(res.status, 202);
+  assert.equal(res.body.pending, true);
+  assert.equal(res.body.result, undefined);
+});
+
+test('poll-now is 409 when the agent is not connected, 503 without an agent channel, 500 on a repo failure', async () => {
+  const snmpDevicesRepo = await seededDevices();
   const offline = makeApp({
     agentsRepo: agentsRepo(), snmpDevicesRepo,
-    agentCommander: makeAgentCommander({ sendCommand: () => false }),
+    agentCommander: makeAgentCommander({ sendCommandAndWait: async () => ({ delivered: 0, acked: false, reply: null }) }),
   });
   assert.equal((await request(offline).post('/api/snmp-devices/1/poll').set('Authorization', authHeader('operator'))).status, 409);
+  const noChannel = makeApp({ agentsRepo: agentsRepo(), snmpDevicesRepo, agentCommander: { sendCommand: () => 1 } });
+  assert.equal((await request(noChannel).post('/api/snmp-devices/1/poll').set('Authorization', authHeader('operator'))).status, 503);
+  const broken = makeApp({
+    agentsRepo: agentsRepo(),
+    snmpDevicesRepo: makeSnmpDevicesRepo({ findById: throwingAsync('snmp_devices down') }),
+    agentCommander: makeAgentCommander(),
+  });
+  assert.equal((await request(broken).post('/api/snmp-devices/1/poll').set('Authorization', authHeader('operator'))).status, 500);
+});
+
+test('the real socket resolves poll-now\'s waiter from the agent\'s command-result', async () => {
+  // The other half of N2: the reply is matched by the id sendCommandAndWait
+  // stamps on, and it carries the agent's result fields through untouched.
+  const http = require('http');
+  const WebSocket = require('ws');
+  const { attachAgentWebSocket } = require('../src/ws/agentSocket');
+  const server = http.createServer();
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  const hub = attachAgentWebSocket({
+    server,
+    agentTokensRepo: makeAgentTokensRepo({ findActiveByHash: async () => ({ id: 1, agent_id: 9 }) }),
+    agentsRepo: makeAgentsRepo({ findById: async () => ({ id: 9, hostname: 'be-aarhus-01' }), touchLastSeen: async () => {} }),
+    heartbeatMs: 60000,
+  });
+  const ws = new WebSocket(`ws://127.0.0.1:${server.address().port}/ws/agent`, { headers: { Authorization: 'Bearer agent-tok' } });
+  try {
+    await new Promise((resolve, reject) => { ws.once('open', resolve); ws.once('error', reject); });
+    ws.on('message', (data) => {
+      const msg = JSON.parse(data.toString());
+      if (msg.type === 'command' && msg.command.name === 'poll-snmp') {
+        ws.send(JSON.stringify(pollReply({ id: msg.command.id, polled: 1, failed: 1 })));
+      }
+    });
+    // The socket registers the agent asynchronously after the upgrade.
+    let out;
+    for (let i = 0; i < 50; i += 1) {
+      out = await hub.sendCommandAndWait(9, { name: 'poll-snmp', deviceId: 1 }, { timeoutMs: 2000 });
+      if (out.delivered) break;
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    assert.equal(out.acked, true, 'the reply was dropped');
+    assert.equal(out.reply.polled, 1);
+    assert.equal(out.reply.failed, 1);
+    assert.equal(out.reply.deviceAssigned, true);
+  } finally {
+    ws.terminate();
+    hub.close();
+    await new Promise((r) => server.close(r));
+  }
 });
 
 test('poll-now on an unassigned device is 409, not a silent no-op', async () => {

@@ -37,7 +37,7 @@ const PUBLIC = path.join(__dirname, '..', '..', 'public');
 // file -> how many hardcoded user-facing sentences it may still contain.
 // Only ever edit these DOWNWARD, in the same commit that does the migrating.
 const CEILING = {
-  'app.js': 629,
+  'app.js': 619,
   'guides.js': 0,
   'serviceAssurance.js': 0,
   // The kitchen sink's are sample DATA inside a component demo, not product
@@ -54,6 +54,10 @@ const CEILING = {
   'deltaView.js': 0,
   'eventTitle.js': 0,
   'ui.js': 0,
+  // Section bodies built through t() from the start.
+  'thresholdsPanel.js': 0,
+  'slaReports.js': 0,
+  'nis2Evidence.js': 0,
 };
 
 // A quoted string that reads like a sentence shown to a person.

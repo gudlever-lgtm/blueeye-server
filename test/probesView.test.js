@@ -151,3 +151,31 @@ test('a failing tab body is an ErrorState inside the shell, not a blank page', a
   assert.ok(doc.querySelector('#view .subtabs'), 'the tabs did not survive the 500');
   assert.ok(doc.querySelector('.sidebar'), 'the shell did not survive the 500');
 });
+
+test('the DHCP test: offered on the run form, summarised in the table, and its offers listed in the detail', async (t) => {
+  const dhcpRow = {
+    id: 1, agentId: 7, ts: '2026-09-24T10:00:00.000Z', type: 'dhcp', target: 'eth0', ok: true, rttMs: 4.2, lossPct: 0,
+    dhcp: {
+      iface: 'eth0', timeoutMs: 3000, serverCount: 2,
+      offers: [
+        { serverId: '192.168.1.1', offeredIp: '192.168.1.100', leaseSec: 86400, router: '192.168.1.1', dns: ['192.168.1.1'], subnetMask: '255.255.255.0', relay: null },
+        { serverId: '192.168.1.66', offeredIp: '192.168.1.201', leaseSec: 600, router: '192.168.1.66', dns: [], subnetMask: '255.255.255.0', relay: '10.9.0.1' },
+      ],
+    },
+  };
+  const { doc, errors } = boot({ t, url: 'http://server.test/probes/run', routes: SESSION({ 'GET /api/probes/latest': { results: [dhcpRow] } }) });
+  await settle();
+  assert.deepEqual(errors, []);
+  const opt = [...doc.querySelectorAll('#view select option')].find((o) => o.value === 'dhcp');
+  assert.ok(opt, 'no DHCP option on the run form');
+  const tr = [...doc.querySelectorAll('#view tr')].find((r) => /eth0/.test(r.textContent) && /DHCP servers/.test(r.textContent));
+  assert.ok(tr, 'the table does not say how many DHCP servers answered');
+  assert.match(tr.textContent, /2 DHCP servers · 4\.2 ms/);
+  tr.dispatchEvent(new doc.defaultView.MouseEvent('click', { bubbles: true }));
+  await settle();
+  const detail = doc.querySelector('#view .probe-detail-row');
+  assert.match(detail.textContent, /DHCP offers on eth0/);
+  assert.match(detail.textContent, /2 different DHCP servers answered/);
+  assert.match(detail.textContent, /192\.168\.1\.201/);
+  assert.match(detail.textContent, /10\.9\.0\.1/);
+});

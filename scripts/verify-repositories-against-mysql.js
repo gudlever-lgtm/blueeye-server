@@ -43,6 +43,7 @@ const { createAiAnalysesRepository } = require(path.join(ROOT, 'src/serviceTests
 const { createRunsRepository } = require(path.join(ROOT, 'src/serviceTests/storage/runsRepository'));
 const { createSnmpDevicesRepository } = require(path.join(ROOT, 'src/repositories/snmpDevicesRepository'));
 const { createUsersRepository } = require(path.join(ROOT, 'src/repositories/usersRepository'));
+const { createPasswordHistoryRepository } = require(path.join(ROOT, 'src/repositories/passwordHistoryRepository'));
 const { createDeviceInterfacesRepository } = require(path.join(ROOT, 'src/repositories/deviceInterfacesRepository'));
 const { createDeviceCounterSamplesRepository } = require(path.join(ROOT, 'src/repositories/deviceCounterSamplesRepository'));
 const { createFdbEntriesRepository } = require(path.join(ROOT, 'src/repositories/fdbEntriesRepository'));
@@ -86,6 +87,31 @@ check('change acks: upsert, millisecond round trip, per-user read, undo', async 
   assert.strictEqual((await repo.listChangeAcks(2)).size, 0, 'another user saw this ack');
   assert.strictEqual(await repo.unackChange(1, key), true);
   assert.strictEqual(await repo.unackChange(1, key), false);
+});
+
+check('password history + password_changed_at: stamped on every hash write, history read newest-first and pruned', async (pool) => {
+  const users = createUsersRepository({ pool });
+  const history = createPasswordHistoryRepository({ pool });
+  const u = await users.create({ email: `pwh-${Date.now()}@example.test`, passwordHash: 'h0', role: 'viewer' });
+  const stamp = async () => (await users.findByEmailWithHash(u.email)).password_changed_at;
+  assert.ok(await stamp(), 'create did not stamp password_changed_at');
+  await pool.query('UPDATE users SET password_changed_at = NOW() - INTERVAL 10 DAY WHERE id = ?', [u.id]);
+  const before = new Date(await stamp()).getTime();
+  await users.update(u.id, { passwordHash: 'h1' });
+  assert.ok(new Date(await stamp()).getTime() > before, 'update(passwordHash) did not move password_changed_at');
+  await pool.query('UPDATE users SET password_changed_at = NOW() - INTERVAL 10 DAY WHERE id = ?', [u.id]);
+  await users.setTempPassword(u.id, { passwordHash: 'h2', expiresAt: new Date(Date.now() + 3600e3), createdBy: null });
+  await users.clearTempPassword(u.id, 'h3');
+  assert.ok(new Date(await stamp()).getTime() > before, 'the temp-password paths did not stamp');
+
+  for (const h of ['a', 'b', 'c', 'd']) await history.record(u.id, h);
+  assert.deepStrictEqual(await history.recentHashes(u.id, 3), ['d', 'c', 'b']);
+  assert.strictEqual(await history.prune(u.id, 2), 2);
+  assert.deepStrictEqual(await history.recentHashes(u.id, 10), ['d', 'c']);
+  assert.strictEqual(await history.prune(u.id, 5), 0, 'fewer rows than keep: nothing pruned');
+  assert.strictEqual(await history.prune(u.id, 0), 2);
+  assert.deepStrictEqual(await history.recentHashes(u.id, 10), []);
+  await users.remove(u.id);
 });
 
 check('observations: a batch writes and reads back', async (pool) => {
@@ -466,10 +492,15 @@ check('snmp devices: the credential chain resolves on the server, once per devic
 
   // sysDescr (migration 116) is COALESCEd: an agent too old to send it must
   // not erase what a newer one read.
-  await repo.recordPoll(own.id, { ok: true, sysDescr: 'Cisco IOS Software, C2960X, 15.2(7)E3' });
+  // sysName (migration 133) follows the same rule, and the placeholder order
+  // of the UPDATE is what this asserts: a shifted `?` would put the name in
+  // sys_location.
+  await repo.recordPoll(own.id, { ok: true, sysDescr: 'Cisco IOS Software, C2960X, 15.2(7)E3', sysName: 'sw-core-1.plant.local', sysLocation: 'rack A3' });
   await repo.recordPoll(own.id, { ok: true });
   const described = await repo.findById(own.id);
   assert.strictEqual(described.sysDescr, 'Cisco IOS Software, C2960X, 15.2(7)E3');
+  assert.strictEqual(described.sysName, 'sw-core-1.plant.local');
+  assert.strictEqual(described.sysLocation, 'rack A3');
 
   assert.strictEqual(await profiles.deviceCount(profile.id), 1, 'the device/profile FK did not join');
   assert.strictEqual(await repo.remove(viaProfile.id), true);
@@ -527,6 +558,30 @@ check('device interfaces: the port NAME is the identity, and a move is reported'
   assert.strictEqual((await repo.findById(byName.get('Gi0/2'))).operStatus, 'down');
 });
 
+check('device interfaces: a real port retires the sFlow placeholder on its ifIndex, and wins byIndex', async (pool) => {
+  const devices = createSnmpDevicesRepository({ pool }, { secretBox: fakeSecretBox });
+  const repo = createDeviceInterfacesRepository({ pool });
+  const device = await devices.create({ host: '10.14.0.21', displayName: 'sFlow-then-SNMP switch' });
+
+  // The sFlow ingest's placeholder, then an SNMP poll naming the same index.
+  const ph = await repo.upsertMany(device.id, [{ ifName: 'ifIndex 3', nameSource: 'ifIndex', ifIndex: 3 }]);
+  assert.strictEqual(ph.retired, 0, 'a placeholder never retires a placeholder');
+  const { byName: before } = await repo.idMapForDevice(device.id);
+  const phId = before.get('ifIndex 3');
+  const at = new Date(Math.floor(Date.now() / 1000) * 1000);
+  const polled = await repo.upsertMany(device.id, [{ ifName: 'Gi0/3', ifIndex: 3, speedMbps: 1000 }], { at });
+  assert.strictEqual(polled.retired, 1, 'IN (?) / NOT IN (?) did not match the placeholder');
+
+  const { byName, byIndex } = await repo.idMapForDevice(device.id);
+  assert.strictEqual(byIndex.get(3), byName.get('Gi0/3'));
+  const kept = await repo.findById(phId);
+  assert.ok(kept, 'the placeholder row is kept');
+  assert.strictEqual(kept.ifIndex, null);
+  assert.strictEqual(kept.ifIndexChangedAt, at.toISOString());
+  assert.strictEqual(kept.nameSource, 'ifIndex');
+  assert.strictEqual(await repo.countForDevice(device.id), 2);
+});
+
 check('device counter samples: a wide insert, a grouped self-join, and a window', async (pool) => {
   const devices = createSnmpDevicesRepository({ pool }, { secretBox: fakeSecretBox });
   const interfaces = createDeviceInterfacesRepository({ pool });
@@ -567,6 +622,15 @@ check('device counter samples: a wide insert, a grouped self-join, and a window'
   assert.strictEqual(latest.get(p1).inOctets, 1750000, 'the grouped self-join returned the wrong row');
   assert.strictEqual(latest.get(p1).inBps, 100000);
   assert.strictEqual(latest.get(p2).inBps, null, 'an absent rate must read back as null, never 0');
+
+  // 'counter_reset' (migration 133) is a member of the ENUM: a cleared
+  // counter's row must store its reason, not fail the insert (strict mode) or
+  // store '' (non-strict).
+  const t2 = new Date(Date.now() - 30000);
+  assert.strictEqual(await repo.insertMany([
+    { ts: t2, deviceId: device.id, interfaceId: p2, inOctets: 3, discontinuity: 'counter_reset' },
+  ]), 1);
+  assert.strictEqual((await repo.latestForDevice(device.id)).get(p2).discontinuity, 'counter_reset');
 
   // ... and the same read with the port name, which is the screen.
   const named = await repo.latestWithNames(device.id);
@@ -771,6 +835,27 @@ check('probe results: failure reason, resolver and ECMP hop ips round-trip; rece
   assert.strictEqual((await repo.recentRuns({ agentId, type: 'traceroute', target: '192.0.2.200', limit: 1 })).length, 1);
 });
 
+check('probe results: the dhcp offers round-trip through their JSON column (migration 132)', async (pool) => {
+  const repo = repoOf('probeResultsRepository', 'createProbeResultsRepository')({ pool });
+  const agentId = await newAgent(pool, 'be-dhcp');
+  const dhcp = {
+    iface: 'eth0', timeoutMs: 3000, serverCount: 2,
+    offers: [
+      { serverId: '192.168.1.1', offeredIp: '192.168.1.100', leaseSec: 86400, router: '192.168.1.1', dns: ['192.168.1.1'], subnetMask: '255.255.255.0', relay: null },
+      { serverId: '192.168.1.66', offeredIp: '192.168.1.201', leaseSec: 600, router: '192.168.1.66', dns: [], subnetMask: '255.255.255.0', relay: null },
+    ],
+  };
+  await repo.createMany(agentId, [
+    { type: 'dhcp', target: 'eth0', ok: true, rttMs: 4.2, lossPct: 0, dhcp, ts: ago(20000) },
+    { type: 'ping', target: '10.0.0.1', ok: true, rttMs: 1, ts: ago(10000) },
+  ]);
+  const rows = await repo.findByAgent({ agentId, from: ago(3600000) });
+  assert.deepStrictEqual(rows.find((r) => r.type === 'dhcp').dhcp, dhcp);
+  assert.strictEqual(rows.find((r) => r.type === 'ping').dhcp, null, 'another type must read back null');
+  const latest = await repo.latestByAgent(agentId);
+  assert.strictEqual(latest.find((r) => r.type === 'dhcp').dhcp.serverCount, 2);
+});
+
 check('nis2 incidents: Art. 23 fields round-trip, the event-case link survives edits and its case', async (pool) => {
   const repo = repoOf('nis2IncidentsRepository', 'createNis2IncidentsRepository')({ pool });
   const [ec] = await pool.query(
@@ -823,6 +908,21 @@ check('nis2 incidents: Art. 23 fields round-trip, the event-case link survives e
   assert.ok((await repo.findAll({})).length >= 2);
 });
 
+check('interface flaps: the summary\'s count is the stored flap_count (SET is evaluated left to right)', async (pool) => {
+  const states = repoOf('interfaceStatesRepository', 'createInterfaceStatesRepository')({ pool });
+  const agentId = await newAgent(pool, 'be-flapper');
+  const id = await states.insertTransition(agentId, {
+    iface: 'eth9', fromStatus: 'up', toStatus: 'down', severity: 'WARN', summary: 'eth9 went down', detectedAt: ago(30000),
+  });
+  for (let n = 2; n <= 3; n += 1) {
+    assert.strictEqual(await states.markFlapping(id, { at: ago(30000 - n * 1000) }), true);
+    const row = await states.latestForIface({ agentId, iface: 'eth9' });
+    assert.strictEqual(row.flapCount, n);
+    assert.strictEqual(row.summary, `eth9 went down (flapping ${n}\u00d7)`, `summary disagrees with flap_count=${row.flapCount}`);
+    assert.strictEqual(row.flapping, true);
+  }
+});
+
 check('switch history: port transitions and switch LLDP rows stay out of the agent\'s own lookups', async (pool) => {
   const states = repoOf('interfaceStatesRepository', 'createInterfaceStatesRepository')({ pool });
   const changes = repoOf('topologyChangesRepository', 'createTopologyChangesRepository')({ pool });
@@ -863,6 +963,22 @@ check('switch history: port transitions and switch LLDP rows stay out of the age
   assert.strictEqual((await changes.listForAgent({ agentId })).length, 2, 'the per-agent history still lists both');
 });
 
+check('device events: snmp_device_id (migration 133) is stored, filtered and counted per switch', async (pool) => {
+  const repo = repoOf('deviceEventsRepository', 'createDeviceEventsRepository')({ pool });
+  const agentId = await newAgent(pool, 'be-collector');
+  const e = (snmpDeviceId, summary, severity = 3) => ({
+    sourceIp: '10.14.0.63', receivedAt: ago(5000), severity, eventType: 'link.down', summary,
+    transport: 'syslog', snmpDeviceId, deviceId: null, dedupKey: null,
+  });
+  await repo.createMany(agentId, [e(9101, 'sw A one'), e(9101, 'sw A two', 5), e(9102, 'sw B')]);
+  const rows = await repo.list({ minutes: 10, agentId, snmpDeviceId: 9101 });
+  assert.deepStrictEqual(rows.map((r) => r.summary).sort(), ['sw A one', 'sw A two']);
+  assert.ok(rows.every((r) => r.snmpDeviceId === 9101 && r.deviceId === null), 'the two id columns crossed');
+  const counts = await repo.severityCounts({ minutes: 10, agentId, snmpDeviceId: 9101 });
+  assert.deepStrictEqual(counts.map((c) => [c.severity, c.rows]), [[3, 1], [5, 1]]);
+  assert.strictEqual((await repo.list({ minutes: 10, agentId })).length, 3, 'an absent snmpDeviceId must not filter');
+});
+
 check('device events: the sourceIp filter ties the log to a polled switch', async (pool) => {
   const repo = repoOf('deviceEventsRepository', 'createDeviceEventsRepository')({ pool });
   const agentId = await newAgent(pool, 'be-syslog');
@@ -873,6 +989,19 @@ check('device events: the sourceIp filter ties the log to a polled switch', asyn
   const rows = await repo.list({ minutes: 10, sourceIp: '10.14.0.61', agentId, transport: 'trap' });
   assert.deepStrictEqual(rows.map((r) => r.summary), ['Gi0/1 down']);
   assert.strictEqual((await repo.list({ minutes: 10, agentId })).length, 2, 'an absent sourceIp must not filter');
+});
+
+check('device inventory read: newest ARP bindings inside the window, capped', async (pool) => {
+  const arp = repoOf('arpEntriesRepository', 'createArpEntriesRepository')({ pool });
+  const a = await newAgent(pool, 'be-inventory-1');
+  await arp.upsertMany(a, [{ ip: '10.61.0.5', mac: 'de:ad:be:ef:61:05' }], { at: new Date(Date.now() - 10 * 86400000) });
+  await arp.upsertMany(a, [{ ip: '10.61.0.6', mac: 'de:ad:be:ef:61:06' }], { at: new Date(Date.now() - 60000) });
+  await arp.upsertMany(a, [{ ip: '10.61.0.7', mac: 'de:ad:be:ef:61:07' }], { at: new Date(Date.now() - 1000) });
+  const rows = (await arp.listRecent({ since: new Date(Date.now() - 86400000), limit: 5000 }))
+    .filter((r) => r.agentId === a);
+  assert.deepStrictEqual(rows.map((r) => r.ip), ['10.61.0.7', '10.61.0.6'], 'window or newest-first order is wrong');
+  const one = await arp.listRecent({ since: new Date(Date.now() - 86400000), limit: 1 });
+  assert.strictEqual(one.length, 1, 'the LIMIT was not applied');
 });
 
 check('new-device detector reads: known MACs per agent and per site, first-seen baselines, candidate by IP', async (pool) => {
@@ -905,6 +1034,14 @@ check('new-device detector reads: known MACs per agent and per site, first-seen 
   assert.strictEqual(found.foundByAgentId, a1);
   const oldest = await discovered.oldestFirstSeen();
   assert.ok(oldest instanceof Date && oldest.getTime() <= seenAt.getTime());
+
+  // The universal-search read. Its LIKE once carried ESCAPE '\\' inside a
+  // template literal — MySQL saw ESCAPE '\', a syntax error the search route
+  // swallowed. By IP, by hostname fragment, and a literal % that must not act
+  // as a wildcard.
+  assert.strictEqual((await discovered.search({ q: '10.30.0.50' }))[0].hostname, 'printer');
+  assert.strictEqual((await discovered.search({ q: 'rint' }))[0].ip, '10.30.0.50');
+  assert.deepStrictEqual(await discovered.search({ q: 'pr%er' }), []);
 });
 
 check('flows: topology edges carry their dominant service ports, chosen in SQL', async (pool) => {
@@ -933,6 +1070,65 @@ check('flows: topology edges carry their dominant service ports, chosen in SQL',
   ]);
   assert.deepStrictEqual(rev.services, [{ port: 502, proto: 'tcp', bytes: 800 }]);
   assert.deepStrictEqual(await flows.topologyEdges({ agentId, from: ago(60000), to: ago(30000) }), []);
+});
+
+check('flows: VLAN and exporter in/out ifIndex land in their columns (migration 127)', async (pool) => {
+  const flows = repoOf('flowsRepository', 'createFlowsRepository')({ pool });
+  const agentId = await newAgent(pool, 'be-vlan');
+  await flows.insertMany([
+    { agentId, ts: ago(60000), srcIp: '10.3.0.5', dstIp: '10.3.0.9', proto: 'tcp', bytes: 1, vlan: 4094, inIf: 3, outIf: 4294967295 },
+    { agentId, ts: ago(60000), srcIp: '10.3.0.5', dstIp: '10.3.0.10', proto: 'tcp', bytes: 1 },
+  ]);
+  const [rows] = await pool.query(
+    'SELECT dst_ip, vlan, in_if, out_if FROM flow_records WHERE agent_id = ? ORDER BY dst_ip', [agentId],
+  );
+  assert.deepStrictEqual(rows.map((r) => [r.dst_ip, r.vlan, r.in_if, r.out_if]), [
+    ['10.3.0.10', null, null, null],
+    ['10.3.0.9', 4094, 3, 4294967295],
+  ]);
+});
+
+check('sFlow exporters: the upsert keeps first_seen, moves device/interfaces/last_seen, and the window reads it (migration 128)', async (pool) => {
+  const repo = repoOf('sflowExportersRepository', 'createSflowExportersRepository')({ pool });
+  const devices = createSnmpDevicesRepository({ pool }, { secretBox: fakeSecretBox });
+  const agentId = await newAgent(pool, 'be-sflow');
+  const device = await devices.create({ host: '10.14.0.70', displayName: 'sFlow switch' });
+  const first = new Date(Math.floor(Date.now() / 1000) * 1000 - 7200000);
+  await repo.recordSeen([
+    { agentId, address: '10.14.0.70', deviceId: null, interfaces: 2 },
+    { agentId, address: '2001:db8::70', deviceId: null, interfaces: 1 },
+  ], { at: first });
+  const later = new Date(first.getTime() + 3600000);
+  await repo.recordSeen([{ agentId, address: '10.14.0.70', deviceId: device.id, interfaces: 52 }], { at: later });
+  const rows = (await repo.listRecent({ since: new Date(first.getTime() - 1000), limit: 10 }))
+    .filter((r) => r.agentId === agentId);
+  const sw = rows.find((r) => r.address === '10.14.0.70');
+  assert.strictEqual(rows.length, 2);
+  assert.strictEqual(rows[0].address, '10.14.0.70', 'newest first');
+  assert.strictEqual(sw.deviceId, device.id);
+  assert.strictEqual(sw.interfaces, 52);
+  assert.strictEqual(sw.firstSeen, first.toISOString());
+  assert.strictEqual(sw.lastSeen, later.toISOString());
+  const recent = await repo.listRecent({ since: new Date(later.getTime() - 1000), limit: 10 });
+  assert.deepStrictEqual(recent.filter((r) => r.agentId === agentId).map((r) => r.address), ['10.14.0.70']);
+  // Heard in flow samples only (interfaces: null): last_seen moves, the
+  // counted ports stay; a new flow-only exporter starts at 0.
+  const flowOnlyAt = new Date(later.getTime() + 60000);
+  await repo.recordSeen([
+    { agentId, address: '10.14.0.70', deviceId: device.id, interfaces: null },
+    { agentId, address: '10.14.0.71', deviceId: null, interfaces: null },
+  ], { at: flowOnlyAt });
+  const heard = (await repo.listRecent({ since: new Date(flowOnlyAt.getTime() - 1000), limit: 10 }))
+    .filter((r) => r.agentId === agentId);
+  const hsw = heard.find((r) => r.address === '10.14.0.70');
+  assert.strictEqual(hsw.interfaces, 52, 'a flow-only sighting keeps the counted ports');
+  assert.strictEqual(hsw.lastSeen, flowOnlyAt.toISOString());
+  assert.strictEqual(heard.find((r) => r.address === '10.14.0.71').interfaces, 0);
+  // Deleting the device leaves the exporter, now unregistered.
+  await devices.remove(device.id);
+  const after = (await repo.listRecent({ since: new Date(first.getTime() - 1000), limit: 10 }))
+    .find((r) => r.agentId === agentId && r.address === '10.14.0.70');
+  assert.strictEqual(after.deviceId, null);
 });
 
 check('retention: internal flows roll up bounded (top-N + one overflow row) and re-runs sum', async (pool) => {
@@ -1042,6 +1238,215 @@ check('retention: every new purge deletes exactly the expired rows it owns', asy
 
   const again = await purge.purgeExpired();
   for (const k of Object.keys(expect)) assert.strictEqual(again[k], 0, `${k} is not idempotent`);
+});
+
+check('probe thresholds: a location override and a global default are removed by their own key', async (pool) => {
+  const { createProbeThresholdsRepository } = require(path.join(ROOT, 'src/repositories/probeThresholdsRepository'));
+  const repo = createProbeThresholdsRepository({ pool });
+  const [site] = await pool.query("INSERT INTO locations (name) VALUES ('Vejle')");
+  await repo.upsert({ location_id: site.insertId, metric: 'latency', warning_value: 10, critical_value: 20 });
+  // The override goes; the seeded global default for the same metric stays.
+  assert.strictEqual(await repo.remove({ location_id: site.insertId, metric: 'latency' }), true);
+  assert.strictEqual(await repo.remove({ location_id: site.insertId, metric: 'latency' }), false);
+  assert.ok((await repo.listGlobal()).some((r) => r.metric === 'latency'), 'the global default went with the override');
+  // IS NULL, not `= NULL`: the global row is actually found and removed.
+  assert.strictEqual(await repo.remove({ location_id: null, metric: 'latency' }), true);
+  assert.ok(!(await repo.listGlobal()).some((r) => r.metric === 'latency'));
+  await repo.upsert({ location_id: null, metric: 'latency', warning_value: 150, critical_value: 300 }); // leave it as seeded
+});
+
+check('flow-pair baselines: the pair filter and the last rolled-up hour', async (pool) => {
+  const { createFlowPairBaselinesRepository } = require(path.join(ROOT, 'src/repositories/flowPairBaselinesRepository'));
+  const repo = createFlowPairBaselinesRepository({ pool });
+  const src = await newAgent(pool, 'be-fp-src');
+  const dst = await newAgent(pool, 'be-fp-dst');
+  const other = await newAgent(pool, 'be-fp-other');
+  await repo.upsertBaselines([
+    { srcHostId: src, dstHostId: dst, dstPort: 443, dow: 2, hour: 14, medianBytes: 1000, madBytes: 100, sampleCount: 4, observationCount: 40 },
+    { srcHostId: src, dstHostId: other, dstPort: 22, dow: 2, hour: 14, medianBytes: 5, madBytes: 1, sampleCount: 4, observationCount: 40 },
+  ]);
+  const h13 = new Date('2026-09-22T13:00:00Z');
+  const h14 = new Date('2026-09-22T14:00:00Z');
+  const h15 = new Date('2026-09-22T15:00:00Z');
+  await repo.insertHourly([
+    { bucket: h13, srcHostId: src, dstHostId: dst, dstPort: 443, bytes: 900 },
+    { bucket: h14, srcHostId: src, dstHostId: dst, dstPort: 443, bytes: 2200 },
+    { bucket: h15, srcHostId: src, dstHostId: other, dstPort: 22, bytes: 3 },
+  ]);
+  const pair = await repo.listForHost({ hostId: src, dstHostId: dst, dstPort: 443 });
+  assert.strictEqual(pair.length, 1);
+  assert.strictEqual(pair[0].medianBytes, 1000);
+  const latestPair = await repo.latestHourlyForHost({ hostId: src, dstHostId: dst, dstPort: 443 });
+  assert.deepStrictEqual(latestPair.map((r) => [r.bucket, r.bytes]), [[h14.toISOString(), 2200]]);
+  const latestHost = await repo.latestHourlyForHost({ hostId: src });
+  assert.deepStrictEqual(latestHost.map((r) => [r.dstHostId, r.bucket]), [[other, h15.toISOString()]]);
+});
+
+check('situations: grouping basis round-trips, cases link to the FIRST live situation (migrations 129/130)', async (pool) => {
+  const clusters = repoOf('eventClustersRepository', 'createEventClustersRepository')({ pool });
+  const cases = repoOf('eventCasesRepository', 'createEventCasesRepository')({ pool });
+  const basis = { subjects: ['target:erp.example.com'], reasons: [{ kind: 'target', detail: 'erp.example.com', agents: 2 }], why: ['shared target'] };
+  const c1 = await clusters.create({ confidence: 'high', memberFindingIds: ['f1', 'f2'], suspectedCommonCause: 'x', groupingBasis: basis, detectedAt: new Date() });
+  assert.deepStrictEqual((await clusters.findById(c1)).groupingBasis.subjects, basis.subjects);
+  // Omitted on update → kept; given → replaced.
+  assert.ok(await clusters.updateMembership(c1, { confidence: 'high', memberFindingIds: ['f1', 'f2', 'f3'], suspectedCommonCause: 'x', detectedAt: new Date() }));
+  assert.deepStrictEqual((await clusters.findById(c1)).groupingBasis.subjects, basis.subjects);
+  const more = { ...basis, subjects: [...basis.subjects, 'port:9/4'] };
+  assert.ok(await clusters.updateMembership(c1, { confidence: 'high', memberFindingIds: ['f1'], suspectedCommonCause: 'x', groupingBasis: more, detectedAt: new Date() }));
+  assert.deepStrictEqual((await clusters.findById(c1)).groupingBasis.subjects, more.subjects);
+  assert.ok((await clusters.listOpen()).some((c) => c.id === c1), 'listOpen still hydrates with the JSON column');
+
+  const k1 = await cases.create({ host_id: '1', title: 'a', first_event_at: new Date(), last_event_at: new Date() });
+  const k2 = await cases.create({ host_id: '2', title: 'b', first_event_at: new Date(), last_event_at: new Date() });
+  assert.strictEqual(await cases.linkCluster([k1, k2, k1], c1), 2);
+  assert.strictEqual((await cases.findById(k1)).clusterId, c1);
+  assert.deepStrictEqual((await cases.listByCluster(c1)).map((c) => c.id), [k1, k2]);
+  // A second LIVE situation does not steal the link; once the first is resolved it may.
+  const c2 = await clusters.create({ confidence: 'medium', memberFindingIds: ['f9'], detectedAt: new Date() });
+  assert.strictEqual(await cases.linkCluster([k1], c2), 0);
+  assert.ok(await clusters.updateStatus(c1, { from: 'open', to: 'resolved', at: new Date() }));
+  assert.strictEqual(await cases.linkCluster([k1], c2), 1);
+  assert.strictEqual((await cases.findById(k1)).clusterId, c2);
+  // ON DELETE SET NULL: deleting a situation keeps its cases.
+  await pool.query('DELETE FROM event_clusters WHERE id = ?', [c2]);
+  assert.strictEqual((await cases.findById(k1)).clusterId, null);
+  assert.ok((await cases.listStaleInvestigating(new Date(Date.now() + 60000))).every((c) => 'clusterId' in c));
+  // The auto-resolve hold (review round 2): a case of a live situation active
+  // since the cut-off is left out; once the situation's activity is older, it is back.
+  const c3 = await clusters.create({ confidence: 'medium', memberFindingIds: ['f8'], detectedAt: new Date() });
+  const k3 = await cases.create({ host_id: '3', title: 'c', status: 'investigating', first_event_at: ago(3600000), last_event_at: ago(3600000) });
+  assert.strictEqual(await cases.linkCluster([k3], c3), 1);
+  const staleIds = async (since) => (await cases.listStaleInvestigating(ago(30 * 60 * 1000), 5000, { holdClustersActiveSince: since })).map((c) => c.id);
+  assert.ok(!(await staleIds(ago(15 * 60 * 1000))).includes(k3), 'held while its situation is active');
+  assert.ok((await staleIds(new Date(Date.now() + 60000))).includes(k3), 'released once the situation went quiet');
+  assert.ok((await cases.listStaleInvestigating(ago(30 * 60 * 1000), 5000)).some((c) => c.id === k3), 'without the option: unchanged');
+});
+
+// Migration 131: the new-device detector's long memory.
+check('known devices: per-scope reads, an upsert that keeps first_seen and never ages last_seen, the 400-day purge', async (pool) => {
+  const repo = repoOf('knownDevicesRepository', 'createKnownDevicesRepository')({ pool });
+  const { createRetentionRepo } = require(path.join(ROOT, 'src/analysis/retention/repo'));
+  const macA = 'de:ad:be:ef:13:01';
+  const macB = 'de:ad:be:ef:13:02';
+  const first = new Date(Math.floor(ago(10 * DAY).getTime() / 1000) * 1000);
+  const later = new Date(Math.floor(Date.now() / 1000) * 1000);
+
+  assert.strictEqual((await repo.knownMacs({ scope: 'site:133', macs: [macA] })).size, 0);
+  await repo.touchMany('site:133', [{ ip: '10.13.0.1', mac: macA }, { ip: '10.13.0.2', mac: macB }], first);
+  await repo.touchMany('agent:133', [{ ip: '10.13.9.9', mac: macA }], first);
+  assert.deepStrictEqual([...(await repo.knownMacs({ scope: 'site:133', macs: [macA, macB, 'de:ad:be:ef:13:03'] }))].sort(), [macA, macB]);
+  assert.deepStrictEqual([...(await repo.knownMacs({ scope: 'agent:133', macs: [macA, macB] }))], [macA], 'scopes leak into each other');
+
+  await repo.touchMany('site:133', [{ ip: '10.13.0.7', mac: macA }], later);
+  // A late snapshot stamped BEFORE the last sighting must not age the row or overwrite its IP.
+  await repo.touchMany('site:133', [{ ip: '10.13.0.99', mac: macA }], first);
+  const [[row]] = await pool.query('SELECT first_seen, last_seen, last_ip FROM known_devices WHERE scope = ? AND mac = ?', ['site:133', macA]);
+  assert.strictEqual(new Date(row.first_seen).getTime(), first.getTime(), 'first_seen moved');
+  assert.strictEqual(new Date(row.last_seen).getTime(), later.getTime(), 'last_seen went backwards');
+  assert.strictEqual(row.last_ip, '10.13.0.7', 'an older sighting overwrote the last IP');
+
+  await pool.query("INSERT INTO known_devices (scope, mac, first_seen, last_seen) VALUES ('site:133', 'de:ad:be:ef:13:09', ?, ?)", [ago(500 * DAY), ago(401 * DAY)]);
+  const purged = await createRetentionRepo({ pool }).purgeKnownDevicesBefore(ago(400 * DAY));
+  assert.strictEqual(purged, 1);
+  const [[left]] = await pool.query("SELECT COUNT(*) AS n FROM known_devices WHERE scope = 'site:133'");
+  assert.strictEqual(Number(left.n), 2, 'the purge took a device seen inside the window');
+});
+
+check('snmp neighbours: LLDP and CDP for one neighbour are two rows, keyed by protocol (migration 124)', async (pool) => {
+  const devices = createSnmpDevicesRepository({ pool }, { secretBox: fakeSecretBox });
+  const repo = repoOf('snmpNeighborsRepository', 'createSnmpNeighborsRepository')({ pool });
+  const device = await devices.create({ host: '10.14.0.80', displayName: 'CDP switch' });
+  const both = [
+    { protocol: 'lldp', localIfName: 'Gi1/0/1', remoteChassisId: 'sw-dist-1', remotePortId: 'Gi1/0/5', remoteSysName: 'sw-dist-1' },
+    { protocol: 'cdp', localIfName: 'Gi1/0/1', remoteChassisId: 'sw-dist-1', remotePortId: 'Gi1/0/5', remoteSysName: 'sw-dist-1', remoteAddress: '10.14.0.11', remotePlatform: 'cisco WS-C3850-48P' },
+    // An older writer's row: no protocol, which is LLDP.
+    { localIfName: 'Gi1/0/2', remoteChassisId: 'aa:bb:cc:11:22:33' },
+  ];
+  await repo.upsertMany(device.id, both, { at: ago(60000) });
+  await repo.upsertMany(device.id, both, { at: new Date() }); // a second sweep upserts, never duplicates
+  const rows = await repo.listForDevice(device.id);
+  assert.strictEqual(rows.length, 3, 'the protocol is not in the unique key, or the upsert duplicated');
+  const cdp = rows.find((r) => r.protocol === 'cdp');
+  assert.strictEqual(cdp.remoteAddress, '10.14.0.11');
+  assert.strictEqual(cdp.remotePlatform, 'cisco WS-C3850-48P');
+  assert.deepStrictEqual(rows.map((r) => r.protocol).sort(), ['cdp', 'lldp', 'lldp']);
+  const [[idx]] = await pool.query(
+    `SELECT COUNT(*) AS n FROM information_schema.STATISTICS
+      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'snmp_neighbors' AND INDEX_NAME = 'uq_snmp_neighbors'`,
+  );
+  assert.strictEqual(Number(idx.n), 0, 'the old unique key (without protocol) is still there');
+});
+
+check('device ARP: upsert, a moved binding, per-site known MACs, IP/MAC lookups, baseline, purge (migration 125)', async (pool) => {
+  const devices = createSnmpDevicesRepository({ pool }, { secretBox: fakeSecretBox });
+  const repo = repoOf('deviceArpEntriesRepository', 'createDeviceArpEntriesRepository')({ pool });
+  const [site] = await pool.query("INSERT INTO locations (name) VALUES ('Plant ARP')");
+  const router = await devices.create({ host: '10.20.0.1', displayName: 'rtr-ot-1', locationId: site.insertId });
+  const elsewhere = await devices.create({ host: '10.21.0.1', displayName: 'rtr-other' });
+  await devices.recordPoll(router.id, { ok: true, sysLocation: 'Hal 2, rack A3' });
+
+  assert.strictEqual(await repo.oldestFirstSeen(router.id), null, 'no rows must be null, not the epoch');
+  const first = new Date(Math.floor(Date.now() / 1000) * 1000 - 60000);
+  await repo.upsertMany(router.id, [
+    { ip: '10.20.0.84', mac: '00:1b:44:11:3a:b7', ifIndex: 20, ifName: 'Vlan20' },
+    { ip: '2001:db8::1', mac: '00:1b:44:11:3a:b7', ifIndex: 20, ifName: 'Vlan20' },
+  ], { at: first });
+  await repo.upsertMany(elsewhere.id, [{ ip: '10.21.0.5', mac: '00:1b:44:11:3a:c0' }], { at: first });
+  // The same address, a different MAC: a moved binding, stamped — not a second row.
+  await repo.upsertMany(router.id, [{ ip: '10.20.0.84', mac: '00:1b:44:11:3a:b8', ifIndex: null, ifName: null }], { at: new Date() });
+  assert.strictEqual(await repo.countForDevice(router.id), 2);
+  const [hit] = await repo.findByIp({ ip: '10.20.0.84' });
+  assert.strictEqual(hit.mac, '00:1b:44:11:3a:b8');
+  assert.ok(hit.macChangedAt, 'the moved binding was not stamped');
+  assert.strictEqual(hit.ifName, 'Vlan20', 'COALESCE kept the interface name');
+  assert.strictEqual(hit.deviceName, 'rtr-ot-1');
+  assert.strictEqual(hit.deviceSysLocation, 'Hal 2, rack A3');
+  assert.strictEqual(hit.deviceLocationId, site.insertId);
+  assert.strictEqual((await repo.findByMac({ mac: '00:1b:44:11:3a:b7' }))[0].ip, '2001:db8::1');
+  assert.strictEqual((await repo.listForDevice(router.id, { limit: 10 })).length, 2);
+
+  const macs = ['00:1b:44:11:3a:b7', '00:1b:44:11:3a:c0', 'de:ad:be:ef:00:09'];
+  assert.deepStrictEqual([...await repo.knownMacs({ macs, locationId: site.insertId })], ['00:1b:44:11:3a:b7'], 'the site JOIN is wrong');
+  assert.deepStrictEqual([...await repo.knownMacs({ macs, deviceId: elsewhere.id })], ['00:1b:44:11:3a:c0']);
+  assert.ok((await repo.oldestFirstSeen(router.id)).getTime() <= first.getTime());
+
+  const { createRetentionRepo } = require(path.join(ROOT, 'src/analysis/retention/repo'));
+  await pool.query('UPDATE device_arp_entries SET last_seen = ? WHERE device_id = ?', [ago(40 * DAY), elsewhere.id]);
+  assert.strictEqual(await createRetentionRepo({ pool }).purgeDeviceArpEntriesBefore(ago(30 * DAY)), 1);
+  assert.strictEqual(await repo.countForDevice(router.id), 2, 'a current row was purged');
+});
+
+check('snmp devices: system group + hardware kept with COALESCE, inventory replaced, serial search (migration 126)', async (pool) => {
+  const devices = createSnmpDevicesRepository({ pool }, { secretBox: fakeSecretBox });
+  const created = await devices.create({ host: '10.14.0.90', displayName: 'Stack' });
+  assert.deepStrictEqual(created.collect, ['if', 'fdb', 'lldp', 'vlan', 'cdp', 'arp', 'entity'],
+    'a new device is stored with the wide default, not NULL');
+  await devices.recordPoll(created.id, {
+    ok: true, sysLocation: 'Bygning 3, rum 2.14, rack B', sysContact: 'noc@example.dk', sysObjectId: '1.3.6.1.4.1.9.1.1745',
+    hardware: { vendor: 'Cisco', model: 'WS-C3850-48P', serial: 'FOC1234X0AB', softwareRev: '16.12.04' },
+  });
+  await devices.recordPoll(created.id, { ok: true }); // an older agent: erases nothing
+  const d = await devices.findById(created.id);
+  assert.strictEqual(d.sysLocation, 'Bygning 3, rum 2.14, rack B');
+  assert.strictEqual(d.sysObjectId, '1.3.6.1.4.1.9.1.1745');
+  assert.strictEqual(d.hardware.serial, 'FOC1234X0AB');
+  assert.strictEqual(d.hardware.softwareRev, '16.12.04');
+  assert.strictEqual((await devices.list({})).find((x) => x.id === created.id).sysLocation, 'Bygning 3, rum 2.14, rack B');
+
+  const stack = [
+    { entIndex: 1, class: 'chassis', name: 'Switch 1', model: 'WS-C3850-48P', serial: 'FOC1234X0AB' },
+    { entIndex: 1000, class: 'chassis', name: 'Switch 2', model: 'WS-C3850-48P', serial: 'FOC9999Z2EF' },
+    { entIndex: 2, class: 'module', name: 'NM', model: 'C3850-NM-4-1G', serial: 'FOC5678Y1CD' },
+  ];
+  await devices.replaceInventory(created.id, stack, { at: ago(60000) });
+  // The next poll: the module was pulled. The delete's cutoff is this poll's
+  // own (whole) second, so it must not take the rows this poll just wrote.
+  await devices.replaceInventory(created.id, stack.slice(0, 2), { at: new Date() });
+  const inv = await devices.listInventory(created.id);
+  assert.deepStrictEqual(inv.map((e) => e.serial), ['FOC1234X0AB', 'FOC9999Z2EF'], 'the pulled module survived, or this poll\'s rows were deleted');
+  const found = await devices.findBySerial('foc9999');
+  assert.strictEqual(found[0].deviceId, created.id, 'a serial prefix, any case, finds the stack member');
+  assert.strictEqual((await devices.findBySerial('FOC%')).length, 0, 'a % in the query is a literal, not a wildcard');
 });
 
 async function main() {

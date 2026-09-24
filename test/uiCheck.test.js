@@ -67,6 +67,15 @@ const MIGRATED_FILES = (() => {
   return [...src.slice(from, src.indexOf('];', from)).matchAll(/'([^']+)'/g)].map((m) => m[1]);
 })();
 
+// The section bodies (SECTIONS) are swept by every rule except `template`, so
+// their stand-in is a bare module with no page.
+const SECTION_FILES = (() => {
+  const src = fs.readFileSync(SCRIPT, 'utf8');
+  const from = src.indexOf('const SECTIONS = [');
+  if (from < 0) return [];
+  return [...src.slice(from, src.indexOf('];', from)).matchAll(/'([^']+)'/g)].map((m) => m[1]);
+})();
+
 function withFixture(files, fn) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'uicheck-'));
   const write = (rel, body) => {
@@ -86,6 +95,9 @@ function withFixture(files, fn) {
     for (const rel of MIGRATED_FILES) {
       if (files[rel] === undefined) write(rel, rel === 'ui.js' ? '// components' : OK_VIEW);
     }
+    for (const rel of SECTION_FILES) {
+      if (files[rel] === undefined) write(rel, 'var root = el(\'div\', {});');
+    }
     for (const [rel, body] of Object.entries(files)) write(rel, body);
     return fn(dir);
   } finally {
@@ -100,6 +112,20 @@ function withFixture(files, fn) {
 function fixtureFindings(body, extra = {}) {
   return withFixture(Object.assign({ 'views/changes.js': OK_VIEW + body }, extra), (dir) => run([], dir));
 }
+
+test('a section body is swept by every rule except template', () => {
+  assert.ok(SECTION_FILES.length > 0, 'SECTIONS could not be read');
+  const rel = SECTION_FILES[0];
+  // No ui.page()/ui.pageHeader(): the page it sits on owns those.
+  const clean = withFixture({ [rel]: "var n = ui.panel({ children: [] });" }, (dir) => run([], dir));
+  assert.equal(clean.code, 0, clean.out);
+  // But an inline style or a colour in it is still a finding.
+  const dirty = withFixture({ [rel]: "var n = el('div', { style: 'color:#ff0000' });" }, (dir) => run([], dir));
+  assert.equal(dirty.code, 1, dirty.out);
+  assert.match(dirty.out, new RegExp(`${rel.replace('.', '\\.')}:\\d+:inline-style`));
+  assert.match(dirty.out, new RegExp(`${rel.replace('.', '\\.')}:\\d+:colour`));
+  assert.doesNotMatch(dirty.out, /:template/);
+});
 
 test('rule: inline style in a view is a finding', () => {
   const { code, out } = fixtureFindings("var n = el('div', { style: 'margin:8px' });");

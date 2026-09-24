@@ -67,6 +67,32 @@ state, and reconciles against stored outages:
   out of the lookback and only healthy rows remain — the first healthy sample, so
   an outage never lingers active after the outage ages out of the window.
 
+## Notification (alerts + event cases)
+
+An outage used to be recorded and reported on, and nobody was ever told. The
+service now takes an optional notification path (wired in `src/server.js`):
+
+- **Open** (and **escalate** warning → critical) raises a finding
+  `probe_outage.<metric>` (`CRIT` for critical, `WARN` for warning, kind
+  `THRESHOLD`) through the finding sink (`src/devices/findingSink.js`): stored,
+  published, grouped into the agent's **event case**, alerted, handed to the
+  integrations. Its explanation names the target, the **threshold** it was judged
+  by ("warning ≥ 150 ms, critical ≥ 300 ms, 3 results in a row" / "3 failed probes
+  in a row") and the **duration so far**; the evidence carries the outage id, the
+  threshold values and scope, `startedAt` and `durationSeconds`. The sink is NOT
+  behind the analysis licence/flag — outages never were.
+- **Close** dispatches **one recovery alert** — finding-shaped, not stored (a
+  recovery is not a new fault), kind `RECOVERED`, the outage's own severity so it
+  reaches the channels the opening did — with the duration and threshold in its
+  text and the `eventCaseId` of the opening finding, and appends a system
+  `observation` note with the same text to that event case's work log.
+- Both go through the ordinary dispatcher, so the **alerting master switch**
+  (`docs/alerting.md`), the licence, the per-channel minimum severity, the cooldown
+  and the **maintenance silencer** all apply. With alerting off or a maintenance
+  window active the finding is still stored and grouped; nothing is sent.
+- The outage finding's subject is its target, so the same target in outage from
+  several agents becomes one situation (`docs/cross-agent-correlation.md`).
+
 ## Endpoints
 
 All under the existing user-JWT auth.

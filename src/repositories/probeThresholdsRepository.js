@@ -77,7 +77,19 @@ function createProbeThresholdsRepository(db) {
     return findById(res.insertId);
   }
 
-  return { getEffective, listGlobal, listByLocation, findById, upsert };
+  // Removes the threshold for (location_id, metric). location_id null is the
+  // global default: without one a metric is not evaluated at all, so no probe
+  // outage opens for it. A location row removed falls back to the global one.
+  // Returns true when a row was deleted.
+  async function remove({ location_id = null, metric }) {
+    const [res] = await pool.query(
+      `DELETE FROM probe_thresholds WHERE metric = ? AND location_id ${location_id == null ? 'IS NULL' : '= ?'}`,
+      location_id == null ? [metric] : [metric, location_id]
+    );
+    return (res && res.affectedRows ? res.affectedRows : 0) > 0;
+  }
+
+  return { getEffective, listGlobal, listByLocation, findById, upsert, remove };
 }
 
 module.exports = { createProbeThresholdsRepository };

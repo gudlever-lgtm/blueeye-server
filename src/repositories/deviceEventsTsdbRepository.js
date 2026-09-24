@@ -29,6 +29,7 @@ function mapRow(row) {
     id: row.id == null ? null : Number(row.id),
     agentId: Number(row.agent_id),
     deviceId: row.device_id == null ? null : Number(row.device_id),
+    snmpDeviceId: row.snmp_device_id == null ? null : Number(row.snmp_device_id),
     sourceIp: row.source_ip,
     receivedAt: toIso(row.ts),
     deviceTime: toIso(row.device_time),
@@ -47,7 +48,7 @@ function mapRow(row) {
   };
 }
 
-const SELECT_COLUMNS = `NULL::bigint AS id, agent_id, device_id, source_ip, ts,
+const SELECT_COLUMNS = `NULL::bigint AS id, agent_id, device_id, snmp_device_id, source_ip, ts,
   device_time, clock_skew_ms, transport, facility, severity, event_type,
   device_hostname, tag, ifname, summary, raw, detail, occurrences`;
 
@@ -89,12 +90,13 @@ function createDeviceEventsTsdbRepository(tsdb) {
       const tuples = [];
       const params = [];
       fresh.forEach((e, i) => {
-        const b = i * 18;
-        tuples.push(`($${b + 1},$${b + 2},$${b + 3},$${b + 4},$${b + 5},$${b + 6},$${b + 7},$${b + 8},$${b + 9},$${b + 10},$${b + 11},$${b + 12},$${b + 13},$${b + 14},$${b + 15},$${b + 16},$${b + 17},$${b + 18})`);
+        const b = i * 19;
+        tuples.push(`(${Array.from({ length: 19 }, (_, k) => `$${b + k + 1}`).join(',')})`);
         params.push(
           e.receivedAt,
           agentId,
           e.deviceId ?? null,
+          e.snmpDeviceId ?? null,
           e.sourceIp,
           e.deviceTime ?? null,
           e.clockSkewMs ?? null,
@@ -114,7 +116,7 @@ function createDeviceEventsTsdbRepository(tsdb) {
       });
       await pool.query(
         `INSERT INTO device_events
-           (ts, agent_id, device_id, source_ip, device_time, clock_skew_ms,
+           (ts, agent_id, device_id, snmp_device_id, source_ip, device_time, clock_skew_ms,
             transport, facility, severity, event_type, device_hostname, tag,
             ifname, summary, raw, detail, dedup_key, occurrences)
          VALUES ${tuples.join(', ')}`,
@@ -128,11 +130,12 @@ function createDeviceEventsTsdbRepository(tsdb) {
   // Builds the shared WHERE for the reads below. The time bound is never
   // optional: an unbounded scan of a hypertable is the one query shape the
   // storage split forbids (see the closing note in 001_init.sql).
-  function buildFilter({ maxSeverity, deviceId, agentId, sourceIp, transport, eventType, q }, params) {
+  function buildFilter({ maxSeverity, deviceId, agentId, snmpDeviceId, sourceIp, transport, eventType, q }, params) {
     const where = [];
     if (maxSeverity != null) { params.push(maxSeverity); where.push(`severity <= $${params.length}`); }
     if (deviceId != null) { params.push(deviceId); where.push(`device_id = $${params.length}`); }
     if (agentId != null) { params.push(agentId); where.push(`agent_id = $${params.length}`); }
+    if (snmpDeviceId != null) { params.push(snmpDeviceId); where.push(`snmp_device_id = $${params.length}`); }
     if (sourceIp) { params.push(sourceIp); where.push(`source_ip = $${params.length}`); }
     if (transport) { params.push(transport); where.push(`transport = $${params.length}`); }
     if (eventType) { params.push(eventType); where.push(`event_type = $${params.length}`); }
@@ -146,12 +149,12 @@ function createDeviceEventsTsdbRepository(tsdb) {
 
   async function list({
     minutes = 120, limit = 100, offset = 0,
-    maxSeverity = null, deviceId = null, agentId = null, sourceIp = null,
+    maxSeverity = null, deviceId = null, agentId = null, snmpDeviceId = null, sourceIp = null,
     transport = null, eventType = null, q = null,
   } = {}) {
     const params = [minutes];
     const where = ['ts >= now() - make_interval(mins => $1::int)'];
-    where.push(...buildFilter({ maxSeverity, deviceId, agentId, sourceIp, transport, eventType, q }, params));
+    where.push(...buildFilter({ maxSeverity, deviceId, agentId, snmpDeviceId, sourceIp, transport, eventType, q }, params));
     params.push(limit);
     const limitIdx = params.length;
     params.push(offset);
@@ -166,10 +169,10 @@ function createDeviceEventsTsdbRepository(tsdb) {
     return res.rows.map(mapRow);
   }
 
-  async function severityCounts({ minutes = 120, deviceId = null, agentId = null } = {}) {
+  async function severityCounts({ minutes = 120, deviceId = null, agentId = null, snmpDeviceId = null } = {}) {
     const params = [minutes];
     const where = ['ts >= now() - make_interval(mins => $1::int)'];
-    where.push(...buildFilter({ deviceId, agentId }, params));
+    where.push(...buildFilter({ deviceId, agentId, snmpDeviceId }, params));
     const res = await pool.query(
       `SELECT severity, COUNT(*) AS n, SUM(occurrences) AS occurrences
          FROM device_events

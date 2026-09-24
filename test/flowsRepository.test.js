@@ -42,6 +42,24 @@ test('toRow flags internal and defaults a missing ts', () => {
   assert.ok(row[1] instanceof Date); // ts defaulted to now
 });
 
+test('toRow appends vlan / in_if / out_if (migration 127), NULL when absent or out of range', () => {
+  const { COLUMNS } = require('../src/repositories/flowsRepository');
+  const at = (col) => COLUMNS.indexOf(col);
+  const row = toRow({ agentId: 1, srcIp: '10.0.0.1', dstIp: '10.0.0.2', vlan: 120, inIf: 3, outIf: 49 });
+  assert.equal(row.length, COLUMNS.length);
+  assert.deepEqual([row[at('vlan')], row[at('in_if')], row[at('out_if')]], [120, 3, 49]);
+  const none = toRow({ agentId: 1 });
+  assert.deepEqual([none[at('vlan')], none[at('in_if')], none[at('out_if')]], [null, null, null]);
+  const bad = toRow({ agentId: 1, vlan: 4095, inIf: 0, outIf: 2 ** 32 });
+  assert.deepEqual([bad[at('vlan')], bad[at('in_if')], bad[at('out_if')]], [null, null, null]);
+});
+
+test('insertMany names the three new columns in the statement', async () => {
+  const pool = makeFakePool();
+  await createFlowsRepository({ pool }).insertMany([{ agentId: 9, dstIp: '8.8.8.8', vlan: 5 }]);
+  assert.match(pool.queries[0].sql, /INSERT INTO flow_records \([^)]*\bvlan, in_if, out_if\) VALUES \?/);
+});
+
 test('insertMany bulk-inserts and returns the row count', async () => {
   const pool = makeFakePool();
   const repo = createFlowsRepository({ pool });

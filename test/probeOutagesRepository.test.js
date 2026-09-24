@@ -132,6 +132,22 @@ test('thresholds.upsert inserts a new location override when none exists', async
 
 // ---- probeResultsRepository.availability -----------------------------------
 
+test('thresholds.remove deletes the global row with IS NULL (a `= NULL` would match nothing)', async () => {
+  const pool = fakePool(() => [{ affectedRows: 1 }]);
+  const repo = createProbeThresholdsRepository({ pool });
+  assert.equal(await repo.remove({ location_id: null, metric: 'latency' }), true);
+  assert.match(pool.calls[0].sql, /DELETE FROM probe_thresholds WHERE metric = \? AND location_id IS NULL/);
+  assert.deepEqual(pool.calls[0].params, ['latency']);
+});
+
+test('thresholds.remove deletes one location override and reports a miss as false', async () => {
+  const pool = fakePool(() => [{ affectedRows: 0 }]);
+  const repo = createProbeThresholdsRepository({ pool });
+  assert.equal(await repo.remove({ location_id: 7, metric: 'packet_loss' }), false);
+  assert.match(pool.calls[0].sql, /location_id = \?/);
+  assert.deepEqual(pool.calls[0].params, ['packet_loss', 7]);
+});
+
 test('probeResults.availability computes uptime % per agent', async () => {
   const pool = fakePool((sql, params) => {
     assert.match(sql, /COUNT\(\*\) AS total/);

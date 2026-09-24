@@ -229,7 +229,12 @@ function createSettingsRouter({ settingsService, featureGate, dispatcher, analys
   // error + month/ranges). viewer+ so the Settings page can poll/show progress.
   router.get('/geoip/update', ...reader, asyncHandler(async (req, res) => {
     if (!geoipUpdater) return res.json({ update: { state: 'unavailable' } });
-    res.json({ update: geoipUpdater.status() });
+    const update = geoipUpdater.status();
+    // Where the CSV is built is a host path — an admin's to see, not a viewer's.
+    if (!(req.user && req.user.role === ROLES.ADMIN) && update && typeof update === 'object' && 'buildPath' in update) {
+      return res.json({ update: { ...update, buildPath: null } });
+    }
+    res.json({ update });
   }));
 
   return router;

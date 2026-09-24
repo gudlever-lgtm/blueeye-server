@@ -1,12 +1,12 @@
 'use strict';
 
-const { rank } = require('./config');
+const { rank, resolveAlertingEnabled } = require('./config');
 
 const silentLogger = { info() {}, warn() {}, error() {} };
 
 // Routes findings to the configured channels under two rules: a minimum
-// severity per channel, and a cooldown/dedup per (hostId, metric, kind) so the
-// same condition on the same host doesn't spam. One channel failing never stops
+// severity per channel, and a cooldown/dedup per (hostId, metric, kind,
+// severity, subject) so the same condition on the same thing doesn't spam. One channel failing never stops
 // the others — each send is caught individually.
 //
 //   const dispatcher = createDispatcher({ config, channels: { email, webhook, syslog } });
@@ -17,13 +17,29 @@ const silentLogger = { info() {}, warn() {}, error() {} };
 // `alerts_webhook`). Both default to allow so callers that don't license per
 // channel are unaffected.
 function createDispatcher({ config, channels = {}, licensed = () => true, channelLicensed = () => true, logger = silentLogger, now = () => Date.now(), silencer = null, alertLog = null }) {
-  const lastSent = new Map(); // `${hostId}|${metric}|${kind}|${severity}` -> timestamp
+  const lastSent = new Map(); // `${hostId}|${metric}|${kind}|${severity}|${subject}` -> timestamp
   let silencedBy = typeof silencer === 'function' ? silencer : null;
+
+  // WHAT the finding is about on that host: the probe/outage target (or the
+  // interface a DHCP test ran on), else the transaction test, else the switch
+  // device/port. Without it every outage on one agent shared a key, so a second
+  // target going down within the cooldown was throttled and never alerted — and
+  // so were a second DHCP interface, a second failing transaction test, and
+  // the recovery of a different target. '' for a finding about the host itself.
+  function subjectOf(f) {
+    const ev = Array.isArray(f.evidence) && f.evidence[0] && typeof f.evidence[0] === 'object' ? f.evidence[0] : {};
+    if (ev.target != null && ev.target !== '') return `target:${ev.target}`;
+    if (ev.testId != null && ev.testId !== '') return `test:${ev.testId}`;
+    if (f.deviceId != null || f.interfaceId != null) return `device:${f.deviceId ?? ''}/${f.interfaceId ?? ''}`;
+    return '';
+  }
 
   // Severity is part of the key so a cooldown started by a WARN never suppresses
   // a later CRIT escalation for the same metric — each severity throttles on its
   // own. (Repeated same-severity findings are still de-duped within the window.)
-  const throttleKey = (f) => `${f.hostId}|${f.metric}|${f.kind}|${f.severity}`;
+  // The subject is part of it so one condition on one thing throttles only
+  // itself, not the same condition on the next target.
+  const throttleKey = (f) => `${f.hostId}|${f.metric}|${f.kind}|${f.severity}|${subjectOf(f)}`;
 
   // Sends a finding-shaped subject to every enabled + licensed + severity-eligible
   // channel. Shared by dispatch() (findings) and dispatchCluster() (clusters). One
@@ -210,7 +226,18 @@ function createDispatcher({ config, channels = {}, licensed = () => true, channe
         if (st.reason) out[name].reason = st.reason;
       }
     }
-    return { enabled: Boolean(config && config.enabled), cooldownMs: config && config.cooldownMs, channels: out };
+    // The master switch with its reason (./config.js): the effective state, the
+    // operator's setting (true/false/null = automatic) and the configured
+    // channels that decide it when it is automatic.
+    const eff = resolveAlertingEnabled(config);
+    return {
+      enabled: Boolean(config && config.enabled),
+      enabledSetting: eff.setting,
+      enabledReason: eff.reason,
+      configuredChannels: eff.configuredChannels,
+      cooldownMs: config && config.cooldownMs,
+      channels: out,
+    };
   }
 
   function channelNames() { return Object.keys(channels); }

@@ -130,3 +130,48 @@ test('GET /api/baselines/flow-pair returns 503 when the repo is not wired', asyn
   const app = makeApp({ agentsRepo: agentsRepo(), flowPairBaselinesRepo: null });
   assert.equal((await get(app, '?host=7')).status, 503);
 });
+
+// ------------------------------------------------------------ pair + "now"
+// The pair detail asks for ONE flow pair and the last complete hour, so it can
+// say "normal for this hour: median ± MAD vs now" without fetching the host's
+// whole profile and without comparing against the wrong slot.
+test('?dst=&port= narrows to one pair and returns the last rolled-up hour as `current`', async () => {
+  const repo = await seeded();
+  await repo.upsertBaselines([{ srcHostId: 7, dstHostId: 11, dstPort: 22, dow: 2, hour: 14, medianBytes: 5, madBytes: 1, sampleCount: 4, observationCount: 20 }]);
+  // Tuesday 2026-09-22 14:00 UTC — the dow=2/hour=14 slot.
+  await repo.insertHourly([
+    { bucket: new Date('2026-09-22T13:00:00Z'), srcHostId: 7, dstHostId: 9, dstPort: 443, bytes: 900 },
+    { bucket: new Date('2026-09-22T14:00:00Z'), srcHostId: 7, dstHostId: 9, dstPort: 443, bytes: 2200 },
+    { bucket: new Date('2026-09-22T15:00:00Z'), srcHostId: 7, dstHostId: 11, dstPort: 22, bytes: 3 },
+  ]);
+  const app = makeApp({ agentsRepo: agentsRepo(), flowPairBaselinesRepo: repo });
+  const res = await get(app, '?host=7&dst=9&port=443');
+  assert.equal(res.status, 200);
+  assert.ok(res.body.baselines.length >= 1);
+  assert.ok(res.body.baselines.every((b) => b.dstHostId === 9 && b.dstPort === 443), 'only the asked pair');
+  // The pair's OWN latest hour (14:00), not the host's (15:00, another pair).
+  assert.deepEqual(res.body.current, {
+    bucket: '2026-09-22T14:00:00.000Z', dow: 2, hour: 14,
+    pairs: [{ dstHostId: 9, dstPort: 443, bytes: 2200 }],
+  });
+});
+
+test('`current` is null when nothing has been rolled up yet', async () => {
+  const app = makeApp({ agentsRepo: agentsRepo(), flowPairBaselinesRepo: await seeded() });
+  const res = await get(app, '?host=7&dst=9&port=443');
+  assert.equal(res.status, 200);
+  assert.equal(res.body.current, null);
+});
+
+test('?dst= and ?port= are validated (400)', async () => {
+  const app = makeApp({ agentsRepo: agentsRepo(), flowPairBaselinesRepo: await seeded() });
+  for (const qs of ['?host=7&dst=0', '?host=7&dst=abc', '?host=7&port=-1', '?host=7&port=70000', '?host=7&port=1.5']) {
+    assert.equal((await get(app, qs)).status, 400, `${qs} should be rejected`);
+  }
+});
+
+test('GET /api/baselines/flow-pair returns 500 when the hourly read fails', async () => {
+  const flowPairBaselinesRepo = makeFlowPairBaselinesRepo({ latestHourlyForHost: throwingAsync() });
+  const app = makeApp({ agentsRepo: agentsRepo(), flowPairBaselinesRepo });
+  assert.equal((await get(app, '?host=7&dst=9&port=443')).status, 500);
+});

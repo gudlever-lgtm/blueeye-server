@@ -301,3 +301,18 @@ test('an agent whose links have no history yet gets an explanation, not an empty
   const panel = fcPanel(doc);
   assert.match(panel.textContent, /enough history/i);
 });
+
+test('the negotiated duplex rides in the Link column and the named reasons sit under the badge', async (t) => {
+  const withDuplex = [
+    { iface: 'eth1', status: 'bad', virtual: false, linkDown: false, speedMbps: 100, operStatus: 'up', duplex: 'half', utilPct: 31, rxBytesPerSec: 3e6, txBytesPerSec: 8e5, errPerSec: 7, dropPerSec: 0, reasons: ['duplex_mismatch', 'fifo_overrun'] },
+    { iface: 'eth0', status: 'ok', virtual: false, linkDown: false, speedMbps: 1000, operStatus: 'up', duplex: 'full', utilPct: 4, rxBytesPerSec: 4e5, txBytesPerSec: 12e4, errPerSec: 0, dropPerSec: 0, reasons: [] },
+  ];
+  const { doc, errors } = boot({ t, routes: SESSION({ 'GET /api/interfaces': { source: 'proc', ts: '2026-09-24T10:00:00.000Z', interfaces: withDuplex } }) });
+  await settle();
+  assert.deepEqual(errors, []);
+  const row = (n) => rows(doc).find((tr) => tr.querySelector('td').textContent.trim() === n);
+  assert.match(row('eth1').textContent, /100 Mb\/s · half duplex · up/);
+  assert.match(row('eth1').textContent, /duplex mismatch suspected/);
+  assert.match(row('eth1').textContent, /NIC FIFO overruns/);
+  assert.match(row('eth0').textContent, /1 Gb\/s · full duplex · up/);
+});

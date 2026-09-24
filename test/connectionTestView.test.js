@@ -22,6 +22,17 @@ const { makeApp, tokenFor, makeAgentsRepo, makeTestPackagesRepo } = require('../
 const PUBLIC = path.join(__dirname, '..', 'public');
 const html = fs.readFileSync(path.join(PUBLIC, 'index.html'), 'utf8');
 const tick = (ms = 150) => new Promise((r) => setTimeout(r, ms));
+// Waits for a condition instead of a fixed pause: the dashboard loads more
+// scripts than it used to, and under a loaded CI runner a fixed 250-300 ms was
+// not always enough for the view to render. Polls up to `ms`, then returns.
+async function until(pred, ms = 15000) {
+  const end = Date.now() + ms;
+  while (Date.now() < end) {
+    try { if (pred()) return true; } catch { /* not there yet */ }
+    await tick(25); // eslint-disable-line no-await-in-loop
+  }
+  return false;
+}
 
 const AGENTS = [{ id: 1, hostname: 'probe-01', display_name: 'probe-01', status: 'online', capabilities: {}, meta: {}, monitor_config: {} }];
 
@@ -79,12 +90,14 @@ const byText = (doc, sel, re) => [...doc.querySelectorAll(sel)].find((e) => re.t
 
 // Probes & Tests → the Connection test sub-tab.
 async function open(doc) {
+  await until(() => doc.querySelector('.tabs button[data-view="probes"]'));
   doc.querySelector('.tabs button[data-view="probes"]').click();
-  await tick(250);
+  await until(() => byText(doc, '.subtabs button', /Connection test/));
   const tab = byText(doc, '.subtabs button', /Connection test/);
   assert.ok(tab, 'no Connection test sub-tab');
   tab.click();
-  await tick(300);
+  await until(() => doc.querySelector('.connection-test .ct-target input') && doc.querySelector('.ct-actions button'));
+  await tick(50);
   return tab;
 }
 

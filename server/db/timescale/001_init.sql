@@ -94,6 +94,16 @@ CREATE INDEX IF NOT EXISTS idx_flows_agent_ts   ON flow_records (agent_id, ts DE
 CREATE INDEX IF NOT EXISTS idx_flows_country_ts ON flow_records (country, ts DESC);
 CREATE INDEX IF NOT EXISTS idx_flows_asn_ts     ON flow_records (asn, ts DESC);
 
+-- Mirrors MySQL migration 127: the 802.1Q VLAN and the exporter's in/out
+-- ifIndex, NULL whenever the agent did not report them (NetFlow v5, older
+-- agents). Nullable, no defaults — re-running this file on an existing node is
+-- the forward migration; until it has been, the mirror
+-- (src/repositories/flowsTsdbRepository.js) writes the columns above and logs
+-- that the node needs it. ifIndex is an unsigned 32-bit value, hence BIGINT.
+ALTER TABLE flow_records ADD COLUMN IF NOT EXISTS vlan   INTEGER;
+ALTER TABLE flow_records ADD COLUMN IF NOT EXISTS in_if  BIGINT;
+ALTER TABLE flow_records ADD COLUMN IF NOT EXISTS out_if BIGINT;
+
 -- ---------------------------------------------------------------------
 -- probe_results  (MySQL `probe_results`; ts already present)
 --   HIGH volume but not extreme; MEDIUM cardinality -> no space partition.
@@ -124,6 +134,25 @@ SELECT create_hypertable(
 
 CREATE INDEX IF NOT EXISTS idx_probe_agent_ts        ON probe_results (agent_id, ts DESC);
 CREATE INDEX IF NOT EXISTS idx_probe_agent_type_tgt  ON probe_results (agent_id, type, target, ts DESC);
+
+-- The probe fields MySQL gained after this file first shipped, so the mirror
+-- (src/repositories/probeResultsTsdbRepository.js) can carry a result whole:
+-- the HTTP page profile, the path-MTU verdict (MySQL migration 096), the
+-- certificate and reverse-DNS answer (101), why a dns/tcp probe failed (121)
+-- and the DHCP offers (132). Nullable, no defaults — re-running this file on
+-- an existing node is the forward migration; until it has been, the mirror
+-- writes the columns above and logs that the node needs it.
+ALTER TABLE probe_results ADD COLUMN IF NOT EXISTS bytes        BIGINT;
+ALTER TABLE probe_results ADD COLUMN IF NOT EXISTS content_type TEXT;
+ALTER TABLE probe_results ADD COLUMN IF NOT EXISTS elements     JSONB;
+ALTER TABLE probe_results ADD COLUMN IF NOT EXISTS mtu          JSONB;
+ALTER TABLE probe_results ADD COLUMN IF NOT EXISTS sizes        JSONB;
+ALTER TABLE probe_results ADD COLUMN IF NOT EXISTS tls          JSONB;
+ALTER TABLE probe_results ADD COLUMN IF NOT EXISTS rdns         JSONB;
+ALTER TABLE probe_results ADD COLUMN IF NOT EXISTS error_code   TEXT;
+ALTER TABLE probe_results ADD COLUMN IF NOT EXISTS failure      TEXT;
+ALTER TABLE probe_results ADD COLUMN IF NOT EXISTS resolver     TEXT;
+ALTER TABLE probe_results ADD COLUMN IF NOT EXISTS dhcp         JSONB;
 
 -- ---------------------------------------------------------------------
 -- findings  (MySQL `findings`; created_at -> ts)
@@ -303,6 +332,10 @@ CREATE INDEX IF NOT EXISTS idx_devevt_type     ON device_events (event_type, ts 
 CREATE INDEX IF NOT EXISTS idx_devevt_severity ON device_events (severity, ts DESC);
 CREATE INDEX IF NOT EXISTS idx_devevt_agent    ON device_events (agent_id, ts DESC);
 CREATE INDEX IF NOT EXISTS idx_devevt_dedup    ON device_events (dedup_key, ts DESC);
+-- The polled SWITCH that sent it (MySQL migration 133). device_id is an agent
+-- id; a switch's own syslog/traps are tied to it through this column instead.
+ALTER TABLE device_events ADD COLUMN IF NOT EXISTS snmp_device_id INTEGER;
+CREATE INDEX IF NOT EXISTS idx_devevt_snmp_device ON device_events (snmp_device_id, ts DESC);
 
 -- =====================================================================
 -- 2. RETENTION POLICIES  (explicit windows; no defaults)

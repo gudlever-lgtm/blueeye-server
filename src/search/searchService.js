@@ -27,6 +27,12 @@ function createSearchService({
   flowsRepo = null,
   arpEntriesRepo = null,
   fdbEntriesRepo = null,
+  // A polled router's ARP table (migration 125): IP↔MAC on segments no agent
+  // sits on — in a flat OT network, every device the router routes for.
+  deviceArpRepo = null,
+  // The polled devices themselves: by name, host, model, serial (ENTITY-MIB)
+  // and sysLocation, and the "where" line every device hit carries.
+  snmpDevicesRepo = null,
   lldpNeighborsRepo = null,
   discoveredDevicesRepo = null,
   cmdbSearch = null,
@@ -52,6 +58,40 @@ function createSearchService({
   const agentLabel = (a) => a.display_name || a.hostname || `agent ${a.id}`;
   const agentTarget = (id) => `agent:${id}`;
   const snmpDeviceTarget = (id) => `snmp-device:${id}`;
+
+  // The polled devices and the site names, read at most ONCE per search and
+  // only when a resolver asks — most queries never touch a switch. A failure
+  // is the asking resolver's failure, reported like any other.
+  function lazy(ctx, key, load) {
+    if (!ctx[key]) ctx[key] = Promise.resolve().then(load);
+    return ctx[key];
+  }
+  const loadDevices = (ctx) => lazy(ctx, 'devicesP', async () => {
+    if (!snmpDevicesRepo || typeof snmpDevicesRepo.list !== 'function') return new Map();
+    const rows = (await snmpDevicesRepo.list({})) || [];
+    return new Map(rows.map((d) => [Number(d.id), d]));
+  });
+  const loadSites = (ctx) => lazy(ctx, 'sitesP', async () => {
+    if (!locationsRepo || typeof locationsRepo.findAll !== 'function') return new Map();
+    try {
+      const rows = (await locationsRepo.findAll()) || [];
+      return new Map(rows.map((l) => [Number(l.id), l.name]));
+    } catch { return new Map(); } // a label, not the answer: never fails the resolver
+  });
+  // Both, for a hit's labels. A label must never cost the answer it labels,
+  // so a failed read here is an unlabelled hit, not a failed resolver.
+  const labels = async (ctx) => {
+    try { return await Promise.all([loadDevices(ctx), loadSites(ctx)]); } catch { return [new Map(), new Map()]; }
+  };
+  const deviceLabel = (d, fallback) => (d ? (d.displayName || d.host) : null) || fallback;
+  // WHERE a device is: its site, and — when the device says so — the room or
+  // rack its sysLocation names. "Aarhus · Bygning 3, rum 2.14, rack B" is an
+  // answer a technician can walk to; the site alone is a building.
+  const whereOf = (d, sites) => {
+    if (!d) return null;
+    const site = d.locationId != null ? (sites.get(Number(d.locationId)) || `site ${d.locationId}`) : null;
+    return [site, d.sysLocation || null].filter(Boolean).join(' · ') || null;
+  };
 
   // --- resolvers -------------------------------------------------------------
   // Each takes (ctx) and returns an array of hits. Each may throw; the caller
@@ -94,6 +134,32 @@ function createSearchService({
           source: `arp_entries (${r.source})`,
           last_seen: r.lastSeen,
           detail: seenBy ? `seen by ${agentLabel(seenBy)}${r.interface ? ` on ${r.interface}` : ''}` : null,
+        }));
+      }
+    }
+
+    // (d) A polled ROUTER holds the address in its ARP table. As exact as (b):
+    //     it is the router's own binding. The hit opens the router, and says
+    //     which interface (the SVI — "Vlan20" — names the segment) and where
+    //     the router is.
+    if (deviceArpRepo && typeof deviceArpRepo.findByIp === 'function') {
+      const rows = await deviceArpRepo.findByIp({ ip: q, limit: 25 });
+      const [devices, sites] = rows.length ? await labels(ctx) : [new Map(), new Map()];
+      for (const r of rows) {
+        const d = devices.get(Number(r.deviceId));
+        const router = deviceLabel(d, r.deviceName || r.deviceHost || `device ${r.deviceId}`);
+        hits.push(makeHit({
+          type: 'ip',
+          display_name: `${q} → ${r.mac}`,
+          target: snmpDeviceTarget(r.deviceId),
+          confidence: 'exact',
+          source: 'device_arp_entries (snmp)',
+          last_seen: r.lastSeen,
+          detail: [
+            `in the ARP table of ${router}${r.ifName ? ` on ${r.ifName}` : ''}`,
+            whereOf(d, sites),
+            r.macChangedAt ? `binding changed ${r.macChangedAt}` : null,
+          ].filter(Boolean).join(' · ') || null,
         }));
       }
     }
@@ -151,6 +217,30 @@ function createSearchService({
       }
     }
 
+    // A polled router's ARP table: which ADDRESS this MAC holds, on segments
+    // no agent sits on.
+    if (deviceArpRepo && typeof deviceArpRepo.findByMac === 'function') {
+      const rows = await deviceArpRepo.findByMac({ mac, limit: 25 });
+      const [devices, sites] = rows.length ? await labels(ctx) : [new Map(), new Map()];
+      for (const r of rows) {
+        const d = devices.get(Number(r.deviceId));
+        const router = deviceLabel(d, r.deviceName || r.deviceHost || `device ${r.deviceId}`);
+        hits.push(makeHit({
+          type: 'mac',
+          display_name: `${mac} → ${r.ip}`,
+          target: snmpDeviceTarget(r.deviceId),
+          confidence: 'exact',
+          source: 'device_arp_entries (snmp)',
+          last_seen: r.lastSeen,
+          detail: [
+            `in the ARP table of ${router}${r.ifName ? ` on ${r.ifName}` : ''}`,
+            whereOf(d, sites),
+            r.macChangedAt ? `binding changed ${r.macChangedAt}` : null,
+          ].filter(Boolean).join(' · ') || null,
+        }));
+      }
+    }
+
     // The forwarding table: which SWITCH PORT this MAC is on. The only hit that
     // gives a PHYSICAL address, which is why it exists — everything else on
     // this screen tells a technician what the device is, and this one tells
@@ -161,6 +251,9 @@ function createSearchService({
     // one more hop to go. Without it the hit is a lead, not an answer.
     if (fdbEntriesRepo && typeof fdbEntriesRepo.findByMac === 'function') {
       const rows = await fdbEntriesRepo.findByMac(mac, { limit: 25 });
+      // The switch's site and room/rack, for the "where to walk" line. Only
+      // read when there is a hit, and a label must never cost the answer.
+      const [devices, sites] = rows.length ? await labels(ctx) : [new Map(), new Map()];
       for (const r of rows) {
         const where = r.ifName || `bridge port ${r.bridgePort}`;
         const switchName = r.deviceName || r.deviceHost || `device ${r.deviceId}`;
@@ -182,6 +275,7 @@ function createSearchService({
             // a port number the bridge-port table could not name, and a
             // technician deserves to know the name is missing rather than wrong.
             r.ifName ? null : 'the switch did not name this port',
+            whereOf(devices.get(Number(r.deviceId)), sites),
           ].filter(Boolean).join(' · ') || null,
         }));
       }
@@ -242,6 +336,78 @@ function createSearchService({
       }));
     }
 
+    return hits;
+  }
+
+  // 3b. Polled devices (snmp_devices) — the switches and routers themselves.
+  //
+  // Matches the name and address an admin gave the device, what the device
+  // says it is (the ENTITY-MIB model), its SERIAL — the number on the box and
+  // on the RMA, including every member of a stack and every module with one
+  // (device_inventory) — and its sysLocation, so "rack B" finds what is in
+  // rack B. Every hit carries WHERE: the site and, when the device says so,
+  // the room or rack.
+  async function resolveSnmpDevice(ctx) {
+    if (!snmpDevicesRepo || typeof snmpDevicesRepo.list !== 'function') return [];
+    const { lower, q } = ctx;
+    const [devices, sites] = await Promise.all([loadDevices(ctx), loadSites(ctx)]);
+    const best = new Map(); // deviceId -> { confidence, via }
+    const RANK = { exact: 0, high: 1, medium: 2 };
+    const offer = (id, confidence, via) => {
+      const cur = best.get(id);
+      if (!cur || RANK[confidence] < RANK[cur.confidence]) best.set(id, { confidence, via });
+    };
+    const score = (value, { substring = true } = {}) => {
+      const v = String(value || '').toLowerCase();
+      if (!v) return null;
+      if (v === lower) return 'exact';
+      if (v.startsWith(lower)) return 'high';
+      return substring && v.includes(lower) ? 'medium' : null;
+    };
+    for (const d of devices.values()) {
+      const hw = d.hardware || {};
+      const fields = [
+        [d.host, 'host'], [d.displayName, 'name'], [hw.serial, 'serial'],
+        [hw.model, 'model'], [d.sysLocation, 'sysLocation'],
+        // What the device calls itself (migration 133) — the name a
+        // technician reads off the prompt or an LLDP neighbour table.
+        [d.sysName, 'sysName'],
+      ];
+      for (const [value, via] of fields) {
+        // A serial matches exactly or by prefix — a substring of a serial is
+        // a coincidence, not a lead.
+        const c = score(value, { substring: via !== 'serial' });
+        if (c) offer(Number(d.id), c, via);
+      }
+    }
+    // Every chassis and module, not just the first: the RMA is for member 3.
+    if (typeof snmpDevicesRepo.findBySerial === 'function' && q.length >= 4) {
+      const rows = (await snmpDevicesRepo.findBySerial(q, { limit: 10 })) || [];
+      for (const r of rows) {
+        const exact = String(r.serial || '').toLowerCase() === lower;
+        offer(Number(r.deviceId), exact ? 'exact' : 'high',
+          `${r.class === 'module' ? 'module' : 'chassis'} serial ${r.serial}${r.name ? ` (${r.name})` : ''}`);
+      }
+    }
+    const hits = [];
+    for (const [id, { confidence, via }] of best) {
+      const d = devices.get(id);
+      if (!d) continue;
+      const hw = d.hardware || {};
+      hits.push(makeHit({
+        type: 'device',
+        display_name: (d.displayName || d.sysName) ? `${d.displayName || d.sysName} (${d.host})` : d.host,
+        target: snmpDeviceTarget(id),
+        confidence,
+        source: via.includes('serial') && via !== 'serial' ? 'device_inventory' : 'snmp_devices',
+        last_seen: d.lastOkAt || null,
+        detail: [
+          whereOf(d, sites),
+          [hw.model, hw.serial ? `S/N ${hw.serial}` : null].filter(Boolean).join(' ') || null,
+          via === 'host' || via === 'name' ? null : `matched ${via}`,
+        ].filter(Boolean).join(' · ') || null,
+      }));
+    }
     return hits;
   }
 
@@ -580,6 +746,7 @@ function createSearchService({
     { family: 'mac', name: 'mac', run: resolveMac },
     { family: 'host', name: 'host', run: resolveHost },
     { family: 'host', name: 'discovered', run: resolveDiscovered },
+    { family: 'host', name: 'snmpDevice', run: resolveSnmpDevice },
     { family: 'site', name: 'site', run: resolveSite },
     { family: 'agentId', name: 'agentId', run: resolveAgentId },
     { family: 'service', name: 'service', run: resolveService },

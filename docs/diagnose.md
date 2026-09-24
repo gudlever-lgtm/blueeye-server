@@ -148,7 +148,7 @@ one file: `FACT_SCHEMA` (every path a playbook may name) and `buildFacts()`
 | `path_mtu.*` | the path_mtu probe |
 | `traceroute.*` | hop count, branch count (ECMP), sustained loss, worst hop, a lost ECMP member (`lost_member_*`) |
 | `dns.*`, `http.*`, `tcp.*` | the other probes |
-| `iface.*` | `computeInterfaceHealth()` for the session's agent, including `late_coll_per_sec` (EtherLike-MIB, SNMP only) |
+| `iface.*` | `computeInterfaceHealth()` for the session's agent, including `late_coll_per_sec` (EtherLike-MIB, SNMP only) and, from the agent's proc source (0.40+), `duplex`, `collisions_per_sec`, `frame_err_per_sec`, `carrier_err_per_sec` |
 | `reverse.*` | the same measurements taken from the FAR end |
 | `path_compare.*` | whether the two directions traverse the same routers (`same_hops`, plus `matched_hops`, `match_ratio`, `method`) |
 
@@ -209,6 +209,14 @@ Three judgements worth knowing about:
   The interface layer is deliberately **strict** about it where it coerces the
   other counters: `Number([])` is 0, and a coercion that turns junk into the most
   consequential answer available is worse than no reading at all.
+- **`duplex` / `collisions_per_sec` / `frame_err_per_sec` / `carrier_err_per_sec`**
+  are the host NIC's own view (`/sys/class/net/<if>/duplex` and the
+  frame/colls/carrier columns of `/proc/net/dev`, see
+  [docs/probe-dhcp.md](probe-dhcp.md)). Half duplex with collisions or frame
+  errors moving confirms `duplex_mismatch`; a MEASURED clean full-duplex link
+  rules it out; frame errors at full duplex and carrier errors confirm
+  `physical_errors`. They follow the same absent-is-not-zero rule: Windows,
+  macOS and SNMP samples do not carry them, and the rules then read `unknown`.
 
 ---
 
@@ -376,7 +384,7 @@ but an un-updated fleet cannot confirm an MTU blackhole.
 | `congestion` | bad at peak | discards with high utilisation |
 | `dns_resolution` | works by IP, not by name | DNS probe |
 | `l2_loop` | everything slow at once, in bursts | wild jitter, many ports busy together |
-| `duplex_mismatch` | slow, worse under load | errors rising with utilisation |
+| `duplex_mismatch` | slow, worse under load | late collisions; half duplex + collisions/frame errors on the host NIC; errors rising with utilisation |
 
 ---
 

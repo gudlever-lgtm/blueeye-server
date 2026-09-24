@@ -22,14 +22,14 @@ const html = fs.readFileSync(path.join(PUBLIC, 'index.html'), 'utf8');
 const appJs = fs.readFileSync(path.join(PUBLIC, 'app.js'), 'utf8');
 const Routes = require('../public/routes.js');
 
-function boot({ t, url = 'http://server.test/docs', role = 'admin' } = {}) {
+function boot({ t, url = 'http://server.test/docs', role = 'admin', locale = null } = {}) {
   const errors = [];
   const vc = new VirtualConsole();
   vc.on('jsdomError', (e) => errors.push(String((e && e.message) || e)));
   const dom = new JSDOM(html, { url, runScripts: 'outside-only', pretendToBeVisual: true, virtualConsole: vc });
   const { window } = dom;
   const routes = {
-    'GET /me': { id: 1, email: 'x@y.dk', role, preferences: {} },
+    'GET /me': { id: 1, email: 'x@y.dk', role, preferences: locale ? { locale } : {} },
     'GET /auth/sso': { methods: [] },
     'GET /license': { plan: 'professional', features: {} },
   };
@@ -61,7 +61,9 @@ const tabsOf = (strip) => [...strip.querySelectorAll('[role="tab"]')];
 // list routes.js has to carry.
 function docsIds() {
   const seg = appJs.slice(appJs.indexOf('const DOCS = ['), appJs.indexOf('// ---- Documentation (SHELL MIGRATED'));
-  return [...seg.matchAll(/^ {8}id: '([^']+)', title: '([^']+)'/gm)].map((m) => m[1]);
+  // A title is a literal, or a getter over t() for an article that has been
+  // moved into the catalogue (agent-offline).
+  return [...seg.matchAll(/^ {8}id: '([^']+)', (?:title: '[^']+'|get title\(\) \{ return t\('[^']+'\); \})/gm)].map((m) => m[1]);
 }
 
 test('every article has a route — a new one without an address fails here', () => {
@@ -188,4 +190,22 @@ test('the article panel is the only frame — no box inside a box', async (t) =>
   await settle();
   assert.equal(doc.querySelectorAll('#view .panel-ui').length, 1);
   assert.equal(doc.querySelectorAll('#view .empty.error, #view .data-card, #view .settings-card').length, 0);
+});
+
+// The agent-offline article went through the catalogue (docs.ao.*): the page
+// somebody reads with an agent down is the last one to leave in one language.
+test('the agent-offline article reads in the reader\'s language, title and all', async (t) => {
+  const en = boot({ t, url: 'http://server.test/docs/agent-offline' });
+  await settle();
+  assert.deepEqual(en.errors, []);
+  assert.match(en.doc.querySelector('#view').textContent, /Work from the server outward/);
+  assert.match(en.doc.querySelector('#view').textContent, /What to expect/);
+
+  const da = boot({ t, url: 'http://server.test/docs/agent-offline', locale: 'da' });
+  await settle();
+  const text = da.doc.querySelector('#view').textContent;
+  assert.match(text, /Arbejd fra serveren og udad/);
+  assert.match(text, /Hvad du kan forvente/);
+  assert.match(text, /En agent er offline/);
+  assert.doesNotMatch(text, /Work from the server outward|docs\.ao\./);
 });

@@ -27,9 +27,15 @@ function createPurge({ repo, config, now = () => new Date() }) {
     // ARP/neighbour entries. Guarded like the config snapshots above so older
     // wiring (or a test repo without the dimension) simply skips it.
     let arpEntries = 0;
+    // A polled router's ARP table (migration 125) is the same identity source
+    // seen from a device, so it ages on the SAME window (RETENTION_ARP_DAYS).
+    let deviceArpEntries = 0;
     if (config.arpRetentionDays && typeof repo.purgeArpEntriesBefore === 'function') {
       const arpCut = new Date(t - config.arpRetentionDays * DAY_MS);
       arpEntries = await repo.purgeArpEntriesBefore(arpCut);
+      if (typeof repo.purgeDeviceArpEntriesBefore === 'function') {
+        deviceArpEntries = await repo.purgeDeviceArpEntriesBefore(arpCut);
+      }
     }
     // Device events (syslog/traps). Guarded like the dimensions above. On a
     // TSDB deployment this is a no-op: the hypertable expires them with a
@@ -105,12 +111,13 @@ function createPurge({ repo, config, now = () => new Date() }) {
     const topologyChanges = await byAge(config.topologyChangeRetentionDays, 'purgeTopologyChangesBefore');
     const discoveredDevices = await byAge(config.discoveredDeviceRetentionDays, 'purgeStaleDiscoveredDevicesBefore');
     const hostConnections = await byAge(config.hostConnectionRetentionDays, 'purgeHostConnectionsBefore');
+    const knownDevices = await byAge(config.knownDeviceRetentionDays, 'purgeKnownDevicesBefore');
     const auditEvents = await byAge(config.auditEventRetentionDays, 'purgeAuditEventsBefore');
     return {
-      flowRollups, metricRollups, internalFlowRollups, findings, configSnapshots, arpEntries, deviceEvents,
+      flowRollups, metricRollups, internalFlowRollups, findings, configSnapshots, arpEntries, deviceArpEntries, deviceEvents,
       fdbEntries, snmpNeighbors, deviceVlans, fdbMoves, burstRuns, deviceCounters, deviceInterfaces, interfaceTransitions, interfaceStates,
       probeResults, probeOutages, speedtestResults, transactionResults, topologyChanges, discoveredDevices,
-      hostConnections, auditEvents,
+      hostConnections, knownDevices, auditEvents,
     };
   }
 

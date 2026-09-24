@@ -83,12 +83,16 @@ function createDiscoveredDevicesRepository(db) {
     const needle = String(q == null ? '' : q).trim();
     if (!needle) return [];
     const lim = Number.isInteger(limit) && limit > 0 && limit <= 100 ? limit : 10;
-    // ESCAPE '\\' so a literal % or _ in the query is matched as itself rather
-    // than as a wildcard.
+    // A literal % or _ in the query is matched as itself rather than as a
+    // wildcard: each is backslash-escaped, and backslash is MySQL's default LIKE
+    // escape. No ESCAPE clause — written inside this template literal, ESCAPE
+    // '\\' reached MySQL as ESCAPE '\' (an unterminated string), a syntax error
+    // that the search route swallowed, so discovered devices never appeared in
+    // search results (found by scripts/verify-routes against MySQL).
     const like = `%${needle.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
     const [rows] = await pool.query(
       `SELECT ${COLS} FROM discovered_devices
-        WHERE status <> 'ignored' AND (ip = ? OR hostname LIKE ? ESCAPE '\\')
+        WHERE status <> 'ignored' AND (ip = ? OR hostname LIKE ?)
         ORDER BY (ip = ?) DESC, last_seen DESC, id DESC
         LIMIT ?`,
       [needle, like, needle, lim],

@@ -85,8 +85,8 @@
       "view": "interfaces",
       "params": {},
       "look_for": {
-        "en": "Late collisions above zero is the specific signature, and BlueEyes now reads it over SNMP. Beside it, errors climbing WITH utilisation and a negotiated speed below what the port should do.",
-        "da": "Late collisions over nul er den præcise signatur, og BlueEyes læser den nu over SNMP. Ved siden af den: fejl der stiger MED forbruget, og en forhandlet hastighed under hvad porten burde kunne."
+        "en": "Late collisions above zero is the specific signature, and BlueEyes now reads it over SNMP. Beside it, errors climbing WITH utilisation and a negotiated speed below what the port should do. For the agent's own NIC the Link column shows the negotiated duplex, and a half-duplex link whose collisions or frame errors are moving is flagged “duplex mismatch suspected”.",
+        "da": "Late collisions over nul er den præcise signatur, og BlueEyes læser den nu over SNMP. Ved siden af den: fejl der stiger MED forbruget, og en forhandlet hastighed under hvad porten burde kunne. For agentens eget netkort viser Link-kolonnen den forhandlede duplex, og et halv-duplex-link hvis kollisioner eller frame-fejl stiger, markeres “duplex mismatch mistænkt”."
       }
     },
     {
@@ -106,6 +106,33 @@
       "because": {
         "en": "Late collisions are being counted. On a switched link that is a duplex mismatch almost by definition — a collision detected after the first 64 bytes is far too late to be ordinary contention — and it is only ever counted on the half-duplex end, which is the end you are looking at.",
         "da": "Der tælles late collisions. På et switchet link er det næsten per definition en duplex mismatch — en kollision opdaget efter de første 64 bytes er alt for sent til at være almindelig kontention — og den tælles kun i halv-duplex-enden, hvilket er den ende du kigger på."
+      }
+    },
+    {
+      "id": "half_duplex_collisions",
+      "when": "iface.duplex == 'half' && iface.collisions_per_sec > 0",
+      "effect": "confirm",
+      "because": {
+        "en": "This host's NIC negotiated HALF duplex and is counting collisions. A switched port never collides at full duplex, so the partner is running full and every frame it sends while this end transmits is a collision here.",
+        "da": "Denne værts netkort har forhandlet HALV duplex og tæller kollisioner. En switchet port kolliderer aldrig ved fuld duplex, så modparten kører fuld, og hver frame den sender mens denne ende sender, er en kollision her."
+      }
+    },
+    {
+      "id": "half_duplex_frame_errors",
+      "when": "iface.duplex == 'half' && iface.frame_err_per_sec > 0",
+      "effect": "confirm",
+      "because": {
+        "en": "This host's NIC is at half duplex and receiving damaged frames (frame/CRC errors) — the partner's full-duplex transmissions being cut off by this end's collision handling.",
+        "da": "Denne værts netkort kører halv duplex og modtager ødelagte frames (frame/CRC-fejl) — modpartens fuld-duplex-transmissioner, der bliver afbrudt af denne endes kollisionshåndtering."
+      }
+    },
+    {
+      "id": "full_duplex_clean",
+      "when": "iface.duplex == 'full' && iface.collisions_per_sec == 0 && iface.frame_err_per_sec == 0",
+      "effect": "rule_out",
+      "because": {
+        "en": "This host's NIC is at full duplex with no collisions and no frame errors. Were the partner at half duplex, this end would be counting damaged frames whenever both transmit. Only a measured zero decides this: a source that cannot read the counters reports nothing, not zero.",
+        "da": "Denne værts netkort kører fuld duplex uden kollisioner og uden frame-fejl. Kørte modparten halv duplex, ville denne ende tælle ødelagte frames, når begge sender. Kun et målt nul afgør det: en kilde der ikke kan læse tællerne, rapporterer ingenting, ikke nul."
       }
     },
     {

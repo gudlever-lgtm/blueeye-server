@@ -7,7 +7,7 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 
 const { createCrossAgentClusterService } = require('../src/analysis/crossAgentClusterService');
-const { makeEventClustersRepo, makeFindingStore, makeAgentsRepo, makeDispatcher, makeAlertDispatchLogRepo } = require('../test-support/fakes');
+const { makeEventClustersRepo, makeEventCasesRepo, makeFindingStore, makeAgentsRepo, makeDispatcher, makeAlertDispatchLogRepo } = require('../test-support/fakes');
 
 const T = new Date('2026-07-01T12:00:00Z');
 const ago = (ms) => new Date(T.getTime() - ms);
@@ -106,16 +106,130 @@ test('a throwing evidence capture never breaks the clustering sweep', async () =
   assert.equal(repo.rows.length, 1); // the cluster was still created
 });
 
-test('two agents, same site, different metric -> MEDIUM cluster', async () => {
+// DELIBERATE CHANGE (audit §8): this used to assert a MEDIUM cluster for cpu
+// on one agent + mem on another just because they share a site — two unrelated
+// subjects merged into one situation. Without a topology relation they now stay
+// apart; the same target from two agents is what groups (next test).
+test('two agents, same site, unrelated subjects (cpu vs mem) -> NO cluster', async () => {
   const { svc, repo } = svcWith({
     findings: [
       finding({ id: 'a', hostId: '1', metric: 'cpu', createdAt: ago(90000) }),
       finding({ id: 'b', hostId: '2', metric: 'mem', createdAt: ago(30000) }),
     ],
   });
+  const summary = await svc.detectAndPersist();
+  assert.equal(summary.created, 0);
+  assert.equal(repo.rows.length, 0);
+});
+
+test('the same target failing from two sites -> one cluster that stores WHY (grouping basis)', async () => {
+  const { svc, repo } = svcWith({
+    agents: [{ id: 1, location_id: 10 }, { id: 2, location_id: 20 }],
+    findings: [
+      finding({ id: 'a', hostId: '1', metric: 'probe.reachability', evidence: [{ target: 'erp.example.com' }], createdAt: ago(90000) }),
+      finding({ id: 'b', hostId: '2', metric: 'probe.loss', evidence: [{ target: 'https://erp.example.com/' }], createdAt: ago(30000) }),
+    ],
+  });
   await svc.detectAndPersist();
   assert.equal(repo.rows.length, 1);
-  assert.equal(repo.rows[0].confidence, 'medium');
+  assert.equal(repo.rows[0].confidence, 'medium'); // shared target, mixed conditions
+  assert.deepEqual(repo.rows[0].grouping_basis.subjects, ['target:erp.example.com']);
+  assert.equal(repo.rows[0].grouping_basis.reasons[0].kind, 'target');
+});
+
+test('a recurring fault on the SAME target joins its open cluster even when the old members aged out', async () => {
+  const { svc, repo, findingStore } = svcWith({
+    agents: [{ id: 1, location_id: 10 }, { id: 2, location_id: 20 }],
+    findings: [
+      finding({ id: 'a', hostId: '1', metric: 'probe.loss', evidence: [{ target: 'erp.example.com' }], createdAt: ago(90000) }),
+      finding({ id: 'b', hostId: '2', metric: 'probe.loss', evidence: [{ target: 'erp.example.com' }], createdAt: ago(30000) }),
+    ],
+  });
+  await svc.detectAndPersist();
+  // The first pair scrolls out of the detection window; the probe re-raises.
+  findingStore.rows.length = 0;
+  findingStore.rows.push({ ...finding({ id: 'c', hostId: '1', metric: 'probe.loss', evidence: [{ target: 'erp.example.com' }], createdAt: ago(20000) }), acked: false });
+  findingStore.rows.push({ ...finding({ id: 'd', hostId: '2', metric: 'probe.loss', evidence: [{ target: 'erp.example.com' }], createdAt: ago(10000) }), acked: false });
+  const s2 = await svc.detectAndPersist();
+  assert.equal(s2.created, 0);
+  assert.equal(s2.updated, 1);
+  assert.equal(repo.rows.length, 1);
+  assert.deepEqual(repo.rows[0].member_finding_ids.slice().sort(), ['a', 'b', 'c', 'd']);
+});
+
+test('a cluster is stamped on the event cases of its member findings', async () => {
+  const eventCasesRepo = makeEventCasesRepo();
+  const c1 = await eventCasesRepo.create({ host_id: '1', title: 't1', first_event_at: ago(90000), last_event_at: ago(90000) });
+  const c2 = await eventCasesRepo.create({ host_id: '2', title: 't2', first_event_at: ago(30000), last_event_at: ago(30000) });
+  const repo = makeEventClustersRepo();
+  const findingStore = makeFindingStore();
+  findingStore.rows.push({ ...finding({ id: 'a', hostId: '1', metric: 'probe.loss', createdAt: ago(90000) }), eventCaseId: c1, acked: false });
+  findingStore.rows.push({ ...finding({ id: 'b', hostId: '2', metric: 'probe.loss', createdAt: ago(30000) }), eventCaseId: c2, acked: false });
+  const svc = createCrossAgentClusterService({
+    clustersRepo: repo, findingStore, eventCasesRepo, now: () => T,
+    agentsRepo: makeAgentsRepo({ findAll: async () => [{ id: 1, location_id: 10 }, { id: 2, location_id: 10 }] }),
+  });
+  await svc.detectAndPersist();
+  assert.equal(repo.rows.length, 1);
+  const cases = await eventCasesRepo.listByCluster(repo.rows[0].id);
+  assert.deepEqual(cases.map((c) => c.id), [c1, c2]);
+  assert.equal((await eventCasesRepo.findById(c1)).clusterId, repo.rows[0].id);
+});
+
+test('a switch finding + a finding from a downstream agent cluster via the blast-radius graph', async () => {
+  const repo = makeEventClustersRepo();
+  const findingStore = makeFindingStore();
+  findingStore.rows.push({ ...finding({ id: 'a', hostId: '1', metric: 'if.4.link.down', createdAt: ago(90000) }), deviceId: 9, interfaceId: 4, acked: false });
+  findingStore.rows.push({ ...finding({ id: 'b', hostId: '2', metric: 'probe.loss', evidence: [{ target: 'erp.example.com' }], createdAt: ago(30000) }), acked: false });
+  // Switch d:9 cuts off agent 2 (an L2 edge between them).
+  const blastRadiusService = {
+    maxDepth: 4,
+    graph: async () => ({ nodes: [{ id: 'd:9' }, { id: 2 }], edges: [{ source: 'd:9', target: 2, type: 'l2_link' }] }),
+  };
+  const svc = createCrossAgentClusterService({
+    clustersRepo: repo, findingStore, blastRadiusService, now: () => T,
+    agentsRepo: makeAgentsRepo({ findAll: async () => [{ id: 1, location_id: 10 }, { id: 2, location_id: 20 }] }),
+  });
+  await svc.detectAndPersist();
+  assert.equal(repo.rows.length, 1);
+  assert.equal(repo.rows[0].grouping_basis.reasons[0].kind, 'upstream');
+});
+
+// graph() is six full-table reads; the sweep runs about once a minute while a
+// device finding is in the window. It used to be rebuilt on every sweep.
+test('the blast-radius graph is cached across sweeps for graphTtlMs, and re-read after', async () => {
+  const findingStore = makeFindingStore();
+  findingStore.rows.push({ ...finding({ id: 'a', hostId: '1', metric: 'if.4.link.down', createdAt: ago(90000) }), deviceId: 9, interfaceId: 4, acked: false });
+  findingStore.rows.push({ ...finding({ id: 'b', hostId: '2', metric: 'probe.loss', evidence: [{ target: 'erp.example.com' }], createdAt: ago(30000) }), acked: false });
+  let reads = 0;
+  let fail = false;
+  const blastRadiusService = {
+    maxDepth: 4,
+    graph: async () => {
+      reads += 1;
+      if (fail) throw new Error('store down');
+      return { nodes: [{ id: 'd:9' }, { id: 2 }], edges: [{ source: 'd:9', target: 2, type: 'l2_link' }] };
+    },
+  };
+  let t = T.getTime();
+  const svc = createCrossAgentClusterService({
+    clustersRepo: makeEventClustersRepo(), findingStore, blastRadiusService, now: () => new Date(t),
+    graphTtlMs: 5 * 60 * 1000,
+    agentsRepo: makeAgentsRepo({ findAll: async () => [{ id: 1, location_id: 10 }, { id: 2, location_id: 20 }] }),
+  });
+  await svc.detectAndPersist();
+  t += 60 * 1000;
+  await svc.detectAndPersist();
+  t += 60 * 1000;
+  await svc.detectAndPersist();
+  assert.equal(reads, 1, 'three sweeps inside the TTL read the graph once');
+  t += 5 * 60 * 1000; // past the TTL
+  fail = true;
+  await svc.detectAndPersist();
+  assert.equal(reads, 2);
+  fail = false;
+  await svc.detectAndPersist(); // a failed read is not cached
+  assert.equal(reads, 3);
 });
 
 test('two agents, different sites -> topology gap, stays LOW', async () => {

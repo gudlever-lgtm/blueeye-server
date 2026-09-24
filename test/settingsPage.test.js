@@ -204,3 +204,42 @@ test('the shell does not draw a second panel around the section\'s own', async (
   assert.equal(doc.querySelectorAll('#view .panel-ui').length, 0,
     'the shell wrapped the section in a second panel');
 });
+
+// ---- Settings → Alerting: the master switch says what it is doing ----------
+
+test('alerting: the tri-state switch, and the EFFECTIVE state with its reason from GET /api/alerting/config', async (t) => {
+  const alerting = {
+    enabled: true, enabledMode: 'auto', enabledReason: 'auto-channels', configuredChannels: ['webhook'], cooldownMs: 900000,
+    channels: { email: {}, webhook: { enabled: true, url: 'https://hooks.example.eu/x' }, matrix: {}, syslog: {} },
+  };
+  const { doc, errors, log, window } = boot({ t, url: 'http://server.test/settings/alerting', routes: SESSION({
+    'GET /api/settings': { alerting },
+    'GET /api/alerting/config': { enabled: true, enabledSetting: null, enabledReason: 'auto-channels', configuredChannels: ['webhook'], channels: {} },
+    'PUT /api/settings/alerting': { alerting: { ...alerting, enabledMode: 'off' } },
+  }) });
+  await settle();
+  assert.deepEqual(errors, []);
+  const text = doc.querySelector('#view').textContent;
+  assert.match(text, /Alerting is ON — automatic, because these channels are configured: webhook\./);
+  const sel = [...doc.querySelectorAll('#view select')].find((s) => [...s.options].some((o) => o.value === 'auto'));
+  assert.ok(sel, 'no tri-state master switch');
+  assert.equal(sel.value, 'auto');
+  assert.deepEqual([...sel.options].map((o) => o.value), ['auto', 'on', 'off']);
+  // Saving the switch sends the mode and re-reads the effective state.
+  sel.value = 'off';
+  const before = log.filter((x) => x.key === 'GET /api/alerting/config').length;
+  const save = [...doc.querySelectorAll('#view .settings-card')][0].querySelector('button');
+  save.dispatchEvent(new window.Event('click', { bubbles: true }));
+  await settle();
+  assert.ok(log.some((x) => x.key === 'PUT /api/settings/alerting'), 'the switch was not saved');
+  assert.ok(log.filter((x) => x.key === 'GET /api/alerting/config').length > before, 'the effective state was not refreshed');
+});
+
+test('alerting: automatic with nothing configured says so', async (t) => {
+  const { doc } = boot({ t, url: 'http://server.test/settings/alerting', routes: SESSION({
+    'GET /api/settings': { alerting: { enabled: false, enabledMode: 'auto', cooldownMs: 900000, channels: {} } },
+    'GET /api/alerting/config': { enabled: false, enabledSetting: null, enabledReason: 'auto-no-channels', configuredChannels: [], channels: {} },
+  }) });
+  await settle();
+  assert.match(doc.querySelector('#view').textContent, /Alerting is OFF — automatic, and no channel is configured yet/);
+});

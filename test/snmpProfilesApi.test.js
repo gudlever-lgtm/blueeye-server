@@ -243,7 +243,13 @@ test('a credential change is audited, with the FIELDS and not the values', async
 
   assert.equal(records[0].action, 'snmp_profile.create');
   assert.equal(records[1].action, 'snmp_profile.update');
-  assert.match(records[1].targetLabel, /community/, 'the field that changed is named');
+  // UPDATED DELIBERATELY: this used to read `targetLabel` — the audit_EVENTS
+  // shape, which the compliance logger could not store (audit_log.category is
+  // NOT NULL, so no row was ever written). The call now carries the logger's
+  // own shape; test/snmpAuditTrail.test.js checks the row is really written.
+  assert.equal(records[1].category, 'snmp');
+  assert.equal(records[1].target, '1');
+  assert.match(records[1].detail, /community/, 'the field that changed is named');
   assert.ok(!JSON.stringify(records).includes('sup3rs3cret'));
   assert.ok(!JSON.stringify(records).includes('newsecret'));
 });

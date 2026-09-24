@@ -349,3 +349,23 @@ test('the NIS2 register shows each Art. 23 deadline, coloured from the badge pal
   assert.ok(find(/Suspected malicious/));
   assert.match(doc.querySelector('#view').textContent, /From event case #11/);
 });
+
+test('a case that is part of a situation says so, and the link opens the situation (migration 129)', async (t) => {
+  const { doc, window } = boot({ t, routes: SESSION({
+    'GET /api/events/11': EVENT({ clusterId: 14 }),
+    'GET /api/event-clusters/14': { cluster: { id: 14, status: 'open', confidence: 'high', suspectedRootCause: { classification: 'network-layer' }, affectedAgents: ['7', '8'], members: [], eventCases: [] } },
+  }) });
+  await settle();
+  const lead = doc.querySelector('#view .page-head p');
+  const link = [...lead.querySelectorAll('.hostlink')].find((a) => /Part of situation #14/.test(a.textContent));
+  assert.ok(link, 'no "part of situation" link on a clustered case');
+  link.dispatchEvent(new window.Event('click', { bubbles: true }));
+  await settle();
+  assert.match(window.location.pathname, /14/);
+});
+
+test('a case in no situation carries no situation link', async (t) => {
+  const { doc } = boot({ t, routes: SESSION() });
+  await settle();
+  assert.doesNotMatch(doc.querySelector('#view .page-head p').textContent, /situation/i);
+});

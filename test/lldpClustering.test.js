@@ -60,14 +60,16 @@ test('unknown adjacency does NOT force a topology cluster (falls through to type
   assert.equal(clusters[0].topologySource, null);
 });
 
-test('no topology resolver → behaves exactly as site-only (no LLDP clusters)', () => {
+// DELIBERATE CHANGE (audit §8): this used to read clusters[0] of a time-only
+// low cluster. Unrelated subjects with no topology relation are no longer a
+// cluster at all.
+test('no topology resolver → unrelated subjects are NOT clustered', () => {
   const cx = createCrossAgentCorrelator();
   const clusters = cx.detect([
     finding({ id: 'a', hostId: '1', metric: 'cpu', createdAt: ago(90000) }),
     finding({ id: 'b', hostId: '2', metric: 'mem', createdAt: ago(30000) }),
   ], { siteOf: () => null }); // no topology
-  // different types, different sites → NOT a topology cluster; time-only low.
-  assert.equal(clusters[0].signals.topology, false);
+  assert.deepEqual(clusters, []);
 });
 
 // ---- service integration: LLDP graph → cluster ----------------------------

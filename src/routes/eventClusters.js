@@ -62,6 +62,8 @@ function createEventClustersRouter({
   runbooksRepo = null, playbooksRepo = null, verificationService = null,
   settingsService = null, assistant = null, alertLog = null, notifier = null,
   evidenceRepo = null, snapshotService = null,
+  // The event cases linked to a situation (migration 129), listed on its page.
+  eventCasesRepo = null,
 }) {
   const router = express.Router();
   const reader = requireRole(ROLES.VIEWER, ROLES.OPERATOR, ROLES.ADMIN);
@@ -116,7 +118,13 @@ function createEventClustersRouter({
     if (!cluster) return res.status(404).json({ error: 'Event cluster not found' });
 
     const members = await hydrateMembers(cluster.memberFindingIds);
-    return res.json({ cluster: buildClusterDetail(cluster, members) });
+    // The event cases this situation is stamped on (migration 129). Optional
+    // and best-effort: the situation still renders without them.
+    let eventCases = [];
+    if (eventCasesRepo && typeof eventCasesRepo.listByCluster === 'function') {
+      try { eventCases = await eventCasesRepo.listByCluster(id); } catch { eventCases = []; }
+    }
+    return res.json({ cluster: buildClusterDetail(cluster, members, eventCases) });
   }));
 
   // GET /api/event-clusters/:id/timeline — one merged, chronological event

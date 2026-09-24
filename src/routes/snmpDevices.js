@@ -26,16 +26,45 @@ const { denyReason, explainReason } = require('../serviceTests/security/hostPoli
 // What is refused is deliberately narrow — loopback, link-local (including
 // cloud metadata) and broadcast. RFC1918 is NOT refused, because a switch at
 // 10.14.0.11 is the entire point of this feature.
+const POLL_REPLY_TIMEOUT_MS = 20000;
+
+// The agent's poll-snmp command-result (agent 0.39+, PROTOCOL.md), field by
+// field: it is input from an agent and goes straight to a browser, so only
+// bounded counts, booleans and one short sentence pass. The per-device `snmp`
+// and `counters` breakdowns stay out — they can be long, and the table the
+// poll refreshes already shows them.
+function pollResultOf(reply) {
+  const count = (v) => (Number.isInteger(v) && v >= 0 && v <= 100000 ? v : null);
+  const bool = (v) => (typeof v === 'boolean' ? v : null);
+  return {
+    devices: count(reply.devices),
+    polled: count(reply.polled),
+    failed: count(reply.failed),
+    configRefreshed: bool(reply.configRefreshed),
+    deviceAssigned: bool(reply.deviceAssigned),
+    detail: typeof reply.detail === 'string' && reply.detail.trim() ? reply.detail.trim().slice(0, 200) : null,
+    error: reply.ok === false && typeof reply.error === 'string' ? reply.error.slice(0, 200) : null,
+  };
+}
+
 function createSnmpDevicesRouter({
   snmpDevicesRepo,
   fdbEntriesRepo = null,
   snmpNeighborsRepo = null,
   deviceInterfacesRepo = null,
   counterSamplesRepo = null,
+  // A polled router's ARP table (migration 125) and the site names, for the
+  // device page. Both optional: without them the page simply has less on it.
+  deviceArpRepo = null,
+  locationsRepo = null,
   agentsRepo,
   agentCommander = null,
   auditLogger = null,
   logger = null,
+  // How long "Poll now" waits for the agent's command-result before answering
+  // 202 (still polling). The agent re-reads its config (<= 5 s) and then walks
+  // every assigned switch, so this is well above one device's cycle.
+  pollTimeoutMs = POLL_REPLY_TIMEOUT_MS,
 }) {
   const router = express.Router();
   const viewer = [requireAuth, requireRole(ROLES.VIEWER, ROLES.OPERATOR, ROLES.ADMIN)];
@@ -111,7 +140,40 @@ function createSnmpDevicesRouter({
     } catch (err) {
       if (logger) logger.warn(`snmp-devices: vlan names unavailable for ${id} (${err.message})`);
     }
-    res.json({ device, fdb, fdbTotal, neighbours, interfaces, vlans });
+    // The router's ARP table (IP-MIB, collect 'arp') — newest first and
+    // bounded, with the true size beside it. Best-effort like the rest.
+    let arp = [];
+    let arpTotal = 0;
+    try {
+      if (deviceArpRepo && typeof deviceArpRepo.listForDevice === 'function') {
+        arp = await deviceArpRepo.listForDevice(id, { limit: 500 });
+        arpTotal = typeof deviceArpRepo.countForDevice === 'function'
+          ? await deviceArpRepo.countForDevice(id) : arp.length;
+      }
+    } catch (err) {
+      if (logger) logger.warn(`snmp-devices: ARP table unavailable for ${id} (${err.message})`);
+    }
+    // Every chassis and module the device reported (ENTITY-MIB).
+    let inventory = [];
+    try {
+      if (typeof snmpDevicesRepo.listInventory === 'function') inventory = await snmpDevicesRepo.listInventory(id);
+    } catch (err) {
+      if (logger) logger.warn(`snmp-devices: inventory unavailable for ${id} (${err.message})`);
+    }
+    // The site's NAME, so the page can say "Aarhus · rack B" without a second
+    // request. Null when the device has no site or the name cannot be read.
+    let siteName = null;
+    try {
+      if (device.locationId != null && locationsRepo && typeof locationsRepo.findById === 'function') {
+        const loc = await locationsRepo.findById(device.locationId);
+        siteName = loc ? loc.name : null;
+      }
+    } catch (err) {
+      if (logger) logger.warn(`snmp-devices: site name unavailable for ${id} (${err.message})`);
+    }
+    res.json({
+      device, siteName, fdb, fdbTotal, neighbours, interfaces, vlans, arp, arpTotal, inventory,
+    });
   }));
 
   // The port table on its own, for a screen that wants it without the
@@ -216,10 +278,10 @@ function createSnmpDevicesRouter({
     const device = await snmpDevicesRepo.create(value);
     if (auditLogger) {
       await auditLogger.record(req, {
+        category: 'snmp',
         action: 'snmp_device.create',
-        targetType: 'snmp_device',
-        targetId: String(device.id),
-        targetLabel: device.host,
+        target: String(device.id),
+        detail: `${device.host}${device.displayName ? ` (${device.displayName})` : ''}`,
       });
     }
     res.status(201).json({ device });
@@ -246,10 +308,12 @@ function createSnmpDevicesRouter({
     const device = await snmpDevicesRepo.update(id, value);
     if (auditLogger) {
       await auditLogger.record(req, {
+        category: 'snmp',
         action: 'snmp_device.update',
-        targetType: 'snmp_device',
-        targetId: String(id),
-        targetLabel: device.host,
+        target: String(id),
+        // WHICH fields changed, never their values: the community is one of
+        // them, and naming the fields is what makes the trail useful.
+        detail: `${device.host} — changed: ${Object.keys(value).join(', ')}`,
       });
     }
     res.json({ device });
@@ -264,10 +328,10 @@ function createSnmpDevicesRouter({
     await snmpDevicesRepo.remove(id);
     if (auditLogger) {
       await auditLogger.record(req, {
+        category: 'snmp',
         action: 'snmp_device.delete',
-        targetType: 'snmp_device',
-        targetId: String(id),
-        targetLabel: existing.host,
+        target: String(id),
+        detail: existing.host,
       });
     }
     res.status(204).end();
@@ -276,9 +340,17 @@ function createSnmpDevicesRouter({
   // Asks the polling agent to run a cycle now. operator+, because it changes no
   // configuration — it only brings forward work the agent would do anyway.
   //
-  // 202: the agent does the polling, so the result arrives on its own ingest
-  // path a moment later. Answering 200 would claim the table had been refreshed
-  // by the time this returned, which it has not.
+  // The command goes out CORRELATED (sendCommandAndWait, the path ping and
+  // diagnose use) and the agent's command-result — how many devices it holds,
+  // how many answered, whether THIS device is one of them — comes back in the
+  // response. Sent uncorrelated, as it was, the socket had no id to match the
+  // reply to and dropped it, so "Poll now" could never say "this device is not
+  // assigned to that agent" or "0 of 2 answered".
+  //
+  // 200 with `result` when the agent answered within the bound. 202 when it
+  // did not: the cycle is still running (a slow switch, a config re-read of up
+  // to 5 s), or the agent predates the reply — its data still arrives on the
+  // ingest path, and 202 says exactly that rather than claiming a refresh.
   router.post('/:id/poll', ...operator, asyncHandler(async (req, res) => {
     const id = parseId(req.params.id);
     if (id === null) return res.status(400).json({ error: 'id must be a positive integer' });
@@ -287,17 +359,20 @@ function createSnmpDevicesRouter({
     if (device.agentId == null) {
       return res.status(409).json({ error: 'This device has no polling agent assigned' });
     }
-    if (!agentCommander || typeof agentCommander.sendCommand !== 'function') {
+    if (!agentCommander || typeof agentCommander.sendCommandAndWait !== 'function') {
       return res.status(503).json({ error: 'No agent channel is configured' });
     }
-    const sent = agentCommander.sendCommand(device.agentId, { name: 'poll-snmp', deviceId: id });
-    if (!sent) {
+    const out = await agentCommander.sendCommandAndWait(device.agentId, { name: 'poll-snmp', deviceId: id }, { timeoutMs: pollTimeoutMs });
+    if (!out || !out.delivered) {
       return res.status(409).json({ error: 'The polling agent is not connected' });
     }
-    res.status(202).json({ ok: true, deviceId: id, agentId: device.agentId });
+    if (out.timedOut || !out.reply) {
+      return res.status(202).json({ ok: true, pending: true, deviceId: id, agentId: device.agentId });
+    }
+    res.json({ ok: out.reply.ok !== false, pending: false, deviceId: id, agentId: device.agentId, result: pollResultOf(out.reply) });
   }));
 
   return router;
 }
 
-module.exports = { createSnmpDevicesRouter };
+module.exports = { createSnmpDevicesRouter, POLL_REPLY_TIMEOUT_MS };

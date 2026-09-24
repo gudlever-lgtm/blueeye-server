@@ -201,3 +201,47 @@ test('POST /:id/resolve twice → second is 409', async () => {
   const res = await request(app).post(`/api/event-clusters/${id}/resolve`).set('Authorization', auth).send({ note: 'second' });
   assert.equal(res.status, 409);
 });
+
+// ---- linked event cases + grouping basis (migrations 129/130) --------------
+
+test('GET /:id lists the event cases linked to the situation and the stored WHY', async () => {
+  const { makeEventCasesRepo } = require('../test-support/fakes');
+  const eventClustersRepo = makeEventClustersRepo();
+  const findingStore = makeFindingStore();
+  findingStore.rows.push({ id: 'a', hostId: '1', metric: 'probe.loss', severity: 'CRIT', kind: 'THRESHOLD', explanation: 'loss', evidence: [{ target: 'x.example' }], createdAt: new Date('2026-07-01T12:00:00Z'), acked: false });
+  findingStore.rows.push({ id: 'b', hostId: '2', metric: 'probe.loss', severity: 'WARN', kind: 'THRESHOLD', explanation: 'loss', evidence: [{ target: 'x.example' }], createdAt: new Date('2026-07-01T12:01:00Z'), acked: false });
+  const why = ['shared target: x.example (seen by 2 agents)'];
+  const id = await eventClustersRepo.create({
+    confidence: 'high', memberFindingIds: ['a', 'b'], suspectedCommonCause: 'x.example down',
+    groupingBasis: { subjects: ['target:x.example'], reasons: [{ kind: 'target', detail: 'x.example', agents: 2 }], why },
+    status: 'open', detectedAt: new Date('2026-07-01T12:01:00Z'),
+  });
+  const eventCasesRepo = makeEventCasesRepo({ devices: { 1: { agentName: 'oslo-edge-01', locationName: 'Oslo' } } });
+  const caseId = await eventCasesRepo.create({ host_id: '1', title: 'CRIT probe.loss on oslo-edge-01', status: 'open', severity: 'CRIT', first_event_at: new Date('2026-07-01T12:00:00Z'), last_event_at: new Date('2026-07-01T12:00:00Z') });
+  await eventCasesRepo.create({ host_id: '3', title: 'unrelated', first_event_at: new Date('2026-07-01T12:00:00Z'), last_event_at: new Date('2026-07-01T12:00:00Z') });
+  await eventCasesRepo.linkCluster([caseId], id);
+
+  const app = makeApp({ eventClustersRepo, findingStore, eventCasesRepo });
+  const res = await request(app).get(`/api/event-clusters/${id}`).set('Authorization', authHeader('viewer'));
+  assert.equal(res.status, 200);
+  assert.deepEqual(res.body.cluster.eventCases.map((c) => c.id), [caseId]);
+  assert.equal(res.body.cluster.eventCases[0].agentName, 'oslo-edge-01');
+  assert.deepEqual(res.body.cluster.groupingBasis.why, why);
+  assert.ok(res.body.cluster.evidenceSummary.drivers.includes(why[0]), 'the stored WHY is not in the evidence summary');
+  assert.doesNotMatch(res.body.cluster.evidenceSummary.text, /share a site/);
+
+  // The case read says which situation it is part of.
+  const ev = await request(app).get(`/api/events/${caseId}`).set('Authorization', authHeader('viewer'));
+  assert.equal(ev.status, 200);
+  assert.equal(ev.body.event.clusterId, id);
+});
+
+test('GET /:id still answers when the case lookup fails (cases are best-effort)', async () => {
+  const { makeEventCasesRepo } = require('../test-support/fakes');
+  const eventClustersRepo = makeEventClustersRepo();
+  const id = await eventClustersRepo.create({ confidence: 'low', memberFindingIds: [], status: 'open', detectedAt: new Date() });
+  const app = makeApp({ eventClustersRepo, findingStore: makeFindingStore(), eventCasesRepo: makeEventCasesRepo({ listByCluster: async () => { throw new Error('db down'); } }) });
+  const res = await request(app).get(`/api/event-clusters/${id}`).set('Authorization', authHeader('viewer'));
+  assert.equal(res.status, 200);
+  assert.deepEqual(res.body.cluster.eventCases, []);
+});

@@ -144,6 +144,13 @@ function createRetentionRepo(db) {
     return deleteInBatches('DELETE FROM arp_entries WHERE last_seen < ? ORDER BY last_seen LIMIT ?', [ts]);
   }
 
+  // A polled router's ARP table (device_arp_entries, migration 125). The same
+  // identity source as arp_entries seen from a device, so it ages on the same
+  // window; re-learned on the router's next poll.
+  async function purgeDeviceArpEntriesBefore(ts) {
+    return deleteInBatches('DELETE FROM device_arp_entries WHERE last_seen < ? ORDER BY last_seen LIMIT ?', [ts]);
+  }
+
   // Device events. Deleted by age like everything else here; the row is a
   // record of a moment, never a current state, so nothing re-derives from it.
   async function purgeDeviceEventsBefore(ts) {
@@ -240,6 +247,12 @@ function createRetentionRepo(db) {
   // Connection-table edges (the second source of the dependency graph). The
   // agent replaces its own rows on every report, so only an agent that stopped
   // reporting leaves rows behind — this is what finally clears them.
+  // The known-device memory (migration 131). A MAC not seen for the window is
+  // forgotten, and would be "new" again if it came back — which, after 400
+  // days, it is.
+  async function purgeKnownDevicesBefore(ts) {
+    return deleteInBatches('DELETE FROM known_devices WHERE last_seen < ? ORDER BY last_seen LIMIT ?', [ts]);
+  }
   async function purgeHostConnectionsBefore(ts) {
     return deleteInBatches('DELETE FROM host_connections WHERE last_seen < ? ORDER BY last_seen LIMIT ?', [ts]);
   }
@@ -266,6 +279,7 @@ function createRetentionRepo(db) {
     purgeAckedFindingsBefore,
     purgeConfigSnapshotsBefore,
     purgeArpEntriesBefore,
+    purgeDeviceArpEntriesBefore,
     purgeDeviceEventsBefore,
     purgeFdbEntriesBefore,
     purgeSnmpNeighborsBefore,
@@ -283,6 +297,7 @@ function createRetentionRepo(db) {
     purgeTopologyChangesBefore,
     purgeStaleDiscoveredDevicesBefore,
     purgeHostConnectionsBefore,
+    purgeKnownDevicesBefore,
     purgeAuditEventsBefore,
   };
 }

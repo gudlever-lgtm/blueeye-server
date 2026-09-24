@@ -8,7 +8,7 @@ const { parseId } = require('../validation/locationValidation');
 const { validateThresholdInput } = require('../validation/probeOutageValidation');
 const { METRICS } = require('../probeOutages/detection');
 
-// Event-threshold read/write. Reading is viewer+, writing is admin only.
+// Event-threshold read/write/delete. Reading is viewer+, writing is admin only.
 // /api/thresholds operates on the GLOBAL defaults (location_id IS NULL);
 // /api/thresholds/:location_id operates on a single location's overrides.
 function createThresholdsRouter({ thresholdsRepo, locationsRepo }) {
@@ -27,6 +27,22 @@ function createThresholdsRouter({ thresholdsRepo, locationsRepo }) {
     if (errors) return res.status(400).json({ error: 'Validation failed', details: errors });
     const threshold = await thresholdsRepo.upsert({ location_id: null, ...value });
     res.json({ threshold });
+  }));
+
+  // The ?metric= a DELETE names. Returns the metric or null when it is not one.
+  const metricOf = (raw) => (typeof raw === 'string' && METRICS.includes(raw) ? raw : null);
+
+  // DELETE /api/thresholds?metric= — remove a global default. admin. Without a
+  // global default (and no location override) the metric is not evaluated, so
+  // no probe outage opens for it — the caller is told so in the 200 body.
+  // 400 unknown metric, 404 no such row.
+  router.delete('/', requireAuth, writer, asyncHandler(async (req, res) => {
+    const metric = metricOf(req.query.metric);
+    if (!metric) return res.status(400).json({ error: 'Validation failed', details: { metric: `metric must be one of: ${METRICS.join(', ')}` } });
+    if (typeof thresholdsRepo.remove !== 'function') return res.status(503).json({ error: 'Threshold removal not available' });
+    const removed = await thresholdsRepo.remove({ location_id: null, metric });
+    if (!removed) return res.status(404).json({ error: 'Threshold not found' });
+    res.json({ removed: { scope: 'global', metric } });
   }));
 
   // GET /api/thresholds/:location_id — the EFFECTIVE threshold per metric for a
@@ -54,6 +70,23 @@ function createThresholdsRouter({ thresholdsRepo, locationsRepo }) {
     if (errors) return res.status(400).json({ error: 'Validation failed', details: errors });
     const threshold = await thresholdsRepo.upsert({ location_id: locationId, ...value });
     res.json({ threshold });
+  }));
+
+  // DELETE /api/thresholds/:location_id?metric= — remove a location override;
+  // the location falls back to the global default. admin. 400 invalid, 404
+  // unknown location or no override for that metric.
+  router.delete('/:location_id', requireAuth, writer, asyncHandler(async (req, res) => {
+    const locationId = parseId(req.params.location_id);
+    if (locationId === null) return res.status(400).json({ error: 'location_id must be a positive integer' });
+    // The location first: a missing id is a 404 whatever else is wrong.
+    const location = await locationsRepo.findById(locationId);
+    if (!location) return res.status(404).json({ error: 'Location not found' });
+    const metric = metricOf(req.query.metric);
+    if (!metric) return res.status(400).json({ error: 'Validation failed', details: { metric: `metric must be one of: ${METRICS.join(', ')}` } });
+    if (typeof thresholdsRepo.remove !== 'function') return res.status(503).json({ error: 'Threshold removal not available' });
+    const removed = await thresholdsRepo.remove({ location_id: locationId, metric });
+    if (!removed) return res.status(404).json({ error: 'Threshold not found' });
+    res.json({ removed: { scope: 'location', locationId, metric } });
   }));
 
   return router;

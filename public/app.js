@@ -150,8 +150,13 @@ function decodeToken(t = token) {
 }
 // True while the signed-in user must change their one-time password first.
 function needsPasswordChange() {
-  return decodeToken().mustChangePassword === true;
+  return decodeToken().mustChangePassword === true || passwordExpired;
 }
+// Set when the server says this session's password is past the (opt-in) max
+// age — at sign-in (`passwordExpired` in the login response) or on any request
+// (403 password_expired). Not in the token: the server decides with the policy
+// it holds, and the change screen is the only way forward either way.
+let passwordExpired = false;
 
 const canWrite = () => role === 'operator' || role === 'admin';
 const canDelete = () => role === 'admin';
@@ -207,6 +212,19 @@ async function api(path, { method = 'GET', body } = {}) {
     logout();
     throw new Error('Session expired — please log in again.');
   }
+  // Baseline security (Settings → Authentication → Security): an expired
+  // password holds the session to the change screen; an address outside the
+  // role's allowlist ends it, and the login screen says why.
+  if (res.status === 403 && data && data.error === 'password_expired' && !passwordExpired) {
+    passwordExpired = true;
+    render();
+  }
+  if (res.status === 403 && data && data.error === 'ip_not_allowed' && path !== '/auth/login') {
+    logout();
+    const loginErr = document.querySelector('#login-error');
+    if (loginErr) loginErr.textContent = t('auth.ipDenied');
+    throw new Error(t('auth.ipDenied'));
+  }
   if (!res.ok) {
     const msg = (data && (data.error || data.message)) || `HTTP ${res.status}`;
     const err = new Error(msg);
@@ -243,6 +261,11 @@ async function authedFetch(path, init = {}) {
 // Human-readable text from an api() error: prefer the field-level validation
 // details (joined), else the thrown message.
 function errText(e) {
+  // A server error that names its own translation key (e.g. auth.pw.reused)
+  // is said in the user's language; the English `message` is the fallback.
+  if (e.data && e.data.messageKey && window.I18n && window.I18n.has && window.I18n.has(e.data.messageKey)) {
+    return t(e.data.messageKey, e.data.messageParams || {});
+  }
   return e.data && e.data.details ? Object.values(e.data.details).join(' · ') : e.message;
 }
 
@@ -318,6 +341,7 @@ function fmtDuration(sec) {
 // ---- Auth -----------------------------------------------------------------
 async function login(emailInput, password) {
   const data = await api('/auth/login', { method: 'POST', body: { email: emailInput, password } });
+  passwordExpired = data.passwordExpired === true;
   token = data.token;
   role = data.user.role;
   email = data.user.email;
@@ -567,6 +591,7 @@ function logout() {
   invalidateFeatures();
   profileLoaded = false;
   token = null;
+  passwordExpired = false;
   email = '';
   localStorage.removeItem(TOKEN_KEY);
   localStorage.removeItem(ROLE_KEY);
@@ -1423,6 +1448,8 @@ const CONTRACT_VIEWS = new Map([
   ['screening', 'screening'],
   ['license', 'license'],
   ['coverage', 'coverage'],
+  ['pathLocation', 'pathLocation'],
+  ['auditLog', 'auditLog'],
 ]);
 
 
@@ -3848,6 +3875,8 @@ function getEventsPage() {
   if (typeof window === 'undefined' || !window.EventsPage || !ui) return null;
   eventsPage = window.EventsPage.create({
     el, t, ui, errText, gotoView, openEvent, canWrite,
+    // "part of situation #N" on a row opens that situation (migration 129).
+    openCluster: (id) => openCluster(id),
     state: eventsPageState,
     condition: incCondition,
     agentLabel: incAgentLabel,
@@ -4137,6 +4166,7 @@ function getEventPage() {
   eventPage = window.EventPage.create({
     el, t, ui, errText,
     canWrite,
+    openCluster: (id) => openCluster(id),
     id: () => selectedEventId,
     transitions: (status) => INC_TRANSITIONS[status],
     openList: () => { currentView = 'events'; render(); },
@@ -4456,6 +4486,8 @@ function getSituationPage() {
   const CV = window.ClusterView;
   situationPage = window.SituationPage.create({
     el, t, ui, errText,
+    // A linked event case opens its own page (migration 129).
+    openEvent: (id) => openEvent(id),
     id: () => selectedClusterId,
     openList: () => { currentView = 'clusters'; render(); },
     rerender: () => render(),
@@ -4759,10 +4791,18 @@ function probeMeasured(r) {
       const c = r.tls || {};
       const parts = [];
       if (c.expiryDays != null) parts.push(c.expiryDays <= 0 ? `expired ${Math.abs(Math.round(c.expiryDays))}d ago` : `${Math.round(c.expiryDays)}d left`);
-      if (c.authorized === false) parts.push('untrusted');
+      if (!tlsChainTrusted(c)) parts.push('untrusted');
       if (c.hostnameMatches === false) parts.push('name mismatch');
       if (c.protocol) parts.push(c.protocol);
       return parts.length ? parts.join(' · ') : null;
+    }
+    case 'dhcp': {
+      // How many servers answered is the number that matters: zero is an
+      // outage, more than one is a rogue server.
+      const d = r.dhcp;
+      if (!d || !Array.isArray(d.offers)) return null;
+      if (!d.offers.length) return t('probe.dhcp.noOffer');
+      return `${plural('probe.dhcp.servers', d.serverCount, { n: String(d.serverCount) })}${r.rttMs != null ? ` · ${ms(r.rttMs)}` : ''}`;
     }
     case 'rdns': {
       const d = r.rdns || {};
@@ -5637,6 +5677,15 @@ function mtuDetail(r) {
 
 // The certificate a port presented, read back in the order an operator needs
 // it: what is wrong first, what it is second, and the identifying detail last.
+// Did the chain validate, apart from the name? `authorized` is node's one flag
+// for both checks, and node checks the chain first — so a handshake refused
+// only with ERR_TLS_CERT_ALTNAME_INVALID had a good chain and a wrong name.
+// The server stores `chainTrusted`; a row stored before it did is read here.
+function tlsChainTrusted(c) {
+  if (typeof c.chainTrusted === 'boolean') return c.chainTrusted;
+  return c.authorized === true || /ERR_TLS_CERT_ALTNAME_INVALID/.test(String(c.authorizationError || ''));
+}
+
 // The four faults are kept apart here exactly as they are stored, because they
 // have four different fixes — renew, reissue, install the intermediate, or
 // point the client at the right name.
@@ -5656,13 +5705,16 @@ function tlsDetail(r) {
         : `${t('probe.tls.expiresIn', { days: String(Math.round(days)) })}${c.validTo ? ` · ${fmtDate(c.validTo)}` : ''}`,
       days <= 0 ? 'error' : (days <= 30 ? 'warn' : null));
   }
+  const chainOk = tlsChainTrusted(c);
   kv(t('probe.tls.chain'),
-    c.authorized ? t('probe.tls.chainOk')
+    chainOk ? t('probe.tls.chainOk')
       : t('probe.tls.chainBad', { reason: c.selfSigned ? t('probe.tls.selfSigned') : (c.authorizationError || '—') }),
-    c.authorized ? null : 'error');
+    chainOk ? null : 'error');
   kv(t('probe.tls.name'),
     c.hostnameMatches === true ? t('probe.tls.nameOk')
-      : c.hostnameMatches === false ? t('probe.tls.nameBad') : t('probe.tls.nameUnchecked'),
+      : c.hostnameMatches === false
+        ? (c.servername ? t('probe.tls.nameBadFor', { name: c.servername }) : t('probe.tls.nameBad'))
+        : t('probe.tls.nameUnchecked'),
     c.hostnameMatches === false ? 'error' : null);
   if (c.subject) kv(t('probe.tls.subject'), c.subject);
   if (c.issuer) kv(t('probe.tls.issuer'), c.issuer);
@@ -5704,6 +5756,37 @@ function rdnsDetail(r) {
     el('p', { class: 'muted small' }, t('probe.rdns.why')));
 }
 
+// Every DHCPOFFER the test heard, one row per server. Two rows is the finding:
+// a second server on the segment hands out its own gateway and resolver.
+function dhcpDetail(r) {
+  const d = r.dhcp;
+  const title = t('probe.dhcp.title', { iface: (d && d.iface) || r.target });
+  if (!d || !Array.isArray(d.offers)) {
+    return el('details', { class: 'sec', open: true }, el('summary', {}, title),
+      el('p', { class: 'muted' }, r.detail ? t('probe.dhcp.notRun', { reason: r.detail }) : t('probe.dhcp.notMeasured')));
+  }
+  if (!d.offers.length) {
+    return el('details', { class: 'sec', open: true }, el('summary', {}, title),
+      el('p', { class: 'error' }, t('probe.dhcp.noneBody', { secs: d.timeoutMs != null ? String(d.timeoutMs / 1000) : '?' })));
+  }
+  const dash = (v) => (v == null || v === '' ? '—' : v);
+  const offerRow = (o) => el('tr', {},
+    el('td', { class: 'mono' }, dash(o.serverId)),
+    el('td', { class: 'mono' }, dash(o.offeredIp)),
+    el('td', { class: 'mono' }, dash(o.subnetMask)),
+    el('td', { class: 'mono' }, dash(o.router)),
+    el('td', { class: 'mono' }, o.dns && o.dns.length ? o.dns.join(', ') : '—'),
+    el('td', { class: 'num' }, o.leaseSec != null ? fmtDuration(o.leaseSec) : '—'),
+    el('td', { class: 'mono' }, dash(o.relay)));
+  return el('details', { class: 'sec', open: true },
+    el('summary', {}, title),
+    d.serverCount > 1 ? el('p', { class: 'error' }, t('probe.dhcp.rogue', { n: String(d.serverCount) })) : null,
+    el('table', { class: 'probe-hops' },
+      el('thead', {}, el('tr', {}, ...['server', 'offered', 'mask', 'router', 'dns', 'lease', 'relay'].map((k) => el('th', {}, t(`probe.dhcp.col.${k}`))))),
+      el('tbody', {}, ...d.offers.map(offerRow))),
+    el('p', { class: 'muted small' }, t('probe.dhcp.why')));
+}
+
 async function probeDetail(r, agentId) {
   if (r.type === 'path_mtu') return mtuDetail(r);
   // Both of these ARE their result — there is no history worth charting for a
@@ -5711,6 +5794,7 @@ async function probeDetail(r, agentId) {
   // expiry) are read in the row itself.
   if (r.type === 'tls') return tlsDetail(r);
   if (r.type === 'rdns') return rdnsDetail(r);
+  if (r.type === 'dhcp') return dhcpDetail(r);
   if (r.type === 'traceroute' || r.type === 'tcptraceroute') {
     const hops = r.hops || [];
     const hopRow = (h) => el('tr', {},
@@ -6568,6 +6652,88 @@ views.coverage = async () => {
   return v.view();
 };
 
+// ---- Diagnostics → Path & location (MIGRATED — see public/views/pathLocation.js)
+// "Where is this device plugged in?" and "which switches does A cross to reach
+// B?" (src/routes/l2Path.js, docs/l2-path.md). Path and locate are viewer+; the
+// inventory under them is operator+, and a viewer is told so on the panel
+// rather than shown an empty table. Help is read through t() at draw time.
+PAGE_INFO.pathLocation = {
+  get hero() { return t('l2p.lead'); },
+  get title() { return t('l2p.info.title'); },
+  body: () => [
+    el('p', {}, t('l2p.info.p1')),
+    el('p', {}, t('l2p.info.p2')),
+    el('p', { class: 'muted' }, t('l2p.info.p3')),
+  ],
+};
+let pathLocationPage = null;
+const pathLocationState = {};
+function getPathLocationPage() {
+  if (pathLocationPage) return pathLocationPage;
+  if (typeof window === 'undefined' || !window.PathLocationPage || !ui) return null;
+  const qs = (o) => Object.entries(o).filter(([, v]) => v != null && v !== '')
+    .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`).join('&');
+  pathLocationPage = window.PathLocationPage.create({
+    el, t, ui, errText,
+    state: pathLocationState,
+    help: () => ({ title: PAGE_INFO.pathLocation.title, body: PAGE_INFO.pathLocation.body }),
+    fetchPath: (p) => api(`/api/topology/l2-path?${qs(p)}`),
+    fetchLocate: (q) => api(`/api/devices/locate?${qs({ q })}`),
+    fetchInventory: (p) => api(`/api/devices/inventory?${qs(p)}`),
+    canInventory: () => roleAtLeast('operator'),
+    openSwitch: (id) => openSnmpDevice(id),
+    openAgent: (id) => openAgent(id),
+  });
+  return pathLocationPage;
+}
+
+views.pathLocation = async () => {
+  const v = getPathLocationPage();
+  if (!v) return el('div', { class: 'empty error' }, t('l2p.err.path'));
+  return v.view();
+};
+
+// Opens Path & location with a question already asked — from universal search
+// (an IP or a MAC) or anywhere else that knows one end.
+function openPathLocation({ q = null, from = null, to = null } = {}) {
+  Object.assign(pathLocationState, { q: q || pathLocationState.q || '', from: from || pathLocationState.from || '', to: to || pathLocationState.to || '' });
+  gotoView('pathLocation');
+}
+
+// ---- Administration → Audit log integrity (MIGRATED — see public/views/auditLog.js)
+// The hash-chained audit_log (GET /api/audit-log, /categories, /verify), with
+// the one action it exists for: proving nobody rewrote it. Admin, `audit_log`.
+let auditLogPage = null;
+const auditLogPageState = {};
+function getAuditLogPage() {
+  if (auditLogPage) return auditLogPage;
+  if (typeof window === 'undefined' || !window.AuditLogPage || !ui) return null;
+  auditLogPage = window.AuditLogPage.create({
+    el, t, ui, errText,
+    state: auditLogPageState,
+    help: () => ({ title: t('auditlog.info.title'), body: () => [
+      el('p', {}, t('auditlog.info.p1')),
+      el('p', {}, t('auditlog.info.p2')),
+      el('p', { class: 'muted' }, t('auditlog.info.p3')),
+    ] }),
+    fetchEntries: ({ category, limit }) => {
+      const qs = new URLSearchParams();
+      if (category) qs.set('category', category);
+      if (limit) qs.set('limit', String(limit));
+      return api(`/api/audit-log${qs.toString() ? `?${qs}` : ''}`);
+    },
+    fetchCategories: () => api('/api/audit-log/categories'),
+    verify: () => api('/api/audit-log/verify'),
+  });
+  return auditLogPage;
+}
+
+views.auditLog = async () => {
+  const v = getAuditLogPage();
+  if (!v) return el('div', { class: 'empty error' }, t('auditlog.err.title'));
+  return v.view();
+};
+
 // ---- Troubleshooting (location-driven investigation) ------------------------
 // Operator+ can trigger an investigation for a site/agent/interface/subnet and
 // get the fault classified as LOCAL / UPSTREAM / DOWNSTREAM / APP_NOT_NET /
@@ -6640,8 +6806,9 @@ function investigationCard(inv) {
           el('a', { href: '#', onclick: (ev) => { ev.preventDefault(); switchView('reporting'); } },
             'Reporting → NIS2 Incidents'), '.')));
   } else if (inv.nis2DraftError) {
-    nis2El = el('div', { class: 'inv-nis2-error muted' },
-      `NIS2 draft could not be created: ${inv.nis2DraftError}`);
+    // `nis2DraftError` is a code, never the server's error message (that goes
+    // to the server log), so the words are ours and translated.
+    nis2El = el('div', { class: 'inv-nis2-error muted' }, t('inv.nis2DraftFailed'));
   }
 
   return el('div', { class: 'inv-card' },
@@ -6831,12 +6998,22 @@ function getDeviceLogView() {
       if (f.eventType) qs.set('eventType', f.eventType);
       if (f.transport) qs.set('transport', f.transport);
       if (f.q) qs.set('q', f.q);
+      if (f.snmpDeviceId != null) qs.set('snmpDeviceId', String(f.snmpDeviceId));
       return api(`/api/device-events?${qs.toString()}`);
     },
     fetchCatalog: async () => api('/api/device-events/catalog'),
     openTimeline: (deviceId) => openAgent(deviceId),
+    openSwitch: (id) => openSnmpDevice(id),
   });
   return deviceLogView;
+}
+
+// The device log narrowed to what one polled switch said (from its page).
+function openDeviceLogForSwitch(id) {
+  if (!deviceLogState) deviceLogState = {};
+  deviceLogState.snmpDeviceId = Number(id);
+  currentView = 'deviceLog';
+  render();
 }
 
 views.deviceLog = async () => {
@@ -8109,9 +8286,13 @@ async function probeRunnerView() {
   if (!agents.length) { root.append(el('div', { class: 'empty' }, 'No agents yet — enrol an agent first.')); return root; }
 
   const agentSel = el('select', {}, ...agents.map((a) => el('option', { value: String(a.id) }, a.display_name || a.hostname)));
-  const typeSel = el('select', {}, ...[['ping', 'Ping (ICMP)'], ['tcp', 'TCP-connect'], ['dns', 'DNS'], ['traceroute', 'Traceroute'], ['tcptraceroute', t('probe.tcptraceroute')], ['path_mtu', t('probe.pathMtu')], ['tls', t('probe.tls')], ['rdns', t('probe.rdns')], ['curl', 'cURL (content check)'], ['pageload', 'Page load'], ['transaction', 'Transaction (multi-step)']].map(([v, l]) => el('option', { value: v }, l)));
+  const typeSel = el('select', {}, ...[['ping', 'Ping (ICMP)'], ['tcp', 'TCP-connect'], ['dns', 'DNS'], ['traceroute', 'Traceroute'], ['tcptraceroute', t('probe.tcptraceroute')], ['path_mtu', t('probe.pathMtu')], ['tls', t('probe.tls')], ['rdns', t('probe.rdns')], ['dhcp', t('probe.dhcp')], ['curl', 'cURL (content check)'], ['pageload', 'Page load'], ['transaction', 'Transaction (multi-step)']].map(([v, l]) => el('option', { value: v }, l)));
   const target = el('input', { type: 'text', placeholder: 'e.g. 1.1.1.1 or example.com' });
-  const targetWrap = el('label', { class: 'inline muted' }, 'Target ', target);
+  // The DHCP test has no target — it broadcasts — so the same field names the
+  // (optional) interface instead, and says so.
+  const targetLabelText = el('span', {}, 'Target ');
+  const targetWrap = el('label', { class: 'inline muted' }, targetLabelText, target);
+  const dhcpHint = el('div', { class: 'muted small', style: 'flex-basis:100%' }, t('probe.dhcpHint'));
   const portInput = el('input', { type: 'number', min: '1', max: '65535', value: '443' });
   const portWrap = el('label', { class: 'inline muted' }, 'Port ', portInput);
   const countInput = el('input', { type: 'number', min: '1', max: '20', value: '4' });
@@ -8166,6 +8347,9 @@ async function probeRunnerView() {
     const isTx = typeSel.value === 'transaction';
     const isUrl = isCurl || typeSel.value === 'pageload';
     const isMtu = typeSel.value === 'path_mtu';
+    const isDhcp = typeSel.value === 'dhcp';
+    dhcpHint.style.display = isDhcp ? '' : 'none';
+    targetLabelText.textContent = isDhcp ? `${t('probe.dhcp.iface')} ` : 'Target ';
     mtuWrap.style.display = isMtu ? '' : 'none';
     mtuHint.style.display = isMtu ? '' : 'none';
     targetWrap.style.display = isTx ? 'none' : '';
@@ -8175,8 +8359,8 @@ async function probeRunnerView() {
     txWrap.style.display = isTx ? '' : 'none';
     // A path-MTU run has no "count": its repetition knob is probes-per-size,
     // which the agent defaults sensibly and the form does not need to expose.
-    countWrap.style.display = (typeSel.value === 'pageload' || isTx || isMtu) ? 'none' : '';
-    target.placeholder = isUrl ? 'e.g. https://example.com/' : 'e.g. 1.1.1.1 or example.com';
+    countWrap.style.display = (typeSel.value === 'pageload' || isTx || isMtu || isDhcp) ? 'none' : '';
+    target.placeholder = isDhcp ? t('probe.dhcp.ifacePlaceholder') : (isUrl ? 'e.g. https://example.com/' : 'e.g. 1.1.1.1 or example.com');
     countLabelText.textContent = tr ? 'Queries/hop ' : 'Count ';
     countInput.max = tr ? '10' : (isCurl ? '10' : '20');
     if (tr && Number(countInput.value) > 10) countInput.value = '3';
@@ -8190,7 +8374,7 @@ async function probeRunnerView() {
     portWrap,
     countWrap,
     curl.wrap,
-    runBtn, stopBtn, repeatBtn, repeatChipEl, status, traceHint, mtuHint), mtuWrap, txWrap);
+    runBtn, stopBtn, repeatBtn, repeatChipEl, status, traceHint, mtuHint, dhcpHint), mtuWrap, txWrap);
 
   const latestHost = el('div', { class: 'probe-latest' });
   // The refresh loop replaces the whole tbody, which would close an open row
@@ -8210,6 +8394,11 @@ async function probeRunnerView() {
       const steps = tx.collect();
       if (!steps.length) return { error: 'Add at least one step with a URL.' };
       return { body: { type: 'transaction', steps } };
+    }
+    if (typeSel.value === 'dhcp') {
+      // No target: empty means the agent's default-route interface.
+      const iface = target.value.trim();
+      return { body: iface ? { type: 'dhcp', iface } : { type: 'dhcp' } };
     }
     const host = target.value.trim();
     if (!host) return { error: 'Enter a target.' };
@@ -8285,11 +8474,18 @@ async function probeRunnerView() {
     repeatBtn.addEventListener('click', () => {
       const { body, error } = collectProbe();
       if (error) { status.className = 'error probe-status'; status.textContent = error; return; }
-      const what = t('repeat.what.probe', { type: body.type, target: body.host || '' });
+      // A DHCP probe has no host: it broadcasts on an interface (the agent's
+      // default-route one when none is given). A transaction has steps.
+      const target = body.type === 'dhcp'
+        ? (body.iface || t('repeat.dhcp.defaultIface'))
+        : (body.host || t('repeat.target.transaction'));
+      const what = body.type === 'dhcp'
+        ? t('repeat.what.dhcp', { iface: target })
+        : t('repeat.what.probe', { type: body.type, target });
       openRepeatModal({
         what,
         onSave: (spec, runs) => saveRepeatPackage({
-          name: `${body.type} — ${body.host || 'transaction'}`.slice(0, 120),
+          name: `${body.type} — ${target}`.slice(0, 120),
           agentId: agentSel.value,
           item: { type: 'probe', probe: body },
           spec,
@@ -8349,6 +8545,7 @@ function getSnmpDeviceView() {
     fetchCounters: (id) => api(`/api/snmp-devices/${id}/counters`),
     fetchSeries: (id, interfaceId, minutes) =>
       api(`/api/snmp-devices/${id}/interfaces/${interfaceId}/series?minutes=${minutes}`),
+    openDeviceLog: (id) => openDeviceLogForSwitch(id),
   });
   return snmpDeviceView;
 }
@@ -8521,6 +8718,14 @@ async function globalSearch(q) {
       el('p', { class: 'muted small' }, t('search.emptyHint'))));
   } else {
     kids.push(el('p', { class: 'muted small' }, t('search.resultCount', { count: data.total })));
+    // An address or a MAC has a physical answer too: which switch port it is
+    // on, and the path to it. One click to Path & location with it filled in.
+    if (hits.some((h) => h.type === 'ip' || h.type === 'mac')) {
+      kids.push(el('p', {}, el('button', {
+        class: 'ghost small',
+        onclick: () => { closeModal(); openPathLocation({ q }); },
+      }, t('l2p.fromSearch'))));
+    }
     // Group in the fixed order above so the layout does not reshuffle between
     // searches — a moving target is harder to scan under pressure.
     const byType = new Map();
@@ -9313,13 +9518,13 @@ function baselineBandChart(slots, { title } = {}) {
   };
   const present = (slots || []).filter((s) => s.median != null);
   if (!present.length) {
-    return el('div', { class: 'empty' }, 'Not enough history yet — a pair needs ≥100 hourly observations before it is baselined.');
+    return el('div', { class: 'empty' }, t('ad.bl.notEnough'));
   }
   const W = 560, H = 190, padL = 52, padR = 10, padT = 12, padB = 26;
   const maxY = Math.max(1, ...present.map((s) => (s.hi != null ? s.hi : s.median)));
   const x = (h) => padL + (h / 23) * (W - padL - padR);
   const y = (v) => padT + (1 - (v / maxY)) * (H - padT - padB);
-  const svg = mk('svg', { viewBox: `0 0 ${W} ${H}`, role: 'img', 'aria-label': title || 'Baseline profile' });
+  const svg = mk('svg', { viewBox: `0 0 ${W} ${H}`, role: 'img', 'aria-label': title || t('ad.bl.profile') });
   // y grid: 0 and max
   [0, maxY].forEach((v) => {
     svg.append(mk('line', { class: 'bl-grid', x1: padL, x2: W - padR, y1: y(v), y2: y(v) }));
@@ -9333,18 +9538,19 @@ function baselineBandChart(slots, { title } = {}) {
   let d = ''; let pen = false;
   slots.forEach((s) => { if (s.median == null) { pen = false; return; } const px = x(s.hour); const py = y(s.median); d += `${pen ? 'L' : 'M'}${px.toFixed(1)} ${py.toFixed(1)} `; pen = true; });
   svg.append(mk('path', { class: 'bl-median', d, fill: 'none' }));
-  slots.forEach((s) => { if (s.median == null) return; const dot = mk('circle', { class: 'bl-dot', cx: x(s.hour), cy: y(s.median), r: '2.4' }); dot.append(mk('title', {}, `${s.hour}:00 · median ${fmtBytes(s.median)} · normal ${fmtBytes(s.lo)}–${fmtBytes(s.hi)}`)); svg.append(dot); });
-  return el('div', { class: 'bl-chart' }, svg, el('div', { class: 'muted small' }, 'Normal range = median ± 3·MAD · y-axis bytes/hour, x-axis hour of day'));
+  slots.forEach((s) => { if (s.median == null) return; const dot = mk('circle', { class: 'bl-dot', cx: x(s.hour), cy: y(s.median), r: '2.4' }); dot.append(mk('title', {}, t('ad.bl.dot', { hour: `${s.hour}:00`, median: fmtBytes(s.median), lo: fmtBytes(s.lo), hi: fmtBytes(s.hi) }))); svg.append(dot); });
+  return el('div', { class: 'bl-chart' }, svg, el('div', { class: 'muted small' }, t('ad.bl.legend')));
 }
 
 // Host dependency list (Part 6 host detail): what this host talks to (outbound)
 // and what talks to it (inbound), with ports + volume, from
 // GET /api/topology/dependencies. Each outbound row links to its per-hour
-// baseline band (operator+; the baselines are keyed by the source host).
+// baseline band (viewer+ via /api/baselines/flow-pair; the baselines are keyed
+// by the source host).
 async function loadAgentDependencies(id, host) {
-  let data; let agents = [];
+  let data; let agents = []; let context = null;
   try {
-    [data, agents] = await Promise.all([
+    [data, agents, context] = await Promise.all([
       api(`/api/topology/dependencies?host=${encodeURIComponent(id)}&direction=both&limit=100`),
       // Names are a nicety — the dependency edges are the point, and a failure
       // here degrades to "host 17" rather than an empty panel. But it used to
@@ -9354,57 +9560,105 @@ async function loadAgentDependencies(id, host) {
         recordClientLog('warn', `Dependency panel: could not load agent names (${e.message}); showing host ids.`);
         return [];
       }),
+      // The baseline context for the outbound pairs (GET /api/baselines/flow-pair,
+      // viewer+): each pair's last complete hour against its normal for that
+      // weekday and hour. Context, not the point — without it the column is
+      // simply not drawn, never a placeholder.
+      api(`/api/baselines/flow-pair?host=${encodeURIComponent(id)}&limit=5000`).catch(() => null),
     ]);
   } catch (e) {
     host.replaceChildren(el('div', { class: 'error' }, errText(e)));
     return;
   }
   const nameById = {};
-  (agents || []).forEach((a) => { nameById[a.id] = a.display_name || a.hostname || `agent ${a.id}`; });
-  const nameFor = (hid) => nameById[hid] || `host ${hid}`;
+  (agents || []).forEach((a) => { nameById[a.id] = a.display_name || a.hostname || t('ad.dep.agentN', { id: a.id }); });
+  const nameFor = (hid) => nameById[hid] || t('ad.dep.hostN', { id: hid });
   const { outbound, inbound } = TopologyGraph.splitDependencies(data.edges || [], id);
 
   if (!outbound.length && !inbound.length) {
-    host.replaceChildren(
-      el('div', { class: 'empty' }, 'No service dependencies observed for this host yet. Dependency edges are aggregated from TCP flows (NetFlow/sFlow) by a scheduled job.'));
+    host.replaceChildren(el('div', { class: 'empty' }, t('ad.dep.none')));
     return;
   }
 
+  // "Now" for a pair is the host's last rolled-up hour (UTC, the slot the
+  // baselines are keyed by); a pair with no traffic in it has no "now".
+  const current = context && context.current;
+  const provider = context && window.BaselineMetric
+    ? window.BaselineMetric.flowPairProvider(context.baselines || []) : null;
+  const slotHour = (h) => `${h < 10 ? '0' : ''}${h}:00`;
+  function lastHourCell(e) {
+    const pair = (current.pairs || []).find((p) => Number(p.dstHostId) === Number(e.dstHostId) && Number(p.dstPort) === Number(e.dstPort));
+    if (!pair) return el('span', { class: 'muted' }, '–');
+    return window.BaselineMetric.render(document, {
+      value: pair.bytes,
+      formatted: fmtBytes(pair.bytes),
+      baseline: provider.lookup({ dstHostId: e.dstHostId, dstPort: e.dstPort, dow: current.dow, hour: current.hour }),
+    });
+  }
+
+  // One pair's hour-of-day profile, with what the last complete hour did
+  // against its normal for that slot: "normal for this hour: median ± MAD vs
+  // now". Viewer+ — the same flow-pair volume the Flows explorer shows.
   async function openBaseline(dstHostId, dstPort, peerLabel) {
     const card = $('#modal-card');
     card.classList.add('wide');
-    const dowNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-    const dowSel = el('select', { class: 'small' }, ...dowNames.map((n, i) => el('option', { value: String(i) }, n)));
-    dowSel.value = String(new Date().getDay());
-    const chartHost = el('div', {}, el('p', { class: 'muted' }, 'Loading baseline…'));
+    // Weekday names from the catalogue: the slot is a day-of-week INDEX from
+    // the baseline table (UTC), not a date to format.
+    const dowSel = el('select', { class: 'small' }, ...[0, 1, 2, 3, 4, 5, 6].map((i) => el('option', { value: String(i) }, t(`weekday.${i}`))));
+    dowSel.value = String(new Date().getUTCDay());
+    const nowHost = el('div', { class: 'bl-now' });
+    const chartHost = el('div', {}, el('p', { class: 'muted' }, t('ad.bl.loading')));
     const draw = (baselines) => {
       const slots = TopologyGraph.baselineProfile(baselines, dstHostId, dstPort, Number(dowSel.value), { sigma: 3 });
-      chartHost.replaceChildren(baselineBandChart(slots, { title: `Baseline → ${peerLabel}:${dstPort}` }));
+      chartHost.replaceChildren(baselineBandChart(slots, { title: t('ad.bl.chartTitle', { peer: peerLabel, port: dstPort }) }));
     };
     card.replaceChildren(
-      el('h3', {}, `Baseline · ${peerLabel}:${dstPort}`),
-      el('div', { class: 'history-controls' }, el('label', { class: 'inline muted' }, 'Day ', dowSel)),
+      el('h3', {}, t('ad.bl.title', { peer: peerLabel, port: dstPort })),
+      nowHost,
+      el('div', { class: 'history-controls' }, el('label', { class: 'inline muted' }, t('ad.bl.day'), ' ', dowSel)),
       chartHost,
-      el('div', { class: 'form-actions' }, el('button', { class: 'ghost', onclick: closeModal }, 'Close')));
+      el('div', { class: 'form-actions' }, el('button', { class: 'ghost', onclick: closeModal }, t('common.close'))));
     $('#modal').classList.remove('hidden');
-    let baselines = [];
+    let r;
     try {
-      const r = await api(`/api/topology/flow-baselines?host=${encodeURIComponent(id)}&limit=5000`);
-      baselines = r.baselines || [];
+      r = await api(`/api/baselines/flow-pair?host=${encodeURIComponent(id)}&dst=${encodeURIComponent(dstHostId)}&port=${encodeURIComponent(dstPort)}&limit=5000`);
     } catch (e) {
       chartHost.replaceChildren(el('div', { class: 'error' }, errText(e)));
       return;
+    }
+    const baselines = r.baselines || [];
+    const now = r.current && (r.current.pairs || [])[0];
+    if (r.current) dowSel.value = String(r.current.dow);
+    if (!baselines.length) {
+      nowHost.replaceChildren(el('p', { class: 'muted' }, t('ad.bl.building')));
+    } else if (!now) {
+      nowHost.replaceChildren(el('p', { class: 'muted' }, t('ad.bl.noCurrent')));
+    } else {
+      const slot = window.BaselineMetric
+        ? window.BaselineMetric.flowPairProvider(baselines).lookup({ dstHostId, dstPort, dow: r.current.dow, hour: r.current.hour })
+        : null;
+      const when = { weekday: t(`weekday.${r.current.dow}`), hour: slotHour(r.current.hour) };
+      nowHost.replaceChildren(
+        el('p', {}, slot
+          ? t('ad.bl.normal', { ...when, median: fmtBytes(slot.median), mad: fmtBytes(slot.mad) })
+          : t('ad.bl.noSlot', when)),
+        el('p', {}, t('ad.bl.now', { hour: slotHour(r.current.hour) }), ' ',
+          window.BaselineMetric
+            ? window.BaselineMetric.render(document, { value: now.bytes, formatted: fmtBytes(now.bytes), baseline: slot || null })
+            : fmtBytes(now.bytes)));
     }
     dowSel.addEventListener('change', () => draw(baselines));
     draw(baselines);
   }
 
+  const withContext = !!(current && provider && window.BaselineMetric);
   const depTable = (rows, dir) => el('table', { class: 'agents-table' },
     el('thead', {}, el('tr', {},
-      el('th', { scope: 'col' }, dir === 'out' ? 'Talks to' : 'Talked to by'),
-      el('th', { scope: 'col' }, 'Port'), el('th', { scope: 'col' }, 'Bytes'),
-      el('th', { scope: 'col' }, 'Conns'), el('th', { scope: 'col' }, 'Last seen'),
-      dir === 'out' && canWrite() ? el('th', { scope: 'col' }, '') : null)),
+      el('th', { scope: 'col' }, dir === 'out' ? t('ad.dep.talksTo') : t('ad.dep.talkedToBy')),
+      el('th', { scope: 'col' }, t('ad.dep.port')), el('th', { scope: 'col' }, t('ad.dep.bytes')),
+      el('th', { scope: 'col' }, t('ad.dep.conns')), el('th', { scope: 'col' }, t('ad.dep.lastSeen')),
+      dir === 'out' && withContext ? el('th', { scope: 'col' }, t('ad.dep.lastHour', { hour: slotHour(current.hour) })) : null,
+      dir === 'out' ? el('th', { scope: 'col' }, '') : null)),
     el('tbody', {}, ...rows.map((e) => {
       const peerId = dir === 'out' ? e.dstHostId : e.srcHostId;
       return el('tr', {},
@@ -9413,15 +9667,59 @@ async function loadAgentDependencies(id, host) {
         el('td', { class: 'num' }, fmtBytes(e.bytes)),
         el('td', { class: 'num' }, String(e.connCount)),
         el('td', {}, e.lastSeen ? fmtTimeShort(new Date(e.lastSeen).getTime()) : '–'),
-        dir === 'out' && canWrite()
-          ? el('td', {}, el('button', { class: 'small ghost', onclick: () => openBaseline(e.dstHostId, e.dstPort, nameFor(e.dstHostId)) }, 'Baseline'))
+        dir === 'out' && withContext ? el('td', {}, lastHourCell(e)) : null,
+        dir === 'out'
+          ? el('td', {}, el('button', { class: 'small ghost', onclick: () => openBaseline(e.dstHostId, e.dstPort, nameFor(e.dstHostId)) }, t('ad.dep.baseline')))
           : null);
     })));
 
   const children = [];
-  if (outbound.length) children.push(el('h4', { class: 'sub' }, `Talks to (${outbound.length})`), depTable(outbound, 'out'));
-  if (inbound.length) children.push(el('h4', { class: 'sub' }, `Talked to by (${inbound.length})`), depTable(inbound, 'in'));
+  if (outbound.length) children.push(el('h4', { class: 'sub' }, t('ad.dep.talksToN', { count: outbound.length })), depTable(outbound, 'out'));
+  if (inbound.length) children.push(el('h4', { class: 'sub' }, t('ad.dep.talkedToByN', { count: inbound.length })), depTable(inbound, 'in'));
   host.replaceChildren(...children);
+}
+
+// The host's LLDP adjacencies (GET /api/topology/neighbors?target=, both
+// directions): which switch port it is plugged into, as the agent's own lldpd
+// reports it — and any other agent that reports this one as its neighbour.
+async function loadAgentNeighbours(id, host) {
+  let data;
+  try {
+    data = await api(`/api/topology/neighbors?target=${encodeURIComponent(id)}&limit=50`);
+  } catch (e) {
+    host.replaceChildren(ui.errorState({ title: t('ad.nb.err'), body: errText(e), detail: 'GET /api/topology/neighbors' }));
+    return;
+  }
+  const rows = (data && data.neighbors) || [];
+  if (!rows.length) {
+    host.replaceChildren(ui.emptyState({ kind: 'nodata', title: t('ad.nb.none'), body: t('ad.nb.noneHint') }));
+    return;
+  }
+  const total = data.page && data.page.total;
+  const table = ui.dataTable({
+    dense: true,
+    columns: [
+      { key: 'port', label: t('ad.nb.port') },
+      { key: 'peer', label: t('ad.nb.peer') },
+      { key: 'peerPort', label: t('ad.nb.peerPort') },
+      { key: 'seen', label: t('ad.nb.seen'), time: true },
+    ],
+    rows: rows.map((n) => ({
+      key: n.id,
+      cells: {
+        // A row another agent reported names this host as the far end.
+        port: Number(n.localAgentId) === Number(id)
+          ? (n.localPort || '—')
+          : ui.meta(t('ad.nb.reportedBy', { id: n.localAgentId })),
+        peer: n.remoteChassisId || '—',
+        peerPort: n.remotePort || '—',
+        seen: ui.fmt.rel(n.lastSeen),
+      },
+    })),
+  });
+  host.replaceChildren(...[table,
+    total && total > rows.length ? ui.inlineNote(t('ad.nb.more', { shown: rows.length, total })) : null,
+  ].filter(Boolean));
 }
 
 // ---- Agent detail (SHELL MIGRATED — see public/views/agent.js)
@@ -9462,6 +9760,10 @@ function getAgentPage() {
       const dep = el('div', { class: 'agent-deps' }, el('div', { class: 'muted' }, t('common.loading')));
       loadAgentDependencies(id, dep);
       out.push({ title: t('ad.dependencies'), node: dep });
+
+      const nb = el('div', { class: 'agent-neighbours' }, el('div', { class: 'muted' }, t('common.loading')));
+      loadAgentNeighbours(id, nb);
+      out.push({ title: t('ad.neighbours'), node: nb });
       return out;
     },
     timeline: (id) => targetTimelineCard(id),
@@ -11355,7 +11657,7 @@ let guideTrack = null;
 // tab is [key, label, adminOnly]; non-admins only ever see the personal section.
 const SETTINGS_GROUPS = [
   ['Access & security', [['users', 'Users', true], ['auth', 'Authentication', true], ['apitokens', 'API tokens', true], ['agentkey', 'Agent key', true]]],
-  ['Detection & alerts', [['analyse', 'Analysis', true], ['alerting', 'Alerting', true], ['severity', 'Severity rules', true], ['runbooks', 'Runbooks', true], ['integrations', 'ITSM', true], ['cmdb', 'CMDB', true], ['ai', 'AI', true], ['maintenance', 'Maintenance', true]]],
+  ['Detection & alerts', [['analyse', 'Analysis', true], ['alerting', 'Alerting', true], ['severity', 'Severity rules', true], ['thresholds', () => t('thr.tab'), true], ['runbooks', 'Runbooks', true], ['integrations', 'ITSM', true], ['cmdb', 'CMDB', true], ['ai', 'AI', true], ['maintenance', 'Maintenance', true]]],
   ['Data', [['database', 'Database', true], ['retention', 'Retention', true], ['types', 'Traffic types', true], ['map', 'Map', true]]],
   ['System', [['setup', 'Setup', true], ['updates', 'Updates', true], ['agents', 'Agents', true], ['snmp', 'SNMP devices', true], ['snmpcommunities', 'SNMP communities', true], ['screening', 'Test Settings', true], ['assurance', 'Service Assurance', true]]],
   ['Personal', [['appearance', 'Appearance', false], ['license', 'License', false]]],
@@ -11485,7 +11787,7 @@ function docsSteps(items) {
 }
 // A "What to expect" callout — success vs. failure signals for a task.
 function docsExpect(...kids) {
-  return el('div', { class: 'callout docs-expect' }, el('strong', {}, 'What to expect '), ...kids);
+  return el('div', { class: 'callout docs-expect' }, el('strong', {}, `${t('docs.expect')} `), ...kids);
 }
 // A three-column reference table: symptom / meaning / action (or you-see / etc.).
 function docsTable(head, rows) {
@@ -11645,19 +11947,23 @@ const DOCS = [
         ],
       },
       {
-        id: 'agent-offline', title: 'An agent is offline', body: () => [
-          docsLead('An agent shows as disconnected, or dropped off the Overview. Work from the server outward.'),
+        // Through the catalogue (docs.ao.*): the troubleshooting article somebody
+        // reads with an agent down is the last place to leave in one language.
+        id: 'agent-offline', get title() { return t('docs.ao.title'); }, body: () => [
+          docsLead(t('docs.ao.lead')),
           docsSteps([
-            ['Open ', viewLink('fleet', 'Overview'), ' and find the agent — offline agents sort to the top with a grey/《offline》badge. Click it to open the agent page.'],
-            ['On the agent page, read the ', el('strong', {}, 'Connection'), ' card. It gives an explainable verdict (last seen, last WebSocket close reason, clock skew) — this usually names the cause outright.'],
-            'Check whether it is one agent or many. Many agents offline at once points at the server/network side (firewall, DNS, this server restarting); a single agent points at that host.',
-            ['If the agent is up but stale, use ', el('strong', {}, 'Reconnect'), ' (operator+) on the agent page to force it to re-dial the server.'],
-            ['On the host itself: confirm the agent process/service is running, and that it can reach this server’s URL and port. Re-running the installer (', el('code', {}, 'git pull && ./install.sh'), ') repairs a broken systemd install.'],
+            [t('docs.ao.s1a'), viewLink('fleet', t('nav.view.fleet')), t('docs.ao.s1b')],
+            [t('docs.ao.s2a'), el('strong', {}, t('docs.ao.s2strong')), t('docs.ao.s2b')],
+            t('docs.ao.s3'),
+            [t('docs.ao.s4a'), el('strong', {}, t('docs.ao.s4strong')), t('docs.ao.s4b')],
+            [t('docs.ao.s5a'), el('code', {}, 'git pull && ./install.sh'), t('docs.ao.s5b')],
           ]),
           docsExpect(
-            el('span', {}, 'A healthy agent reports within seconds of connecting and its ', el('strong', {}, 'Last seen'), ' stays under a minute. '),
-            el('span', {}, 'Common close reasons: ', el('code', {}, 'auth failed'), ' → the agent token was rotated/revoked (re-enroll); ', el('code', {}, 'timeout'), '/', el('code', {}, 'ECONNREFUSED'), ' → network path or the server is down; large ', el('strong', {}, 'clock skew'), ' → fix NTP on the host, it degrades data quality.')),
-          el('p', { class: 'muted' }, ['Related: ', viewLink('logs', 'Logs'), ' shows server-side connect/disconnect events, and Reporting → Audit records each agent online/offline transition.']),
+            el('span', {}, t('docs.ao.expect1a'), el('strong', {}, t('docs.ao.lastSeen')), t('docs.ao.expect1b')),
+            el('span', {}, t('docs.ao.expect2a'), el('code', {}, 'auth failed'), t('docs.ao.expect2b'),
+              el('code', {}, 'timeout'), '/', el('code', {}, 'ECONNREFUSED'), t('docs.ao.expect2c'),
+              el('strong', {}, t('docs.ao.skew')), t('docs.ao.expect2d'))),
+          el('p', { class: 'muted' }, [t('docs.ao.relatedA'), viewLink('logs', t('nav.view.logs')), t('docs.ao.relatedB')]),
         ],
       },
       {
@@ -11957,8 +12263,8 @@ const DOCS = [
             ['SSO (OIDC)', settingsLink('auth', 'Settings → Authentication'), ['env ', el('code', {}, 'OIDC_*'), ' (issuer/client)'], 'token claim → role'],
             ['SSO (SAML)', settingsLink('auth', 'Settings → Authentication'), ['env ', el('code', {}, 'SAML_*'), ' (IdP/SP)'], 'assertion attribute → role'],
           ]),
-          el('p', {}, ['The connection itself (bind host, issuer, IdP metadata) comes from server ', el('strong', {}, 'environment variables'), ' — set those on the server. The dashboard tab is where you map groups/claims/attributes to BlueEyes roles and read the login audit. Local accounts always remain as a fallback, so you can never lock yourself out.']),
-          docsExpect('Each method has a built-in test: an LDAP bind check, OIDC discovery, and a SAML reachability probe (all also surfaced in Test Settings). A successful test + a correct role map means a directory user lands on the right role on first login (just-in-time provisioning). Failures name the step: bind failed (credentials/DN), discovery failed (issuer/URL), signature/audience mismatch (SAML metadata).'),
+          el('p', {}, [t('docs.sso.connA'), el('strong', {}, t('docs.sso.connEnv')), t('docs.sso.connB')]),
+          docsExpect('Each method has a built-in check: an LDAP bind test and OIDC discovery on Settings → Authentication, and a SAML reachability probe in Test Settings (which screens all three). A successful test + a correct role map means a directory user lands on the right role on first login (just-in-time provisioning). Failures name the step: bind failed (credentials/DN), discovery failed (issuer/URL), signature/audience mismatch (SAML metadata).'),
         ],
       },
       {
@@ -12061,6 +12367,7 @@ const SETTINGS_SECTIONS = {
   analyse: settingsAnalyseView,
   alerting: settingsAlertingView,
   severity: settingsSeverityRulesView,
+  thresholds: settingsThresholdsView,
   runbooks: settingsRunbooksView,
   integrations: settingsIntegrationsView,
   cmdb: settingsCmdbView,
@@ -12079,15 +12386,19 @@ const SETTINGS_SECTIONS = {
   assurance: settingsAssuranceView,
 };
 
+// A section label is a string, or a function for one that goes through t() —
+// resolved per call, so a language switch relabels it.
+const settingsLabelText = (label) => (typeof label === 'function' ? label() : label);
 function settingsGroups() {
   // Drop admin-only sections for non-admins, then drop any group left empty.
   return SETTINGS_GROUPS
-    .map(([label, tabs]) => [label, tabs.filter(([, , adminOnly]) => isAdmin() || !adminOnly)])
+    .map(([label, tabs]) => [label, tabs.filter(([, , adminOnly]) => isAdmin() || !adminOnly)
+      .map(([k, l, a]) => [k, settingsLabelText(l), a])])
     .filter(([, tabs]) => tabs.length > 0);
 }
 function settingsLabel(key) {
   for (const [, tabs] of SETTINGS_GROUPS) {
-    for (const [k, label] of tabs) if (k === key) return label;
+    for (const [k, label] of tabs) if (k === key) return settingsLabelText(label);
   }
   return key;
 }
@@ -12418,8 +12729,11 @@ function serverUpdateActions(ver, targetVersion) {
     return out;
   }
 
-  out.push(el('p', { class: 'muted' }, 'Runs on the server host: ', el('code', {}, update.command),
-    '. The server restarts as part of the update, so the dashboard reconnects when it comes back.'));
+  // The command line is an admin's to see (the server sends null to others).
+  if (update.command) {
+    out.push(el('p', { class: 'muted' }, t('set.upd.runsOnA'), el('code', {}, update.command),
+      t('set.upd.runsOnB')));
+  }
 
   if (!canDelete()) {
     out.push(el('p', { class: 'muted' }, 'Only an admin can start an update.'));
@@ -12692,7 +13006,9 @@ async function settingsAiView() {
 //   * WHEN IT LAST ANSWERED, not just that it is failing. "Last answered 41
 //     minutes ago" is the difference between a switch that blipped and one that
 //     is gone.
-const SNMP_COLLECT_KINDS = ['if', 'fdb', 'lldp', 'vlan'];
+// 'cdp', 'arp' and 'entity' are collected by default for devices added from
+// migration 124 on; a device created before keeps its own list.
+const SNMP_COLLECT_KINDS = ['if', 'fdb', 'lldp', 'vlan', 'cdp', 'arp', 'entity'];
 
 async function settingsSnmpDevicesView() {
   const host = el('div', { class: 'settings-grid' });
@@ -12892,17 +13208,29 @@ async function settingsSnmpDevicesView() {
         el('td', {}, isAdmin() ? siteCell(d) : (
           locations.find((l) => Number(l.id) === d.locationId)
             ? locations.find((l) => Number(l.id) === d.locationId).name
-            : el('span', { class: 'muted' }, t('snmpdev.site.none')))),
+            : el('span', { class: 'muted' }, t('snmpdev.site.none'))),
+          // Below the site: the room or rack the device's own sysLocation
+          // names, so the list answers "where is it" at rack level.
+          d.sysLocation ? el('div', { class: 'meta-xs' }, t('snmpdev.list.sysLocation', { where: d.sysLocation })) : null),
         el('td', {}, supportedCell(d)),
         el('td', {}, stateCell(d)),
         el('td', {},
           el('button', {
             class: 'btn btn-secondary btn-xs',
-            onclick: async () => {
+            onclick: async (ev) => {
+              // The server waits (bounded) for the agent's answer, so the
+              // button says it is busy rather than inviting a second press.
+              const btn = ev.currentTarget;
+              btn.disabled = true;
+              btn.textContent = t('snmpdev.poll.running');
               try {
-                await api(`/api/snmp-devices/${d.id}/poll`, { method: 'POST' });
-                toast(t('snmpdev.poll.queued'));
-              } catch (e) { toast(errText(e)); }
+                const out = await api(`/api/snmp-devices/${d.id}/poll`, { method: 'POST' });
+                toast(snmpPollOutcome(out));
+                if (out && out.result) await refresh();
+              } catch (e) { toast(errText(e)); } finally {
+                btn.disabled = false;
+                btn.textContent = t('snmpdev.action.poll');
+              }
             },
           }, t('snmpdev.action.poll')),
           isAdmin() ? el('button', {
@@ -12921,6 +13249,20 @@ async function settingsSnmpDevicesView() {
 
   await refresh();
   return host;
+}
+
+// What "Poll now" came back with, in one sentence. 202 (`pending`) is an agent
+// still polling — or one too old to answer — and its data lands on the table
+// later; 200 carries the agent's own count, and the two answers an operator
+// can act on: this device is not the agent's, or the agent has none at all.
+function snmpPollOutcome(out) {
+  const r = out && out.result;
+  if (!r || out.pending) return t('snmpdev.poll.queued');
+  if (r.error) return t('snmpdev.poll.failed', { error: r.error });
+  if (r.devices === 0) return t('snmpdev.poll.noDevices');
+  if (r.deviceAssigned === false) return t('snmpdev.poll.notAssigned');
+  const n = r.devices == null ? (r.polled || 0) + (r.failed || 0) : r.devices;
+  return plural('snmpdev.poll.done', n, { n: String(n), polled: String(r.polled ?? 0), failed: String(r.failed ?? 0) });
 }
 
 // ---- Settings → SNMP communities -------------------------------------------
@@ -12997,6 +13339,9 @@ async function settingsSetupView() {
     const detailKey = `setup.check.${check.key}.${check.state}`;
     let detail = t(detailKey, check.detail || {});
     if (detail === detailKey) detail = t(`setup.state.${check.state}`);
+    // A row whose source could not be READ says that, whatever row it is —
+    // its own "unknown" text explains a different kind of not knowing.
+    if (check.detail && check.detail.reason === 'unreadable') detail = t('setup.reason.unreadable');
     return el('tr', {},
       el('td', {},
         el('strong', {}, t(`setup.check.${check.key}.title`)),
@@ -13004,6 +13349,31 @@ async function settingsSetupView() {
       el('td', {}, stateBadge(check.state)),
       el('td', {}, unlocksCell(check.unlocks)),
       el('td', {}, check.state === 'ok' ? null : fixControl(check)));
+  }
+
+  // Three answers, never two: work outstanding; nothing outstanding that can
+  // be seen but some rows could not be determined (NOT "complete" — an
+  // unread row may be hiding the work); or complete. `status` is absent from
+  // an older server, which only knew `complete`.
+  function setupBanner(data) {
+    const unreadable = data.unreadable || 0;
+    const status = data.status || (data.complete ? 'complete' : 'outstanding');
+    if (status === 'outstanding') {
+      return el('div', {},
+        el('span', { class: 'badge-ui warn' }, t('setup.outstanding', { n: data.outstanding || 0 })),
+        unreadable ? ' ' : null,
+        unreadable ? el('span', { class: 'badge-ui neutral' }, t('setup.unreadable', { n: unreadable })) : null);
+    }
+    if (status === 'unknown') {
+      return el('div', {},
+        el('strong', {}, t('setup.unknown.title')),
+        el('p', { class: 'muted' }, unreadable
+          ? t('setup.unknown.bodyUnreadable', { n: data.unknown || 0 })
+          : t('setup.unknown.body', { n: data.unknown || 0 })));
+    }
+    return el('div', {},
+      el('strong', {}, t('setup.complete.title')),
+      el('p', { class: 'muted' }, t('setup.complete.body')));
   }
 
   async function refresh() {
@@ -13019,11 +13389,7 @@ async function settingsSetupView() {
     const head = el('section', { class: 'card' },
       el('h3', {}, t('setup.title')),
       el('p', { class: 'muted' }, t('setup.lead')),
-      data.complete
-        ? el('div', {},
-          el('strong', {}, t('setup.complete.title')),
-          el('p', { class: 'muted' }, t('setup.complete.body')))
-        : el('span', { class: 'badge-ui warn' }, t('setup.outstanding', { n: data.outstanding || 0 })),
+      setupBanner(data),
       // The next question once the wiring is done: what is still not SEEN.
       // Same role as this screen (admin), so the link is never a dead end.
       el('p', { class: 'muted' }, t('setup.coverage.lead'), ' ', viewLink('coverage', t('nav.view.coverage'))));
@@ -13820,14 +14186,15 @@ async function settingsAlertingView() {
   // otherwise). An unknown licence (null) keeps the editor, per the "allow until we
   // know it's off" rule used for the assistant.
   const alertingLicensed = !data.license || data.license.alerting !== false;
-  root.append(el('p', { class: 'muted settings-intro' },
-    'When a finding is raised it can be dispatched by e-mail, webhook, Matrix or syslog. Turn alerting on, then enable the channels you want and set a minimum severity for each. Settings are stored in the database and take effect immediately — no restart.'));
+  root.append(el('p', { class: 'muted settings-intro' }, t('alerting.intro')));
   if (!alertingLicensed) {
     root.append(el('div', { class: 'settings-grid' }, alertingUnlicensedCard(data.license)));
     return root;
   }
+  const state = alertingStateLine();
+  refreshAlertingState = state.refresh;
   root.append(el('div', { class: 'settings-grid' },
-    alertingGeneralCard(a),
+    alertingGeneralCard(a, state),
     alertingEmailCard(ch.email),
     alertingWebhookCard(ch.webhook),
     alertingMatrixCard(ch.matrix),
@@ -13844,10 +14211,33 @@ function alertingUnlicensedCard(license) {
     licenseBadge(license, 'alerting'));
 }
 
-// Master switch + cooldown. Saves just { enabled, cooldownMs }; the server merges
-// it onto the stored config, leaving the per-channel settings untouched.
-function alertingGeneralCard(a) {
-  const enabledI = el('input', { type: 'checkbox' }); enabledI.checked = !!a.enabled;
+// The EFFECTIVE master switch and why (GET /api/alerting/config): automatic
+// mode turns alerting on as soon as one channel is configured, so the checkbox
+// alone could not say whether anything will actually be sent. Refreshed after
+// every save on this screen, channel cards included.
+let refreshAlertingState = () => {};
+function alertingStateLine() {
+  const line = el('p', { class: 'muted small' });
+  async function refresh() {
+    try {
+      const c = await api('/api/alerting/config');
+      const head = t(c.enabled ? 'alerting.state.on' : 'alerting.state.off');
+      line.textContent = c.enabledReason
+        ? `${head} — ${t(`alerting.reason.${c.enabledReason}`, { channels: (c.configuredChannels || []).join(', ') })}`
+        : head;
+    } catch { line.textContent = t('alerting.state.unknown'); }
+  }
+  refresh();
+  return { node: line, refresh };
+}
+
+// Master switch + cooldown. Saves just { enabledMode, cooldownMs }; the server
+// merges it onto the stored config, leaving the per-channel settings untouched.
+// The switch has three states (auto | on | off) — see docs/alerting.md.
+function alertingGeneralCard(a, state) {
+  const enabledI = el('select', {},
+    ...['auto', 'on', 'off'].map((m) => el('option', { value: m }, t(`alerting.mode.${m}`))));
+  enabledI.value = ['auto', 'on', 'off'].includes(a.enabledMode) ? a.enabledMode : (a.enabled ? 'on' : 'auto');
   const coolI = el('input', { type: 'number', min: '0', max: '1440', step: '1', value: String(Math.round((a.cooldownMs ?? 900000) / 60000)) });
   const err = el('p', { class: 'error' });
   const btn = el('button', { class: 'small' }, 'Save');
@@ -13863,15 +14253,16 @@ function alertingGeneralCard(a) {
       return;
     }
     btn.disabled = true;
-    try { await api('/api/settings/alerting', { method: 'PUT', body: { enabled: enabledI.checked, cooldownMs: Math.round(mins * 60000) } }); toast('Alerting saved'); }
+    try { await api('/api/settings/alerting', { method: 'PUT', body: { enabledMode: enabledI.value, cooldownMs: Math.round(mins * 60000) } }); toast('Alerting saved'); refreshAlertingState(); }
     catch (e2) { err.textContent = errText(e2); }
     finally { btn.disabled = false; }
   }
   btn.addEventListener('click', save);
   return el('div', { class: 'settings-card' }, el('h3', {}, 'Alerting'),
+    state ? state.node : null,
     el('div', { class: 'form-grid' },
-      el('label', { class: 'set-field' }, el('span', {}, 'Alerting enabled'), enabledI,
-        el('span', { class: 'muted small' }, 'Master switch. When off, findings are still recorded but never dispatched.')),
+      el('label', { class: 'set-field' }, el('span', {}, t('alerting.mode.label')), enabledI,
+        el('span', { class: 'muted small' }, t('alerting.mode.hint'))),
       el('label', { class: 'set-field' }, el('span', {}, 'Cooldown (minutes)'), coolI,
         el('span', { class: 'muted small' }, 'Minimum time between repeated alerts for the same condition on the same host. 0 = no throttling (every finding is sent).')),
       err, el('div', { class: 'form-actions' }, btn)));
@@ -13925,6 +14316,8 @@ function alertingChannelCard({ name, title, blurb, channel, bodyRows, gather, on
       const res = await api('/api/settings/alerting', { method: 'PUT', body: { [name]: slice } });
       toast(`${title} saved`);
       if (onSaved) onSaved(res.alerting || {});
+      // A channel becoming configured can switch automatic alerting on.
+      refreshAlertingState();
     } catch (e2) { err.textContent = errText(e2); }
     finally { saveBtn.disabled = false; }
   }
@@ -14049,8 +14442,9 @@ function alertingSyslogCard(channel) {
 // (config CRUD + connectivity test + login audit) and src/auth/ldap.js (the bind
 // + group→role resolution, run from src/routes/auth.js at login). Admin-only and
 // licence-gated (sso_ldap, Professional) — the server returns licensed:false and
-// refuses the writes when the plan doesn't include it.
-async function settingsAuthView() {
+// refuses the writes when the plan doesn't include it. One section of the tab —
+// settingsAuthView (below) composes it with the security policy and SSO.
+async function settingsLdapSection() {
   const cfgRes = await api('/api/ldap/config');
   const cfg = cfgRes.config || {};
   const licensed = cfgRes.licensed !== false; // server-computed; allow-until-known-off
@@ -14253,6 +14647,242 @@ function ldapAuditCard() {
   return card;
 }
 
+// ---- Settings → Authentication: the whole tab --------------------------------
+// Four sections on one page, in the order an admin works through them: the
+// baseline security policy every account is under (password history, max age,
+// IP allowlist by role — never licence-gated), then the three directory/SSO
+// methods. Each SSO section is self-contained, so a licence that lacks LDAP
+// still shows OIDC and SAML, and the security policy always shows.
+async function settingsAuthView() {
+  const root = el('div', { class: 'auth-settings' });
+  const section = (key, node) => el('section', { class: 'auth-section', 'data-auth-section': key }, node);
+  const safe = async (fn) => {
+    try { return await fn(); } catch (e) { return el('p', { class: 'error' }, errText(e)); }
+  };
+  root.append(
+    section('security', await safe(authSecuritySection)),
+    section('ldap', el('div', {}, el('h2', { class: 'auth-section-title' }, t('set.auth.ldap.title')), await safe(settingsLdapSection))),
+    section('oidc', await safe(() => ssoSection(SSO_KINDS.oidc))),
+    section('saml', await safe(() => ssoSection(SSO_KINDS.saml))));
+  return root;
+}
+
+// ---- Security policy (migration 041) ----------------------------------------
+// Backend: /api/settings/security (src/routes/authSecurity.js). The server owns
+// the bounds and the lock-out guard; the form only states them.
+async function authSecuritySection() {
+  const cfg = await api('/api/settings/security');
+  const limits = cfg.limits || {};
+  const wrap = el('div');
+  wrap.append(el('h2', { class: 'auth-section-title' }, t('set.sec.title')),
+    el('p', { class: 'muted settings-intro' }, t('set.sec.intro')));
+
+  // Password rules.
+  const histI = el('input', { type: 'number', min: '0', max: String(limits.passwordHistoryMax ?? 24), step: '1', value: String(cfg.passwordHistory ?? 5), 'data-sec': 'passwordHistory' });
+  const ageI = el('input', { type: 'number', min: '0', max: String(limits.passwordMaxAgeMaxDays ?? 3650), step: '1', value: String(cfg.passwordMaxAgeDays ?? 0), 'data-sec': 'passwordMaxAgeDays' });
+  const pwErr = el('p', { class: 'error' });
+  const pwSave = el('button', { class: 'small', 'data-sec-save': 'password' }, t('set.sec.save'));
+  pwSave.addEventListener('click', async () => {
+    pwErr.textContent = ''; pwSave.disabled = true;
+    try {
+      await api('/api/settings/security', { method: 'PUT', body: { passwordHistory: Number(histI.value), passwordMaxAgeDays: Number(ageI.value) } });
+      toast(t('set.sec.saved'));
+    } catch (e) { pwErr.textContent = errText(e); }
+    finally { pwSave.disabled = false; }
+  });
+  const pwCard = el('div', { class: 'settings-card' }, el('h3', {}, t('set.sec.pw.title')),
+    el('div', { class: 'form-grid' },
+      alertField(t('set.sec.pw.history'), histI, t('set.sec.pw.historyHint', { max: limits.passwordHistoryMax ?? 24 })),
+      alertField(t('set.sec.pw.maxAge'), ageI, t('set.sec.pw.maxAgeHint')),
+      pwErr,
+      el('div', { class: 'form-actions' }, pwSave)));
+
+  // IP allowlist by role — one address/CIDR per line, an empty box = unrestricted.
+  const roles = ['admin', 'operator', 'viewer'];
+  const boxes = {};
+  const lists = cfg.ipAllowlist || {};
+  const ipErr = el('p', { class: 'error' });
+  const ipSave = el('button', { class: 'small', 'data-sec-save': 'allowlist' }, t('set.sec.save'));
+  const rows = roles.map((r) => {
+    boxes[r] = el('textarea', { rows: '4', spellcheck: 'false', 'data-sec-role': r, placeholder: t('set.sec.ip.placeholder') });
+    boxes[r].value = (lists[r] || []).join('\n');
+    return alertField(t(`set.sec.ip.role.${r}`), boxes[r], r === 'admin' ? t('set.sec.ip.adminHint') : null);
+  });
+  ipSave.addEventListener('click', async () => {
+    ipErr.textContent = ''; ipSave.disabled = true;
+    const body = { ipAllowlist: {} };
+    for (const r of roles) body.ipAllowlist[r] = boxes[r].value.split(/[\s,]+/).map((x) => x.trim()).filter(Boolean);
+    try {
+      const saved = await api('/api/settings/security', { method: 'PUT', body });
+      for (const r of roles) boxes[r].value = (saved.ipAllowlist[r] || []).join('\n');
+      toast(t('set.sec.saved'));
+    } catch (e) { ipErr.textContent = errText(e); }
+    finally { ipSave.disabled = false; }
+  });
+  const ipCard = el('div', { class: 'settings-card wide' }, el('h3', {}, t('set.sec.ip.title')),
+    el('p', { class: 'muted small' }, t('set.sec.ip.intro')),
+    el('p', { class: 'small', 'data-sec-yourip': '' }, t('set.sec.ip.yourIp', { ip: cfg.yourIp || '?' })),
+    el('div', { class: 'form-grid' }, ...rows, ipErr, el('div', { class: 'form-actions' }, ipSave)));
+
+  wrap.append(el('div', { class: 'settings-grid' }, pwCard, ipCard));
+  return wrap;
+}
+
+// ---- SSO (OIDC / SAML) --------------------------------------------------------
+// Backend: src/routes/oidc.js / saml.js (admin API at /api/oidc, /api/saml):
+// read-only connection status (the IdP connection itself is env-configured and
+// no secret is ever returned), the claim/attribute → role map CRUD, the SSO
+// login audit, and for OIDC a discovery test. Admin-only; the writes are
+// licence-gated (sso_oidc / sso_saml) server-side, so an unlicensed install
+// sees the status and an explanation rather than controls that would 403.
+const SSO_KINDS = {
+  oidc: {
+    key: 'oidc', base: '/api/oidc', flag: 'OIDC_AUTH_ENABLED', envPrefix: 'OIDC_*', test: true,
+    fields: [
+      ['issuer', 'set.sso.f.issuer'], ['clientId', 'set.sso.f.clientId'], ['redirectUri', 'set.sso.f.redirectUri'],
+      ['scopes', 'set.sso.f.scopes'], ['roleClaim', 'set.sso.f.roleClaim'], ['clientSecretSet', 'set.sso.f.clientSecret'],
+    ],
+  },
+  saml: {
+    key: 'saml', base: '/api/saml', flag: 'SAML_AUTH_ENABLED', envPrefix: 'SAML_*', test: false, metadata: '/auth/saml/metadata',
+    fields: [
+      ['entryPoint', 'set.sso.f.entryPoint'], ['idpEntityId', 'set.sso.f.idpEntityId'], ['spEntityId', 'set.sso.f.spEntityId'],
+      ['audience', 'set.sso.f.audience'], ['callbackUrl', 'set.sso.f.callbackUrl'], ['roleAttribute', 'set.sso.f.roleAttribute'],
+      ['idpCertSet', 'set.sso.f.idpCert'],
+    ],
+  },
+};
+
+async function ssoSection(kind) {
+  const [status, roleMap] = await Promise.all([
+    api(`${kind.base}/config`),
+    api(`${kind.base}/role-map`).catch(() => []),
+  ]);
+  const licensed = status.licensed !== false;
+  const wrap = el('div');
+  wrap.append(el('h2', { class: 'auth-section-title' }, t(`set.sso.${kind.key}.title`)),
+    el('p', { class: 'muted settings-intro' }, t(`set.sso.${kind.key}.intro`), ' ',
+      el('span', { class: `badge ${licensed ? 'active' : 'offline'}`, 'data-sso-licence': kind.key },
+        t(licensed ? 'set.sso.licensed' : 'set.sso.unlicensed'))));
+  const cards = [ssoStatusCard(kind, status)];
+  if (licensed) cards.push(ssoRoleMapCard(kind, Array.isArray(roleMap) ? roleMap : []));
+  cards.push(ssoAuditCard(kind));
+  wrap.append(el('div', { class: 'settings-grid' }, ...cards));
+  return wrap;
+}
+
+// Status: is it live, and if not, which of the three conditions is missing —
+// the server flag, the licence, or the env connection settings.
+function ssoStatusCard(kind, s) {
+  const yesNo = (v) => el('span', { class: `badge ${v ? 'ok' : 'warn'}` }, t(v ? 'set.sso.yes' : 'set.sso.no'));
+  const live = s.enabled === true;
+  const err = el('p', { class: 'error' });
+  const card = el('div', { class: 'settings-card', 'data-sso-status': kind.key },
+    el('h3', {}, t('set.sso.status.title'), ' ',
+      el('span', { class: `badge ${live ? 'ok' : 'warn'}`, 'data-sso-live': live ? 'yes' : 'no' }, t(live ? 'set.sso.live' : 'set.sso.notLive'))));
+  const tbl = el('table', { class: 'kv' }, el('tbody', {},
+    el('tr', {}, el('td', {}, t('set.sso.flag', { flag: kind.flag })), el('td', {}, yesNo(s.authEnabledFlag === true))),
+    el('tr', {}, el('td', {}, t('set.sso.licence')), el('td', {}, yesNo(s.licensed !== false))),
+    el('tr', {}, el('td', {}, t('set.sso.configured')), el('td', {}, yesNo(s.configured === true))),
+    ...kind.fields.map(([f, label]) => el('tr', {}, el('td', {}, t(label)),
+      el('td', {}, typeof s[f] === 'boolean' ? yesNo(s[f]) : (s[f] ? el('code', {}, String(s[f])) : el('span', { class: 'muted' }, '–')))))));
+  card.append(tbl, el('p', { class: 'muted small' }, t('set.sso.envHint', { prefix: kind.envPrefix })));
+  const actions = el('div', { class: 'form-actions' });
+  if (kind.metadata) {
+    actions.append(el('a', { href: kind.metadata, target: '_blank', rel: 'noopener', class: 'btn btn-ghost btn-xs' }, t('set.sso.metadata')));
+  }
+  if (kind.test && s.licensed !== false) {
+    const testBtn = el('button', { class: 'small ghost', 'data-sso-test': kind.key }, t('set.sso.test'));
+    testBtn.addEventListener('click', async () => {
+      err.textContent = ''; testBtn.disabled = true;
+      try {
+        const r = await api(`${kind.base}/test`, { method: 'POST' });
+        if (r.ok) toast(t('set.sso.testOk', { detail: r.detail || 'ok' }));
+        else err.textContent = t('set.sso.testFailed', { detail: r.detail || '?' });
+      } catch (e) { err.textContent = errText(e); }
+      finally { testBtn.disabled = false; }
+    });
+    actions.append(testBtn);
+  }
+  if (actions.childNodes.length) card.append(err, actions);
+  return card;
+}
+
+// Claim/attribute value → role. Same shape as the LDAP group map: a change
+// PUTs immediately, add/delete re-render the tab. No match = no access.
+function ssoRoleMapCard(kind, roleMap) {
+  const card = el('div', { class: 'settings-card wide', 'data-sso-rolemap': kind.key },
+    el('h3', {}, t(`set.sso.${kind.key}.mapTitle`)),
+    el('p', { class: 'muted small' }, t(`set.sso.${kind.key}.mapIntro`)));
+  const err = el('p', { class: 'error' });
+  const listEl = el('div', { class: 'tablewrap' });
+  if (!roleMap.length) {
+    listEl.append(el('div', { class: 'empty' }, t('set.sso.mapEmpty')));
+  } else {
+    listEl.append(el('table', {},
+      el('thead', {}, el('tr', {}, el('th', {}, t(`set.sso.${kind.key}.value`)), el('th', {}, t('set.sso.role')), el('th', {}))),
+      el('tbody', {}, ...roleMap.map((m) => {
+        const sel = roleSelect(m.blueeye_role);
+        sel.addEventListener('change', async () => {
+          err.textContent = '';
+          try { await api(`${kind.base}/role-map/${m.id}`, { method: 'PUT', body: { claimValue: m.claim_value, role: sel.value } }); m.blueeye_role = sel.value; toast(t('set.sso.mapUpdated')); }
+          catch (e) { sel.value = m.blueeye_role; err.textContent = errText(e); }
+        });
+        const del = el('button', { class: 'small ghost danger', 'data-sso-del': String(m.id), onclick: async () => {
+          err.textContent = '';
+          try { await api(`${kind.base}/role-map/${m.id}`, { method: 'DELETE' }); render(); }
+          catch (e) { err.textContent = errText(e); }
+        } }, t('set.sso.delete'));
+        return el('tr', {}, el('td', {}, el('code', {}, m.claim_value)), el('td', {}, sel), el('td', {}, del));
+      }))));
+  }
+  const valueI = el('input', { type: 'text', 'data-sso-new': kind.key, placeholder: t(`set.sso.${kind.key}.placeholder`) });
+  const roleI = roleSelect('viewer');
+  const addBtn = el('button', { class: 'small', 'data-sso-add': kind.key }, t('set.sso.add'));
+  addBtn.addEventListener('click', async () => {
+    err.textContent = '';
+    const claimValue = valueI.value.trim();
+    if (!claimValue) { err.textContent = t('set.sso.valueRequired'); return; }
+    addBtn.disabled = true;
+    try { await api(`${kind.base}/role-map`, { method: 'POST', body: { claimValue, role: roleI.value } }); render(); }
+    catch (e) { err.textContent = e.status === 409 ? t('set.sso.duplicate') : errText(e); addBtn.disabled = false; }
+  });
+  card.append(listEl, el('div', { class: 'ldap-add' },
+    el('label', { class: 'set-field' }, el('span', {}, t(`set.sso.${kind.key}.value`)), valueI),
+    el('label', { class: 'set-field' }, el('span', {}, t('set.sso.role')), roleI),
+    addBtn), err);
+  return card;
+}
+
+// Recent SSO sign-ins for this provider (read-only; the shared
+// sso_login_audit). A refused sign-in says why — including ip-not-allowed.
+function ssoAuditCard(kind) {
+  const card = el('div', { class: 'settings-card wide', 'data-sso-audit': kind.key });
+  const body = el('div', {}, el('p', { class: 'muted small' }, t('set.sso.loading')));
+  const refresh = el('button', { class: 'small ghost' }, t('set.sso.refresh'));
+  card.append(el('div', { class: 'section-head' }, el('h3', {}, t('set.sso.auditTitle')), el('span', { class: 'spacer' }), refresh), body);
+  async function load() {
+    body.replaceChildren(el('p', { class: 'muted small' }, t('set.sso.loading')));
+    let rows;
+    try { rows = await api(`${kind.base}/login-audit?limit=25`); }
+    catch (e) { body.replaceChildren(el('p', { class: 'error' }, errText(e))); return; }
+    if (!Array.isArray(rows) || !rows.length) { body.replaceChildren(el('div', { class: 'empty' }, t('set.sso.auditEmpty'))); return; }
+    const heads = ['set.sso.a.when', 'set.sso.a.subject', 'set.sso.a.result', 'set.sso.role', 'set.sso.a.groups', 'set.sso.a.ip'];
+    body.replaceChildren(el('div', { class: 'tablewrap' }, el('table', {},
+      el('thead', {}, el('tr', {}, ...heads.map((h) => el('th', {}, t(h))))),
+      el('tbody', {}, ...rows.map((r) => el('tr', {},
+        el('td', { class: 'muted' }, fmtDate(r.created_at)),
+        el('td', {}, r.subject || '–'),
+        el('td', {}, r.ok ? el('span', { class: 'badge ok' }, 'ok') : el('span', { class: 'badge bad' }, r.reason || 'failed')),
+        el('td', {}, r.granted_role || '–'),
+        el('td', { class: 'muted' }, String(r.groups_matched ?? 0)),
+        el('td', { class: 'muted' }, r.source_ip || '–')))))));
+  }
+  refresh.addEventListener('click', load);
+  load();
+  return card;
+}
+
 // Maintenance windows: during an active window, alert notifications are
 // suppressed (findings are still recorded + shown). Global, per-location or
 // per-agent. Admin only.
@@ -14438,7 +15068,7 @@ async function editSeverityRule(r, prefill) {
   ];
 
   const modalFields = fields;
-  openModal(editing ? t('sev.editTitle') : t('sev.newTitle'), fields, async (vals) => {
+  const ruleBody = (vals) => {
     const body = {
       source: editing ? r.source : vals.source,
       severity: vals.severity,
@@ -14447,7 +15077,11 @@ async function editSeverityRule(r, prefill) {
     };
     // A blank box means "any", which the API spells as null. Sending '' would
     // be a rule that matches the empty string and therefore nothing.
-    for (const f of scopeFields) body[f.name] = vals[f.name].trim() || null;
+    for (const f of scopeFields) body[f.name] = (vals[f.name] || '').trim() || null;
+    return body;
+  };
+  openModal(editing ? t('sev.editTitle') : t('sev.newTitle'), fields, async (vals) => {
+    const body = ruleBody(vals);
     await api(editing ? `/api/severity-rules/${r.id}` : '/api/severity-rules', {
       method: editing ? 'PUT' : 'POST', body,
     });
@@ -14455,6 +15089,36 @@ async function editSeverityRule(r, prefill) {
     toast(t('sev.saved'));
     render();
   });
+
+  // Preview before Save: how many OPEN events this draft would change right
+  // now (POST /api/severity-rules/preview, scope 'open' — a dry run, nothing is
+  // written). A rule that matches nothing is a typo in a match field far more
+  // often than it is a rule for the future, and this is where that shows.
+  {
+    const card = $('#modal-card');
+    const form = card.querySelector('form');
+    const nodes = [...card.querySelectorAll('form input, form select, form textarea')];
+    const result = el('span', { class: 'muted small', role: 'status' });
+    const previewBtn = el('button', {
+      type: 'button', class: 'ghost small',
+      onclick: async () => {
+        const vals = {};
+        modalFields.forEach((f, i) => { if (nodes[i]) vals[f.name] = nodes[i].value; });
+        result.className = 'muted small';
+        result.textContent = t('sev.previewing');
+        try {
+          const p = await api('/api/severity-rules/preview', { method: 'POST', body: { rule: ruleBody(vals), scope: 'open' } });
+          result.textContent = p.changed
+            ? t('sev.previewResult', { count: p.changed, severity: p.severity })
+            : t('sev.previewNone', { severity: p.severity });
+        } catch (err) {
+          result.className = 'error small';
+          result.textContent = errText(err);
+        }
+      },
+    }, t('sev.preview'));
+    if (form) form.insertBefore(el('div', {}, previewBtn, ' ', result), form.querySelector('p.error'));
+  }
 
   // Switching the source rebuilds the form, because the fields below it BELONG
   // to the source: a Service Assurance rule has no agent, and a finding has no
@@ -14498,6 +15162,28 @@ async function deleteSeverityRule(r) {
   if (!confirm(t('sev.deleteConfirm'))) return;
   try { await api(`/api/severity-rules/${r.id}`, { method: 'DELETE' }); toast(t('sev.deleted')); render(); }
   catch (err) { toast(errText(err), true); }
+}
+
+// ---- Settings → Outage thresholds (built from ui.* — see public/thresholdsPanel.js)
+// The probe-outage thresholds (GET/PUT/DELETE /api/thresholds[/:location_id]).
+// An outage opens only for a metric that has one, so this is where "why did no
+// outage open" is answered.
+const thresholdsPanelState = {};
+function settingsThresholdsView() {
+  if (typeof window === 'undefined' || !window.ThresholdsPanel || !ui) return el('div', { class: 'empty error' }, t('thr.err.title'));
+  const scoped = (scope) => (scope === 'global' ? '/api/thresholds' : `/api/thresholds/${encodeURIComponent(scope)}`);
+  return window.ThresholdsPanel.create({
+    el, t, ui, errText,
+    state: thresholdsPanelState,
+    canEdit: isAdmin,
+    confirm: (msg) => confirm(msg),
+    toast: (msg, bad) => toast(msg, bad),
+    fetchLocations: () => api('/locations'),
+    fetchGlobal: () => api('/api/thresholds'),
+    fetchLocation: (id) => api(scoped(id)),
+    save: (scope, body) => api(scoped(scope), { method: 'PUT', body }),
+    remove: (scope, metric) => api(`${scoped(scope)}?metric=${encodeURIComponent(metric)}`, { method: 'DELETE' }),
+  }).view();
 }
 
 async function settingsRunbooksView() {
@@ -15514,9 +16200,34 @@ function reportingSections() {
   // Analysis screen deliberately stopped answering when it became an overview
   // of what is wrong NOW.
   // Audit is RBAC-gated: only admins may see who did what on the server.
+  // `sla` — the availability and probe-outage reports, run on demand — sits
+  // next to findings: both answer "how did it go over this period".
   return role === 'admin'
-    ? ['findings', 'nis2', 'generator', 'schedules', 'audit']
-    : ['findings', 'nis2', 'generator', 'schedules'];
+    ? ['findings', 'sla', 'nis2', 'generator', 'schedules', 'audit']
+    : ['findings', 'sla', 'nis2', 'generator', 'schedules'];
+}
+
+// ---- Reporting → Availability & outages (built from ui.* — see public/slaReports.js)
+const slaReportsState = {};
+function slaReportsSection() {
+  if (typeof window === 'undefined' || !window.SlaReports || !ui) return el('div', { class: 'empty error' }, t('sla.err'));
+  return window.SlaReports.create({
+    el, t, ui, errText,
+    state: slaReportsState,
+    canWrite,
+    toast: (msg, bad) => toast(msg, bad),
+    fetch: (path) => api(path),
+    fetchLocations: () => api('/locations'),
+    download: (path, filename) => nis2Download(path, filename),
+    print: (path) => nis2Print(path),
+    fetchDraft: (id) => api(`/api/reports/nis2-draft/${encodeURIComponent(id)}`),
+    investigate: (id) => api('/api/investigation/from-event', { method: 'POST', body: { eventId: id } }),
+    card: (inv) => investigationCard(inv),
+    copy: (text) => copyText(text),
+    openAgent: (id) => { ui.closeOverlays(); openAgent(id); },
+    openTroubleshooting: () => { ui.closeOverlays(); gotoView('investigation'); },
+    openSchedules: () => { reportingState.section = 'schedules'; syncLocation(); render(); },
+  }).view();
 }
 
 // ---- Reporting → Findings over time ----------------------------------------
@@ -15660,6 +16371,7 @@ function getReportingPage() {
       return { lead: info.hero || '', title: info.title || t('rep.title'), body: info.body || (() => []) };
     },
     render: (key) => (key === 'findings' ? findingsReport()
+      : key === 'sla' ? slaReportsSection()
       : key === 'generator' ? reportGenerator()
         : key === 'schedules' ? reportSchedulesPanel()
           : key === 'audit' ? auditModule()
@@ -15860,6 +16572,7 @@ async function nis2Risks() {
     el('td', {}, nbadge(r.status, 'neutral')),
     el('td', {}, r.dueDate || '–'),
     el('td', {}, el('div', { class: 'row-actions' },
+      el('button', { class: 'small ghost', onclick: () => nis2OpenEvidence('risk', r.id, r.title) }, t('nis2ev.button')),
       canWrite() ? el('button', { class: 'small ghost', onclick: () => nis2EditRisk(r) }, 'Edit') : null,
       canWrite() ? el('button', { class: 'small ghost', onclick: () => nis2DeleteRisk(r) }, 'Delete') : null))));
   wrap.append(el('div', { class: 'tablewrap' }, el('table', {},
@@ -15933,11 +16646,26 @@ async function nis2Controls() {
     el('td', {}, c.hasEvidence ? nbadge('yes', 'ok') : nbadge('none', 'crit')),
     el('td', {}, nbadge(c.status, NIS2_CTRL_CLASS[c.status])),
     el('td', {}, el('div', { class: 'row-actions' },
+      el('button', { class: 'small ghost', onclick: () => nis2OpenEvidence('control', c.id, c.controlName) }, t('nis2ev.button')),
       canWrite() ? el('button', { class: 'small ghost', onclick: () => nis2EditControl(c) }, 'Edit') : null,
       canWrite() ? el('button', { class: 'small ghost', onclick: () => nis2DeleteControl(c) }, 'Delete') : null))));
   wrap.append(el('div', { class: 'tablewrap' }, el('table', {},
     el('thead', {}, el('tr', {}, ...head.map((h) => el('th', {}, h)))), el('tbody', {}, ...rows))));
   return wrap;
+}
+// Evidence references on a control / risk / incident (GET/POST/DELETE
+// /api/nis2/evidence) — a Drawer built from ui.* (public/nis2Evidence.js).
+// Readers see what is attached; operators attach and remove.
+function nis2OpenEvidence(entityType, entityId, label) {
+  if (typeof window === 'undefined' || !window.Nis2Evidence || !ui) return;
+  window.Nis2Evidence.create({
+    el, t, ui, errText, canWrite,
+    confirm: (msg) => confirm(msg),
+    toast: (msg, bad) => toast(msg, bad),
+    list: (type, id) => api(`/api/nis2/evidence?entityType=${encodeURIComponent(type)}&entityId=${encodeURIComponent(id)}`),
+    create: (body) => api('/api/nis2/evidence', { method: 'POST', body }),
+    remove: (id) => api(`/api/nis2/evidence/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  }).open(entityType, entityId, label);
 }
 function nis2EditControl(c) {
   const editing = c && c.id;
@@ -16052,6 +16780,7 @@ async function nis2Incidents() {
     el('td', {}, i.notificationRequired ? nbadge('required', 'crit') : '–'),
     el('td', {}, nis2DeadlineCell(i.deadlines)),
     el('td', {}, el('div', { class: 'row-actions' },
+      el('button', { class: 'small ghost', onclick: () => nis2OpenEvidence('incident', i.id, i.title) }, t('nis2ev.button')),
       canWrite() ? el('button', { class: 'small ghost', onclick: () => nis2EditIncident(i) }, 'Edit') : null,
       canWrite() ? el('button', { class: 'small ghost', onclick: () => nis2DeleteIncident(i) }, 'Delete') : null))));
   wrap.append(el('div', { class: 'tablewrap' }, el('table', {},
@@ -16169,6 +16898,9 @@ async function auditModule() {
   const wrap = el('div', { class: 'nis2-inner' });
   wrap.append(el('h3', { class: 'nis2-h3' }, 'Audit trail'));
   wrap.append(el('p', { class: 'muted' }, 'Actions performed by users on the server, and what each agent reported — with when, who and what. Repeated activity (continuous reporting, scheduled probes) is recorded once and annotated with how often it repeats.'));
+  // The separate, hash-chained security log, and the one thing it is for:
+  // proving nobody rewrote it (Administration → Audit log integrity).
+  wrap.append(el('p', {}, el('button', { class: 'linklike', onclick: () => gotoView('auditLog') }, t('auditlog.fromTrail'))));
 
   // Filters: actor type + action, plus refresh / CSV export.
   const actorSel = el('select', { class: 'small', onchange: () => { auditState.actorType = actorSel.value; load(); } },
@@ -16484,16 +17216,19 @@ PAGE_INFO.transactions = {
 };
 
 // ---- Transaction tests ------------------------------------------------------
-// Phase → diagnosis. MUST match src/analysis/transactionAlerts.js so the
-// UI diagnosis and the server alert text read identically.
-const TX_PHASE_LABELS = {
-  dns: 'DNS lookup failed — the hostname could not be resolved',
-  connect: 'TCP connection failed — network, firewall, or host down',
-  tls: 'TLS handshake failed — certificate or protocol problem',
-  http_status: 'Unexpected HTTP status code',
-  keyword: 'Response was missing the expected content',
-  timeout: 'The step timed out',
-  error: 'The test could not be run',
+// Phase → diagnosis, through the catalogue (tx.phase.*). The English strings
+// MUST match PHASE_LABELS in src/analysis/transactionAlerts.js so the UI
+// diagnosis and the server alert text read identically —
+// test/txPhaseLabels.test.js pins it. Spelled out per key rather than built
+// from the phase, because the UI gate sweeps literal t() keys.
+const TX_PHASE_KEYS = {
+  dns: () => t('tx.phase.dns'),
+  connect: () => t('tx.phase.connect'),
+  tls: () => t('tx.phase.tls'),
+  http_status: () => t('tx.phase.http_status'),
+  keyword: () => t('tx.phase.keyword'),
+  timeout: () => t('tx.phase.timeout'),
+  error: () => t('tx.phase.error'),
 };
 const TX_TYPES = ['http', 'tcp', 'dns', 'icmp'];
 const TX_DNS_RECORDS = ['A', 'AAAA', 'CNAME', 'MX', 'TXT', 'NS', 'SOA', 'PTR', 'SRV'];
@@ -16503,8 +17238,10 @@ const TX_STATUS_COLOR = { ok: '#2e7d32', fail: '#c62828', timeout: '#e65100', er
 function txDiagnose(detail, status) {
   const d = detail && typeof detail === 'object' ? detail : {};
   if (status === 'ok') return 'OK';
-  const base = TX_PHASE_LABELS[d.phase] || `Failed (${status || 'unknown'})`;
-  const step = d.step != null ? ` (step ${d.step})` : '';
+  const base = Object.prototype.hasOwnProperty.call(TX_PHASE_KEYS, d.phase)
+    ? TX_PHASE_KEYS[d.phase]()
+    : t('tx.phase.failed', { status: status || t('tx.phase.unknown') });
+  const step = d.step != null ? ` ${t('tx.phase.step', { step: d.step })}` : '';
   const errno = d.errno ? ` [${d.errno}]` : '';
   return `${base}${step}${errno}`;
 }
@@ -17382,6 +18119,13 @@ async function render({ silent = false } = {}) {
     $('#login').classList.add('hidden');
     $('#app').classList.add('hidden');
     $('#force-change').classList.remove('hidden');
+    // The same screen serves a one-time password and an expired one; only the
+    // wording differs. The data-i18n keys move too, so a language switch keeps it.
+    const lead = $('#force-change-form p.meta');
+    const curLabel = $('label[for="fc-current"]');
+    const keys = passwordExpired ? ['auth.fc.expiredLead', 'auth.fc.currentPlain'] : ['auth.fc.lead', 'auth.fc.current'];
+    if (lead) { lead.setAttribute('data-i18n', keys[0]); lead.textContent = t(keys[0]); }
+    if (curLabel) { curLabel.setAttribute('data-i18n', keys[1]); curLabel.textContent = t(keys[1]); }
     const cur = $('#fc-current');
     if (cur && document.activeElement !== cur) cur.focus();
     return;
@@ -17514,7 +18258,7 @@ $('#login-form').addEventListener('submit', async (e) => {
   e.preventDefault();
   $('#login-error').textContent = '';
   try { await login($('#email').value, $('#password').value); render(); }
-  catch (err) { $('#login-error').textContent = err.message; }
+  catch (err) { $('#login-error').textContent = errText(err); }
 });
 
 // Forced password change (first login with a one-time password). Posts the
@@ -17531,6 +18275,7 @@ $('#force-change-form').addEventListener('submit', async (e) => {
   if (newPassword !== confirm) { errEl.textContent = t('auth.fc.mismatch'); return; }
   try {
     const data = await api('/auth/change-password', { method: 'POST', body: { currentPassword, newPassword } });
+    passwordExpired = false;
     token = data.token;
     role = data.user.role;
     email = data.user.email;
@@ -17552,7 +18297,7 @@ $('#fc-logout').addEventListener('click', () => logout());
 async function renderSsoOptions() {
   const host = $('#sso-options');
   if (!host) return;
-  if (ssoLoginError) $('#login-error').textContent = t('auth.sso.failed', { message: ssoLoginError });
+  if (ssoLoginError) $('#login-error').textContent = ssoLoginError === 'ip-not-allowed' ? t('auth.ipDenied') : t('auth.sso.failed', { message: ssoLoginError });
   let sso = null;
   try { sso = await (await fetch('/auth/sso')).json(); } catch { sso = null; }
   const methods = [];
@@ -17779,6 +18524,12 @@ const RS_SEVERITIES = ['info', 'warning', 'critical'];
 async function reportSchedulesPanel() {
   const wrap = el('div', { class: 'rs' });
   wrap.append(el('p', { class: 'muted nis2-note' }, t('rs.lead')));
+  // The same two reports, for any period, on screen — and the place to check
+  // what a schedule will send before it sends it.
+  wrap.append(el('p', {}, el('button', {
+    class: 'linklike',
+    onclick: () => { reportingState.section = 'sla'; syncLocation(); render(); },
+  }, t('rs.runNow'))));
 
   const [schedules, locations] = await Promise.all([
     api('/api/report-schedules'),

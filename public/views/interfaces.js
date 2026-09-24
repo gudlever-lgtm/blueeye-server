@@ -56,9 +56,26 @@
     }
 
     function linkText(i) {
-      if (!i.speedMbps && !i.operStatus) return '–';
+      if (!i.speedMbps && !i.operStatus && !i.duplex) return '–';
       var sp = i.speedMbps ? (i.speedMbps >= 1000 ? (i.speedMbps / 1000) + ' Gb/s' : i.speedMbps + ' Mb/s') : '';
-      return [sp, i.operStatus].filter(Boolean).join(' · ');
+      // The negotiated duplex (agent proc source). "unknown" says nothing a
+      // reader can use, so only full/half are shown.
+      var dx = i.duplex === 'full' || i.duplex === 'half' ? t('iface.duplex.' + i.duplex) : '';
+      return [sp, dx, i.operStatus].filter(Boolean).join(' · ');
+    }
+
+    // WHICH fault it is, under the badge — "bad" alone sends somebody to the
+    // cable when the fix is the port's duplex setting. Codes come from
+    // src/health/interfaceHealth.js reasonsOf.
+    function statusCell(i) {
+      var reasons = Array.isArray(i && i.reasons) ? i.reasons : [];
+      if (!reasons.length) return statusBadge(i);
+      var lines = reasons.map(function (r) {
+        var key = 'iface.reason.' + r;
+        var label = t(key);
+        return ui.metaXs(label === key ? r : label);
+      });
+      return el.apply(null, ['div', {}, statusBadge(i)].concat(lines));
     }
 
     // The empty case is two different answers. A flow source (sflow/netflow)
@@ -110,7 +127,7 @@
           return {
             cells: {
               iface: i.iface,
-              status: statusBadge(i),
+              status: statusCell(i),
               link: ui.meta(linkText(i)),
               util: i.utilPct != null
                 ? el('div', { class: 'util' }, deps.usageBar(i.utilPct), ui.metaXs(i.utilPct + '%'))

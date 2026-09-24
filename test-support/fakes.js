@@ -103,6 +103,27 @@ function makeUsersRepo(overrides = {}) {
   };
 }
 
+// A fake password_history repository (migration 041) over an in-memory list,
+// newest last, so history checks and pruning behave as in MySQL. `rows` is
+// exposed for assertions: { id, user_id, password_hash }.
+function makePasswordHistoryRepo(overrides = {}) {
+  const rows = [...(overrides.initial || [])];
+  let nextId = rows.reduce((m, r) => Math.max(m, r.id), 0) + 1;
+  return {
+    rows,
+    recentHashes: overrides.recentHashes || (async (userId, limit) => rows
+      .filter((r) => r.user_id === userId).sort((a, b) => b.id - a.id)
+      .slice(0, Math.max(0, limit)).map((r) => r.password_hash)),
+    record: overrides.record || (async (userId, hash) => { rows.push({ id: nextId++, user_id: userId, password_hash: hash }); }),
+    prune: overrides.prune || (async (userId, keep) => {
+      const mine = rows.filter((r) => r.user_id === userId).sort((a, b) => b.id - a.id);
+      const drop = new Set(mine.slice(Math.max(0, keep)).map((r) => r.id));
+      for (let i = rows.length - 1; i >= 0; i -= 1) if (drop.has(rows[i].id)) rows.splice(i, 1);
+      return drop.size;
+    }),
+  };
+}
+
 // A fake one-time-password mailer. Records every send; a test can point
 // `sendTempPassword` at a rejecting stub to exercise the 500 rollback path.
 function makeUserMailer(overrides = {}) {
@@ -346,6 +367,11 @@ function makeArpEntriesRepo(overrides = {}) {
       const mine = rows.filter((r) => r.agent_id === Number(agentId));
       return mine.length ? new Date(Math.min(...mine.map((r) => new Date(r.first_seen).getTime()))) : null;
     }),
+    // Device inventory (src/topology/deviceLocator.js): newest bindings first.
+    listRecent: overrides.listRecent || (async ({ since = null, limit = 5000 } = {}) => rows
+      .filter((r) => !since || new Date(r.last_seen) >= new Date(since))
+      .sort((a, b) => new Date(b.last_seen) - new Date(a.last_seen) || b.id - a.id)
+      .slice(0, limit).map(mapOut)),
     // Coverage report (src/coverage/): IPv4 per /24, and the MACs behind IPs.
     subnetSummary: overrides.subnetSummary || (async ({ since = null, limit = 500 } = {}) => {
       const by = new Map();
@@ -385,6 +411,7 @@ function makeDeviceEventsRepo(overrides = {}) {
     id: r.id,
     agentId: r.agent_id,
     deviceId: r.device_id,
+    snmpDeviceId: r.snmp_device_id ?? null,
     sourceIp: r.source_ip,
     receivedAt: iso(r.received_at),
     deviceTime: iso(r.device_time),
@@ -406,6 +433,7 @@ function makeDeviceEventsRepo(overrides = {}) {
     if (f.maxSeverity != null && r.severity > f.maxSeverity) return false;
     if (f.deviceId != null && r.device_id !== Number(f.deviceId)) return false;
     if (f.agentId != null && r.agent_id !== Number(f.agentId)) return false;
+    if (f.snmpDeviceId != null && r.snmp_device_id !== Number(f.snmpDeviceId)) return false;
     if (f.sourceIp && r.source_ip !== f.sourceIp) return false;
     if (f.transport && r.transport !== f.transport) return false;
     if (f.eventType && r.event_type !== f.eventType) return false;
@@ -436,6 +464,7 @@ function makeDeviceEventsRepo(overrides = {}) {
           id: (seq += 1),
           agent_id: Number(agentId),
           device_id: e.deviceId ?? null,
+          snmp_device_id: e.snmpDeviceId ?? null,
           source_ip: e.sourceIp,
           received_at: e.receivedAt,
           device_time: e.deviceTime ?? null,
@@ -474,6 +503,7 @@ function makeDeviceEventsRepo(overrides = {}) {
         if (ms(r.received_at) < cut) continue;
         if (f.deviceId != null && r.device_id !== Number(f.deviceId)) continue;
         if (f.agentId != null && r.agent_id !== Number(f.agentId)) continue;
+        if (f.snmpDeviceId != null && r.snmp_device_id !== Number(f.snmpDeviceId)) continue;
         const cur = by.get(r.severity) || { severity: r.severity, rows: 0, occurrences: 0 };
         cur.rows += 1;
         cur.occurrences += r.occurrences;
@@ -520,8 +550,47 @@ function makeDeviceEventsRepo(overrides = {}) {
 // never return a community, and only `listForAgentWithSecret` does. A fake that
 // leaked it everywhere would let a route accidentally return one and still pass
 // its test.
+// sflow_exporters (migration 128): one row per (agent, address), upserted by
+// the sFlow counter ingest; first_seen kept on a repeat, like the real upsert.
+function makeSflowExportersRepo(overrides = {}) {
+  const rows = [];
+  let seq = 0;
+  const iso = (v) => (v instanceof Date ? v.toISOString() : new Date(v).toISOString());
+  return {
+    rows,
+    recordSeen: overrides.recordSeen || (async (list, { at = new Date() } = {}) => {
+      let n = 0;
+      for (const r of Array.isArray(list) ? list : []) {
+        if (!r || r.agentId == null || !r.address) continue;
+        const cur = rows.find((x) => x.agentId === Number(r.agentId) && x.address === r.address);
+        if (cur) {
+          // interfaces: null = heard from flow samples only; keeps the stored count.
+          Object.assign(cur, {
+            deviceId: r.deviceId ?? null,
+            interfaces: r.interfaces == null ? cur.interfaces : Number(r.interfaces) || 0,
+            lastSeen: iso(at),
+          });
+        } else {
+          rows.push({
+            id: (seq += 1), agentId: Number(r.agentId), address: r.address, deviceId: r.deviceId ?? null,
+            interfaces: Number(r.interfaces) || 0, firstSeen: iso(at), lastSeen: iso(at),
+          });
+        }
+        n += 1;
+      }
+      return n;
+    }),
+    listRecent: overrides.listRecent || (async ({ since, limit = 500 } = {}) => rows
+      .filter((r) => !since || new Date(r.lastSeen) >= new Date(since))
+      .sort((a, b) => new Date(b.lastSeen) - new Date(a.lastSeen) || b.id - a.id)
+      .slice(0, limit)
+      .map((r) => ({ ...r }))),
+  };
+}
+
 function makeSnmpDevicesRepo(overrides = {}, { credentialProfilesRepo = null } = {}) {
   const rows = [];
+  const inventory = [];
   let seq = 0;
   const iso = (v) => (v == null ? null : (v instanceof Date ? v.toISOString() : new Date(v).toISOString()));
   const safe = (r) => ({
@@ -532,6 +601,19 @@ function makeSnmpDevicesRepo(overrides = {}, { credentialProfilesRepo = null } =
     version: r.version,
     displayName: r.display_name,
     sysDescr: r.sys_descr ?? null,
+    sysName: r.sys_name ?? null,
+    // The rest of the system group and the first chassis (migration 126).
+    sysLocation: r.sys_location ?? null,
+    sysContact: r.sys_contact ?? null,
+    sysObjectId: r.sys_object_id ?? null,
+    hardware: {
+      vendor: r.hw_vendor ?? null,
+      model: r.hw_model ?? null,
+      serial: r.hw_serial ?? null,
+      hardwareRev: r.hw_rev ?? null,
+      firmwareRev: r.fw_rev ?? null,
+      softwareRev: r.sw_rev ?? null,
+    },
     locationId: r.location_id,
     collect: r.collect,
     intervalSec: r.interval_sec,
@@ -619,7 +701,9 @@ function makeSnmpDevicesRepo(overrides = {}, { credentialProfilesRepo = null } =
         community: v.community ?? null,
         display_name: v.displayName ?? null,
         location_id: v.locationId ?? null,
-        collect: v.collect ?? ['if', 'fdb', 'lldp', 'vlan'],
+        // A NEW device gets the wide default written explicitly, as the real
+        // repository does (a stored NULL means the legacy list).
+        collect: v.collect ?? ['if', 'fdb', 'lldp', 'vlan', 'cdp', 'arp', 'entity'],
         interval_sec: v.intervalSec ?? 300,
         counter_interval_sec: v.counterIntervalSec ?? null,
         credential_profile_id: v.credentialProfileId ?? null,
@@ -654,7 +738,8 @@ function makeSnmpDevicesRepo(overrides = {}, { credentialProfilesRepo = null } =
       return true;
     }),
     recordPoll: overrides.recordPoll || (async (id, {
-      ok, error = null, supported = null, sysDescr = null, at = new Date(),
+      ok, error = null, supported = null, sysDescr = null, sysName = null,
+      sysLocation = null, sysContact = null, sysObjectId = null, hardware = null, at = new Date(),
     } = {}) => {
       const r = rows.find((x) => x.id === Number(id));
       if (!r) return;
@@ -665,6 +750,15 @@ function makeSnmpDevicesRepo(overrides = {}, { credentialProfilesRepo = null } =
         if (supported != null) r.supported = supported;
         // COALESCE, like the real UPDATE: an older agent never erases it.
         if (sysDescr != null) r.sys_descr = sysDescr;
+        if (sysName != null) r.sys_name = sysName;
+        if (sysLocation != null) r.sys_location = sysLocation;
+        if (sysContact != null) r.sys_contact = sysContact;
+        if (sysObjectId != null) r.sys_object_id = sysObjectId;
+        const hw = hardware || {};
+        for (const [k, col] of [['vendor', 'hw_vendor'], ['model', 'hw_model'], ['serial', 'hw_serial'],
+          ['hardwareRev', 'hw_rev'], ['firmwareRev', 'fw_rev'], ['softwareRev', 'sw_rev']]) {
+          if (hw[k] != null) r[col] = hw[k];
+        }
       } else {
         // The LAST GOOD time is kept, so the UI can say "last answered 41
         // minutes ago" rather than just "failing".
@@ -678,6 +772,72 @@ function makeSnmpDevicesRepo(overrides = {}, { credentialProfilesRepo = null } =
       r.last_uptime_ticks = uptimeTicks;
       r.last_uptime_at = at;
     }),
+    // device_inventory (migration 126): replaced per poll, searchable by serial.
+    inventory,
+    replaceInventory: overrides.replaceInventory || (async (deviceId, list, { at = new Date() } = {}) => {
+      const id = Number(deviceId);
+      for (let i = inventory.length - 1; i >= 0; i -= 1) if (inventory[i].deviceId === id) inventory.splice(i, 1);
+      for (const e of list || []) inventory.push({ deviceId: id, ...e, firstSeen: iso(at), lastSeen: iso(at) });
+      return (list || []).length;
+    }),
+    listInventory: overrides.listInventory || (async (deviceId) => inventory
+      .filter((e) => e.deviceId === Number(deviceId))
+      .sort((a, b) => a.entIndex - b.entIndex)
+      .map(({ deviceId: _d, ...e }) => e)),
+    findBySerial: overrides.findBySerial || (async (serial, { limit = 10 } = {}) => {
+      const q = String(serial || '').toLowerCase();
+      return inventory.filter((e) => e.serial && e.serial.toLowerCase().startsWith(q)).slice(0, limit);
+    }),
+  };
+}
+
+// A fake device ARP repository (`device_arp_entries`, migration 125): a polled
+// router's IP-MIB table. One row per (device, ip), like the real upsert.
+//
+// `deviceSite` maps a device id to its site (snmp_devices.location_id), which
+// is what the real knownMacs JOINs on for the per-site scope.
+function makeDeviceArpRepo(overrides = {}) {
+  const deviceSite = overrides.deviceSite || {};
+  const rows = [];
+  let seq = 0;
+  const iso = (v) => (v == null ? null : (v instanceof Date ? v.toISOString() : new Date(v).toISOString()));
+  const out = (r) => ({
+    id: r.id, deviceId: r.deviceId, ip: r.ip, mac: r.mac, ifIndex: r.ifIndex ?? null, ifName: r.ifName ?? null,
+    firstSeen: iso(r.firstSeen), lastSeen: iso(r.lastSeen), macChangedAt: iso(r.macChangedAt),
+  });
+  return {
+    rows,
+    upsertMany: overrides.upsertMany || (async (deviceId, entries, { at = new Date() } = {}) => {
+      let n = 0;
+      for (const e of entries || []) {
+        const existing = rows.find((r) => r.deviceId === Number(deviceId) && r.ip === e.ip);
+        if (existing) {
+          if (existing.mac !== e.mac) existing.macChangedAt = at;
+          Object.assign(existing, { mac: e.mac, ifIndex: e.ifIndex ?? existing.ifIndex, ifName: e.ifName ?? existing.ifName, lastSeen: at });
+        } else {
+          rows.push({ id: (seq += 1), deviceId: Number(deviceId), ...e, firstSeen: at, lastSeen: at, macChangedAt: null });
+        }
+        n += 1;
+      }
+      return n;
+    }),
+    findByIp: overrides.findByIp || (async ({ ip, limit = 25 }) => rows.filter((r) => r.ip === ip).slice(0, limit).map(out)),
+    findByMac: overrides.findByMac || (async ({ mac, limit = 25 }) => rows.filter((r) => r.mac === mac).slice(0, limit).map(out)),
+    listForDevice: overrides.listForDevice || (async (deviceId, { limit = 500 } = {}) => rows
+      .filter((r) => r.deviceId === Number(deviceId)).slice(0, limit).map(out)),
+    countForDevice: overrides.countForDevice || (async (deviceId) => rows.filter((r) => r.deviceId === Number(deviceId)).length),
+    knownMacs: overrides.knownMacs || (async ({ macs = [], deviceId = null, locationId = null } = {}) => {
+      if (locationId == null && deviceId == null) return new Set();
+      const inScope = (r) => (locationId != null
+        ? deviceSite[r.deviceId] != null && Number(deviceSite[r.deviceId]) === Number(locationId)
+        : r.deviceId === Number(deviceId));
+      return new Set(rows.filter((r) => inScope(r) && macs.includes(r.mac)).map((r) => r.mac));
+    }),
+    oldestFirstSeen: overrides.oldestFirstSeen || (async (deviceId) => {
+      const mine = rows.filter((r) => r.deviceId === Number(deviceId));
+      return mine.length ? new Date(Math.min(...mine.map((r) => new Date(r.firstSeen).getTime()))) : null;
+    }),
+    purgeBefore: overrides.purgeBefore || (async () => 0),
   };
 }
 
@@ -1057,7 +1217,23 @@ function makeDeviceInterfacesRepo(overrides = {}) {
         }
         upserted += 1;
       }
-      return { upserted, renumbered, statusChanges };
+      // Retire sFlow placeholders (`ifIndex N`, name_source 'ifIndex') whose
+      // index a real-named port in this batch now holds, as the real upsert
+      // does: if_index cleared, row and history kept.
+      const batch = (interfaces || []).filter((i) => i && i.ifName);
+      const namedIdx = new Set(batch
+        .filter((i) => (i.nameSource || 'ifName') !== 'ifIndex' && i.ifIndex != null).map((i) => Number(i.ifIndex)));
+      const batchNames = new Set(batch.map((i) => i.ifName));
+      let retired = 0;
+      for (const r of rows) {
+        if (r.device_id === Number(deviceId) && r.name_source === 'ifIndex' && r.if_index != null
+          && namedIdx.has(r.if_index) && !batchNames.has(r.if_name)) {
+          r.if_index = null;
+          r.if_index_changed_at = at;
+          retired += 1;
+        }
+      }
+      return { upserted, renumbered, statusChanges, retired };
     }),
     setStatus: overrides.setStatus || (async (id, { adminStatus, operStatus } = {}) => {
       const r = rows.find((x) => x.id === Number(id));
@@ -1069,9 +1245,18 @@ function makeDeviceInterfacesRepo(overrides = {}) {
     idMapForDevice: overrides.idMapForDevice || (async (deviceId) => {
       const byName = new Map();
       const byIndex = new Map();
-      for (const r of rows.filter((x) => x.device_id === Number(deviceId))) {
+      // A real-named row wins an ifIndex over an sFlow placeholder; among
+      // equals the lowest id — as the real repository resolves it.
+      const placeholder = new Set();
+      for (const r of rows.filter((x) => x.device_id === Number(deviceId)).sort((a, b) => a.id - b.id)) {
         byName.set(r.if_name, r.id);
-        if (r.if_index != null) byIndex.set(Number(r.if_index), r.id);
+        if (r.if_index == null) continue;
+        const idx = Number(r.if_index);
+        const isPlaceholder = r.name_source === 'ifIndex';
+        if (!byIndex.has(idx) || (placeholder.has(idx) && !isPlaceholder)) {
+          byIndex.set(idx, r.id);
+          if (isPlaceholder) placeholder.add(idx); else placeholder.delete(idx);
+        }
       }
       return { byName, byIndex };
     }),
@@ -1173,12 +1358,16 @@ function makeSnmpNeighborsRepo(overrides = {}) {
       let n = 0;
       for (const nb of neighbours || []) {
         const key = nb.remotePortId ?? '';
+        // `protocol` is in the key (migration 124): LLDP and CDP rows for the
+        // same neighbour never overwrite each other.
+        const protocol = nb.protocol || 'lldp';
         const existing = rows.find((r) => r.deviceId === Number(deviceId)
+          && (r.protocol || 'lldp') === protocol
           && r.remoteChassisId === nb.remoteChassisId && (r.remotePortId ?? '') === key);
         if (existing) {
           Object.assign(existing, { ...nb, remotePortId: key, lastSeen: at });
         } else {
-          rows.push({ id: (seq += 1), deviceId: Number(deviceId), ...nb, remotePortId: key, firstSeen: at, lastSeen: at });
+          rows.push({ id: (seq += 1), deviceId: Number(deviceId), ...nb, protocol, remotePortId: key, firstSeen: at, lastSeen: at });
         }
         n += 1;
       }
@@ -1489,6 +1678,7 @@ function makeEventCasesRepo(overrides = {}) {
     severity: r.severity,
     primaryFindingId: r.primary_finding_id ?? null,
     configChangeId: r.config_change_id ?? null,
+    clusterId: r.cluster_id ?? null,
     firstEventAt: iso(r.first_event_at),
     lastEventAt: iso(r.last_event_at),
     resolvedAt: iso(r.resolved_at),
@@ -1528,6 +1718,25 @@ function makeEventCasesRepo(overrides = {}) {
       return true;
     }),
     findById: overrides.findById || (async (id) => { const r = rows.find((x) => x.id === Number(id)); return r ? mapJoined(r) : null; }),
+    // Mirrors the real repo (migration 129): the first LIVE situation wins. The
+    // fake knows no clusters, so a case already linked elsewhere keeps its link
+    // unless `isClusterLive(id)` (an override) says that one is over.
+    linkCluster: overrides.linkCluster || (async (caseIds, clusterId) => {
+      const live = overrides.isClusterLive || (() => true);
+      let n = 0;
+      for (const id of new Set((caseIds || []).map(Number))) {
+        const r = rows.find((x) => x.id === id);
+        if (!r) continue;
+        if (r.cluster_id == null || r.cluster_id === clusterId || !live(r.cluster_id)) {
+          if (r.cluster_id !== clusterId) { r.cluster_id = clusterId; n += 1; }
+        }
+      }
+      return n;
+    }),
+    listByCluster: overrides.listByCluster || (async (clusterId) => rows
+      .filter((r) => r.cluster_id != null && Number(r.cluster_id) === Number(clusterId))
+      .sort((a, b) => new Date(a.first_event_at) - new Date(b.first_event_at) || a.id - b.id)
+      .map(mapJoined)),
     findOpenByHost: overrides.findOpenByHost || (async (hostId) => {
       const open = rows
         .filter((x) => x.host_id === hostId && (x.status === 'open' || x.status === 'investigating'))
@@ -1589,6 +1798,7 @@ function makeEventClustersRepo(overrides = {}) {
     confidence: r.confidence,
     memberFindingIds: Array.isArray(r.member_finding_ids) ? r.member_finding_ids : [],
     suspectedCommonCause: r.suspected_common_cause ?? null,
+    groupingBasis: r.grouping_basis ?? null,
     advisory: r.advisory ?? null,
     alertLastAt: iso(r.alert_last_at),
     alertLastSeverity: r.alert_last_severity ?? null,
@@ -1616,6 +1826,7 @@ function makeEventClustersRepo(overrides = {}) {
         ...c,
         member_finding_ids: c.memberFindingIds || [],
         suspected_common_cause: c.suspectedCommonCause ?? null,
+        grouping_basis: c.groupingBasis ?? null,
         detected_at: c.detectedAt,
       });
       return id;
@@ -1625,12 +1836,13 @@ function makeEventClustersRepo(overrides = {}) {
       .filter((r) => LIVE.includes(r.status))
       .sort((a, b) => new Date(b.detected_at) - new Date(a.detected_at) || b.id - a.id)
       .map(mapOut)),
-    updateMembership: overrides.updateMembership || (async (id, { confidence, memberFindingIds, suspectedCommonCause, detectedAt }) => {
+    updateMembership: overrides.updateMembership || (async (id, { confidence, memberFindingIds, suspectedCommonCause, groupingBasis = null, detectedAt }) => {
       const r = rows.find((x) => x.id === Number(id) && LIVE.includes(x.status));
       if (!r) return false;
       r.confidence = confidence;
       r.member_finding_ids = memberFindingIds || [];
       r.suspected_common_cause = suspectedCommonCause ?? null;
+      if (groupingBasis) r.grouping_basis = groupingBasis;
       if (new Date(detectedAt) > new Date(r.detected_at)) r.detected_at = detectedAt;
       return true;
     }),
@@ -2162,7 +2374,21 @@ function makeFlowPairBaselinesRepo(overrides = {}) {
       return (rows || []).length;
     }),
     baselinesForSlot: overrides.baselinesForSlot || (async ({ dow, hour }) => [...baselines.values()].filter((b) => b.dow === dow && b.hour === hour)),
-    listForHost: overrides.listForHost || (async ({ hostId, limit = 500 }) => [...baselines.values()].filter((b) => b.srcHostId === Number(hostId)).slice(0, limit)),
+    listForHost: overrides.listForHost || (async ({ hostId, limit = 500, dstHostId = null, dstPort = null }) => [...baselines.values()]
+      .filter((b) => b.srcHostId === Number(hostId)
+        && (dstHostId == null || b.dstHostId === Number(dstHostId))
+        && (dstPort == null || b.dstPort === Number(dstPort)))
+      .slice(0, limit)),
+    // The latest rolled-up hour over the same filter, as the real repository.
+    latestHourlyForHost: overrides.latestHourlyForHost || (async ({ hostId, dstHostId = null, dstPort = null, limit = 5000 }) => {
+      const mine = hourly.filter((r) => r.srcHostId === Number(hostId)
+        && (dstHostId == null || r.dstHostId === Number(dstHostId))
+        && (dstPort == null || r.dstPort === Number(dstPort)));
+      if (!mine.length) return [];
+      const last = Math.max(...mine.map((r) => new Date(r.bucket).getTime()));
+      return mine.filter((r) => new Date(r.bucket).getTime() === last).slice(0, limit)
+        .map((r) => ({ srcHostId: r.srcHostId, dstHostId: r.dstHostId, dstPort: r.dstPort, proto: r.proto, bucket: iso(r.bucket), bytes: r.bytes, packets: r.packets, connCount: r.connCount }));
+    }),
     countForHost: overrides.countForHost || (async ({ hostId }) => [...baselines.values()].filter((b) => b.srcHostId === Number(hostId)).length),
   };
 }
@@ -2203,6 +2429,12 @@ function makeProbeThresholdsRepo(overrides = {}) {
       r = { id: (seq += 1), location_id, metric, warning_value, critical_value, debounce_count };
       rows.push(r);
       return r;
+    }),
+    remove: overrides.remove || (async ({ location_id = null, metric }) => {
+      const i = rows.findIndex((x) => x.location_id === location_id && x.metric === metric);
+      if (i < 0) return false;
+      rows.splice(i, 1);
+      return true;
     }),
   };
 }
@@ -2434,7 +2666,14 @@ function makeAuditLogRepo(overrides = {}) {
   let seq = 0;
   return {
     rows,
-    record: overrides.record || (async (e) => { const id = (seq += 1); rows.push({ id, created_at: new Date().toISOString(), outcome: 'success', ...e }); return id; }),
+    // category and action are NOT NULL in audit_log; the fake refuses what
+    // MySQL would, so a call that could never be stored cannot pass a test.
+    record: overrides.record || (async (e) => {
+      for (const col of ['category', 'action']) {
+        if (e == null || e[col] == null || e[col] === '') throw new Error(`Column '${col}' cannot be null`);
+      }
+      const id = (seq += 1); rows.push({ id, created_at: new Date().toISOString(), outcome: 'success', ...e }); return id;
+    }),
     list: overrides.list || (async ({ category = null, actorUserId = null, limit = 100 } = {}) =>
       rows.filter((r) => (!category || r.category === category) && (actorUserId == null || r.actorUserId === actorUserId))
         .slice().reverse().slice(0, limit)),
@@ -3601,7 +3840,10 @@ function makeApp(overrides = {}) {
   const serviceTests = overrides.serviceTests === undefined ? makeServiceTests() : overrides.serviceTests;
   const auditLogRepo = overrides.auditLogRepo || makeAuditLogRepo();
   const apiTokensRepo = overrides.apiTokensRepo || makeApiTokensRepo();
-  const auditLogger = overrides.auditLogger || createAuditLogger({ auditLogRepo });
+  // STRICT: an audit call the compliance logger cannot store (no action, no
+  // category) throws here instead of being logged and dropped, so the route
+  // test that exercises it fails rather than a field run warning about it.
+  const auditLogger = overrides.auditLogger || createAuditLogger({ auditLogRepo, strict: true });
   const licenseManager = overrides.licenseManager || makeLicenseManager();
   const planService = overrides.planService || createPlanService({ licenseManager });
   const usageService =
@@ -3621,6 +3863,9 @@ function makeApp(overrides = {}) {
   const snmpDevicesRepo = overrides.snmpDevicesRepo === undefined ? makeSnmpDevicesRepo({}, { credentialProfilesRepo: snmpProfilesRepo }) : overrides.snmpDevicesRepo;
   const fdbEntriesRepo = overrides.fdbEntriesRepo === undefined ? makeFdbEntriesRepo() : overrides.fdbEntriesRepo;
   const snmpNeighborsRepo = overrides.snmpNeighborsRepo === undefined ? makeSnmpNeighborsRepo() : overrides.snmpNeighborsRepo;
+  // A polled router's ARP table (migration 125). `null` exercises an install
+  // without it.
+  const deviceArpRepo = overrides.deviceArpRepo === undefined ? makeDeviceArpRepo() : overrides.deviceArpRepo;
   const deviceInterfacesRepo = overrides.deviceInterfacesRepo === undefined ? makeDeviceInterfacesRepo() : overrides.deviceInterfacesRepo;
   const counterSamplesRepo = overrides.counterSamplesRepo === undefined ? makeCounterSamplesRepo() : overrides.counterSamplesRepo;
   const burstRunsRepo = overrides.burstRunsRepo === undefined ? makeBurstRunsRepo() : overrides.burstRunsRepo;
@@ -3668,6 +3913,7 @@ function makeApp(overrides = {}) {
       l2LoopService: overrides.l2LoopService || null,
       switchPortStateService,
       topologyChangeService,
+      deviceArpRepo,
     }) : null)
     : overrides.snmpTopologyIngest;
   // The REAL counter ingest over the fakes, so the delta arithmetic, the reboot
@@ -3707,12 +3953,16 @@ function makeApp(overrides = {}) {
   // Real blast-radius service over the fake topology repos, so the event
   // enrichment + /api/topology/blast-radius are exercised end-to-end.
   const blastRadiusService = overrides.blastRadiusService === undefined
-    ? createBlastRadiusService({ lldpNeighborsRepo, serviceDependenciesRepo, agentsRepo })
+    // The switches too, as src/server.js wires it, so GET /api/topology/graph
+    // (which reads this service) shows the same devices blast radius walks.
+    ? createBlastRadiusService({ lldpNeighborsRepo, serviceDependenciesRepo, agentsRepo, snmpDevicesRepo, snmpNeighborsRepo, deviceInterfacesRepo })
     : overrides.blastRadiusService;
   return createApp({
     db: overrides.db || makeDb(),
     tsdb: overrides.tsdb || null,
     resultsTsdbRepo: overrides.resultsTsdbRepo || null,
+    probeResultsTsdbRepo: overrides.probeResultsTsdbRepo || null,
+    speedtestResultsTsdbRepo: overrides.speedtestResultsTsdbRepo || null,
     locationsRepo: overrides.locationsRepo || makeLocationsRepo(),
     usersRepo: overrides.usersRepo || makeUsersRepo(),
     agentsRepo,
@@ -3759,8 +4009,13 @@ function makeApp(overrides = {}) {
     snmpDevicesRepo,
     fdbEntriesRepo,
     snmpNeighborsRepo,
+    deviceArpRepo,
     snmpTopologyIngest,
     snmpCounterIngest,
+    // Off unless a test wires one: the sFlow counter hook is best-effort and
+    // optional, and every other results test must not depend on it.
+    sflowCounterIngest: overrides.sflowCounterIngest || null,
+    sflowExportersRepo: overrides.sflowExportersRepo || null,
     snmpProfilesRepo,
     deviceInterfacesRepo,
     counterSamplesRepo,
@@ -3784,6 +4039,10 @@ function makeApp(overrides = {}) {
     dispatcher,
     featureGate: overrides.featureGate || makeFeatureGate(),
     settingsService: overrides.settingsService || makeSettingsService(),
+    // Baseline security: the policy is built over settingsService unless a
+    // test injects its own; the history repo is in-memory by default.
+    securityPolicy: overrides.securityPolicy || null,
+    passwordHistoryRepo: overrides.passwordHistoryRepo === undefined ? makePasswordHistoryRepo() : overrides.passwordHistoryRepo,
     analysisConfig: overrides.analysisConfig || { analysisEnabled: true, assistantEnabled: false, critSigma: 4, warnSigma: 3, baselineDays: 7, minSamples: 200 },
     retentionConfig: overrides.retentionConfig || { enabled: true, rawRetentionDays: 7, rollupRetentionDays: 90, findingRetentionDays: 365, rollupIntervalMinutes: 60 },
     artifactStore: overrides.artifactStore || makeArtifactStore(),
@@ -3927,6 +4186,7 @@ module.exports = {
   makeLocationsRepo,
   makeUsersRepo,
   makeUserMailer,
+  makePasswordHistoryRepo,
   makeAgentsRepo,
   makeAgentTokensRepo,
   makeResultsRepo,
@@ -3945,12 +4205,14 @@ module.exports = {
   makeFlowPairBaselinesRepo,
   makeDiscoveredDevicesRepo,
   makeArpEntriesRepo,
+  makeDeviceArpRepo,
   makeDeviceEventsRepo,
   makeSnmpDevicesRepo,
   makeFdbEntriesRepo,
   makeSnmpNeighborsRepo,
   makeDeviceInterfacesRepo,
   makeCounterSamplesRepo,
+  makeSflowExportersRepo,
   makeSnmpProfilesRepo,
   makeBurstRunsRepo,
   makeInterfaceStatesRepo,

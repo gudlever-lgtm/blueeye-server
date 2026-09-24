@@ -64,3 +64,26 @@ licence-gated admin API:
 Every login attempt is recorded in `sso_login_audit` (shared with SAML) —
 subject, outcome, reason, granted role, groups matched, source IP. **No tokens or
 secrets are ever stored.**
+
+## Dashboard UI (**Settings → Authentication**, admin only)
+
+The OIDC section of the Authentication tab (`ssoSection(SSO_KINDS.oidc)` in
+`public/app.js`) is the admin surface for everything above:
+
+- **Connection** — live / not live, and which of the three conditions is missing
+  (server flag `OIDC_AUTH_ENABLED`, licence, connection configured), with the
+  non-secret issuer, client id, redirect URI, scopes and role claim. The
+  connection itself stays in the environment; no secret is shown or stored.
+  **Test discovery** calls `POST /api/oidc/test`.
+- **Claim → role mapping** — add, change and delete mappings. Hidden, with a
+  "Licence: no" badge, when the licence lacks `sso_oidc` (the writes would 403).
+- **Recent sign-ins** — the last 25 rows of `sso_login_audit` for OIDC, with the
+  reason for every refusal (including `ip-not-allowed`, below).
+
+## IP allowlist
+
+A successful OIDC sign-in is still subject to the role-based IP allowlist
+(**Settings → Authentication → Security**, [security-hardening.md](security-hardening.md)).
+A user whose role has a list, signing in from outside it, is redirected with
+`sso_error=ip-not-allowed` and the refusal is in the sign-in audit. The password
+rules (history, max age) never apply to OIDC users — they have no local password.

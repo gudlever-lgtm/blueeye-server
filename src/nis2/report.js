@@ -3,6 +3,7 @@
 const { riskBand } = require('./constants');
 const { createT } = require('./i18n');
 const { actionText } = require('./dashboard');
+const { computeIncidentDeadlines } = require('./deadlines');
 
 // Minimal HTML escape for the server-rendered, print-to-PDF report document.
 function esc(s) {
@@ -255,7 +256,69 @@ function renderRegisterHtml(title, sections, { org, locale } = {}) {
   return renderDocument(title, org || t('doc.org'), body, t);
 }
 
+// The incident register as print sections (GET /api/nis2/export/incident.html):
+// the overview table it always had, then the Article 23 reporting record —
+// suspected malicious act and cross-border impact (23(4)(a)), the authority's
+// reference, when each of the three reports was actually submitted (and
+// whether that beat its deadline), where the deadlines stand, and the event
+// case the incident was drafted from (migrations 122/123).
+//
+// Two tables rather than one seventeen-column one: this is a document that is
+// printed, and the second table is the part an authority asks about.
+//
+// Deadlines are COMPUTED here exactly as the dashboard computes them
+// (src/nis2/deadlines.js), so the printout and the screen cannot disagree.
+function incidentRegisterSections(rows, t, { now = Date.now() } = {}) {
+  const list = Array.isArray(rows) ? rows : [];
+  const dash = t('doc.dash');
+  const when = (v) => (v ? new Date(v).toLocaleString(t.htmlLang) : dash);
+  const submitted = (stage) => {
+    if (!stage || !stage.submittedAt) return dash;
+    const at = when(stage.submittedAt);
+    return stage.onTime === false ? t('art23.late', { when: at }) : at;
+  };
+  const deadlineStatus = (d) => {
+    if (!d.applicable) return t('art23.notRequired');
+    if (!d.stages.length) return t('art23.noDetection');
+    return t.enum('deadlineStatus', d.worstStatus);
+  };
+  const crossBorder = (i) => {
+    if (!i.crossBorderImpact) return t.yesNo(false);
+    return i.crossBorderDetails ? t('art23.crossBorderDetails', { details: i.crossBorderDetails }) : t.yesNo(true);
+  };
+  return [
+    {
+      heading: t('incident.heading', { n: list.length }),
+      intro: t('incident.intro'),
+      headers: [t('col.ref'), t('col.title'), t('col.severity'), t('col.detected'), t('col.resolved'), t('col.status'), t('col.nis2'), t('col.notify')],
+      rows: list.map((i) => [i.incidentId, i.title, t.enum('severity', i.severity), when(i.detectedAt), when(i.resolvedAt), t.enum('incidentStatus', i.status), t.yesNo(i.nis2Relevant), t.yesNo(i.notificationRequired)]),
+    },
+    {
+      heading: t('art23.heading', { n: list.length }),
+      intro: t('art23.intro'),
+      headers: [t('col.ref'), t('col.suspectedMalicious'), t('col.crossBorder'), t('col.authorityRef'), t('col.earlyWarningSubmitted'), t('col.notificationSubmitted'), t('col.finalReportSubmitted'), t('col.deadlineStatus'), t('col.eventCase')],
+      rows: list.map((i) => {
+        const d = computeIncidentDeadlines(i, { now });
+        const stage = (name) => d.stages.find((s) => s.stage === name);
+        return [
+          i.incidentId,
+          t.yesNo(i.suspectedMalicious),
+          crossBorder(i),
+          i.authorityReference || dash,
+          // A recorded submission is shown even when the incident carries no
+          // reporting duty — it happened, and the register says so.
+          stage('early-warning') ? submitted(stage('early-warning')) : when(i.earlyWarningSubmittedAt),
+          stage('notification') ? submitted(stage('notification')) : when(i.notificationSubmittedAt),
+          stage('final-report') ? submitted(stage('final-report')) : when(i.finalReportSubmittedAt),
+          deadlineStatus(d),
+          i.eventCaseId != null ? t('art23.eventCase', { id: i.eventCaseId }) : dash,
+        ];
+      }),
+    },
+  ];
+}
+
 module.exports = {
   buildExecutiveReport, buildSnapshot, deltaFrom, managementConclusion,
-  renderExecutiveHtml, renderRegisterHtml, esc,
+  renderExecutiveHtml, renderRegisterHtml, incidentRegisterSections, esc,
 };

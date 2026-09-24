@@ -56,6 +56,10 @@ const ACCEPTS_EMPTY = new Set([
   // The burst list opens unfiltered — every recent run, newest first — which
   // is what somebody wants before they know which run they are looking for.
   'validateBurstQuery',
+  // The device inventory opens unfiltered — the first page of everything —
+  // which is the question "which devices do I have" asks. Its bounds (limit,
+  // offset, kind, q) are pinned in test/l2PathApi.test.js.
+  'validateInventoryQuery',
 ]);
 
 test('every exported validator survives garbage input and rejects an empty object where it has required fields', () => {
@@ -332,6 +336,36 @@ test('burstValidation: a packet generator is bounded at the boundary', () => {
   assert.ok(rejected(validateBurstQuery({ limit: 1000 }, {})));
   assert.ok(rejected(validateBurstQuery({ agentId: 'all' }, {})));
   assert.deepEqual(validateBurstQuery({}, {}), { limit: 25, offset: 0 });
+});
+
+test('l2PathValidation: an endpoint is classified once, and the inventory page is bounded', () => {
+  const {
+    parseEndpoint, validateL2PathQuery, validateLocateQuery, validateInventoryQuery, INVENTORY_MAX_LIMIT,
+  } = require('../../src/validation/l2PathValidation');
+
+  // What the technician knows, classified — an address is never read as a
+  // hostname that happens to look like one.
+  assert.deepEqual(parseEndpoint('10.1.2.3'), { kind: 'ip', value: '10.1.2.3', raw: '10.1.2.3' });
+  assert.equal(parseEndpoint('AA-BB-CC-00-11-22').value, 'aa:bb:cc:00:11:22');
+  assert.equal(parseEndpoint('aabb.cc00.1122').kind, 'mac');
+  assert.deepEqual(parseEndpoint('agent:12'), { kind: 'agent', value: 12, raw: 'agent:12' });
+  assert.equal(parseEndpoint('Core-SW.corp.local.').value, 'core-sw.corp.local');
+  for (const bad of ['', 'agent:0', 'agent:abc', 'x y', '<script>', "a' OR 1=1", 'a'.repeat(254), '-leading']) {
+    assert.equal(parseEndpoint(bad), null, JSON.stringify(bad));
+  }
+  assert.ok(rejected(validateL2PathQuery({ from: '10.1.2.3' })), 'to is required');
+  assert.ok(rejected(validateL2PathQuery({ from: '10.1.2.3', to: '10.1.2.4', gateway: '<x>' })));
+  assert.ok(rejected(validateL2PathQuery({ from: ['10.1.2.3'], to: '10.1.2.4' })), 'a repeated parameter is not a string');
+  assert.equal(validateL2PathQuery({ from: '10.1.2.3', to: 'sw-b' }).value.gateway, null);
+  assert.ok(rejected(validateLocateQuery({ q: '' })));
+
+  // The inventory rejects out of range rather than clamping.
+  assert.deepEqual(validateInventoryQuery({}).value, { limit: 50, offset: 0, kind: null, q: null });
+  assert.ok(rejected(validateInventoryQuery({ limit: String(INVENTORY_MAX_LIMIT + 1) })));
+  assert.ok(rejected(validateInventoryQuery({ limit: '1e3' })));
+  assert.ok(rejected(validateInventoryQuery({ offset: '-1' })));
+  assert.ok(rejected(validateInventoryQuery({ kind: 'router' })));
+  assert.ok(rejected(validateInventoryQuery({ q: ['a', 'b'] })));
 });
 
 test('every src/validation module is named in this suite', () => {

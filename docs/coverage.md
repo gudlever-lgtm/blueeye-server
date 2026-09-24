@@ -101,13 +101,14 @@ then by label.
 | | | `deviceNeverPolled` | warn | Has a poller, has never answered (`last_ok_at` null). Evidence carries the last error. |
 | | | `deviceError` | warn | Has answered before, the last poll failed (`last_error` set). |
 | snmpCredentials | snmpDevices, credentials | `deviceNoCredential` | warn | Enabled, has a poller, no own community, and `snmpProfilesRepo.resolveForAgent` resolves nothing. Suggestion `grantCredential` when a community exists but the agent is not granted it (`blocked`), else `assignCredential`. |
-| snmpCollect | snmpDevices | `deviceNoCounters` | info | Answered at least once, and `ifcounters` is not collected, has no counter interval, or the device does not support it. |
+| snmpCollect | snmpDevices | `deviceNoCounters` | info | Answered at least once, and `ifcounters` is not collected or has no counter interval (`enableCounters`), or it is configured but no counter poll has arrived within max(3 × the counter interval, 30 min) — `last_uptime_at`, stamped by every counter cycle the server ingests (`checkCounterPolling`). Judged on what arrived, never on `supported`: that is the topology cycle's list and never names `ifcounters`. |
 | | | `deviceNoLldp` / `deviceNoFdb` | info | Answered at least once, and `lldp`/`fdb` is not in `collect` (`enableCollect`) or the device reports it does not support it (`deviceLacks`). |
 | switchPorts | snmpDevices, portMacs, deviceNeighbours, deviceMacs (+ agentMacs, agentNeighbours) | `unmonitoredHosts` | info / **warn** | Per switch: learned MACs on operationally **up** ports with **no LLDP neighbour**, that belong to no agent or polled device. Warn when a port has ≥ 4 such MACs (probably an unmanaged switch or AP). |
 | switchNeighbours | snmpDevices, agents, deviceNeighbours, deviceMacs (+ agentMacs, agentNeighbours) | `unmanagedNeighbour` | info / **warn** | A neighbour in a switch's LLDP table (`snmp_neighbors`) that is not a monitored switch or agent. |
 | agentNeighbours | snmpDevices, agents, agentNeighbours, deviceMacs (+ agentMacs) | `unmanagedNeighbour` | info / **warn** | The same, from the agents' own LLDP (`lldp_neighbors`). Both checks aggregate into ONE gap per remote chassis; warn when seen from two or more monitored things (it sits between them, in the path). |
 | subnets | agents, arpSubnets | `subnetUncovered` | info | An IPv4 /24 seen in the ARP tables (last 7 days) with no agent that has an address in it (`capabilities.ips`). Loopback, link-local (169.254/16), 0/8 and multicast+ are never listed. |
 | discovery | discovered | `discoveredPending` | info | Discovery candidates still in status `discovered` (neither promoted nor ignored). The total counts all of them; the list is capped. |
+| sflowExporters | sflowExporters, snmpDevices (+ agents) | `sflowExporterUnregistered` | info | An sFlow exporter an agent heard in the last 24 h (`sflow_exporters`, migration 128) whose address is no registered device's host (IP literals; IPv6 compared compressed). Its interface counters — errors, discards, duplex — are dropped until it is registered (see docs/traffic-sources.md). One gap per address; evidence names the agents that hear it. A device registered by **hostname** does not match (the counter ingest does not resolve names either). An address that is an agent's own (`capabilities.ips` of any agent) is never listed: that is the host's own hsflowd, not a switch to register. |
 
 "Real" agent: promoted discovery candidates are `agents` rows with platform
 `snmp` and no software behind them. They count as known identities (their name
@@ -155,6 +156,7 @@ is `partial`). Nothing scales with traffic volume:
 | arpSubnets | `arpEntriesRepo.subnetSummary({ since: 7 d })` — aggregated per /24 in SQL | 500 prefixes |
 | agentMacs | `arpEntriesRepo.macsForIps(agent IPs)` | 1 000 IPs in, 5 000 rows out |
 | discovered | `discoveredDevicesRepo.list({ status: 'discovered', limit })` + `countByStatus()` | `limit` |
+| sflowExporters | `sflowExportersRepo.listRecent({ since: 24 h })` — one row per (agent, exporter) | 500 rows |
 
 A source read back at its bound marks the checks built on it `partial`.
 

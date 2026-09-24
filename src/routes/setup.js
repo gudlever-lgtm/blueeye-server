@@ -28,11 +28,12 @@ function createSetupRouter({
   const router = express.Router();
   const admin = [requireAuth, requireRole(ROLES.ADMIN)];
 
-  const tryRead = async (what, fn, fallback) => {
+  const tryRead = async (what, fn, fallback, failed = null) => {
     try {
       return await fn();
     } catch (err) {
       if (logger) logger.warn(`setup checklist: ${what} unavailable (${err && err.message})`);
+      if (failed) failed.push(what);
       return fallback;
     }
   };
@@ -58,31 +59,36 @@ function createSetupRouter({
   }
 
   router.get('/checklist', ...admin, asyncHandler(async (req, res) => {
-    const agents = await tryRead('agents', () => (agentsRepo && agentsRepo.findAll ? agentsRepo.findAll() : []), []);
-    const snmpDevices = await tryRead('snmp devices', () => (snmpDevicesRepo && snmpDevicesRepo.list ? snmpDevicesRepo.list({}) : []), []);
-    const locations = await tryRead('locations', () => (locationsRepo && locationsRepo.findAll ? locationsRepo.findAll() : []), []);
+    // The lists fall back to null — "could not be read" — never to [], which
+    // would read as "there are none" and put invented work on the list.
+    const agents = await tryRead('agents', () => (agentsRepo && agentsRepo.findAll ? agentsRepo.findAll() : []), null);
+    const snmpDevices = await tryRead('snmp devices', () => (snmpDevicesRepo && snmpDevicesRepo.list ? snmpDevicesRepo.list({}) : []), null);
+    const locations = await tryRead('locations', () => (locationsRepo && locationsRepo.findAll ? locationsRepo.findAll() : []), null);
+    // The scalar facts are null both when their source is absent and when it
+    // threw; this names the ones that threw, so only those hold `complete` back.
+    const failed = [];
 
     const enabled = (Array.isArray(snmpDevices) ? snmpDevices : []).filter((d) => d && d.enabled !== false);
     const credentialed = enabled.length
-      ? await tryRead('snmp credentials', () => countCredentialed(enabled), null)
+      ? await tryRead('credentialed', () => countCredentialed(enabled), null, failed)
       : null;
 
-    const deviceEvents = await tryRead('device events', async () => {
+    const deviceEvents = await tryRead('deviceEvents', async () => {
       if (!deviceEventsRepo || typeof deviceEventsRepo.severityCounts !== 'function') return null;
       const rows = await deviceEventsRepo.severityCounts({ minutes: DEVICE_EVENT_WINDOW_DAYS * 24 * 60 });
       return (Array.isArray(rows) ? rows : []).reduce((n, r) => n + (Number(r.rows) || 0), 0);
-    }, null);
+    }, null, failed);
 
-    const geoipRanges = await tryRead('geoip', async () => {
+    const geoipRanges = await tryRead('geoipRanges', async () => {
       if (!settingsService || typeof settingsService.getGeoip !== 'function') return null;
       const geo = await settingsService.getGeoip();
       return Number.isInteger(geo && geo.ranges) ? geo.ranges : null;
-    }, null);
+    }, null, failed);
 
     res.json({
       generatedAt: new Date().toISOString(),
       ...buildSetupChecklist({
-        agents, snmpDevices, credentialed, deviceEvents, geoipRanges, locations,
+        agents, snmpDevices, credentialed, deviceEvents, geoipRanges, locations, failed,
       }),
     });
   }));

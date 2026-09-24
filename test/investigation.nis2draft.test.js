@@ -12,6 +12,8 @@ const {
   makeNis2IncidentsRepo, authHeader,
 } = require('../test-support/fakes');
 
+const { NIS2_DRAFT_FAILED } = require('../src/routes/investigation');
+
 const operator = () => authHeader('operator');
 
 // A real-looking investigation result containing a raw IP in the explanation
@@ -171,20 +173,47 @@ test('NIS2 failure → narrative (Output 1) still present, nis2DraftError shown'
   const assistant = makeNis2Assistant({
     generateNis2Draft: async () => { throw new Error('Mistral timeout'); },
   });
-  const app = makeEnabledApp({}, { assistant });
+  const warnings = [];
+  const logger = { info() {}, warn: (m) => warnings.push(String(m)), error: (m) => warnings.push(String(m)) };
   const res = await request(makeApp({
     agentsRepo: makeAgentsRepo({ findAll: async () => [{ id: '1', hostname: 'h', location_id: 1, status: 'online' }] }),
     findingStore: makeFindingStore({ list: async () => [] }),
     assistant,
     nis2IncidentsRepo: makeNis2IncidentsRepo(),
+    logger,
   })).post('/api/investigation/run')
     .set('Authorization', operator())
     .send({ locationRef: { type: 'agent', value: '1' } });
 
   assert.equal(res.status, 200, 'should be 200 even when NIS2 generation fails');
   assert.ok(typeof res.body.narrative === 'string', 'narrative must still be present');
-  assert.ok(typeof res.body.nis2DraftError === 'string', 'nis2DraftError must describe the failure');
+  // Deliberately changed: this used to accept any string, and the string was
+  // err.message — an internal error inside a 200. It is now a stable code the
+  // dashboard translates, and the detail goes to the request's log.
+  assert.equal(res.body.nis2DraftError, NIS2_DRAFT_FAILED, 'nis2DraftError is a code, not a message');
+  assert.ok(!JSON.stringify(res.body).includes('Mistral timeout'), 'the internal error message must not leak');
+  assert.ok(warnings.some((w) => /NIS2 draft failed \(Mistral timeout\)/.test(w)), 'the detail is logged instead');
   assert.ok(!res.body.nis2Draft, 'nis2Draft must be absent on failure');
+});
+
+test('a repository failure on the NIS2 path never leaks SQL/host detail into the 200', async () => {
+  const assistant = makeNis2Assistant();
+  const res = await request(makeApp({
+    agentsRepo: makeAgentsRepo({ findAll: async () => [{ id: '1', hostname: 'h', location_id: 1, status: 'online' }] }),
+    findingStore: makeFindingStore({ list: async () => [] }),
+    assistant,
+    nis2IncidentsRepo: makeNis2IncidentsRepo({
+      create: async () => { throw new Error("ER_NO_SUCH_TABLE: Table 'blueeye.blueeye_nis2_incidents' doesn't exist (10.0.0.12:3306)"); },
+    }),
+  })).post('/api/investigation/run')
+    .set('Authorization', operator())
+    .send({ locationRef: { type: 'agent', value: '1' } });
+
+  assert.equal(res.status, 200);
+  assert.equal(res.body.nis2DraftError, NIS2_DRAFT_FAILED);
+  for (const leak of ['ER_NO_SUCH_TABLE', 'blueeye_nis2_incidents', '10.0.0.12', '3306']) {
+    assert.ok(!JSON.stringify(res.body).includes(leak), `leaked: ${leak}`);
+  }
 });
 
 // ---- Mistral timeout on NIS2 path ---------------------------------------------
@@ -205,7 +234,8 @@ test('Mistral timeout on NIS2 path → 200 with nis2DraftError, no 500', async (
     .send({ locationRef: { type: 'agent', value: '1' } });
 
   assert.equal(res.status, 200);
-  assert.ok(typeof res.body.nis2DraftError === 'string');
+  assert.equal(res.body.nis2DraftError, NIS2_DRAFT_FAILED);
+  assert.ok(!JSON.stringify(res.body).includes('aborted'), 'the upstream error message must not leak');
   assert.ok(!res.body.nis2Draft);
 });
 

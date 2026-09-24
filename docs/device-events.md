@@ -78,11 +78,14 @@ iptables -t nat -A PREROUTING -p udp --dport 514 -j REDIRECT --to-port 1514
 | `BLUEEYE_SYSLOG_FLUSH_MS` | `syslogFlushIntervalMs` | `30000` | independent of the traffic report: a link-down should not wait on a traffic sample |
 | `BLUEEYE_SYSLOG_MAX_EVENTS` | `syslogMaxEvents` | `5000` | buffered rows before new ones are dropped |
 | `BLUEEYE_SYSLOG_RATE` | `syslogRatePerSec` | `200` | per sender |
+| `BLUEEYE_SYSLOG_ALLOWED_SENDERS` | `syslogAllowedSenders` | empty (accept all) | CIDRs / addresses, comma- or space-separated (an array in the file). Fails **closed**: an entry that does not parse is logged and allows nothing |
+| `BLUEEYE_SYSLOG_ONLY_POLLED` | `syslogOnlyPolled` | `false` | accept the switches this agent polls (the same resolved addresses as the trap allowlist). With `syslogAllowedSenders` too, a sender either one vouches for is accepted. Refused lines count as `refused` |
 | `BLUEEYE_TRAPS_ENABLED` | `trapsEnabled` | `false` | SNMP traps; shares the device-event flush, so it needs no interval of its own |
 | `BLUEEYE_TRAP_PORT` | `trapPort` | `1162` | |
 | `BLUEEYE_TRAP_BIND` | `trapBindAddress` | `0.0.0.0` | |
 | `BLUEEYE_TRAP_MAX_EVENTS` | `trapMaxEvents` | `2000` | |
 | `BLUEEYE_TRAP_RATE` | `trapRatePerSec` | `50` | per sender |
+| `BLUEEYE_TRAPS_CHECK_COMMUNITY` | `trapsCheckCommunity` | `true` | refuse a v1/v2c trap whose community differs from the one the agent polls that device with (when known); counted as `badCommunity`. Turn off for a device whose trap community is deliberately different |
 
 ---
 
@@ -159,17 +162,30 @@ through this path, and nothing here is geolocated.
 
 ## Who sent it
 
-The agent knows only a source IP. `deviceEventIngest.js` resolves it:
+The agent knows only a source IP. `deviceEventIngest.js` resolves it into TWO
+columns, because there are two id spaces (migration 133):
 
-1. **The agent inventory** — reported IPs and SNMP monitor targets, through the
-   same `buildHostResolver` the topology graph uses. One resolver, one answer;
-   two would eventually disagree. Cached for 60 s.
-2. **`arp_entries`** — the IP↔MAC table an agent reports from its own neighbour
-   cache. One lookup per *distinct* unresolved address in the batch, not per
+1. **A polled switch** — the address against `snmp_devices.host` (IP literals,
+   canonical form; an IPv4-mapped IPv6 sender is its IPv4 address) →
+   `snmp_device_id`. A switch's own syslog and traps belong to the switch.
+2. **The agent inventory** — reported IPs and SNMP monitor targets, through the
+   same `buildHostResolver` the topology graph uses → `device_id`, which is and
+   always was an **agent** id. One resolver, one answer; two would eventually
+   disagree. Cached for 60 s.
+3. **`arp_entries`, only as a bridge to 2** — the MAC behind the sender address,
+   and whether that same MAC is behind an address some agent reports as its
+   OWN (a multi-homed host sending from an address it did not list). An ARP row
+   names the agent that SAW the address — the observer, never the owner; crediting
+   it once put a collector's whole view of two switches on the collector's own
+   timeline. One lookup per *distinct* unresolved address in the batch, not per
    row: a switch mid-outage sends the same address hundreds of times.
-3. **Neither** → stored with `device_id NULL` and the source IP intact.
+4. **None of these** → stored with both ids `NULL` and the source IP intact.
 
-Step 3 is the one worth protecting. Discarding an unresolved sender would throw
+The device log filters per switch (`GET /api/device-events?snmpDeviceId=`,
+404 for a switch that does not exist) and names the switch on every row
+(`snmpDeviceName`); the switch page links to it.
+
+Step 4 is the one worth protecting. Discarding an unresolved sender would throw
 away the one message that explains an outage because the inventory was
 incomplete — and an outage is exactly when inventories are incomplete. The
 device log shows such a row as `(unknown sender)` rather than hiding it.
@@ -303,7 +319,7 @@ same as zero skew.
 | | |
 |---|---|
 | **Device log** | its own screen, the full stream |
-| **Target timeline** | `source: 'device'` next to the findings for that agent — the switch's own account of what happened, beside the server's inference about it. Keyed on the RESOLVED `device_id`, so an unresolved sender correctly appears on nobody's timeline |
+| **Target timeline** | `source: 'device'` next to the findings for that agent — the switch's own account of what happened, beside the server's inference about it. Keyed on the RESOLVED `device_id` (an agent id), so an unresolved sender — and a polled switch, whose lines carry `snmp_device_id` instead — correctly appears on no agent's timeline |
 | **Changes feed** | **warning and above only.** The landing page answers "what changed since I last looked", and a fleet's notice-level chatter is not that. Folds as `device_event`, for the same reason `interface_state` does: a port that flaps forty times is one thing to look at |
 
 The eight syslog levels narrow to the three the rest of the server speaks
@@ -359,7 +375,20 @@ dropped, *before any decoding*, so a hostile sender cannot make the process do
 work by sending malformed packets.
 
 That is a weak check. It is the strongest one v2c permits. SNMPv3 traps, which
-can be authenticated, are separate work.
+can be authenticated, are separate work: they are counted as `v3` and dropped.
+
+**The community, too, when it is known.** A v1/v2c trap carries its
+community in clear text — no secret on the wire, but a second thing a spoofer
+has to get right. When the device's polling community is known (the server
+sends it in `snmpTargets`) and `trapsCheckCommunity` is on (the default), a trap
+with a different community is refused and counted as `badCommunity`. A device
+with no known community (a v3 target, none assigned) is checked on address
+alone. A switch configured to send traps with a *different* community than it
+answers polls with needs `trapsCheckCommunity: false`.
+
+Older agents decoded traps through a `net-snmp` API the library does not
+export, so every real trap was counted as `undecodable`; the agent now decodes
+v1/v2c itself (`traps/decode.js`).
 
 `refused` is counted apart from `dropped` on purpose: *"a switch nobody added is
 shouting at us"* and *"a device we poll is shouting too fast"* are different

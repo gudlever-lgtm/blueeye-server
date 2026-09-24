@@ -198,6 +198,9 @@ CREATE TABLE IF NOT EXISTS `flow_records` (
   `country` CHAR(2) NULL DEFAULT NULL,
   `asn` INT UNSIGNED NULL DEFAULT NULL,
   `asn_name` VARCHAR(255) NULL DEFAULT NULL,
+  `vlan` SMALLINT UNSIGNED NULL DEFAULT NULL,
+  `in_if` INT UNSIGNED NULL DEFAULT NULL,
+  `out_if` INT UNSIGNED NULL DEFAULT NULL,
   `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (id),
   KEY idx_flows_agent_ts (agent_id, ts),
@@ -290,6 +293,7 @@ CREATE TABLE IF NOT EXISTS `probe_results` (
   `error_code` VARCHAR(32) NULL DEFAULT NULL,
   `failure` VARCHAR(16) NULL DEFAULT NULL,
   `resolver` VARCHAR(64) NULL DEFAULT NULL,
+  `dhcp` JSON NULL DEFAULT NULL,
   `detail` VARCHAR(255) NULL DEFAULT NULL,
   `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (id),
@@ -1517,6 +1521,7 @@ CREATE TABLE IF NOT EXISTS `event_cases` (
   `severity` ENUM('INFO', 'WARN', 'CRIT') NOT NULL DEFAULT 'INFO',
   `primary_finding_id` CHAR(36) NULL DEFAULT NULL,
   `config_change_id` BIGINT UNSIGNED NULL DEFAULT NULL,
+  `cluster_id` BIGINT UNSIGNED NULL DEFAULT NULL,
   `first_event_at` DATETIME NOT NULL,
   `last_event_at` DATETIME NOT NULL,
   `resolved_at` DATETIME NULL DEFAULT NULL,
@@ -1532,7 +1537,9 @@ CREATE TABLE IF NOT EXISTS `event_cases` (
   KEY idx_event_cases_closed_by (closed_by),
   CONSTRAINT fk_event_cases_primary_finding FOREIGN KEY (primary_finding_id) REFERENCES findings (id) ON DELETE SET NULL,
   CONSTRAINT fk_event_cases_closed_by FOREIGN KEY (closed_by) REFERENCES users (id) ON DELETE SET NULL,
-  CONSTRAINT fk_event_cases_config_change FOREIGN KEY (config_change_id) REFERENCES config_snapshots (id) ON DELETE SET NULL
+  CONSTRAINT fk_event_cases_config_change FOREIGN KEY (config_change_id) REFERENCES config_snapshots (id) ON DELETE SET NULL,
+  KEY idx_event_cases_cluster (cluster_id),
+  CONSTRAINT fk_event_cases_cluster FOREIGN KEY (cluster_id) REFERENCES event_clusters (id) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- 072 — the incident work log (shift handover).
@@ -1612,6 +1619,7 @@ CREATE TABLE IF NOT EXISTS `event_clusters` (
   `confidence` ENUM('low', 'medium', 'high') NOT NULL DEFAULT 'low',
   `member_finding_ids` JSON NOT NULL,
   `suspected_common_cause` TEXT NULL DEFAULT NULL,
+  `grouping_basis` JSON NULL DEFAULT NULL,
   `advisory` TEXT NULL DEFAULT NULL,
   `alert_last_at` DATETIME NULL DEFAULT NULL,
   `alert_last_severity` VARCHAR(16) NULL DEFAULT NULL,
@@ -2723,6 +2731,7 @@ CREATE TABLE IF NOT EXISTS `device_events` (
   `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
   `agent_id` INT UNSIGNED NOT NULL,
   `device_id` INT UNSIGNED NULL DEFAULT NULL,
+  `snmp_device_id` INT UNSIGNED NULL DEFAULT NULL,
   `source_ip` VARCHAR(45) NOT NULL,
   `received_at` DATETIME(3) NOT NULL,
   `device_time` DATETIME(3) NULL DEFAULT NULL,
@@ -2746,7 +2755,8 @@ CREATE TABLE IF NOT EXISTS `device_events` (
   KEY `idx_device_events_device` (`device_id`, `received_at`),
   KEY `idx_device_events_type` (`event_type`, `received_at`),
   KEY `idx_device_events_severity` (`severity`, `received_at`),
-  KEY `idx_device_events_agent` (`agent_id`, `received_at`)
+  KEY `idx_device_events_agent` (`agent_id`, `received_at`),
+  KEY idx_device_events_snmp_device (snmp_device_id, received_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- 104 — snmp_devices: the switches an agent polls ON BEHALF OF the server.
@@ -2792,6 +2802,16 @@ CREATE TABLE IF NOT EXISTS `snmp_devices` (
   `credential_profile_id` INT UNSIGNED NULL DEFAULT NULL,
   `display_name` VARCHAR(255) NULL DEFAULT NULL,
   `sys_descr` VARCHAR(255) NULL DEFAULT NULL,
+  `sys_name` VARCHAR(255) NULL DEFAULT NULL,
+  `sys_location` VARCHAR(255) NULL DEFAULT NULL,
+  `sys_contact` VARCHAR(255) NULL DEFAULT NULL,
+  `sys_object_id` VARCHAR(128) NULL DEFAULT NULL,
+  `hw_vendor` VARCHAR(128) NULL DEFAULT NULL,
+  `hw_model` VARCHAR(128) NULL DEFAULT NULL,
+  `hw_serial` VARCHAR(64) NULL DEFAULT NULL,
+  `hw_rev` VARCHAR(64) NULL DEFAULT NULL,
+  `fw_rev` VARCHAR(64) NULL DEFAULT NULL,
+  `sw_rev` VARCHAR(64) NULL DEFAULT NULL,
   `location_id` INT UNSIGNED NULL DEFAULT NULL,
   `collect` JSON NULL DEFAULT NULL,
   `interval_sec` INT UNSIGNED NOT NULL DEFAULT 300,
@@ -2893,6 +2913,7 @@ CREATE TABLE IF NOT EXISTS `fdb_entries` (
 CREATE TABLE IF NOT EXISTS `snmp_neighbors` (
   `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
   `device_id` INT UNSIGNED NOT NULL,
+  `protocol` VARCHAR(8) NOT NULL DEFAULT 'lldp',
   `local_port` INT UNSIGNED NULL DEFAULT NULL,
   `local_if_index` INT UNSIGNED NULL DEFAULT NULL,
   `local_if_name` VARCHAR(64) NULL DEFAULT NULL,
@@ -2900,14 +2921,16 @@ CREATE TABLE IF NOT EXISTS `snmp_neighbors` (
   `remote_port_id` VARCHAR(255) NULL DEFAULT NULL,
   `remote_port_desc` VARCHAR(255) NULL DEFAULT NULL,
   `remote_sys_name` VARCHAR(255) NULL DEFAULT NULL,
+  `remote_address` VARCHAR(45) NULL DEFAULT NULL,
+  `remote_platform` VARCHAR(255) NULL DEFAULT NULL,
   `first_seen` DATETIME NOT NULL,
   `last_seen` DATETIME NOT NULL,
   PRIMARY KEY (`id`),
-  UNIQUE KEY `uq_snmp_neighbors` (`device_id`, `remote_chassis_id`, `remote_port_id`),
   KEY `idx_snmp_neighbors_device` (`device_id`, `last_seen`),
   KEY `idx_snmp_neighbors_remote` (`remote_chassis_id`),
   KEY `idx_snmp_neighbors_last_seen` (`last_seen`),
-  CONSTRAINT `fk_snmp_neighbors_device` FOREIGN KEY (`device_id`) REFERENCES `snmp_devices` (`id`) ON DELETE CASCADE
+  CONSTRAINT `fk_snmp_neighbors_device` FOREIGN KEY (`device_id`) REFERENCES `snmp_devices` (`id`) ON DELETE CASCADE,
+  UNIQUE KEY uq_snmp_neighbors_proto (device_id, protocol, remote_chassis_id, remote_port_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- 107 — burst_runs: one-target, once-a-second measurement, on demand.
@@ -3106,7 +3129,7 @@ CREATE TABLE IF NOT EXISTS `device_counter_samples` (
   `in_bcast_pps` DOUBLE NULL DEFAULT NULL,
   `in_util_pct` DOUBLE NULL DEFAULT NULL,
   `out_util_pct` DOUBLE NULL DEFAULT NULL,
-  `discontinuity` ENUM('first', 'reboot', 'renumber', 'gap', 'wrap') NULL DEFAULT NULL,
+  `discontinuity` ENUM('first', 'reboot', 'renumber', 'gap', 'wrap', 'counter_reset') NULL DEFAULT NULL,
   PRIMARY KEY (`id`),
   UNIQUE KEY `uq_counter_sample` (`interface_id`, `ts`),
   KEY `idx_counter_device_ts` (`device_id`, `ts`),
@@ -3327,6 +3350,140 @@ CREATE TABLE IF NOT EXISTS `flow_internal_rollup` (
   UNIQUE KEY uq_flow_internal_rollup (agent_id, bucket, src_ip, dst_ip, proto, service_port),
   KEY idx_flow_internal_rollup_bucket (bucket),
   KEY idx_flow_internal_rollup_pair (src_ip, dst_ip, bucket)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- 125 — device_arp_entries: the ARP table of a polled router or L3 switch.
+--
+-- THE GAP THIS CLOSES. arp_entries (073) is what an AGENT's own neighbour
+-- cache sees — the hosts on the agent's segment. In a flat OT network the
+-- agent sits on one segment and the PLCs on others, and the only thing that
+-- sees every one of them is the router between them. Its IP-MIB neighbour
+-- table (ipNetToPhysicalTable, or the older ipNetToMediaTable) is read by the
+-- SNMP topology poll now (collect 'arp') and stored here.
+--
+-- WHY NOT arp_entries. That table keys on an `agents` id and carries an ENUM
+-- source; a polled device has its own id sequence (snmp_devices, 104), and
+-- writing a device id into agent_id would attribute a router's table to
+-- whichever agent shared the number — the same collision 106 refused for LLDP.
+--
+-- SAME SHAPE, SAME RULES as arp_entries: one row per (device, ip), a MAC that
+-- changes behind an address is an UPDATE stamped in mac_changed_at rather
+-- than a second row, and rows age out on last_seen (30 days, the same
+-- RETENTION_ARP_DAYS window). `if_index`/`if_name` are the SVI or routed port
+-- the address was learned on ("Vlan20") — the name resolved by the agent from
+-- the device's own ifName, NULL rather than invented.
+--
+-- It is an IDENTITY SOURCE: universal search answers IP↔MAC from it, and the
+-- new-device detector watches it per site (snmp_devices.location_id).
+--
+-- PRIVACY: an address pairing the router already holds. Metadata only.
+CREATE TABLE IF NOT EXISTS `device_arp_entries` (
+  `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `device_id` INT UNSIGNED NOT NULL,
+  `ip` VARCHAR(45) NOT NULL,
+  `mac` CHAR(17) NOT NULL,
+  `if_index` INT UNSIGNED NULL DEFAULT NULL,
+  `if_name` VARCHAR(64) NULL DEFAULT NULL,
+  `first_seen` DATETIME NOT NULL,
+  `last_seen` DATETIME NOT NULL,
+  `mac_changed_at` DATETIME NULL DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uq_device_arp` (`device_id`, `ip`),
+  KEY `idx_device_arp_mac` (`mac`),
+  KEY `idx_device_arp_ip` (`ip`),
+  KEY `idx_device_arp_last_seen` (`last_seen`),
+  CONSTRAINT `fk_device_arp_device` FOREIGN KEY (`device_id`) REFERENCES `snmp_devices` (`id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- The inventory rows. `ent_index` is entPhysicalIndex, the device's own key
+-- for the entity; `ent_class` is 'chassis' or 'module'.
+CREATE TABLE IF NOT EXISTS `device_inventory` (
+  `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `device_id` INT UNSIGNED NOT NULL,
+  `ent_index` INT UNSIGNED NOT NULL,
+  `ent_class` VARCHAR(16) NOT NULL,
+  `name` VARCHAR(64) NULL DEFAULT NULL,
+  `descr` VARCHAR(255) NULL DEFAULT NULL,
+  `model` VARCHAR(128) NULL DEFAULT NULL,
+  `serial` VARCHAR(64) NULL DEFAULT NULL,
+  `vendor` VARCHAR(128) NULL DEFAULT NULL,
+  `hardware_rev` VARCHAR(64) NULL DEFAULT NULL,
+  `firmware_rev` VARCHAR(64) NULL DEFAULT NULL,
+  `software_rev` VARCHAR(64) NULL DEFAULT NULL,
+  `first_seen` DATETIME NOT NULL,
+  `last_seen` DATETIME NOT NULL,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uq_device_inventory` (`device_id`, `ent_index`),
+  KEY `idx_device_inventory_serial` (`serial`),
+  CONSTRAINT `fk_device_inventory_device` FOREIGN KEY (`device_id`) REFERENCES `snmp_devices` (`id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- 128 — the sFlow exporters each agent hears from, and whether each one is a
+-- device the product knows.
+--
+-- An sFlow exporter pushes its interface counters (generic + Ethernet error
+-- counters) every polling interval, unasked. When its address is a registered
+-- SNMP device those counters become device_counter_samples through the same
+-- counter path an SNMP poll takes — which is what gives a switch nobody polls
+-- over SNMP its per-port errors and duplex. When it is NOT registered, the
+-- counters have nowhere to go, and the coverage report has to be able to say
+-- so ("sFlow exporter not registered as a device"). That needs a record of who
+-- was heard, which is this table.
+--
+-- ONE ROW PER (agent, exporter address), upserted by the ingest: bounded by the
+-- number of exporters, not by traffic, so it needs no purge.
+--
+-- `device_id`   the snmp_devices row the address matched at the last sighting,
+--               NULL when it matched none. SET NULL when the device is deleted:
+--               the exporter is still out there, now unregistered.
+-- `interfaces`  distinct ifIndexes in the last batch — "a 48-port switch", as
+--               evidence in the gap, not a count to add up.
+CREATE TABLE IF NOT EXISTS `sflow_exporters` (
+  `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `agent_id` INT UNSIGNED NOT NULL,
+  `address` VARCHAR(45) NOT NULL,
+  `device_id` INT UNSIGNED NULL DEFAULT NULL,
+  `interfaces` INT UNSIGNED NOT NULL DEFAULT 0,
+  `first_seen` DATETIME NOT NULL,
+  `last_seen` DATETIME NOT NULL,
+  PRIMARY KEY (id),
+  UNIQUE KEY uq_sflow_exporter (agent_id, address),
+  KEY idx_sflow_exporter_last_seen (last_seen),
+  CONSTRAINT fk_sflow_exporter_agent FOREIGN KEY (agent_id) REFERENCES agents (id) ON DELETE CASCADE,
+  CONSTRAINT fk_sflow_exporter_device FOREIGN KEY (device_id) REFERENCES snmp_devices (id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- 131 — known_devices: the new-device detector's long memory.
+--
+-- THE GAP THIS CLOSES. The detector (src/discovery/newDeviceDetector.js) calls
+-- a MAC new when no ARP table at the site holds it. But arp_entries (073) ages
+-- out after 30 days (RETENTION_ARP_DAYS) — correctly, a stale answer to "where
+-- is this MAC" is worse than none — so a laptop back from a month's holiday, or
+-- a spare PLC powered up for the quarterly test, was "a device we have never
+-- seen before" and paged somebody. Seen-before is a much longer question than
+-- where-is-it-now, so it gets its own table.
+--
+-- ONE ROW PER (scope, MAC). `scope` is where "known" applies, exactly the
+-- detector's rule: 'site:<locations.id>' for an agent with a site, else
+-- 'agent:<agents.id>'. A string rather than two nullable ids because a UNIQUE
+-- key over NULLable columns does not deduplicate in MySQL. first_seen is kept,
+-- last_seen and last_ip move on every sighting.
+--
+-- 400 DAYS on last_seen (RETENTION_KNOWN_DEVICE_DAYS), the same horizon as the
+-- probe history: long enough that a device used once a year is still known
+-- when it comes back, short enough that the table forgets hardware that left.
+-- No foreign keys on purpose — the memory outlives a deleted agent or site the
+-- same way the finding it prevents would have.
+--
+-- PRIVACY: a MAC, an IP and two timestamps. Metadata only.
+CREATE TABLE IF NOT EXISTS `known_devices` (
+  `scope` VARCHAR(32) NOT NULL,
+  `mac` CHAR(17) NOT NULL,
+  `first_seen` DATETIME NOT NULL,
+  `last_seen` DATETIME NOT NULL,
+  `last_ip` VARCHAR(45) NULL DEFAULT NULL,
+  PRIMARY KEY (`scope`, `mac`),
+  KEY `idx_known_devices_last_seen` (`last_seen`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 SET FOREIGN_KEY_CHECKS = 1;

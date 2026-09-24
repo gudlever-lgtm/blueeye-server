@@ -18,7 +18,9 @@
 //   the subtraction is two unrelated ports minus each other.
 //
 // In both cases the raw counter is stored and every rate is null, with
-// `discontinuity` saying which case it was. Null plus a reason is the
+// `discontinuity` saying which case it was. The full list: 'first', 'reboot',
+// 'renumber', 'gap', 'wrap' and 'counter_reset' (migration 133 — a counter
+// that went down while the device stayed up). Null plus a reason is the
 // difference between "we measured nothing" and "we do not know".
 //
 // Pure. No database, no clock, no I/O — the one file in this feature where a
@@ -163,7 +165,23 @@ function computeSample({
   // read from the same device at the same moment, so a counter that wrapped
   // says the interval was long enough for one to — and half a trustworthy row
   // invites somebody to read the other half as if it were fine.
-  if (inOct.wrapped || outOct.wrapped) {
+  //
+  // A counter that went DOWN without wrapping — a 64-bit counter, or a 32-bit
+  // one the wrap rule does not explain — while the device did NOT restart
+  // (that was `rebooted`, above) is a counter somebody RESET: `clear counters`
+  // on the switch zeroes every counter on the port at once. The rate was
+  // already dropped (delta() answers null for a decrease); what was missing
+  // was the reason, so the row said "no rate" and nothing about why — the one
+  // thing a NULL rate must never do. It voids the whole row for the same
+  // reason a wrap does: a clear resets them all, and half a row is a lie.
+  //
+  // Any OTHER counter that wrapped (a 32-bit error counter) voids the row as a
+  // wrap too, rather than leaving that one rate null with no reason.
+  const all = COUNTER_FIELDS.map((f) => d(f));
+  const wrapped = all.some((x) => x.wrapped);
+  const reset = all.some((x, i) => x.value == null && !x.wrapped
+    && raw[COUNTER_FIELDS[i]] != null && previous[COUNTER_FIELDS[i]] != null);
+  if (wrapped || reset) {
     return {
       ...raw,
       deltaSec: null,
@@ -172,7 +190,7 @@ function computeSample({
       inDiscPps: null, outDiscPps: null,
       fcsPps: null, lateCollPps: null, inBcastPps: null,
       inUtilPct: null, outUtilPct: null,
-      discontinuity: 'wrap',
+      discontinuity: wrapped ? 'wrap' : 'counter_reset',
     };
   }
 

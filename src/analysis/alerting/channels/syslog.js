@@ -18,7 +18,9 @@ function rfc5424(finding, { appName = 'blueeye' } = {}) {
   const pri = FACILITY * 8 + sev;
   const ts = new Date(finding.createdAt || Date.now()).toISOString();
   const host = String(finding.hostId || '-').replace(/\s+/g, '_') || '-';
-  const msg = `${finding.metric || '-'} severity=${finding.severity || 'INFO'} kind=${finding.kind || '-'} ${finding.explanation || ''}`
+  const named = finding.hostName ? ` agent="${String(finding.hostName).replace(/"/g, "'")}"` : '';
+  const link = finding.link ? ` link=${finding.link}` : '';
+  const msg = `${finding.metric || '-'} severity=${finding.severity || 'INFO'} kind=${finding.kind || '-'}${named}${link} ${finding.explanation || ''}`
     .replace(/[\r\n]+/g, ' ')
     .trim();
   return `<${pri}>1 ${ts} ${host} ${appName} - finding - ${msg}`;

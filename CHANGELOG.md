@@ -1,5 +1,101 @@
 # Changelog
 
+## 0.193.0 — A checksum mismatch now says which side is stale
+
+**"checksum mismatch - refusing to update", on every retry.** The install and
+update scripts carry the SHA-256 of the agent source bundle embedded at the
+moment the script was generated, and the bundle is fetched in a separate request
+afterwards. Reproducible packaging (0.1x) removed the drift the *server* caused;
+it cannot remove the drift something *between* server and host causes. A CDN or
+reverse proxy that caches the `.tgz` by heuristic — a static-looking extension on
+a response that said nothing about caching — hands out an older build, and the
+mismatch then survives every retry instead of clearing.
+
+* Every `/enroll` response is now `Cache-Control: no-store`.
+* The scripts ask for the bundle **by checksum**:
+  `GET /enroll/agent-source.tgz?sha=<embedded>`. The URL differs per server
+  build, so nothing in the path can answer it with older bytes, and a server that
+  has repackaged since answers **409** rather than serving bytes the script would
+  then reject.
+* New `GET /enroll/agent-source.sha256` — the checksum the server serves right
+  now, one line of plain text. When verification fails anyway, the script reads
+  it and names the stale side: an out-of-date script (re-run the one-liner) or a
+  stale/altered download (a cache or proxy in the path).
+
+No agent change; older scripts keep working. See `docs/enrollment.md`.
+
+## 0.192.0 — Mute this rule does something
+
+**"Mute this rule" on a Changes row only showed a toast.** It now mutes the
+row's rule — every row of that source + type, on every host — for 24 hours, for
+you only (`POST /api/changes/mute`, migration 134 `change_mutes`). Muted rows
+leave the default list, the note under the toolbar counts them, and
+**Show → Muted** lists them with **Unmute this rule**
+(`DELETE /api/changes/mute/:key`).
+
+Always time-boxed (1..168 hours through the API), and it never touches
+alerting. See `docs/changes-feed.md`.
+
+## 0.190.0 — Traceroute hops placed by city, not just country
+
+Pair with agent 0.40.1, which sends each public hop's PTR name (`hostname`).
+Older agents keep working; their hops fall back to GeoIP.
+
+**Router names.** A backbone router's name usually says where it stands
+(`ae3.cph-bb1.telia.net`, `fra03.atlas.cogentco.com`). The server reads the
+city out of it against a curated code table (`src/geo/networkPlaces.js`) and
+puts the hop there.
+
+**City GeoIP as fallback.** When the name says nothing, DB-IP City Lite places
+the hop. "Update now" builds it next to the country table (Settings → Map →
+City-level data; about 120 MB to download, about 60 MB of memory), or
+`scripts/build-geoip.js --city`. Flows stay at country level.
+
+**Speed-of-light check.** Every placement is checked against the hop's fastest
+reply: R ms round trip means at most R × 100 km from the agent's site. A place
+that is too far is skipped for the next source; an anycast address registered
+in the US but answering from 3 ms away is left off the map, and the map says
+why.
+
+The popup and the Destinations path list show the city, how it was found and
+the router's name. Country-only stops are drawn hollow.
+
+## 0.189.0 — Troubleshooting that follows the fault
+
+A technician chasing one fault had to carry the agent, the target and the time
+from screen to screen by hand. Now:
+
+- **One fault context.** Events, situations, Changes, Troubleshooting root
+  causes, the agent page, Investigate results and search open Probes, Diagnose,
+  Investigate and Device log with the agent, target and a covering window
+  already chosen — and the address carries it (`?agent=&target=&window=`), so
+  the link can be sent on. Per-record chart parameters no longer leak onto the
+  next screen.
+- **Alerts you can act on from a phone.** Every alert names the agent and links
+  to its situation, event or agent page (`BLUEEYE_PUBLIC_URL`) — the
+  agent-offline alert from 0.188.0 included.
+- **Evidence first on the event page:** what/where/why, the anomalies, the path
+  chart and the agent's traffic and interface errors on one time axis — with
+  the minutes before the event as baseline — then the work log. It names the
+  situation the event belongs to and the recommended next step, and says when
+  the blast radius could not be computed.
+- **Troubleshooting is open to viewers** (root causes, topology, agent events;
+  the operator-only domains are left out and named). Root causes list the
+  affected devices as links; every host and timeline row opens its device.
+- **Numbers you can trust.** One unit formatter: an RTT of 1500 ms read
+  "1.5 KB"; link rates are bit/s everywhere; charts show values under the
+  pointer; SNMP legends were blank and error charts ignored egress.
+- **Auto-refresh stops wiping work:** it skips a tick while a field has focus,
+  a drawer is open or text is selected, and screens keep their filters and
+  results across a rebuild.
+- **Field use:** the switch page shows its MAC table (filterable, loop moves
+  flagged); copy buttons on IPs and MACs; offline agents marked on the topology
+  with a way into the device; drag-to-zoom works on touch; Fleet sorts
+  worst-first; the Situations list has a severity column.
+- **Fixed:** Investigate's NIS2 link threw; Fleet's *Open issues* never
+  rendered; Changes rows lost their event/situation links; *Mute this rule*
+  (a placeholder) is gone; a deep link to a switch opened "No device".
+
 ## 0.188.0 — Audit fixes: switch ports, OT traffic, coverage gaps, agent offline
 
 Fixes the findings in `docs/audit/fejlscenarie-audit.md` (section 8 lists each

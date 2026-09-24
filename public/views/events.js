@@ -32,7 +32,9 @@
     var ui = deps.ui;
 
     var SEV_TONE = { CRIT: 'crit', WARN: 'warn', INFO: 'info' };
-    var STATUS_TONE = { open: 'info', investigating: 'warn', resolved: 'ok', closed: 'neutral' };
+    // The same tones as the event page (views/event.js): an open event was
+    // blue in this list and red on its own page.
+    var STATUS_TONE = { open: 'crit', investigating: 'warn', resolved: 'ok', closed: 'neutral' };
     var SEV_RANK = { CRIT: 3, WARN: 2, INFO: 1 };
 
     // The event state machine, mirrored for the UI. It lives in
@@ -317,7 +319,13 @@
                   // The condition only: severity, device and site are the
                   // columns either side, and the stored title repeats all three.
                   // The full title is still the row's tooltip.
-                  condition: el('span', { title: i.title || '' }, deps.condition(i)),
+                  // …plus the situation it is part of, when other agents
+                  // see the same fault (migration 129).
+                  condition: el('span', { title: i.title || '' }, deps.condition(i),
+                    i.clusterId != null && typeof deps.openCluster === 'function'
+                      ? el('span', {}, ' ', ui.hostLink(t('events.partOfSituation', { id: i.clusterId }),
+                        function () { deps.openCluster(i.clusterId); }))
+                      : null),
                   device: ui.hostLink(deps.agentLabel(i), function () { deps.openEvent(i.id); }),
                   location: i.locationName ? ui.meta(i.locationName) : ui.metaXs(deps.locationLabel(i)),
                   first: el('span', { title: ui.fmt.abs(i.firstEventAt) }, ui.fmt.rel(i.firstEventAt)),

@@ -1,5 +1,7 @@
 'use strict';
 
+const { hostLabel } = require('../alertContext');
+
 const silentLogger = { info() {}, warn() {}, error() {} };
 
 // Matrix channel — posts findings into a Matrix room.
@@ -63,22 +65,25 @@ function renderMessage(finding, group) {
   const isCluster = group && Array.isArray(group.memberFindingIds);
   const sev = (finding && finding.severity) || 'INFO';
   const mark = SEVERITY_MARK[sev] || '⚪';
-  const host = (finding && finding.hostId) != null ? String(finding.hostId) : '–';
   const metric = (finding && finding.metric) || '–';
+  const count = isCluster ? (finding.memberCount || (group.memberFindingIds || []).length) : 0;
   const headline = isCluster
-    ? `${mark} ${sev} · ${finding.memberCount || (group.memberFindingIds || []).length} related findings`
-    : `${mark} ${sev} · ${metric} on host ${host}`;
+    ? `${mark} ${sev} · ${count} related findings${finding.hostName ? ` on ${finding.hostName}` : ''}`
+    : `${mark} ${sev} · ${metric} on ${hostLabel(finding)}`;
 
   const lines = [headline];
   if (finding && finding.explanation) lines.push(finding.explanation);
   if (group && group.likelyCause) lines.push(`Likely cause: ${group.likelyCause}`);
   if (group && group.hint) lines.push(group.hint);
   if (isCluster && group.advisory) lines.push(group.advisory);
+  const link = finding && typeof finding.link === 'string' && /^https?:\/\//.test(finding.link) ? finding.link : null;
+  if (link) lines.push(`Open in BlueEyes: ${link}`);
 
   const body = lines.join('\n');
   const formatted = [
     `<b>${escapeHtml(headline)}</b>`,
-    ...lines.slice(1).map((l) => escapeHtml(l)),
+    ...lines.slice(1, link ? -1 : undefined).map((l) => escapeHtml(l)),
+    ...(link ? [`<a href="${escapeHtml(link)}">Open in BlueEyes</a>`] : []),
   ].join('<br/>');
 
   return { body, formatted };

@@ -10,7 +10,7 @@
 **Agent:** `blueeye-agent/src/transactions/phases.js` · `blueeye-agent/src/capture/`
 **Server:** `src/analysis/transactionPhases.js` · `src/analysis/captureAnalysis.js`
 **API:** `/api/transactions/:id/run` · `/api/transactions/:id/captures`
-**Tables:** `transaction_results.step_phases`, `transaction_captures` (migration 124)
+**Tables:** `transaction_results.step_phases`, `transaction_captures` (migration 135)
 
 ---
 

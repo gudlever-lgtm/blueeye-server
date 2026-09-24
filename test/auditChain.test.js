@@ -60,6 +60,8 @@ test('verifyChain() detects a tampered field', async () => {
   const v = await repo.verifyChain();
   assert.equal(v.ok, false);
   assert.equal(v.brokenAt, 2);
+  // The row's own fields changed, so the screen can say "edited", not "missing".
+  assert.equal(v.reason, 'altered');
 });
 
 test('verifyChain() detects a removed row (chain link broken)', async () => {
@@ -74,6 +76,8 @@ test('verifyChain() detects a removed row (chain link broken)', async () => {
   const v = await repo.verifyChain();
   assert.equal(v.ok, false);
   assert.equal(v.brokenAt, 3);
+  // Row 3 is intact; what broke is its link to the row before it.
+  assert.equal(v.reason, 'unlinked');
 });
 
 test('verifyChain() is fine with an empty log', async () => {

@@ -33,6 +33,43 @@
     var STATUS_TONE = { open: 'crit', acknowledged: 'warn', resolved: 'ok', closed: 'neutral' };
     var CONF_TONE = { high: 'ok', medium: 'warn', low: 'neutral' };
 
+    var SEV_TONE = { CRIT: 'crit', WARN: 'warn', INFO: 'info' };
+    var CASE_TONE = { open: 'crit', investigating: 'warn', resolved: 'ok', closed: 'neutral' };
+
+    function membersPanel(detail) {
+      var members = Array.isArray(detail.members) ? detail.members : [];
+      return ui.panel({
+        title: t('sit.members.title'),
+        note: t('sit.members.note', { n: members.length }),
+        children: [members.length
+          ? el('div', { class: 'panel-body' }, ui.history(members.map(function (m) {
+            return [ui.fmt.short(m.createdAt), el('span', {},
+              ui.badge(SEV_TONE[m.severity] || 'neutral', m.severity || '–'), ' ',
+              el('strong', {}, m.metric || ''), ' ', ui.meta(t('sit.members.agent', { host: m.host == null ? '–' : m.host })),
+              ' — ', m.explanation || '')];
+          })))
+          : ui.emptyState({ title: t('sit.members.none'), body: t('sit.members.noneHint') })],
+      });
+    }
+
+    function casesPanel(detail) {
+      var cases = Array.isArray(detail.eventCases) ? detail.eventCases : [];
+      return ui.panel({
+        title: t('sit.cases.title'),
+        note: t('sit.cases.note', { n: cases.length }),
+        children: [cases.length
+          ? el('div', { class: 'panel-body' }, ui.history(cases.map(function (c) {
+            return [ui.fmt.short(c.firstEventAt), el('span', {},
+              ui.badge(CASE_TONE[c.status] || 'neutral', c.status ? t('events.status.' + c.status) : '–'), ' ',
+              ui.hostLink(c.title || ('#' + c.id), function () { deps.openEvent(c.id); }),
+              c.agentName || c.locationName
+                ? ui.meta(' · ' + [c.agentName, c.locationName].filter(Boolean).join(' · '))
+                : null)];
+          })))
+          : ui.emptyState({ title: t('sit.cases.none'), body: t('sit.cases.noneHint') })],
+      });
+    }
+
     function view() {
       var id = deps.id();
       var page = ui.page();
@@ -80,6 +117,11 @@
           help: { title: t('sit.info.title'), body: function () { return deps.helpBody(); } },
           actions: actions,
         }));
+
+        // What the situation is made of: its member findings and the event
+        // cases they sit in (migration 129) — each case opens its own page,
+        // which says "part of situation #N" back.
+        page.append(membersPanel(detail), casesPanel(detail));
 
         // The five panels are the module's, passed in whole.
         page.append(deps.mount(detail));

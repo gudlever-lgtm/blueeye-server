@@ -254,6 +254,41 @@ test('preview shows the effect without storing anything', async () => {
     .send({ rule: { source: 'finding', severity: 'WARN', match_metric: 'x', reason: 'r' } })).status, 400);
 });
 
+// The editor previews a DRAFT rule against the open events before Save, so an
+// admin sees how much it would change while it is still a draft.
+test('preview scope:open counts the open events a draft would change, stores nothing', async () => {
+  const calls = [];
+  const store = {
+    applySeverityRule: async (rule, opts) => { calls.push({ rule, opts }); return { matched: 7, changed: 7 }; },
+  };
+  const app = makeApp({ findingStore: store });
+  const rule = { source: 'finding', severity: 'WARN', match_metric: 'packet_loss', reason: 'noisy' };
+  const res = await request(app).post(`${BASE}/preview`).set('Authorization', authHeader('admin')).send({ rule, scope: 'open' });
+  assert.equal(res.status, 200);
+  assert.equal(res.body.scope, 'open');
+  assert.equal(res.body.matched, 7);
+  assert.equal(res.body.changed, 7);
+  assert.match(res.body.explanation, /to WARN/);
+  assert.equal(calls.length, 1);
+  assert.deepEqual(calls[0].opts, { dryRun: true }, 'a preview never writes');
+  assert.equal(calls[0].rule.match_metric, 'packet_loss');
+
+  // A viewer may preview one event, not count the estate; a bad draft is 400.
+  assert.equal((await request(app).post(`${BASE}/preview`).set('Authorization', authHeader('viewer')).send({ rule, scope: 'open' })).status, 403);
+  assert.equal((await request(app).post(`${BASE}/preview`).set('Authorization', authHeader('admin'))
+    .send({ rule: { source: 'finding', severity: 'WARN', reason: 'r' }, scope: 'open' })).status, 400);
+});
+
+test('preview scope:open → 404 when that source cannot be counted, 500 when the count fails', async () => {
+  const rule = { source: 'service_assurance', severity: 'INFO', match_kind: 'slow', reason: 'r' };
+  const none = makeApp({ serviceTestIncidentsRepo: null });
+  assert.equal((await request(none).post(`${BASE}/preview`).set('Authorization', authHeader('admin')).send({ rule, scope: 'open' })).status, 404);
+  const broken = makeApp({ findingStore: { applySeverityRule: async () => { throw new Error('db down'); } } });
+  const res = await request(broken).post(`${BASE}/preview`).set('Authorization', authHeader('admin'))
+    .send({ rule: { source: 'finding', severity: 'WARN', match_metric: 'x', reason: 'r' }, scope: 'open' });
+  assert.equal(res.status, 500);
+});
+
 // ------------------------------------------------------- the store applies it
 test('a finding is STORED with the ruled severity, and remembers what it was', async () => {
   const { FindingStore } = require('../src/analysis/findings');

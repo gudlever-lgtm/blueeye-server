@@ -150,8 +150,13 @@ function decodeToken(t = token) {
 }
 // True while the signed-in user must change their one-time password first.
 function needsPasswordChange() {
-  return decodeToken().mustChangePassword === true;
+  return decodeToken().mustChangePassword === true || passwordExpired;
 }
+// Set when the server says this session's password is past the (opt-in) max
+// age — at sign-in (`passwordExpired` in the login response) or on any request
+// (403 password_expired). Not in the token: the server decides with the policy
+// it holds, and the change screen is the only way forward either way.
+let passwordExpired = false;
 
 const canWrite = () => role === 'operator' || role === 'admin';
 const canDelete = () => role === 'admin';
@@ -207,6 +212,19 @@ async function api(path, { method = 'GET', body } = {}) {
     logout();
     throw new Error('Session expired — please log in again.');
   }
+  // Baseline security (Settings → Authentication → Security): an expired
+  // password holds the session to the change screen; an address outside the
+  // role's allowlist ends it, and the login screen says why.
+  if (res.status === 403 && data && data.error === 'password_expired' && !passwordExpired) {
+    passwordExpired = true;
+    render();
+  }
+  if (res.status === 403 && data && data.error === 'ip_not_allowed' && path !== '/auth/login') {
+    logout();
+    const loginErr = document.querySelector('#login-error');
+    if (loginErr) loginErr.textContent = t('auth.ipDenied');
+    throw new Error(t('auth.ipDenied'));
+  }
   if (!res.ok) {
     const msg = (data && (data.error || data.message)) || `HTTP ${res.status}`;
     const err = new Error(msg);
@@ -214,7 +232,22 @@ async function api(path, { method = 'GET', body } = {}) {
     err.data = data;
     throw err;
   }
+  if (path === '/agents' && Array.isArray(data)) rememberAgentNames(data);
   return data;
+}
+
+// Every screen fetches /agents on its own; the names it returns are remembered
+// here so a row that only carries an agent id (a finding's hostId, an alert's
+// host) can still say WHICH machine instead of printing a bare number.
+const agentNames = new Map();
+function rememberAgentNames(list) {
+  for (const a of list) {
+    if (a && a.id != null) agentNames.set(String(a.id), a.display_name || a.hostname || a.name || null);
+  }
+}
+function agentLabel(id) {
+  if (id == null || id === '') return '–';
+  return agentNames.get(String(id)) || `agent ${id}`;
 }
 
 // Authenticated fetch for responses api() cannot parse — blobs (CSV/PDF/PNG
@@ -243,6 +276,11 @@ async function authedFetch(path, init = {}) {
 // Human-readable text from an api() error: prefer the field-level validation
 // details (joined), else the thrown message.
 function errText(e) {
+  // A server error that names its own translation key (e.g. auth.pw.reused)
+  // is said in the user's language; the English `message` is the fallback.
+  if (e.data && e.data.messageKey && window.I18n && window.I18n.has && window.I18n.has(e.data.messageKey)) {
+    return t(e.data.messageKey, e.data.messageParams || {});
+  }
   return e.data && e.data.details ? Object.values(e.data.details).join(' · ') : e.message;
 }
 
@@ -288,6 +326,19 @@ function copyText(text) {
     fallbackCopy(text, done);
   }
 }
+// An address with a copy button beside it: IPs, MACs and hop addresses are
+// what a technician pastes into a terminal next, and selecting text inside a
+// clickable row opens the row instead.
+function copyable(text) {
+  if (text == null || text === '') return el('span', { class: 'muted' }, '–');
+  const value = String(text);
+  return el('span', { class: 'copyable' },
+    el('code', {}, value),
+    el('button', {
+      type: 'button', class: 'copy-btn', title: t('common.copy'), 'aria-label': t('common.copyValue', { v: value }),
+      onclick: (e) => { e.stopPropagation(); e.preventDefault(); copyText(value); },
+    }, '⧉'));
+}
 function fallbackCopy(text, done) {
   const ta = el('textarea', { style: 'position:fixed;opacity:0' });
   ta.value = text;
@@ -318,6 +369,7 @@ function fmtDuration(sec) {
 // ---- Auth -----------------------------------------------------------------
 async function login(emailInput, password) {
   const data = await api('/auth/login', { method: 'POST', body: { email: emailInput, password } });
+  passwordExpired = data.passwordExpired === true;
   token = data.token;
   role = data.user.role;
   email = data.user.email;
@@ -443,6 +495,16 @@ function applyFeatureVisibility() {
 // to the always-available landing page.
 const ROLE_RANK = { viewer: 1, operator: 2, admin: 3 };
 function roleAtLeast(min) { return (ROLE_RANK[role] || 0) >= (ROLE_RANK[min] || 1); }
+// Whether this user can open a view: its nav entry is neither above their role
+// nor excluded by the licence. A view with no nav entry is allowed.
+function viewAllowed(view) {
+  if (typeof document === 'undefined') return true;
+  const b = document.querySelector(`.tabs button[data-view="${view}"]`);
+  if (!b) return true;
+  if (b.dataset.minRole && !roleAtLeast(b.dataset.minRole)) return false;
+  if (b.dataset.feature && !featureEntitled(b.dataset.feature)) return false;
+  return true;
+}
 function applyRoleVisibility() {
   for (const b of document.querySelectorAll('.tabs button[data-min-role]')) {
     const allowed = roleAtLeast(b.dataset.minRole);
@@ -567,6 +629,7 @@ function logout() {
   invalidateFeatures();
   profileLoaded = false;
   token = null;
+  passwordExpired = false;
   email = '';
   localStorage.removeItem(TOKEN_KEY);
   localStorage.removeItem(ROLE_KEY);
@@ -812,13 +875,27 @@ function showSigningKeySetupPrompt() {
 // Labels mirror the top nav. A link whose target tab is hidden (licence/role)
 // degrades to plain text, so the help never offers a dead end.
 const VIEW_LABELS = {
-  fleet: 'Overview', overview: 'Traffic', map: 'Sites', geo: 'Destinations', agents: 'Agents',
+  fleet: 'Fleet', overview: 'Traffic', map: 'Sites', geo: 'Destinations', agents: 'Agents',
   interfaces: 'Interfaces', probes: 'Probes', tests: 'Tests', flows: 'Flows',
   findings: 'Analysis', reporting: 'Reporting', locations: 'Locations', enrollment: 'Enrollment', settings: 'Settings',
-  docs: 'Documentation', investigation: 'Troubleshooting', nics: 'NICs', events: 'Events',
+  docs: 'Documentation', investigation: 'Investigate', troubleshooting: 'Troubleshooting', diagnose: 'Diagnose', deviceLog: 'Device log', nics: 'NICs', events: 'Events',
   serviceAssurance: 'Service Assurance', guide: 'Guides',
   logs: 'System Logs', userLogs: 'User Logs',
 };
+// The five records a fault can show up as, side by side. Each list page has its
+// own help, and none said how the others relate — so a technician met "finding",
+// "event", "situation", "probe outage" and "incident" as five separate ideas.
+function conceptGlossary() {
+  return el('div', { class: 'concept-glossary' },
+    el('h4', {}, t('glossary.title')),
+    el('dl', {},
+      ...['finding', 'event', 'situation', 'outage', 'incident'].flatMap((k) => {
+        const term = `glossary.${k}.term`;
+        const desc = `glossary.${k}.desc`;
+        return [el('dt', {}, t(term)), el('dd', {}, t(desc))];
+      })));
+}
+
 function gotoView(viewKey) {
   closeDrawer();
   // Probes and Tests share one view now; a 'tests' link opens the packages sub-tab.
@@ -1276,6 +1353,7 @@ const PAGE_INFO = {
     title: 'Analysis — errors & anomalies',
     body: () => [
       el('p', {}, 'The server analyses agent measurements locally (no cloud, no ML library) and raises a finding when a metric deviates significantly from its own baseline, flatlines (sensor/agent stop) or correlates with other errors.'),
+      conceptGlossary(),
       el('h4', {}, 'Overview & filtering'),
       el('p', {}, 'The page opens with an ', el('strong', {}, 'Overview'), ' — total and unacknowledged counts, a severity breakdown, and per-metric / per-host tables with average and peak deviation (σ). Filter by host, severity or metric from the header (or by clicking a severity chip / metric row in the overview), and click any column header to sort the list.'),
       el('h4', {}, 'Severity'),
@@ -1423,6 +1501,8 @@ const CONTRACT_VIEWS = new Map([
   ['screening', 'screening'],
   ['license', 'license'],
   ['coverage', 'coverage'],
+  ['pathLocation', 'pathLocation'],
+  ['auditLog', 'auditLog'],
 ]);
 
 
@@ -2934,9 +3014,17 @@ function attachBrush(svg, { W, padL, padR, padT, padB, H, onSelect, onClear }) {
   svg.append(rect);
   let startX = null;
   const toViewX = (clientX) => { const r = svg.getBoundingClientRect(); return Math.max(padL, Math.min(W - padR, ((clientX - r.left) / r.width) * W)); };
-  svg.addEventListener('mousedown', (e) => { startX = toViewX(e.clientX); rect.setAttribute('x', startX); rect.setAttribute('width', 0); rect.setAttribute('visibility', 'visible'); });
-  svg.addEventListener('mousemove', (e) => { if (startX === null) return; const cx = toViewX(e.clientX); rect.setAttribute('x', Math.min(startX, cx)); rect.setAttribute('width', Math.abs(cx - startX)); });
-  svg.addEventListener('mouseup', (e) => {
+  // Pointer events, not mouse events: the same drag now works with a finger on
+  // a tablet in a wiring closet. touch-action keeps a horizontal drag from
+  // scrolling the page instead.
+  svg.style.touchAction = 'pan-y';
+  svg.addEventListener('pointerdown', (e) => {
+    if (e.button != null && e.button > 0) return;
+    startX = toViewX(e.clientX); rect.setAttribute('x', startX); rect.setAttribute('width', 0); rect.setAttribute('visibility', 'visible');
+    try { svg.setPointerCapture(e.pointerId); } catch { /* not all engines */ }
+  });
+  svg.addEventListener('pointermove', (e) => { if (startX === null) return; const cx = toViewX(e.clientX); rect.setAttribute('x', Math.min(startX, cx)); rect.setAttribute('width', Math.abs(cx - startX)); });
+  svg.addEventListener('pointerup', (e) => {
     if (startX === null) return;
     const cx = toViewX(e.clientX); const x0 = Math.min(startX, cx); const x1 = Math.max(startX, cx);
     startX = null; rect.setAttribute('visibility', 'hidden');
@@ -2944,7 +3032,7 @@ function attachBrush(svg, { W, padL, padR, padT, padB, H, onSelect, onClear }) {
     const denom = W - padL - padR;
     onSelect((x0 - padL) / denom, (x1 - padL) / denom);
   });
-  svg.addEventListener('mouseleave', () => { startX = null; rect.setAttribute('visibility', 'hidden'); });
+  svg.addEventListener('pointercancel', () => { startX = null; rect.setAttribute('visibility', 'hidden'); });
   if (onClear) svg.addEventListener('contextmenu', (e) => { e.preventDefault(); onClear(); });
 }
 
@@ -2973,7 +3061,7 @@ function multiChart(seriesList, { height = 320, xLabels = null, onBrush = null, 
     const yy = y(max * frac);
     svg.append(mk('line', { class: 'grid', x1: pad.l, y1: yy, x2: W - pad.r, y2: yy }));
     const label = mk('text', { x: 6, y: yy + 4, class: 'axis' });
-    label.textContent = `${fmtBytes(max * frac)}/s`;
+    label.textContent = fmtUnit(max * frac, 'B/s');
     svg.append(label);
   }
   // Optional x (time) gridlines at each non-empty tick — drawn under the data.
@@ -3020,13 +3108,99 @@ function multiChart(seriesList, { height = 320, xLabels = null, onBrush = null, 
 
 // Metric/traffic types selectable in the history view.
 const METRIC_DEFS = [
-  ['rx', 'RX (bytes/s)'], ['tx', 'TX (bytes/s)'],
+  ['rx', 'RX (bit/s)'], ['tx', 'TX (bit/s)'],
   ['cpu', 'CPU %'], ['mem', 'Mem %'], ['load1', 'Load1'],
 ];
 const histState = { agentId: '', metrics: new Set(['rx', 'tx']) };
 
 // (toLocalInput(Date) lives with the other datetime-local helpers below.)
-function fmtNum(v) { return v >= 1024 ? fmtBytes(v) : String(Math.round(v * 10) / 10); }
+// A value with its unit, the way a network engineer reads it. Every chart
+// axis, hover readout and rate column goes through this, so one screen cannot
+// say KB/s while the next says Mbit/s about the same link.
+//
+//   'ms'    latency / RTT / load time — switches to seconds past 1000 ms
+//   'B/s'   a byte rate — SHOWN IN BITS (Mbit/s), because links are sold in bits
+//   'bit/s' a bit rate
+//   'B'     a byte count (per bucket, total)
+//   '%'     a percentage
+//   '/s'    an event rate (errors/s, discards/s, pps)
+//   ''      a plain number, compacted with k / M / G
+function fmtBits(bps) {
+  const v = Number(bps);
+  if (!Number.isFinite(v)) return '–';
+  if (v >= 1e9) return `${(v / 1e9).toFixed(2)} Gbit/s`;
+  if (v >= 1e6) return `${(v / 1e6).toFixed(1)} Mbit/s`;
+  if (v >= 1e3) return `${(v / 1e3).toFixed(1)} kbit/s`;
+  return `${Math.round(v)} bit/s`;
+}
+function fmtUnit(value, unit = '') {
+  const v = Number(value);
+  if (value == null || !Number.isFinite(v)) return '–';
+  const r1 = (x) => String(Math.round(x * 10) / 10);
+  switch (unit) {
+    case 'ms': return v >= 1000 ? `${(v / 1000).toFixed(2)} s` : `${r1(v)} ms`;
+    case 'B/s': return fmtBits(v * 8);
+    case 'bit/s': case 'bps': return fmtBits(v);
+    case 'B': return fmtBytes(v);
+    case '%': return `${r1(v)} %`;
+    case '/s': case 'pps': return `${v > 0 && v < 1 ? v.toFixed(2) : r1(v)} /s`;
+    default:
+      if (Math.abs(v) >= 1e9) return `${r1(v / 1e9)}G`;
+      if (Math.abs(v) >= 1e6) return `${r1(v / 1e6)}M`;
+      if (Math.abs(v) >= 1e4) return `${r1(v / 1e3)}k`;
+      return r1(v);
+  }
+}
+// Kept for the callers that pass no unit: a plain number, never bytes. It used
+// to turn anything >= 1024 into bytes, so an RTT of 1500 ms read "1.5 KB".
+function fmtNum(v) { return fmtUnit(v, ''); }
+
+// Hover readout for the time-axis charts: move over the plot and a line marks
+// the nearest sample while a small box lists every series' value there, with
+// its unit and time. Pointer events, so it works for a finger as well as a
+// mouse. Returns nothing; it decorates `svg` and `wrap` in place.
+function attachReadout(svg, wrap, { W, padL, padR, padT, H, padB, fromMs, toMs, series, format }) {
+  const ns = 'http://www.w3.org/2000/svg';
+  const span = Math.max(1, toMs - fromMs);
+  const line = document.createElementNS(ns, 'line');
+  line.setAttribute('class', 'chart-readout-line');
+  line.setAttribute('y1', padT); line.setAttribute('y2', H - padB);
+  line.setAttribute('visibility', 'hidden');
+  svg.append(line);
+  const box = el('div', { class: 'chart-readout', hidden: true });
+  wrap.classList.add('has-readout');
+  wrap.append(box);
+  const nearest = (pts, t) => {
+    let lo = 0; let hi = pts.length - 1;
+    if (hi < 0) return null;
+    while (hi - lo > 1) { const mid = (lo + hi) >> 1; if (pts[mid].t < t) lo = mid; else hi = mid; }
+    return Math.abs(pts[lo].t - t) <= Math.abs(pts[hi].t - t) ? pts[lo] : pts[hi];
+  };
+  const sorted = series.map((s) => ({ s, pts: (s.points || []).filter((p) => Number.isFinite(p.t)).slice().sort((a, b) => a.t - b.t) }));
+  const hide = () => { box.hidden = true; line.setAttribute('visibility', 'hidden'); };
+  svg.addEventListener('pointermove', (e) => {
+    const r = svg.getBoundingClientRect();
+    if (!r.width) return;
+    const vx = ((e.clientX - r.left) / r.width) * W;
+    if (vx < padL || vx > W - padR) { hide(); return; }
+    const t = fromMs + ((vx - padL) / (W - padL - padR)) * span;
+    const hits = sorted.map(({ s, pts }) => ({ s, p: nearest(pts, t) })).filter((h) => h.p);
+    if (!hits.length) { hide(); return; }
+    const at = hits[0].p.t;
+    const lx = padL + ((at - fromMs) / span) * (W - padL - padR);
+    line.setAttribute('x1', lx); line.setAttribute('x2', lx);
+    line.setAttribute('visibility', 'visible');
+    box.replaceChildren(
+      el('div', { class: 'chart-readout-time' }, fmtDate(at)),
+      ...hits.map((h) => el('div', {},
+        h.s.color ? el('span', { class: 'dot', style: `background:${h.s.color}` }) : null,
+        `${h.s.label || ''}${h.s.label ? ': ' : ''}${format(h.p.y)}`)));
+    box.hidden = false;
+    const px = e.clientX - wrap.getBoundingClientRect().left;
+    box.style.left = `${Math.max(0, Math.min(px + 12, wrap.clientWidth - box.offsetWidth - 4))}px`;
+  });
+  svg.addEventListener('pointerleave', hide);
+}
 function fmtTimeShort(ms) {
   return new Date(ms).toLocaleString('en-GB', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
 }
@@ -3072,7 +3246,8 @@ function findingMarkers(findings) {
 
 // Time-axis chart. Optional `band` ({lo,hi,mid}) shades a normal range (#6);
 // optional `markers` ([{t,kind,label}]) draws event lines (#7).
-function historyChart(seriesList, { fromMs, toMs, onBrush, height = 300, band = null, markers = null }) {
+function historyChart(seriesList, { fromMs, toMs, onBrush, height = 300, band = null, markers = null, unit = '' }) {
+  const fmtY = (v) => fmtUnit(v, unit);
   const W = 1000;
   const H = height;
   const pad = { l: 64, r: 12, t: 14, b: 28 };
@@ -3090,7 +3265,7 @@ function historyChart(seriesList, { fromMs, toMs, onBrush, height = 300, band = 
   for (const frac of [0, 0.5, 1]) {
     const yy = yOf(max * frac);
     svg.append(mk('line', { class: 'grid', x1: pad.l, y1: yy, x2: W - pad.r, y2: yy }));
-    const lbl = mk('text', { x: 6, y: yy + 4, class: 'axis' }); lbl.textContent = fmtNum(max * frac); svg.append(lbl);
+    const lbl = mk('text', { x: 6, y: yy + 4, class: 'axis' }); lbl.textContent = fmtY(max * frac); svg.append(lbl);
   }
   for (const frac of [0, 0.5, 1]) {
     const t = fromMs + frac * span; const xx = xOf(t);
@@ -3162,7 +3337,9 @@ function historyChart(seriesList, { fromMs, toMs, onBrush, height = 300, band = 
   if (onBrush) {
     attachBrush(svg, { W, padL: pad.l, padR: pad.r, padT: pad.t, padB: pad.b, H, onSelect: (f0, f1) => onBrush(Math.round(fromMs + f0 * span), Math.round(fromMs + f1 * span)) });
   }
-  return el('div', { class: 'big-chart' }, svg);
+  const wrap = el('div', { class: 'big-chart' }, svg);
+  attachReadout(svg, wrap, { W, padL: pad.l, padR: pad.r, padT: pad.t, padB: pad.b, H, fromMs, toMs, series: seriesList, format: fmtY });
+  return wrap;
 }
 
 // Historical traffic for one agent over a date range, with selectable metric
@@ -3264,7 +3441,11 @@ function trafficHistorySection({ onData = () => {} } = {}) {
     const legend = legendFor(seriesList);
     // Band (#6) only when a single metric is shown (otherwise scales clash).
     const band = seriesList.length === 1 ? robustBand(seriesList[0].points) : null;
-    chartHost.replaceChildren(historyChart(seriesList, { fromMs: lastFromMs, toMs: lastToMs, band, markers: lastMarkers, onBrush: (f, t) => { fromI.value = toLocalInput(new Date(f)); toI.value = toLocalInput(new Date(t)); load({ fromMs: f, toMs: t }); } }), legend);
+    // One axis, one unit: only when every chosen metric shares it.
+    const unitOf = (k) => (k === 'rx' || k === 'tx' ? 'B/s' : k === 'cpu' || k === 'mem' ? '%' : '');
+    const units = [...new Set(chosen.map(([k]) => unitOf(k)))];
+    const unit = units.length === 1 ? units[0] : '';
+    chartHost.replaceChildren(historyChart(seriesList, { unit, fromMs: lastFromMs, toMs: lastToMs, band, markers: lastMarkers, onBrush: (f, t) => { fromI.value = toLocalInput(new Date(f)); toI.value = toLocalInput(new Date(t)); load({ fromMs: f, toMs: t }); } }), legend);
   }
 
   // Called from the live graph's brush: load the actual stored data for the
@@ -3449,7 +3630,7 @@ function trafficTypeSection() {
     }));
     const legend = legendFor(seriesList);
     chartHost.replaceChildren(
-      seriesList.length ? historyChart(seriesList, { fromMs, toMs }) : el('div', { class: 'empty' }, 'Select one or more types above.'),
+      seriesList.length ? historyChart(seriesList, { fromMs, toMs, unit: 'B' }) : el('div', { class: 'empty' }, 'Select one or more types above.'),
       legend);
   }
 
@@ -3833,7 +4014,8 @@ PAGE_INFO.events = {
   title: 'Events — grouped anomalies, tracked end-to-end',
   body: () => [
     el('p', {}, 'Each event wraps the analysis findings (anomalies) that fired close together on one device. Status moves open → investigating → resolved → closed, and an open event can go straight to resolved when there is nothing to investigate; a closed event can be reopened with a comment (recorded in the audit trail).'),
-    el('p', {}, 'BlueEyes deliberately stops at the event. An event is a technical observation the monitoring owns; an ', el('strong', {}, 'event'), ' is a service-desk record with a number, an SLA and an owner, and it belongs in your ITSM. Connect one under Settings → Integrations and an event can open an event there.'),
+    el('p', {}, 'On the network side BlueEyes stops at the event: a technical observation the monitoring owns. A service-desk ', el('strong', {}, 'ticket'), ' with a number, an SLA and an owner belongs in your ITSM — connect one under Settings → Integrations and an event can open a ticket there. (Service Assurance is the exception: it tracks incidents on the public services it tests.)'),
+    conceptGlossary(),
     el('p', {}, 'The detail page shows the event timeline, the device-config change suspected to have triggered it, similar past events, and — when the EU AI assistant is enabled — a chat that answers questions using only masked, aggregated context.'),
     el('p', { class: 'muted' }, 'Status changes, config history and the AI chat are operator/admin only.'),
   ],
@@ -3848,6 +4030,8 @@ function getEventsPage() {
   if (typeof window === 'undefined' || !window.EventsPage || !ui) return null;
   eventsPage = window.EventsPage.create({
     el, t, ui, errText, gotoView, openEvent, canWrite,
+    // "part of situation #N" on a row opens that situation (migration 129).
+    openCluster: (id) => openCluster(id),
     state: eventsPageState,
     condition: incCondition,
     agentLabel: incAgentLabel,
@@ -3964,6 +4148,157 @@ function targetTimelineCard(agentId) {
     body);
   load();
   return card;
+}
+
+// ---- Event evidence ---------------------------------------------------------
+// The window every evidence chart on an event uses: from well before the first
+// anomaly (a quarter of the event's age, at least an hour) to half an hour after
+// the last one, or now. The minutes BEFORE the fault are the baseline — a chart
+// that starts at the fault shows the problem with nothing to compare it to.
+function eventEvidenceWindow(inc) {
+  const now = Date.now();
+  const first = inc.firstEventAt ? Date.parse(inc.firstEventAt) : now - 3600 * 1000;
+  const last = inc.lastEventAt ? Date.parse(inc.lastEventAt) : now;
+  const age = Math.max(0, now - first);
+  const before = Math.max(3600 * 1000, age * 0.25);
+  return { fromMs: first - before, toMs: Math.min(now, Math.max(last + 30 * 60 * 1000, first + 3600 * 1000)) };
+}
+
+// What / where / why, from the explanation GET /api/events/:id already sends:
+// the device and site, the interface when the evidence names one, and the
+// measurement against its own baseline.
+function eventExplanation(x, inc) {
+  if (!x) return null;
+  const where = x.where || {};
+  const why = x.why || {};
+  const rows = [
+    [t('ev.what.metric'), (x.what && x.what.anomalyType) || '–'],
+    [t('ev.what.where'), where.summary || incAgentLabel(inc)],
+    where.interface ? [t('ev.what.iface'), el('code', {}, where.interface)] : null,
+    why.observed != null ? [t('ev.what.observed'), fmtUnit(why.observed)] : null,
+    why.baseline != null ? [t('ev.what.baseline'), fmtUnit(why.baseline)] : null,
+    why.deviation != null ? [t('ev.what.deviation'), `${fmtUnit(why.deviation)} σ`] : null,
+  ].filter(Boolean);
+  return el('div', {},
+    why.explanation ? el('p', {}, why.explanation) : null,
+    ui.keyValues(rows));
+}
+
+// The situation(s) this event is part of: a situation groups findings from
+// several agents, and a finding of this event may be one of them. Found by
+// matching member ids, so no extra endpoint is needed.
+async function loadEventSituations(anomalies, firstMs, slot) {
+  const ids = new Set((anomalies || []).map((a) => String(a.id)));
+  if (!ids.size) return;
+  const from = new Date((firstMs || Date.now()) - 24 * 3600 * 1000).toISOString();
+  try {
+    const { clusters } = await api(`/api/event-clusters?from=${encodeURIComponent(from)}&limit=200`);
+    const hits = (clusters || []).filter((c) => (c.memberFindingIds || []).some((m) => ids.has(String(m))));
+    if (!hits.length) return;
+    slot.replaceChildren(el('div', { class: 'ui ctx-actions' },
+      el('span', { class: 'meta-xs' }, t('ev.partOf')),
+      ...hits.map((c) => ui.button('secondary', t('ev.openSituation', { id: c.id }), {
+        size: 'xs', onclick: () => openCluster(c.id),
+      }))));
+  } catch { /* best-effort: the link is extra, the event stands on its own */ }
+}
+
+// The device around the event: its traffic, and its interface errors and
+// discards on the same time axis, from the results the agent reported. This is
+// the "is the link itself sick?" half of the question the probe chart asks.
+async function loadEventDeviceEvidence(inc, agentId, anomalies, host) {
+  const { fromMs, toMs } = eventEvidenceWindow(inc);
+  let rows;
+  try {
+    rows = await api(`/agents/${agentId}/results?from=${new Date(fromMs).toISOString()}&to=${new Date(toMs).toISOString()}&limit=1000`);
+  } catch (e) { host.replaceChildren(el('p', { class: 'error' }, errText(e))); return; }
+  const samples = (rows || []).slice().reverse().map((r) => {
+    const tr = r.payload && r.payload.traffic;
+    const totals = tr && tr.totals;
+    const elapsed = tr && Number(tr.elapsedSec) > 0 ? Number(tr.elapsedSec) : 1;
+    let errs = 0; let drops = 0; let seen = false;
+    for (const i of (tr && Array.isArray(tr.interfaces) ? tr.interfaces : [])) {
+      if (!i || typeof i !== 'object') continue;
+      seen = true;
+      errs += (Number(i.rxErrors) || 0) + (Number(i.txErrors) || 0);
+      drops += (Number(i.rxDrop) || 0) + (Number(i.txDrop) || 0);
+    }
+    return {
+      t: new Date(r.created_at).getTime(),
+      rx: totals ? Number(totals.rxBytesPerSec) || 0 : null,
+      tx: totals ? Number(totals.txBytesPerSec) || 0 : null,
+      err: seen ? errs / elapsed : null,
+      drop: seen ? drops / elapsed : null,
+    };
+  }).filter((p) => Number.isFinite(p.t));
+  if (samples.length < 2) { host.replaceChildren(el('p', { class: 'muted' }, t('ev.device.none'))); return; }
+  const markers = [
+    ...(inc.firstEventAt ? [{ t: Date.parse(inc.firstEventAt), kind: inc.severity || 'WARN', label: t('ev.device.start') }] : []),
+    ...findingMarkers(anomalies),
+  ];
+  const traffic = samples.filter((p) => p.rx != null);
+  const counters = samples.filter((p) => p.err != null);
+  const anyErr = counters.some((p) => p.err > 0 || p.drop > 0);
+  host.replaceChildren(
+    traffic.length > 1 ? el('div', { class: 'overview-chart' }, historyChart([
+      { id: 'rx', label: '↓ RX', color: ui.token('--series-0'), points: traffic.map((p) => ({ t: p.t, y: p.rx })) },
+      { id: 'tx', label: '↑ TX', color: ui.token('--series-1'), points: traffic.map((p) => ({ t: p.t, y: p.tx })) },
+    ], { fromMs, toMs, markers, unit: 'B/s', height: 200 })) : null,
+    counters.length > 1 && anyErr ? el('div', { class: 'overview-chart' }, historyChart([
+      { id: 'err', label: t('iface.col.err'), color: ui.token('--series-3'), points: counters.map((p) => ({ t: p.t, y: p.err })) },
+      { id: 'drop', label: t('iface.col.drop'), color: ui.token('--series-1'), points: counters.map((p) => ({ t: p.t, y: p.drop })) },
+    ], { fromMs, toMs, markers, unit: '/s', height: 140 })) : null,
+    el('p', { class: 'muted small' }, counters.length > 1
+      ? (anyErr ? t('ev.device.note') : t('ev.device.noErrors'))
+      : t('ev.device.noCounters')));
+}
+
+// The recommended next step: a matching playbook, and what fixed the same
+// kind of event before. When the AI assistant is on, the server may ask it to
+// fill the gap, which sends context to a third party — so then it is fetched
+// on a click, never just by opening the page.
+function loadEventRecommendation(id, host) {
+  const render = async (force) => {
+    host.replaceChildren(el('p', { class: 'muted' }, t('common.loading')));
+    let rec;
+    try { rec = await api(`/api/events/${id}/recommendation${force ? '?force_ai=true' : ''}`); } catch (e) {
+      host.replaceChildren(el('p', { class: 'error' }, errText(e))); return;
+    }
+    const parts = [];
+    const pb = rec.matching_playbook;
+    if (pb) {
+      parts.push(el('div', { class: 'rec-block' },
+        el('strong', {}, t('ev.rec.playbook', { name: pb.name || '' })),
+        pb.already_run && pb.run
+          ? el('p', {}, t('ev.rec.ran', { status: pb.run.status || '', at: pb.run.ran_at ? fmtDate(pb.run.ran_at) : '–' }),
+            pb.run.result_text ? el('span', { class: 'muted' }, ` — ${pb.run.result_text}`) : null)
+          : (pb.manual_action_text ? el('p', {}, pb.manual_action_text) : el('p', { class: 'muted' }, t('ev.rec.auto')))));
+    }
+    const hist = rec.historical_matches || [];
+    if (hist.length) {
+      parts.push(el('div', { class: 'rec-block' },
+        el('strong', {}, t('ev.rec.before')),
+        el('ul', { class: 'inc-similar' }, ...hist.slice(0, 3).map((h) => el('li', { class: 'clickable', onclick: () => openEvent(h.id) },
+          h.title || `#${h.id}`,
+          el('span', { class: 'muted' }, ` · ${h.resolvedAt ? fmtDate(h.resolvedAt) : ''}`
+            + `${h.resolutionTimeSeconds != null ? ` · ${fmtDuration(h.resolutionTimeSeconds)}` : ''}`
+            + `${h.playbook && h.playbook.name ? ` · ${h.playbook.name}` : ''}`
+            + `${h.closedBy ? ` · ${h.closedBy}` : ''}`))))));
+    }
+    const ai = rec.ai_suggestion;
+    if (ai && ai.suggestion) {
+      parts.push(el('div', { class: 'rec-block' },
+        el('strong', {}, t('ev.rec.ai')), el('p', {}, ai.suggestion)));
+    }
+    host.replaceChildren(...(parts.length ? parts : [el('p', { class: 'muted' }, t('ev.rec.none'))]));
+  };
+  if (featureEnabled('assistant')) {
+    host.replaceChildren(el('div', { class: 'ui' },
+      el('p', { class: 'muted' }, t('ev.rec.askHint')),
+      ui.button('secondary', t('ev.rec.load'), { onclick: () => render(false) })));
+  } else {
+    render(false);
+  }
 }
 
 async function loadEventSimilar(id, card) {
@@ -4137,6 +4472,7 @@ function getEventPage() {
   eventPage = window.EventPage.create({
     el, t, ui, errText,
     canWrite,
+    openCluster: (id) => openCluster(id),
     id: () => selectedEventId,
     transitions: (status) => INC_TRANSITIONS[status],
     openList: () => { currentView = 'events'; render(); },
@@ -4185,15 +4521,57 @@ function getEventPage() {
         render();
       } catch (err) { toast(errText(err), true); }
     },
-    panels: (inc, anomalies, id) => {
+    panels: (inc, anomalies, id, data) => {
       const out = [];
-      // The work log is first because "what has already been tried and ruled
-      // out" is what the next shift must read before anything else.
+      const devNum = Number.parseInt(inc.hostId, 10);
+      const agentId = Number.isInteger(devNum) && devNum > 0 ? devNum : null;
+      const pathTarget = (anomalies.find((a) => a.target) || {}).target || inc.target || null;
+      const firstMs = inc.firstEventAt ? Date.parse(inc.firstEventAt) : null;
+
+      // EVIDENCE FIRST. What was measured, where, and the numbers around the
+      // moment it started — the reason somebody opened the event. The work log
+      // follows straight after: it is what the next shift reads, but a shift
+      // that cannot see the fault cannot judge what was ruled out.
+      const ctxRow = contextActions({ agentId, target: pathTarget, sinceMs: firstMs });
+      if (ctxRow) out.push({ key: 'context', wrap: false, node: ctxRow });
+      const situationSlot = el('div', {});
+      loadEventSituations(anomalies, firstMs, situationSlot);
+      out.push({ key: 'situation', wrap: false, node: situationSlot });
+
+      const what = eventExplanation(data && data.explanation, inc);
+      if (what) out.push({ key: 'explanation', title: t('ev.what'), node: what });
+      out.push({ key: 'anomalies' });
+
+      // The affected path needs both a numeric device and a target to draw
+      // between; without one it is not a panel that could be empty, it is a
+      // panel that does not apply.
+      if (pathTarget && agentId != null) {
+        const body = el('div', { class: 'muted' }, t('common.loading'));
+        (async () => {
+          const { fromMs, toMs } = eventEvidenceWindow(inc);
+          try {
+            body.replaceChildren(await pathVisualization({
+              sourceId: agentId, targetId: pathTarget, eventId: id, timeRange: { fromMs, toMs },
+            }));
+          } catch (e) { body.replaceChildren(el('div', { class: 'error' }, errText(e))); }
+        })();
+        out.push({ key: 'path', title: t('ev.path'), node: body });
+      }
+      if (agentId != null) {
+        const body = el('div', { class: 'muted' }, t('common.loading'));
+        loadEventDeviceEvidence(inc, agentId, anomalies, body);
+        out.push({ key: 'device', title: t('ev.device'), node: body });
+      }
+
+      // The work log; "ruled out" is pinned at its top.
       // These three draw their own card, so the page does not put a panel
       // around them — a box inside a box with the same name on both.
       out.push({ key: 'notes', wrap: false, node: eventNotesCard(id) });
+
+      const rec = el('div', {});
+      loadEventRecommendation(id, rec);
+      out.push({ key: 'recommendation', title: t('ev.rec.title'), node: rec });
       if (canWrite()) out.push({ key: 'guide', wrap: false, node: eventGuideCard(inc) });
-      out.push({ key: 'anomalies' });
 
       if (inc.blastRadius) {
         const body = el('div', { class: 'muted' }, t('common.loading'));
@@ -4208,6 +4586,10 @@ function getEventPage() {
           }));
         })();
         out.push({ key: 'blast', title: t('ev.blast'), node: body });
+      } else if (inc.blastRadiusError) {
+        // A failed lookup is said out loud: no panel at all read as "nothing
+        // downstream depends on this device", which is an all-clear nobody gave.
+        out.push({ key: 'blast', title: t('ev.blast'), node: el('p', { class: 'muted' }, t('ev.blastUnavailable')) });
       }
 
       const timeline = el('div', { class: 'muted' }, t('common.loading'));
@@ -4217,24 +4599,6 @@ function getEventPage() {
       const similar = el('div', { class: 'muted' }, t('common.loading'));
       loadEventSimilar(id, similar);
       out.push({ key: 'similar', title: t('ev.similar'), node: similar });
-
-      // The affected path needs both a numeric device and a target to draw
-      // between; without one it is not a panel that could be empty, it is a
-      // panel that does not apply.
-      const devNum = Number.parseInt(inc.hostId, 10);
-      const pathTarget = (anomalies.find((a) => a.target) || {}).target || inc.target || null;
-      if (pathTarget && Number.isInteger(devNum) && devNum > 0) {
-        const body = el('div', { class: 'muted' }, t('common.loading'));
-        (async () => {
-          const fromMs = inc.firstEventAt ? Date.parse(inc.firstEventAt) : (Date.now() - 24 * 3600 * 1000);
-          try {
-            body.replaceChildren(await pathVisualization({
-              sourceId: devNum, targetId: pathTarget, eventId: id, timeRange: { fromMs, toMs: Date.now() },
-            }));
-          } catch (e) { body.replaceChildren(el('div', { class: 'error' }, errText(e))); }
-        })();
-        out.push({ key: 'path', title: t('ev.path'), node: body });
-      }
 
       if (canWrite()) {
         const cfg = el('div', { class: 'muted' }, t('common.loading'));
@@ -4402,8 +4766,45 @@ PAGE_INFO.clusters = {
     el('p', {}, 'When a fault hits many agents at the same time, BlueEyes clusters their findings into one situation instead of N look-alike alerts. Each situation carries a confidence tier (how independent the grouping signals were) and a suspected common cause.'),
     el('p', {}, 'The detail page is the “one common picture”: what changed in the minutes before the first finding, the evidence that drove the grouping, and a single timeline merging findings, agent events, playbook runs and config changes across every affected agent.'),
     el('p', { class: 'muted' }, 'Everyone can view; acknowledging and resolving are operator/admin and are recorded in the audit trail.'),
+    conceptGlossary(),
   ],
 };
+
+// Who a situation is about: one row per member finding, naming the agent (a
+// link), what it measured against its normal, and the event it sits in on that
+// device. The header only said "3 agents", and which three had to be pieced
+// together from the timeline.
+function situationMembersPanel(members) {
+  if (!members.length) return null;
+  const rows = members.map((m) => ({
+    cells: {
+      agent: m.host != null ? ui.hostLink(agentLabel(m.host), () => openAgent(Number(m.host))) : '–',
+      sev: ui.badge(m.severity === 'CRIT' ? 'crit' : m.severity === 'WARN' ? 'warn' : 'info', m.severity || '–'),
+      metric: el('code', {}, m.metric || '–'),
+      value: m.observed != null
+        ? `${fmtUnit(m.observed)}${m.baseline != null ? ` (${t('sit.members.normal', { v: fmtUnit(m.baseline) })})` : ''}`
+        : '–',
+      event: m.eventCaseId != null ? ui.hostLink(`#${m.eventCaseId}`, () => openEvent(Number(m.eventCaseId))) : ui.meta('–'),
+      time: m.createdAt ? ui.fmt.short(m.createdAt) : '–',
+    },
+  }));
+  return ui.panel({
+    title: t('sit.members.title'),
+    note: t('sit.members.note', { n: new Set(members.map((m) => String(m.host))).size }),
+    children: [ui.dataTable({
+      dense: true,
+      columns: [
+        { key: 'agent', label: t('sit.members.agent') },
+        { key: 'sev', label: t('sit.members.sev'), width: '90px' },
+        { key: 'metric', label: t('sit.members.metric') },
+        { key: 'value', label: t('sit.members.value') },
+        { key: 'event', label: t('sit.members.event'), width: '90px' },
+        { key: 'time', label: t('sit.members.time'), width: '130px', time: true },
+      ],
+      rows,
+    })],
+  });
+}
 
 // ---- Situations (MIGRATED — see public/views/situations.js) -----------------
 let situationsPage = null;
@@ -4456,6 +4857,8 @@ function getSituationPage() {
   const CV = window.ClusterView;
   situationPage = window.SituationPage.create({
     el, t, ui, errText,
+    // A linked event case opens its own page (migration 129).
+    openEvent: (id) => openEvent(id),
     id: () => selectedClusterId,
     openList: () => { currentView = 'clusters'; render(); },
     rerender: () => render(),
@@ -4468,7 +4871,11 @@ function getSituationPage() {
       el('p', {}, t('sit.info.p2')),
       el('p', { class: 'muted' }, t('sit.info.p3')),
     ],
-    fetchDetail: async (id) => (await api(`/api/event-clusters/${id}`)).cluster,
+    // /agents alongside, so the affected-agents panel names them.
+    fetchDetail: async (id) => {
+      const [d] = await Promise.all([api(`/api/event-clusters/${id}`), api('/agents').catch(() => null)]);
+      return d.cluster;
+    },
     ack: async (id) => {
       try { await api(`/api/event-clusters/${id}/ack`, { method: 'POST' }); toast(t('sit.acked')); render(); }
       catch (err) { toast(errText(err), true); }
@@ -4488,6 +4895,11 @@ function getSituationPage() {
     mount: (detail) => {
       const id = selectedClusterId;
       const container = el('div', { class: 'cluster-detail' });
+      const members = Array.isArray(detail.members) ? detail.members : [];
+      const firstHost = members.map((m) => Number(m.host)).find((h) => Number.isInteger(h) && h > 0);
+      const lead = el('div', {},
+        contextActions({ agentId: firstHost, sinceMs: detail.firstSeen ? Date.parse(detail.firstSeen) : null }),
+        situationMembersPanel(members));
       (async () => {
         let timeline = null;
         let timelineError = false;
@@ -4510,7 +4922,7 @@ function getSituationPage() {
             },
           }));
       })();
-      return container;
+      return el('div', {}, lead, container);
     },
   });
   return situationPage;
@@ -4759,10 +5171,18 @@ function probeMeasured(r) {
       const c = r.tls || {};
       const parts = [];
       if (c.expiryDays != null) parts.push(c.expiryDays <= 0 ? `expired ${Math.abs(Math.round(c.expiryDays))}d ago` : `${Math.round(c.expiryDays)}d left`);
-      if (c.authorized === false) parts.push('untrusted');
+      if (!tlsChainTrusted(c)) parts.push('untrusted');
       if (c.hostnameMatches === false) parts.push('name mismatch');
       if (c.protocol) parts.push(c.protocol);
       return parts.length ? parts.join(' · ') : null;
+    }
+    case 'dhcp': {
+      // How many servers answered is the number that matters: zero is an
+      // outage, more than one is a rogue server.
+      const d = r.dhcp;
+      if (!d || !Array.isArray(d.offers)) return null;
+      if (!d.offers.length) return t('probe.dhcp.noOffer');
+      return `${plural('probe.dhcp.servers', d.serverCount, { n: String(d.serverCount) })}${r.rttMs != null ? ` · ${ms(r.rttMs)}` : ''}`;
     }
     case 'rdns': {
       const d = r.rdns || {};
@@ -4945,7 +5365,7 @@ function pathGraph(graph, pgOpts = {}) {
       el('div', { class: 'pg-panel-head' },
         el('span', { class: `pg-dot ${n.severity}` }),
         el('strong', {}, n.kind === 'source' ? 'Agent (origin)' : (n.kind === 'dest' ? `Destination · hop ${n.hop}` : `Hop ${n.hop}`)),
-        el('span', { class: 'mono' }, n.ip || (n.unresponsive ? '* * * (silent)' : '–'))),
+        n.ip ? copyable(n.ip) : el('span', { class: 'mono' }, n.unresponsive ? '* * * (silent)' : '–')),
       el('div', { class: 'muted' }, n.explain),
       loc ? el('div', {}, loc) : (n.private ? el('div', { class: 'muted' }, 'Private / RFC1918 — not geolocated') : null),
       el('div', { class: 'pg-stats' },
@@ -5150,7 +5570,7 @@ function pathGraph(graph, pgOpts = {}) {
   mapSection.addEventListener('toggle', () => {
     if (!mapSection.open || mapBuilt) return;
     mapBuilt = true;
-    drawPathMap(mapHost, geoStops);
+    drawPathMap(mapHost, geoStops, nodes);
   });
 
   return el('div', { class: 'pathmap' },
@@ -5187,18 +5607,46 @@ function pathGeoStops(nodes) {
   return stops;
 }
 
-// Popup HTML for one map stop (esc-escaped — IPs/ASN come from GeoIP + traceroute).
+// How sure the map is about a stop, in words: the router's name said the city,
+// city GeoIP did, or only the country is known. See src/geo/hopLocation.js.
+function pathPlaceNote(place) {
+  if (!place) return '';
+  if (place.source === 'rdns') return t('pathmap.place.rdns', { code: place.code || '' });
+  if (place.source === 'geoip-city') return t('pathmap.place.geoipCity');
+  return t('pathmap.place.country');
+}
+
+// Popup HTML for one map stop (esc-escaped — IPs/ASN/hostnames come from GeoIP
+// + traceroute).
 function pathStopPopup(s, i, total) {
   const head = i === 0 ? 'Origin' : (i === total - 1 ? 'Destination' : 'Transit');
-  const place = s.nodes[0].country ? ` · ${esc(s.nodes[0].country)}` : '';
+  const pl = s.nodes.map((n) => n.place).find(Boolean) || null;
+  const where = pl ? [pl.city, pl.country].filter(Boolean).join(', ') : (s.nodes[0].country || '');
+  const place = where ? ` · ${esc(where)}` : '';
+  const note = pl && s.nodes.some((n) => n.kind !== 'source') ? `<div class="muted">${esc(pathPlaceNote(pl))}</div>` : '';
   const lines = s.nodes.map((n) => {
     const who = n.kind === 'source' ? esc(n.label || 'Agent') : `Hop ${n.hop}${n.ip ? ' · ' + esc(n.ip) : ''}`;
+    const name = n.hostname ? ` · ${esc(n.hostname)}` : '';
     const asn = n.asn != null ? ` · AS${n.asn}${n.asnName ? ' ' + esc(n.asnName) : ''}` : '';
     const met = n.rttMs != null ? ` · ${n.rttMs} ms` : '';
     const loss = n.lossPct ? ` · ${n.lossPct}% loss` : '';
-    return `<div>${who}${asn}${met}${loss}</div>`;
+    return `<div>${who}${name}${asn}${met}${loss}</div>`;
   }).join('');
-  return `<div class="pg-pop"><strong>${head}${place}</strong>${lines}</div>`;
+  return `<div class="pg-pop"><strong>${head}${place}</strong>${note}${lines}</div>`;
+}
+
+// The hops the map left out because their round-trip time rules out every place
+// GeoIP or the router name suggested (anycast, mostly). Listed under the map so
+// a path that "ends early" says why. null when there are none.
+function pathRejectedNote(nodes) {
+  const out = [];
+  for (const n of nodes || []) {
+    if (n.lat != null || !Array.isArray(n.geoRejected) || !n.geoRejected.length) continue;
+    const r = n.geoRejected[n.geoRejected.length - 1];
+    const where = [r.city, r.country].filter(Boolean).join(', ') || '?';
+    out.push(el('li', {}, t('pathmap.rejected', { hop: n.hop, ip: n.ip || '*', where, km: r.distanceKm, max: r.maxKm })));
+  }
+  return out.length ? el('ul', { class: 'muted small pg-rejected' }, ...out) : null;
 }
 
 // Draws a path's geolocated stops into a Leaflet layer group: a polyline (each
@@ -5212,9 +5660,12 @@ function renderPathStops(layer, stops) {
   }
   stops.forEach((s, i) => {
     const isSrc = s.nodes.some((n) => n.kind === 'source');
+    // A stop known only to the country is drawn hollow-ish with a dashed ring:
+    // it marks the country, not a place in it.
+    const rough = !isSrc && !s.nodes.some((n) => n.place && n.place.precision === 'city');
     L.circleMarker([s.lat, s.lng], {
-      radius: isSrc ? 9 : 7, weight: 2, color: '#fff',
-      fillColor: isSrc ? '#38bdf8' : pgColor(s.severity), fillOpacity: 0.95,
+      radius: isSrc ? 9 : 7, weight: 2, color: '#fff', dashArray: rough ? '3 3' : null,
+      fillColor: isSrc ? '#38bdf8' : pgColor(s.severity), fillOpacity: rough ? 0.45 : 0.95,
     }).addTo(layer).bindPopup(pathStopPopup(s, i, stops.length));
   });
   return latlngs;
@@ -5222,12 +5673,14 @@ function renderPathStops(layer, stops) {
 
 // Draws the path on its own Leaflet map (the Probes traceroute detail). Reuses the
 // Destinations tile config.
-async function drawPathMap(host, stops) {
+async function drawPathMap(host, stops, nodes = []) {
   if (typeof L === 'undefined') { host.replaceChildren(el('div', { class: 'error' }, 'Map library failed to load.')); return; }
+  const rejected = pathRejectedNote(nodes);
   if (!stops || stops.length < 2) {
-    host.replaceChildren(el('div', { class: 'empty' }, 'Not enough geolocated hops to map. Public hops are placed at country level, so this needs the GeoIP database plus the agent site and at least one public hop.'));
+    host.replaceChildren(el('div', { class: 'empty' }, t('pathmap.empty')), rejected || '');
     return;
   }
+  if (rejected) host.after(rejected);
   let cfg = {};
   try { cfg = await api('/api/map/config'); } catch { /* fall back to default tiles */ }
   const map = createLeafletMap(host, cfg, { center: [stops[0].lat, stops[0].lng], zoom: 3 });
@@ -5286,7 +5739,7 @@ function pvChart(seriesList, { fromMs, toMs, render = 'line', unit = '', height 
     for (const frac of [0, 0.5, 1]) {
       const yy = yOf(max * frac);
       svg.append(mk('line', { class: 'grid', x1: pad.l, y1: yy, x2: W - pad.r, y2: yy }));
-      const lbl = mk('text', { x: 6, y: yy + 4, class: 'axis' }); lbl.textContent = fmtNum(max * frac); svg.append(lbl);
+      const lbl = mk('text', { x: 6, y: yy + 4, class: 'axis' }); lbl.textContent = fmtUnit(max * frac, unit); svg.append(lbl);
     }
     for (const frac of [0, 0.5, 1]) {
       const t = fromMs + frac * span; const xx = xOf(t);
@@ -5318,7 +5771,9 @@ function pvChart(seriesList, { fromMs, toMs, render = 'line', unit = '', height 
     }
   });
   if (onBrush) attachBrush(svg, { W, padL: pad.l, padR: pad.r, padT: pad.t, padB: pad.b, H, onSelect: (f0, f1) => onBrush(Math.round(fromMs + f0 * span), Math.round(fromMs + f1 * span)), onClear: () => onBrush(null, null) });
-  return el('div', { class: `pv-chart${overview ? ' pv-ov' : ''}` }, svg);
+  const wrap = el('div', { class: `pv-chart${overview ? ' pv-ov' : ''}` }, svg);
+  if (!overview) attachReadout(svg, wrap, { W, padL: pad.l, padR: pad.r, padT: pad.t, padB: pad.b, H, fromMs, toMs, series: seriesList, format: (v) => fmtUnit(v, unit) });
+  return wrap;
 }
 
 // Turns a server timeseries response into chart series (per-agent overlay gets
@@ -5614,7 +6069,7 @@ function mtuDetail(r) {
       : h.status === 'ok' ? 'good' : 'unknown';
     return el('tr', { class: h.hop === dropAt ? 'mtu-drop' : null },
       el('td', { class: 'muted' }, `#${h.hop}`),
-      el('td', { class: 'mono' }, h.ip || '* * *'),
+      el('td', { class: 'mono' }, h.ip ? copyable(h.ip) : '* * *'),
       el('td', { class: 'mtu-bar-cell' },
         el('div', { class: 'mtu-bar' }, el('div', { class: `mtu-bar-fill ${cls}`, style: `width:${pct}%` })),
         // The hop the path narrows at is marked in text as well as colour —
@@ -5637,6 +6092,15 @@ function mtuDetail(r) {
 
 // The certificate a port presented, read back in the order an operator needs
 // it: what is wrong first, what it is second, and the identifying detail last.
+// Did the chain validate, apart from the name? `authorized` is node's one flag
+// for both checks, and node checks the chain first — so a handshake refused
+// only with ERR_TLS_CERT_ALTNAME_INVALID had a good chain and a wrong name.
+// The server stores `chainTrusted`; a row stored before it did is read here.
+function tlsChainTrusted(c) {
+  if (typeof c.chainTrusted === 'boolean') return c.chainTrusted;
+  return c.authorized === true || /ERR_TLS_CERT_ALTNAME_INVALID/.test(String(c.authorizationError || ''));
+}
+
 // The four faults are kept apart here exactly as they are stored, because they
 // have four different fixes — renew, reissue, install the intermediate, or
 // point the client at the right name.
@@ -5656,13 +6120,16 @@ function tlsDetail(r) {
         : `${t('probe.tls.expiresIn', { days: String(Math.round(days)) })}${c.validTo ? ` · ${fmtDate(c.validTo)}` : ''}`,
       days <= 0 ? 'error' : (days <= 30 ? 'warn' : null));
   }
+  const chainOk = tlsChainTrusted(c);
   kv(t('probe.tls.chain'),
-    c.authorized ? t('probe.tls.chainOk')
+    chainOk ? t('probe.tls.chainOk')
       : t('probe.tls.chainBad', { reason: c.selfSigned ? t('probe.tls.selfSigned') : (c.authorizationError || '—') }),
-    c.authorized ? null : 'error');
+    chainOk ? null : 'error');
   kv(t('probe.tls.name'),
     c.hostnameMatches === true ? t('probe.tls.nameOk')
-      : c.hostnameMatches === false ? t('probe.tls.nameBad') : t('probe.tls.nameUnchecked'),
+      : c.hostnameMatches === false
+        ? (c.servername ? t('probe.tls.nameBadFor', { name: c.servername }) : t('probe.tls.nameBad'))
+        : t('probe.tls.nameUnchecked'),
     c.hostnameMatches === false ? 'error' : null);
   if (c.subject) kv(t('probe.tls.subject'), c.subject);
   if (c.issuer) kv(t('probe.tls.issuer'), c.issuer);
@@ -5704,6 +6171,37 @@ function rdnsDetail(r) {
     el('p', { class: 'muted small' }, t('probe.rdns.why')));
 }
 
+// Every DHCPOFFER the test heard, one row per server. Two rows is the finding:
+// a second server on the segment hands out its own gateway and resolver.
+function dhcpDetail(r) {
+  const d = r.dhcp;
+  const title = t('probe.dhcp.title', { iface: (d && d.iface) || r.target });
+  if (!d || !Array.isArray(d.offers)) {
+    return el('details', { class: 'sec', open: true }, el('summary', {}, title),
+      el('p', { class: 'muted' }, r.detail ? t('probe.dhcp.notRun', { reason: r.detail }) : t('probe.dhcp.notMeasured')));
+  }
+  if (!d.offers.length) {
+    return el('details', { class: 'sec', open: true }, el('summary', {}, title),
+      el('p', { class: 'error' }, t('probe.dhcp.noneBody', { secs: d.timeoutMs != null ? String(d.timeoutMs / 1000) : '?' })));
+  }
+  const dash = (v) => (v == null || v === '' ? '—' : v);
+  const offerRow = (o) => el('tr', {},
+    el('td', { class: 'mono' }, dash(o.serverId)),
+    el('td', { class: 'mono' }, dash(o.offeredIp)),
+    el('td', { class: 'mono' }, dash(o.subnetMask)),
+    el('td', { class: 'mono' }, dash(o.router)),
+    el('td', { class: 'mono' }, o.dns && o.dns.length ? o.dns.join(', ') : '—'),
+    el('td', { class: 'num' }, o.leaseSec != null ? fmtDuration(o.leaseSec) : '—'),
+    el('td', { class: 'mono' }, dash(o.relay)));
+  return el('details', { class: 'sec', open: true },
+    el('summary', {}, title),
+    d.serverCount > 1 ? el('p', { class: 'error' }, t('probe.dhcp.rogue', { n: String(d.serverCount) })) : null,
+    el('table', { class: 'probe-hops' },
+      el('thead', {}, el('tr', {}, ...['server', 'offered', 'mask', 'router', 'dns', 'lease', 'relay'].map((k) => el('th', {}, t(`probe.dhcp.col.${k}`))))),
+      el('tbody', {}, ...d.offers.map(offerRow))),
+    el('p', { class: 'muted small' }, t('probe.dhcp.why')));
+}
+
 async function probeDetail(r, agentId) {
   if (r.type === 'path_mtu') return mtuDetail(r);
   // Both of these ARE their result — there is no history worth charting for a
@@ -5711,11 +6209,12 @@ async function probeDetail(r, agentId) {
   // expiry) are read in the row itself.
   if (r.type === 'tls') return tlsDetail(r);
   if (r.type === 'rdns') return rdnsDetail(r);
+  if (r.type === 'dhcp') return dhcpDetail(r);
   if (r.type === 'traceroute' || r.type === 'tcptraceroute') {
     const hops = r.hops || [];
     const hopRow = (h) => el('tr', {},
       el('td', { class: 'muted' }, `#${h.hop}`),
-      el('td', { class: 'mono' }, h.ip || '* * *'),
+      el('td', { class: 'mono' }, h.ip ? copyable(h.ip) : '* * *'),
       el('td', { class: 'num' }, h.rttMs != null ? `${h.rttMs} ms` : '–'),
       el('td', { class: 'num' }, h.lossPct != null ? `${h.lossPct}%` : '–'),
       el('td', { class: 'num' }, h.jitterMs != null ? `${h.jitterMs} ms` : '–'));
@@ -5751,7 +6250,7 @@ async function probeDetail(r, agentId) {
   const metricLabel = isPageload ? 'Load time (ms)' : isTx ? 'Total time (ms)' : 'RTT (ms)';
   const histTitle = isPageload ? 'Load-time history' : isTx ? 'Transaction-time history' : 'RTT history';
   const chart = el('details', { class: 'sec', open: true }, el('summary', {}, `${histTitle} — ${r.type} → ${r.target} `, el('span', { class: 'muted' }, '· band = normal range (median±MAD)')),
-    el('div', { class: 'overview-chart' }, pts.length ? historyChart([{ id: 'rtt', label: metricLabel, color: '#06b6d4', points: pts }], { fromMs, toMs, band, markers }) : el('div', { class: 'empty' }, 'No history yet — run a few measurements.')));
+    el('div', { class: 'overview-chart' }, pts.length ? historyChart([{ id: 'rtt', label: metricLabel, color: ui.token('--series-0'), points: pts }], { fromMs, toMs, band, markers, unit: 'ms' }) : el('div', { class: 'empty' }, 'No history yet — run a few measurements.')));
   if (!isPageload && !isTx) return chart;
   return el('div', {},
     el('details', { class: 'sec', open: true }, el('summary', {}, `${isTx ? 'Steps' : 'Page elements'} — ${r.target} `, el('span', { class: 'muted' }, isTx ? '· per-step status · size · time' : '· per-resource status · size · load time')), pageloadWaterfall(r)),
@@ -5885,8 +6384,9 @@ function topoGraphSvg(nodes, edges, { label, kindBadge, actionBtns } = {}) {
       el('div', { class: 'pg-stat' }, el('span', { class: 'k' }, 'Out'), el('span', { class: 'v' }, fmtBytes(n.bytesOut))),
     ];
     const peerInfo = label(n.id) === n.id ? null : el('span', { class: 'mono' }, label(n.id));
+    const idCopy = copyable(n.id);
     panel.replaceChildren(
-      ...[el('div', { class: 'pg-panel-head' }, kindBadge(n.kind), el('strong', {}, n.id), peerInfo),
+      ...[el('div', { class: 'pg-panel-head' }, kindBadge(n.kind), el('strong', {}, idCopy), peerInfo),
         el('div', { class: 'pg-stats' }, ...rows),
         actionBtns ? actionBtns(n.id) : null].filter(Boolean));
   }
@@ -6238,7 +6738,27 @@ async function drawTopoMapInto(host, { data, locations, siteId }) {
 
 // Layers mode: the unified resilience graph (LLDP l2_link + service_dep). The
 // graph is fetched once and cached; the layer choice re-renders locally.
-const topoLayersState = { graph: null, changeSets: null, api: null };
+const topoLayersState = { graph: null, changeSets: null, api: null, agents: null };
+
+// The panel under the Layers graph for the node that was clicked: what it is,
+// whether it is up, and the way into its own page and the fault tools. The
+// graph used to highlight the neighbourhood and lead nowhere.
+function topoNodePanel(id) {
+  const node = ((topoLayersState.graph && topoLayersState.graph.nodes) || []).find((x) => String(x.id) === String(id));
+  const label = node ? node.label : String(id);
+  const device = /^d:(\d+)$/.exec(String(id));
+  const agent = !device ? (topoLayersState.agents || []).find((a) => String(a.id) === String(id)) : null;
+  const status = agent ? agent.status : null;
+  return el('div', { class: 'pg-panel topo-node-panel' },
+    el('div', { class: 'pg-panel-head' },
+      status ? el('span', { class: `badge ${status === 'online' ? 'online' : 'offline'}` }, status) : null,
+      el('strong', {}, label)),
+    el('div', { class: 'ui ctx-actions' },
+      device
+        ? ui.button('primary', t('topo.node.openDevice'), { size: 'xs', onclick: () => openSnmpDevice(Number(device[1])) })
+        : ui.button('primary', t('topo.node.openAgent'), { size: 'xs', onclick: () => openAgent(Number(id)) })),
+    !device ? contextActions({ agentId: Number(id) }) : null);
+}
 
 async function drawTopoLayersInto(host, opts) {
   const render = () => {
@@ -6259,10 +6779,26 @@ async function drawTopoLayersInto(host, opts) {
       focusId: opts.focus,
       onNodeClick: (id) => {
         if (opts.whatIf) runTopoBlast(host, id, opts);
-        else if (topoLayersState.api) topoLayersState.api.neighbourhood(id);
+        else if (topoLayersState.api) {
+          topoLayersState.api.neighbourhood(id);
+          const slot = host.querySelector('.topo-node-slot');
+          if (slot) slot.replaceChildren(topoNodePanel(id));
+        }
       },
     });
     topoLayersState.api = api2;
+    // State on the node itself: an agent that is not connected gets a dashed
+    // red ring and says so in its tooltip — the shape carries it as well as
+    // the colour.
+    const offline = new Set((topoLayersState.agents || []).filter((a) => a.status && a.status !== 'online').map((a) => String(a.id)));
+    api2.nodeEls.forEach((g, id) => {
+      const down = offline.has(String(id));
+      g.classList.toggle('down', down);
+      if (down) {
+        const tip = g.querySelector('title');
+        if (tip && !/offline/.test(tip.textContent)) tip.textContent += `\n${t('topo.node.offline')}`;
+      }
+    });
     // Recently-changed + flapping hosts (operator+ data) flagged on their nodes.
     if (topoLayersState.changeSets) {
       api2.nodeEls.forEach((g, id) => {
@@ -6277,10 +6813,12 @@ async function drawTopoLayersInto(host, opts) {
       topoLayersState.changeSets && (topoLayersState.changeSets.changed.size || topoLayersState.changeSets.flapping.size)
         ? el('span', { class: 'lg' }, el('span', { class: 'topo-dot flapping' }), t('topo.legend.changed'))
         : null,
+      offline.size ? el('span', { class: 'lg' }, el('span', { class: 'topo-dot down' }), t('topo.legend.offline', { n: offline.size })) : null,
       el('span', { class: 'lg muted' }, t('topo.legend.totals', {
         nodes: totals.nodes, links: totals.l2_link, deps: totals.service_dep,
       })));
     const children = [el('div', { class: 'pg-head' }, legend), api2.wrap];
+    if (!opts.whatIf) children.push(el('div', { class: 'topo-node-slot' }));
     if (opts.whatIf) children.push(el('div', { class: 'blast-slot' }, el('div', { class: 'muted small' }, t('topo.whatIf.prompt'))));
     host.replaceChildren(...children);
     if (opts.whatIf && opts.focus != null) runTopoBlast(host, opts.focus, opts);
@@ -6289,7 +6827,9 @@ async function drawTopoLayersInto(host, opts) {
   render();
   if (topoLayersState.graph) return;
   try {
-    topoLayersState.graph = await api('/api/topology/graph');
+    const [graph, agents] = await Promise.all([api('/api/topology/graph'), api('/agents').catch(() => null)]);
+    topoLayersState.graph = graph;
+    topoLayersState.agents = agents;
   } catch (e) {
     host.replaceChildren(el('div', { class: 'error' }, errText(e)));
     return;
@@ -6568,6 +7108,88 @@ views.coverage = async () => {
   return v.view();
 };
 
+// ---- Diagnostics → Path & location (MIGRATED — see public/views/pathLocation.js)
+// "Where is this device plugged in?" and "which switches does A cross to reach
+// B?" (src/routes/l2Path.js, docs/l2-path.md). Path and locate are viewer+; the
+// inventory under them is operator+, and a viewer is told so on the panel
+// rather than shown an empty table. Help is read through t() at draw time.
+PAGE_INFO.pathLocation = {
+  get hero() { return t('l2p.lead'); },
+  get title() { return t('l2p.info.title'); },
+  body: () => [
+    el('p', {}, t('l2p.info.p1')),
+    el('p', {}, t('l2p.info.p2')),
+    el('p', { class: 'muted' }, t('l2p.info.p3')),
+  ],
+};
+let pathLocationPage = null;
+const pathLocationState = {};
+function getPathLocationPage() {
+  if (pathLocationPage) return pathLocationPage;
+  if (typeof window === 'undefined' || !window.PathLocationPage || !ui) return null;
+  const qs = (o) => Object.entries(o).filter(([, v]) => v != null && v !== '')
+    .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`).join('&');
+  pathLocationPage = window.PathLocationPage.create({
+    el, t, ui, errText,
+    state: pathLocationState,
+    help: () => ({ title: PAGE_INFO.pathLocation.title, body: PAGE_INFO.pathLocation.body }),
+    fetchPath: (p) => api(`/api/topology/l2-path?${qs(p)}`),
+    fetchLocate: (q) => api(`/api/devices/locate?${qs({ q })}`),
+    fetchInventory: (p) => api(`/api/devices/inventory?${qs(p)}`),
+    canInventory: () => roleAtLeast('operator'),
+    openSwitch: (id) => openSnmpDevice(id),
+    openAgent: (id) => openAgent(id),
+  });
+  return pathLocationPage;
+}
+
+views.pathLocation = async () => {
+  const v = getPathLocationPage();
+  if (!v) return el('div', { class: 'empty error' }, t('l2p.err.path'));
+  return v.view();
+};
+
+// Opens Path & location with a question already asked — from universal search
+// (an IP or a MAC) or anywhere else that knows one end.
+function openPathLocation({ q = null, from = null, to = null } = {}) {
+  Object.assign(pathLocationState, { q: q || pathLocationState.q || '', from: from || pathLocationState.from || '', to: to || pathLocationState.to || '' });
+  gotoView('pathLocation');
+}
+
+// ---- Administration → Audit log integrity (MIGRATED — see public/views/auditLog.js)
+// The hash-chained audit_log (GET /api/audit-log, /categories, /verify), with
+// the one action it exists for: proving nobody rewrote it. Admin, `audit_log`.
+let auditLogPage = null;
+const auditLogPageState = {};
+function getAuditLogPage() {
+  if (auditLogPage) return auditLogPage;
+  if (typeof window === 'undefined' || !window.AuditLogPage || !ui) return null;
+  auditLogPage = window.AuditLogPage.create({
+    el, t, ui, errText,
+    state: auditLogPageState,
+    help: () => ({ title: t('auditlog.info.title'), body: () => [
+      el('p', {}, t('auditlog.info.p1')),
+      el('p', {}, t('auditlog.info.p2')),
+      el('p', { class: 'muted' }, t('auditlog.info.p3')),
+    ] }),
+    fetchEntries: ({ category, limit }) => {
+      const qs = new URLSearchParams();
+      if (category) qs.set('category', category);
+      if (limit) qs.set('limit', String(limit));
+      return api(`/api/audit-log${qs.toString() ? `?${qs}` : ''}`);
+    },
+    fetchCategories: () => api('/api/audit-log/categories'),
+    verify: () => api('/api/audit-log/verify'),
+  });
+  return auditLogPage;
+}
+
+views.auditLog = async () => {
+  const v = getAuditLogPage();
+  if (!v) return el('div', { class: 'empty error' }, t('auditlog.err.title'));
+  return v.view();
+};
+
 // ---- Troubleshooting (location-driven investigation) ------------------------
 // Operator+ can trigger an investigation for a site/agent/interface/subnet and
 // get the fault classified as LOCAL / UPSTREAM / DOWNSTREAM / APP_NOT_NET /
@@ -6637,11 +7259,12 @@ function investigationCard(inv) {
           el('dt', {}, 'Description'), el('dd', {}, d.businessImpact || '–')),
         el('p', { class: 'muted' },
           'Edit the draft under ',
-          el('a', { href: '#', onclick: (ev) => { ev.preventDefault(); switchView('reporting'); } },
+          el('a', { href: '#', onclick: (ev) => { ev.preventDefault(); reportingState.section = 'nis2'; gotoView('reporting'); } },
             'Reporting → NIS2 Incidents'), '.')));
   } else if (inv.nis2DraftError) {
-    nis2El = el('div', { class: 'inv-nis2-error muted' },
-      `NIS2 draft could not be created: ${inv.nis2DraftError}`);
+    // `nis2DraftError` is a code, never the server's error message (that goes
+    // to the server log), so the words are ours and translated.
+    nis2El = el('div', { class: 'inv-nis2-error muted' }, t('inv.nis2DraftFailed'));
   }
 
   return el('div', { class: 'inv-card' },
@@ -6662,7 +7285,14 @@ function investigationCard(inv) {
       : null,
     hints,
     narrativeEl,
-    nis2El);
+    nis2El,
+    // An agent investigation leads on to the tools that test the verdict.
+    inv.locationRef && inv.locationRef.type === 'agent'
+      ? contextActions({
+        agentId: Number(inv.locationRef.value),
+        sinceMs: inv.window && inv.window.from ? Date.parse(inv.window.from) : null,
+      }, { exclude: ['investigation'] })
+      : null);
 }
 
 // Help text for the Investigate view (i18n-backed: the getters re-read the
@@ -6708,6 +7338,7 @@ function getDiagnoseView() {
     el, t, ui, errText, plural,
     state: diagnoseState,
     navigate: diagnoseNavigate,
+    onContext: writeContextParams,
     isViewer: () => role === 'viewer',
     help: () => {
       const info = PAGE_INFO.diagnose || {};
@@ -6770,6 +7401,7 @@ function getDiagnoseView() {
 }
 
 views.diagnose = async () => {
+  applyContextFromUrl('diagnose');
   const v = getDiagnoseView();
   if (!v) return el('div', { class: 'empty error' }, t('diag.err.ask'));
   return v.view();
@@ -6820,6 +7452,10 @@ function getDeviceLogView() {
   deviceLogView = window.DeviceLogView.create({
     el, t, ui, errText,
     state: deviceLogState,
+    onContext: writeContextParams,
+    agentName: agentLabel,
+    copyable,
+    fetchAgents: () => api('/agents').catch(() => []),
     help: () => {
       const info = PAGE_INFO.deviceLog || {};
       return { lead: info.hero || '', title: info.title || t('devlog.title'), body: info.body || (() => []) };
@@ -6831,15 +7467,33 @@ function getDeviceLogView() {
       if (f.eventType) qs.set('eventType', f.eventType);
       if (f.transport) qs.set('transport', f.transport);
       if (f.q) qs.set('q', f.q);
+      if (f.agentId != null) qs.set('agentId', String(f.agentId));
+      if (f.deviceId != null) qs.set('deviceId', String(f.deviceId));
+      if (f.snmpDeviceId != null) qs.set('snmpDeviceId', String(f.snmpDeviceId));
       return api(`/api/device-events?${qs.toString()}`);
     },
     fetchCatalog: async () => api('/api/device-events/catalog'),
     openTimeline: (deviceId) => openAgent(deviceId),
+    openSwitch: (id) => openSnmpDevice(id),
   });
   return deviceLogView;
 }
 
+// The device log narrowed to what one polled switch said (from its page).
+function openDeviceLogForSwitch(id) {
+  if (!deviceLogState) deviceLogState = {};
+  deviceLogState.snmpDeviceId = Number(id);
+  currentView = 'deviceLog';
+  render();
+}
+
 views.deviceLog = async () => {
+  applyContextFromUrl('deviceLog');
+  // The scope line names the agent; opened from a link, nothing has fetched
+  // the names yet.
+  if (deviceLogState && deviceLogState.agentId != null && !agentNames.has(String(deviceLogState.agentId))) {
+    await api('/agents').catch(() => null);
+  }
   const v = getDeviceLogView();
   if (!v) return el('div', { class: 'empty error' }, t('devlog.err.title'));
   return v.view();
@@ -6880,6 +7534,8 @@ function getInvestigateView() {
     el, t, ui, errText,
     state: investigateState,
     card: investigationCard,
+    onContext: writeContextParams,
+    openAgent,
     help: () => {
       const info = PAGE_INFO.investigation || {};
       return { lead: info.hero || '', title: info.title || t('inv.title'), body: info.body || (() => []) };
@@ -6904,6 +7560,7 @@ function getInvestigateView() {
 }
 
 views.investigation = async () => {
+  applyContextFromUrl('investigation');
   const v = getInvestigateView();
   if (!v) return el('div', { class: 'empty error' }, t('inv.err.run'));
   return v.view();
@@ -6987,9 +7644,11 @@ function tshootTopologySvg(topology, { onSelect, layerFilter } = {}) {
 
   // Highlight a blast-radius path returned by /api/topology/blast-radius.
   wrap.highlightPath = (ids) => {
-    const set = new Set((ids || []).map(Number));
-    nodeEls.forEach((g, id) => g.classList.toggle('on-path', set.has(Number(id))));
-    linkEls.forEach((l) => l.el.classList.toggle('on-path', set.has(Number(l.source)) && set.has(Number(l.target))));
+    // Keyed as strings: a switch is `d:<id>`, and Number() made every switch
+    // NaN, so a path through one never lit up.
+    const set = new Set((ids || []).map(String));
+    nodeEls.forEach((g, id) => g.classList.toggle('on-path', set.has(String(id))));
+    linkEls.forEach((l) => l.el.classList.toggle('on-path', set.has(String(l.source)) && set.has(String(l.target))));
   };
   wrap.clearPath = () => {
     nodeEls.forEach((g) => g.classList.remove('on-path'));
@@ -7071,6 +7730,10 @@ function getTroubleshootingView() {
   if (typeof window === 'undefined' || !window.TroubleshootingPage || !ui) return null;
   troubleshootingView = window.TroubleshootingPage.create({
     el, t, ui, errText, openAgent, openCluster, gotoView,
+    // A root cause from a single host's open event case opens that event.
+    openEvent,
+    onContext: writeContextParams,
+    contextActions,
     // A node on this map is an agent OR a polled switch, and they open two
     // different pages. The id says which: a switch is `d:<id>` (see
     // src/topology/snmpTopologyMerge.js), because a polled switch is not an
@@ -7084,12 +7747,22 @@ function getTroubleshootingView() {
     TV: window.TroubleshootingView,
     topologySvg: tshootTopologySvg,
     brushSvg: tshootBrushSvg,
-    timelineRow: (e) => window.TimelineView.renderRow(document, e, { formatTime: fmtDate }),
+    // Rows open the device they concern — they were drawn without a handler,
+    // so the timeline was the one list on the page nobody could click through.
+    timelineRow: (e) => window.TimelineView.renderRow(document, e, { formatTime: fmtDate, onOpen: (id) => openAgent(id) }),
     help: () => {
       const info = PAGE_INFO.troubleshooting || {};
       return { lead: info.hero || '', title: info.title || t('tshoot.title'), body: info.body || (() => []) };
     },
-    fetchOverview: async (minutes) => api(`/api/troubleshooting/overview?minutes=${encodeURIComponent(minutes)}`),
+    // /agents alongside, so devices the topology does not carry are still named.
+    fetchOverview: async (minutes) => {
+      const [d] = await Promise.all([
+        api(`/api/troubleshooting/overview?minutes=${encodeURIComponent(minutes)}`),
+        api('/agents').catch(() => null),
+      ]);
+      return d;
+    },
+    agentName: agentLabel,
     fetchFaults: async (limit, offset) => api(`/api/troubleshooting/faults?limit=${limit}&offset=${offset}`),
     blastRadius: async (anchorId) => {
       const radius = await api(`/api/topology/blast-radius/${encodeURIComponent(anchorId)}`);
@@ -7103,6 +7776,7 @@ function getTroubleshootingView() {
 }
 
 views.troubleshooting = async () => {
+  applyContextFromUrl('troubleshooting');
   const v = getTroubleshootingView();
   if (!v) return el('div', { class: 'empty error' }, t('tshoot.err.title'));
   return v.view();
@@ -7119,7 +7793,7 @@ function getInterfacesPage() {
   if (interfacesPage) return interfacesPage;
   if (typeof window === 'undefined' || !window.InterfacesPage || !ui) return null;
   interfacesPage = window.InterfacesPage.create({
-    el, t, ui, errText, usageBar, fmtBytes, viewLink,
+    el, t, ui, errText, usageBar, fmtBytes, fmtUnit, viewLink,
     state: interfacesPageState,
     help: () => ({ title: t('iface.info.title'), body: () => [
       el('p', {}, t('iface.info.p1')),
@@ -7165,6 +7839,9 @@ views.interfaces = async () => {
 // persists the active sub-tab across re-renders; gotoView('tests') deep-links here
 // onto the packages tab (the old standalone Tests page).
 let probesTab = 'run'; // 'run' | 'connection' | 'packages'
+// The hand-off into Run a probe (openInContext) and the agent last used there.
+let probeRunContext = null;
+let probeLastAgentId = null;
 // ---- Probes & Tests (page shell MIGRATED — see public/views/probes.js) ------
 // The shell is on the UI contract; the three tab bodies below are not yet, and
 // they migrate in their own commits. Built lazily: `ui` is declared far down
@@ -7201,6 +7878,10 @@ function getProbesView() {
 }
 
 views.probes = async () => {
+  if (probesTab === 'run' && !probeRunContext) {
+    const c = contextFromUrl();
+    if (c.agentId != null || c.target) probeRunContext = { agentId: c.agentId, target: c.target };
+  }
   const v = getProbesView();
   if (v) return v.view();
   // The module did not load: the tab bodies still work, so serve them rather
@@ -8109,9 +8790,27 @@ async function probeRunnerView() {
   if (!agents.length) { root.append(el('div', { class: 'empty' }, 'No agents yet — enrol an agent first.')); return root; }
 
   const agentSel = el('select', {}, ...agents.map((a) => el('option', { value: String(a.id) }, a.display_name || a.hostname)));
-  const typeSel = el('select', {}, ...[['ping', 'Ping (ICMP)'], ['tcp', 'TCP-connect'], ['dns', 'DNS'], ['traceroute', 'Traceroute'], ['tcptraceroute', t('probe.tcptraceroute')], ['path_mtu', t('probe.pathMtu')], ['tls', t('probe.tls')], ['rdns', t('probe.rdns')], ['curl', 'cURL (content check)'], ['pageload', 'Page load'], ['transaction', 'Transaction (multi-step)']].map(([v, l]) => el('option', { value: v }, l)));
+  const typeSel = el('select', {}, ...[['ping', 'Ping (ICMP)'], ['tcp', 'TCP-connect'], ['dns', 'DNS'], ['traceroute', 'Traceroute'], ['tcptraceroute', t('probe.tcptraceroute')], ['path_mtu', t('probe.pathMtu')], ['tls', t('probe.tls')], ['rdns', t('probe.rdns')], ['dhcp', t('probe.dhcp')], ['curl', 'cURL (content check)'], ['pageload', 'Page load'], ['transaction', 'Transaction (multi-step)']].map(([v, l]) => el('option', { value: v }, l)));
   const target = el('input', { type: 'text', placeholder: 'e.g. 1.1.1.1 or example.com' });
-  const targetWrap = el('label', { class: 'inline muted' }, 'Target ', target);
+  // The DHCP test has no target — it broadcasts — so the same field names the
+  // (optional) interface instead, and says so.
+  const targetLabelText = el('span', {}, 'Target ');
+  const targetWrap = el('label', { class: 'inline muted' }, targetLabelText, target);
+  const dhcpHint = el('div', { class: 'muted small', style: 'flex-basis:100%' }, t('probe.dhcpHint'));
+  // Opened from a record (openInContext) or a shared link: the agent and the
+  // target are already chosen. Otherwise the agent picked last time, rather
+  // than whichever one happens to sort first.
+  const ctx = probeRunContext || {};
+  probeRunContext = null;
+  const preferred = [ctx.agentId, probeLastAgentId].find((id) => id != null && agents.some((a) => String(a.id) === String(id)));
+  if (preferred != null) agentSel.value = String(preferred);
+  if (ctx.target) target.value = ctx.target;
+  probeLastAgentId = agentSel.value;
+  agentSel.addEventListener('change', () => {
+    probeLastAgentId = agentSel.value;
+    writeContextParams({ agentId: agentSel.value });
+  });
+  target.addEventListener('change', () => writeContextParams({ target: target.value.trim() }));
   const portInput = el('input', { type: 'number', min: '1', max: '65535', value: '443' });
   const portWrap = el('label', { class: 'inline muted' }, 'Port ', portInput);
   const countInput = el('input', { type: 'number', min: '1', max: '20', value: '4' });
@@ -8166,6 +8865,9 @@ async function probeRunnerView() {
     const isTx = typeSel.value === 'transaction';
     const isUrl = isCurl || typeSel.value === 'pageload';
     const isMtu = typeSel.value === 'path_mtu';
+    const isDhcp = typeSel.value === 'dhcp';
+    dhcpHint.style.display = isDhcp ? '' : 'none';
+    targetLabelText.textContent = isDhcp ? `${t('probe.dhcp.iface')} ` : 'Target ';
     mtuWrap.style.display = isMtu ? '' : 'none';
     mtuHint.style.display = isMtu ? '' : 'none';
     targetWrap.style.display = isTx ? 'none' : '';
@@ -8175,8 +8877,8 @@ async function probeRunnerView() {
     txWrap.style.display = isTx ? '' : 'none';
     // A path-MTU run has no "count": its repetition knob is probes-per-size,
     // which the agent defaults sensibly and the form does not need to expose.
-    countWrap.style.display = (typeSel.value === 'pageload' || isTx || isMtu) ? 'none' : '';
-    target.placeholder = isUrl ? 'e.g. https://example.com/' : 'e.g. 1.1.1.1 or example.com';
+    countWrap.style.display = (typeSel.value === 'pageload' || isTx || isMtu || isDhcp) ? 'none' : '';
+    target.placeholder = isDhcp ? t('probe.dhcp.ifacePlaceholder') : (isUrl ? 'e.g. https://example.com/' : 'e.g. 1.1.1.1 or example.com');
     countLabelText.textContent = tr ? 'Queries/hop ' : 'Count ';
     countInput.max = tr ? '10' : (isCurl ? '10' : '20');
     if (tr && Number(countInput.value) > 10) countInput.value = '3';
@@ -8190,7 +8892,7 @@ async function probeRunnerView() {
     portWrap,
     countWrap,
     curl.wrap,
-    runBtn, stopBtn, repeatBtn, repeatChipEl, status, traceHint, mtuHint), mtuWrap, txWrap);
+    runBtn, stopBtn, repeatBtn, repeatChipEl, status, traceHint, mtuHint, dhcpHint), mtuWrap, txWrap);
 
   const latestHost = el('div', { class: 'probe-latest' });
   // The refresh loop replaces the whole tbody, which would close an open row
@@ -8210,6 +8912,11 @@ async function probeRunnerView() {
       const steps = tx.collect();
       if (!steps.length) return { error: 'Add at least one step with a URL.' };
       return { body: { type: 'transaction', steps } };
+    }
+    if (typeSel.value === 'dhcp') {
+      // No target: empty means the agent's default-route interface.
+      const iface = target.value.trim();
+      return { body: iface ? { type: 'dhcp', iface } : { type: 'dhcp' } };
     }
     const host = target.value.trim();
     if (!host) return { error: 'Enter a target.' };
@@ -8285,11 +8992,18 @@ async function probeRunnerView() {
     repeatBtn.addEventListener('click', () => {
       const { body, error } = collectProbe();
       if (error) { status.className = 'error probe-status'; status.textContent = error; return; }
-      const what = t('repeat.what.probe', { type: body.type, target: body.host || '' });
+      // A DHCP probe has no host: it broadcasts on an interface (the agent's
+      // default-route one when none is given). A transaction has steps.
+      const target = body.type === 'dhcp'
+        ? (body.iface || t('repeat.dhcp.defaultIface'))
+        : (body.host || t('repeat.target.transaction'));
+      const what = body.type === 'dhcp'
+        ? t('repeat.what.dhcp', { iface: target })
+        : t('repeat.what.probe', { type: body.type, target });
       openRepeatModal({
         what,
         onSave: (spec, runs) => saveRepeatPackage({
-          name: `${body.type} — ${body.host || 'transaction'}`.slice(0, 120),
+          name: `${body.type} — ${target}`.slice(0, 120),
           agentId: agentSel.value,
           item: { type: 'probe', probe: body },
           spec,
@@ -8349,6 +9063,8 @@ function getSnmpDeviceView() {
     fetchCounters: (id) => api(`/api/snmp-devices/${id}/counters`),
     fetchSeries: (id, interfaceId, minutes) =>
       api(`/api/snmp-devices/${id}/interfaces/${interfaceId}/series?minutes=${minutes}`),
+    openDeviceLog: (id) => openDeviceLogForSwitch(id),
+    copyable,
   });
   return snmpDeviceView;
 }
@@ -8511,6 +9227,16 @@ async function globalSearch(q) {
   const kids = [title()];
   const hits = data.hits || [];
 
+  // An address or a host name is also something to TEST, not only to look
+  // up: the probe and Diagnose open with it as the target.
+  if (/^[0-9a-f.:]+$/i.test(q) || /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/i.test(q)) {
+    const go = (view) => () => { closeModal(); openInContext(view, { target: q }); };
+    kids.push(el('div', { class: 'ui ctx-actions' },
+      el('span', { class: 'meta-xs' }, t('ctx.label')),
+      viewAllowed('probes') ? ui.button('secondary', t('search.probeTarget'), { size: 'xs', onclick: go('probes') }) : null,
+      viewAllowed('diagnose') ? ui.button('secondary', t('ctx.diagnose'), { size: 'xs', onclick: go('diagnose') }) : null));
+  }
+
   if (data.partial && (data.failedSources || []).length) {
     kids.push(el('p', { class: 'warn small' }, t('search.partial', { sources: data.failedSources.join(', ') })));
   }
@@ -8521,6 +9247,14 @@ async function globalSearch(q) {
       el('p', { class: 'muted small' }, t('search.emptyHint'))));
   } else {
     kids.push(el('p', { class: 'muted small' }, t('search.resultCount', { count: data.total })));
+    // An address or a MAC has a physical answer too: which switch port it is
+    // on, and the path to it. One click to Path & location with it filled in.
+    if (hits.some((h) => h.type === 'ip' || h.type === 'mac')) {
+      kids.push(el('p', {}, el('button', {
+        class: 'ghost small',
+        onclick: () => { closeModal(); openPathLocation({ q }); },
+      }, t('l2p.fromSearch'))));
+    }
     // Group in the fixed order above so the layout does not reshuffle between
     // searches — a moving target is harder to scan under pressure.
     const byType = new Map();
@@ -8647,17 +9381,19 @@ function getChangesView() {
   if (changesView) return changesView;
   if (typeof window === 'undefined' || !window.ChangesView || !ui) return null;
   changesView = window.ChangesView.create({
-    el, api, t, errText, openAgent, ui,
+    el, api, t, errText, openAgent, openEvent, openCluster, contextActions, ui,
     WINDOWS: CHANGES_WINDOWS.map((w) => [w, w === CHANGES_LAST_SEEN ? t('changes.window.lastSeen') : w]),
     LAST_SEEN: CHANGES_LAST_SEEN,
     getWindow: () => changesWindow,
     setWindow: (w) => { if (CHANGES_WINDOWS.includes(w)) changesWindow = w; },
     feedPath: () => `/api/changes?${changesQuery().toString()}`,
+    filterState: () => changesFilterState,
     exportCsv: () => exportChangesCsv(),
   });
   return changesView;
 }
 
+const changesFilterState = {};
 views.changes = async () => {
   const v = getChangesView();
   return v ? v.view() : el('div', { class: 'empty error' }, t('changes.error', { message: 'view module not loaded' }));
@@ -8698,7 +9434,9 @@ function stopFleet() { if (fleetState.timer) { clearInterval(fleetState.timer); 
 // Shared by the Overview and the Delta/Changes view — one state, one URL, not a
 // per-view copy. Any view that reads it does so through this module-level var.
 let fleetFilter = FleetFilter.parseQuery(window.location.search);
-let fleetSortByHealth = false;
+// Worst-first by default: the help text promised it, and on a fleet of fifty
+// the broken agent is the one row anybody opened the page to find.
+let fleetSortByHealth = true;
 // The query keys the global filter owns — cleared before re-serialising so a
 // dropped dimension leaves the URL, without disturbing OTHER views' params
 // (topology ?layer/?focus, delta ?changeTypes). This merge is what lets the
@@ -8955,8 +9693,8 @@ function fleetIssues(w) {
           el('pre', {}, r.draft || ''))));
     } catch (err) { draftHost.replaceChildren(el('p', { class: 'error' }, errText(err))); }
   };
-  const inc = el('div', { class: 'card' }, el('h3', {}, 'Active events', count(outages.active)));
-  if (!outages.recent.length) inc.append(el('p', { class: 'muted' }, 'No active events.'));
+  const inc = el('div', { class: 'card' }, el('h3', {}, 'Active probe outages', count(outages.active)));
+  if (!outages.recent.length) inc.append(el('p', { class: 'muted' }, 'No active probe outages.'));
   else inc.append(el('table', { class: 'adv-table' }, el('tbody', {}, ...outages.recent.map((i) =>
     el('tr', i.agentId ? { class: 'clickable', onclick: () => openAgent(i.agentId) } : {},
       el('td', {}, el('span', { class: `badge ${i.severity === 'critical' ? 'crit' : 'warn'}` }, i.severity)),
@@ -8971,9 +9709,9 @@ function fleetIssues(w) {
   const fnd = el('div', { class: 'card' }, el('h3', {}, 'Recent findings', count(findings.open)));
   if (!findings.recent.length) fnd.append(el('p', { class: 'muted' }, 'No open analysis findings.'));
   else fnd.append(el('table', { class: 'adv-table' }, el('tbody', {}, ...findings.recent.map((x) =>
-    el('tr', {},
+    el('tr', x.hostId != null ? { class: 'clickable', onclick: () => openAgent(x.hostId) } : {},
       el('td', {}, el('span', { class: `badge ${x.severity === 'CRIT' ? 'crit' : x.severity === 'WARN' ? 'warn' : 'grace'}` }, x.severity)),
-      el('td', {}, x.hostId, el('span', { class: 'muted' }, ` · ${x.metric}`)),
+      el('td', {}, agentLabel(x.hostId), el('span', { class: 'muted' }, ` · ${x.metric}`)),
       el('td', { class: 'muted' }, x.explanation || x.kind || ''))))));
 
   // First-class events (event_cases) — open/investigating cases; click a
@@ -9048,7 +9786,8 @@ function getFleetView() {
     // panels are simply omitted, so the core Overview always renders.
     issues: async () => {
       if (!featureEntitled('dashboard_advanced')) return null;
-      return fleetIssues((await api('/api/dashboard/advanced')).widgets);
+      const [adv] = await Promise.all([api('/api/dashboard/advanced'), api('/agents').catch(() => null)]);
+      return fleetIssues(adv.widgets);
     },
     noc: (data) => nocDashboard(data, {}),
     // Rendered once per view entry: the poll redraws the grid, and rebuilding
@@ -9313,13 +10052,13 @@ function baselineBandChart(slots, { title } = {}) {
   };
   const present = (slots || []).filter((s) => s.median != null);
   if (!present.length) {
-    return el('div', { class: 'empty' }, 'Not enough history yet — a pair needs ≥100 hourly observations before it is baselined.');
+    return el('div', { class: 'empty' }, t('ad.bl.notEnough'));
   }
   const W = 560, H = 190, padL = 52, padR = 10, padT = 12, padB = 26;
   const maxY = Math.max(1, ...present.map((s) => (s.hi != null ? s.hi : s.median)));
   const x = (h) => padL + (h / 23) * (W - padL - padR);
   const y = (v) => padT + (1 - (v / maxY)) * (H - padT - padB);
-  const svg = mk('svg', { viewBox: `0 0 ${W} ${H}`, role: 'img', 'aria-label': title || 'Baseline profile' });
+  const svg = mk('svg', { viewBox: `0 0 ${W} ${H}`, role: 'img', 'aria-label': title || t('ad.bl.profile') });
   // y grid: 0 and max
   [0, maxY].forEach((v) => {
     svg.append(mk('line', { class: 'bl-grid', x1: padL, x2: W - padR, y1: y(v), y2: y(v) }));
@@ -9333,18 +10072,19 @@ function baselineBandChart(slots, { title } = {}) {
   let d = ''; let pen = false;
   slots.forEach((s) => { if (s.median == null) { pen = false; return; } const px = x(s.hour); const py = y(s.median); d += `${pen ? 'L' : 'M'}${px.toFixed(1)} ${py.toFixed(1)} `; pen = true; });
   svg.append(mk('path', { class: 'bl-median', d, fill: 'none' }));
-  slots.forEach((s) => { if (s.median == null) return; const dot = mk('circle', { class: 'bl-dot', cx: x(s.hour), cy: y(s.median), r: '2.4' }); dot.append(mk('title', {}, `${s.hour}:00 · median ${fmtBytes(s.median)} · normal ${fmtBytes(s.lo)}–${fmtBytes(s.hi)}`)); svg.append(dot); });
-  return el('div', { class: 'bl-chart' }, svg, el('div', { class: 'muted small' }, 'Normal range = median ± 3·MAD · y-axis bytes/hour, x-axis hour of day'));
+  slots.forEach((s) => { if (s.median == null) return; const dot = mk('circle', { class: 'bl-dot', cx: x(s.hour), cy: y(s.median), r: '2.4' }); dot.append(mk('title', {}, t('ad.bl.dot', { hour: `${s.hour}:00`, median: fmtBytes(s.median), lo: fmtBytes(s.lo), hi: fmtBytes(s.hi) }))); svg.append(dot); });
+  return el('div', { class: 'bl-chart' }, svg, el('div', { class: 'muted small' }, t('ad.bl.legend')));
 }
 
 // Host dependency list (Part 6 host detail): what this host talks to (outbound)
 // and what talks to it (inbound), with ports + volume, from
 // GET /api/topology/dependencies. Each outbound row links to its per-hour
-// baseline band (operator+; the baselines are keyed by the source host).
+// baseline band (viewer+ via /api/baselines/flow-pair; the baselines are keyed
+// by the source host).
 async function loadAgentDependencies(id, host) {
-  let data; let agents = [];
+  let data; let agents = []; let context = null;
   try {
-    [data, agents] = await Promise.all([
+    [data, agents, context] = await Promise.all([
       api(`/api/topology/dependencies?host=${encodeURIComponent(id)}&direction=both&limit=100`),
       // Names are a nicety — the dependency edges are the point, and a failure
       // here degrades to "host 17" rather than an empty panel. But it used to
@@ -9354,57 +10094,105 @@ async function loadAgentDependencies(id, host) {
         recordClientLog('warn', `Dependency panel: could not load agent names (${e.message}); showing host ids.`);
         return [];
       }),
+      // The baseline context for the outbound pairs (GET /api/baselines/flow-pair,
+      // viewer+): each pair's last complete hour against its normal for that
+      // weekday and hour. Context, not the point — without it the column is
+      // simply not drawn, never a placeholder.
+      api(`/api/baselines/flow-pair?host=${encodeURIComponent(id)}&limit=5000`).catch(() => null),
     ]);
   } catch (e) {
     host.replaceChildren(el('div', { class: 'error' }, errText(e)));
     return;
   }
   const nameById = {};
-  (agents || []).forEach((a) => { nameById[a.id] = a.display_name || a.hostname || `agent ${a.id}`; });
-  const nameFor = (hid) => nameById[hid] || `host ${hid}`;
+  (agents || []).forEach((a) => { nameById[a.id] = a.display_name || a.hostname || t('ad.dep.agentN', { id: a.id }); });
+  const nameFor = (hid) => nameById[hid] || t('ad.dep.hostN', { id: hid });
   const { outbound, inbound } = TopologyGraph.splitDependencies(data.edges || [], id);
 
   if (!outbound.length && !inbound.length) {
-    host.replaceChildren(
-      el('div', { class: 'empty' }, 'No service dependencies observed for this host yet. Dependency edges are aggregated from TCP flows (NetFlow/sFlow) by a scheduled job.'));
+    host.replaceChildren(el('div', { class: 'empty' }, t('ad.dep.none')));
     return;
   }
 
+  // "Now" for a pair is the host's last rolled-up hour (UTC, the slot the
+  // baselines are keyed by); a pair with no traffic in it has no "now".
+  const current = context && context.current;
+  const provider = context && window.BaselineMetric
+    ? window.BaselineMetric.flowPairProvider(context.baselines || []) : null;
+  const slotHour = (h) => `${h < 10 ? '0' : ''}${h}:00`;
+  function lastHourCell(e) {
+    const pair = (current.pairs || []).find((p) => Number(p.dstHostId) === Number(e.dstHostId) && Number(p.dstPort) === Number(e.dstPort));
+    if (!pair) return el('span', { class: 'muted' }, '–');
+    return window.BaselineMetric.render(document, {
+      value: pair.bytes,
+      formatted: fmtBytes(pair.bytes),
+      baseline: provider.lookup({ dstHostId: e.dstHostId, dstPort: e.dstPort, dow: current.dow, hour: current.hour }),
+    });
+  }
+
+  // One pair's hour-of-day profile, with what the last complete hour did
+  // against its normal for that slot: "normal for this hour: median ± MAD vs
+  // now". Viewer+ — the same flow-pair volume the Flows explorer shows.
   async function openBaseline(dstHostId, dstPort, peerLabel) {
     const card = $('#modal-card');
     card.classList.add('wide');
-    const dowNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-    const dowSel = el('select', { class: 'small' }, ...dowNames.map((n, i) => el('option', { value: String(i) }, n)));
-    dowSel.value = String(new Date().getDay());
-    const chartHost = el('div', {}, el('p', { class: 'muted' }, 'Loading baseline…'));
+    // Weekday names from the catalogue: the slot is a day-of-week INDEX from
+    // the baseline table (UTC), not a date to format.
+    const dowSel = el('select', { class: 'small' }, ...[0, 1, 2, 3, 4, 5, 6].map((i) => el('option', { value: String(i) }, t(`weekday.${i}`))));
+    dowSel.value = String(new Date().getUTCDay());
+    const nowHost = el('div', { class: 'bl-now' });
+    const chartHost = el('div', {}, el('p', { class: 'muted' }, t('ad.bl.loading')));
     const draw = (baselines) => {
       const slots = TopologyGraph.baselineProfile(baselines, dstHostId, dstPort, Number(dowSel.value), { sigma: 3 });
-      chartHost.replaceChildren(baselineBandChart(slots, { title: `Baseline → ${peerLabel}:${dstPort}` }));
+      chartHost.replaceChildren(baselineBandChart(slots, { title: t('ad.bl.chartTitle', { peer: peerLabel, port: dstPort }) }));
     };
     card.replaceChildren(
-      el('h3', {}, `Baseline · ${peerLabel}:${dstPort}`),
-      el('div', { class: 'history-controls' }, el('label', { class: 'inline muted' }, 'Day ', dowSel)),
+      el('h3', {}, t('ad.bl.title', { peer: peerLabel, port: dstPort })),
+      nowHost,
+      el('div', { class: 'history-controls' }, el('label', { class: 'inline muted' }, t('ad.bl.day'), ' ', dowSel)),
       chartHost,
-      el('div', { class: 'form-actions' }, el('button', { class: 'ghost', onclick: closeModal }, 'Close')));
+      el('div', { class: 'form-actions' }, el('button', { class: 'ghost', onclick: closeModal }, t('common.close'))));
     $('#modal').classList.remove('hidden');
-    let baselines = [];
+    let r;
     try {
-      const r = await api(`/api/topology/flow-baselines?host=${encodeURIComponent(id)}&limit=5000`);
-      baselines = r.baselines || [];
+      r = await api(`/api/baselines/flow-pair?host=${encodeURIComponent(id)}&dst=${encodeURIComponent(dstHostId)}&port=${encodeURIComponent(dstPort)}&limit=5000`);
     } catch (e) {
       chartHost.replaceChildren(el('div', { class: 'error' }, errText(e)));
       return;
+    }
+    const baselines = r.baselines || [];
+    const now = r.current && (r.current.pairs || [])[0];
+    if (r.current) dowSel.value = String(r.current.dow);
+    if (!baselines.length) {
+      nowHost.replaceChildren(el('p', { class: 'muted' }, t('ad.bl.building')));
+    } else if (!now) {
+      nowHost.replaceChildren(el('p', { class: 'muted' }, t('ad.bl.noCurrent')));
+    } else {
+      const slot = window.BaselineMetric
+        ? window.BaselineMetric.flowPairProvider(baselines).lookup({ dstHostId, dstPort, dow: r.current.dow, hour: r.current.hour })
+        : null;
+      const when = { weekday: t(`weekday.${r.current.dow}`), hour: slotHour(r.current.hour) };
+      nowHost.replaceChildren(
+        el('p', {}, slot
+          ? t('ad.bl.normal', { ...when, median: fmtBytes(slot.median), mad: fmtBytes(slot.mad) })
+          : t('ad.bl.noSlot', when)),
+        el('p', {}, t('ad.bl.now', { hour: slotHour(r.current.hour) }), ' ',
+          window.BaselineMetric
+            ? window.BaselineMetric.render(document, { value: now.bytes, formatted: fmtBytes(now.bytes), baseline: slot || null })
+            : fmtBytes(now.bytes)));
     }
     dowSel.addEventListener('change', () => draw(baselines));
     draw(baselines);
   }
 
+  const withContext = !!(current && provider && window.BaselineMetric);
   const depTable = (rows, dir) => el('table', { class: 'agents-table' },
     el('thead', {}, el('tr', {},
-      el('th', { scope: 'col' }, dir === 'out' ? 'Talks to' : 'Talked to by'),
-      el('th', { scope: 'col' }, 'Port'), el('th', { scope: 'col' }, 'Bytes'),
-      el('th', { scope: 'col' }, 'Conns'), el('th', { scope: 'col' }, 'Last seen'),
-      dir === 'out' && canWrite() ? el('th', { scope: 'col' }, '') : null)),
+      el('th', { scope: 'col' }, dir === 'out' ? t('ad.dep.talksTo') : t('ad.dep.talkedToBy')),
+      el('th', { scope: 'col' }, t('ad.dep.port')), el('th', { scope: 'col' }, t('ad.dep.bytes')),
+      el('th', { scope: 'col' }, t('ad.dep.conns')), el('th', { scope: 'col' }, t('ad.dep.lastSeen')),
+      dir === 'out' && withContext ? el('th', { scope: 'col' }, t('ad.dep.lastHour', { hour: slotHour(current.hour) })) : null,
+      dir === 'out' ? el('th', { scope: 'col' }, '') : null)),
     el('tbody', {}, ...rows.map((e) => {
       const peerId = dir === 'out' ? e.dstHostId : e.srcHostId;
       return el('tr', {},
@@ -9413,15 +10201,59 @@ async function loadAgentDependencies(id, host) {
         el('td', { class: 'num' }, fmtBytes(e.bytes)),
         el('td', { class: 'num' }, String(e.connCount)),
         el('td', {}, e.lastSeen ? fmtTimeShort(new Date(e.lastSeen).getTime()) : '–'),
-        dir === 'out' && canWrite()
-          ? el('td', {}, el('button', { class: 'small ghost', onclick: () => openBaseline(e.dstHostId, e.dstPort, nameFor(e.dstHostId)) }, 'Baseline'))
+        dir === 'out' && withContext ? el('td', {}, lastHourCell(e)) : null,
+        dir === 'out'
+          ? el('td', {}, el('button', { class: 'small ghost', onclick: () => openBaseline(e.dstHostId, e.dstPort, nameFor(e.dstHostId)) }, t('ad.dep.baseline')))
           : null);
     })));
 
   const children = [];
-  if (outbound.length) children.push(el('h4', { class: 'sub' }, `Talks to (${outbound.length})`), depTable(outbound, 'out'));
-  if (inbound.length) children.push(el('h4', { class: 'sub' }, `Talked to by (${inbound.length})`), depTable(inbound, 'in'));
+  if (outbound.length) children.push(el('h4', { class: 'sub' }, t('ad.dep.talksToN', { count: outbound.length })), depTable(outbound, 'out'));
+  if (inbound.length) children.push(el('h4', { class: 'sub' }, t('ad.dep.talkedToByN', { count: inbound.length })), depTable(inbound, 'in'));
   host.replaceChildren(...children);
+}
+
+// The host's LLDP adjacencies (GET /api/topology/neighbors?target=, both
+// directions): which switch port it is plugged into, as the agent's own lldpd
+// reports it — and any other agent that reports this one as its neighbour.
+async function loadAgentNeighbours(id, host) {
+  let data;
+  try {
+    data = await api(`/api/topology/neighbors?target=${encodeURIComponent(id)}&limit=50`);
+  } catch (e) {
+    host.replaceChildren(ui.errorState({ title: t('ad.nb.err'), body: errText(e), detail: 'GET /api/topology/neighbors' }));
+    return;
+  }
+  const rows = (data && data.neighbors) || [];
+  if (!rows.length) {
+    host.replaceChildren(ui.emptyState({ kind: 'nodata', title: t('ad.nb.none'), body: t('ad.nb.noneHint') }));
+    return;
+  }
+  const total = data.page && data.page.total;
+  const table = ui.dataTable({
+    dense: true,
+    columns: [
+      { key: 'port', label: t('ad.nb.port') },
+      { key: 'peer', label: t('ad.nb.peer') },
+      { key: 'peerPort', label: t('ad.nb.peerPort') },
+      { key: 'seen', label: t('ad.nb.seen'), time: true },
+    ],
+    rows: rows.map((n) => ({
+      key: n.id,
+      cells: {
+        // A row another agent reported names this host as the far end.
+        port: Number(n.localAgentId) === Number(id)
+          ? (n.localPort || '—')
+          : ui.meta(t('ad.nb.reportedBy', { id: n.localAgentId })),
+        peer: n.remoteChassisId || '—',
+        peerPort: n.remotePort || '—',
+        seen: ui.fmt.rel(n.lastSeen),
+      },
+    })),
+  });
+  host.replaceChildren(...[table,
+    total && total > rows.length ? ui.inlineNote(t('ad.nb.more', { shown: rows.length, total })) : null,
+  ].filter(Boolean));
 }
 
 // ---- Agent detail (SHELL MIGRATED — see public/views/agent.js)
@@ -9440,6 +10272,7 @@ function getAgentPage() {
     openLocation,
     exportInvestigation: exportInvestigationMenu,
     runTest,
+    contextActions,
     rerender: () => render(),
     helpBody: () => [
       el('p', {}, t('ad.info.p1')),
@@ -9462,6 +10295,10 @@ function getAgentPage() {
       const dep = el('div', { class: 'agent-deps' }, el('div', { class: 'muted' }, t('common.loading')));
       loadAgentDependencies(id, dep);
       out.push({ title: t('ad.dependencies'), node: dep });
+
+      const nb = el('div', { class: 'agent-neighbours' }, el('div', { class: 'muted' }, t('common.loading')));
+      loadAgentNeighbours(id, nb);
+      out.push({ title: t('ad.neighbours'), node: nb });
       return out;
     },
     timeline: (id) => targetTimelineCard(id),
@@ -9609,9 +10446,9 @@ function agentDetailFolds(id, agent) {
     let markers = [];
     try { const fs = await api(`/api/findings?hostId=${encodeURIComponent(id)}&since=${new Date(series[0].t).toISOString()}`); markers = findingMarkers(fs); } catch { markers = []; }
     trafficHost.replaceChildren(historyChart([
-      { id: 'rx', label: '↓ RX', color: '#06b6d4', points: series.map((s) => ({ t: s.t, y: s.rx })) },
-      { id: 'tx', label: '↑ TX', color: '#10b981', points: series.map((s) => ({ t: s.t, y: s.tx })) },
-    ], { fromMs: series[0].t, toMs: series[series.length - 1].t, markers }));
+      { id: 'rx', label: '↓ RX', color: ui.token('--series-0'), points: series.map((s) => ({ t: s.t, y: s.rx })) },
+      { id: 'tx', label: '↑ TX', color: ui.token('--series-1'), points: series.map((s) => ({ t: s.t, y: s.tx })) },
+    ], { fromMs: series[0].t, toMs: series[series.length - 1].t, markers, unit: 'B/s' }));
   }
 
   async function refreshHealth() {
@@ -9742,7 +10579,7 @@ function getFlowsPage() {
     chart: (points, { markers, onBrush }) => el('div', { class: 'overview-chart' },
       historyChart([{ id: 'b', label: t('flows.col.bytes'), color: ui.token('--series-0'), points }], {
         fromMs: points[0].t, toMs: points[points.length - 1].t,
-        band: robustBand(points), markers, onBrush,
+        band: robustBand(points), markers, onBrush, unit: 'B',
       })),
     fetchExplore: async ({ window: w, agentId, peer, port, proto, direction, internal }) => {
       const qp = new URLSearchParams({ agentId, from: iso(w.fromMs), to: iso(w.toMs) });
@@ -11355,7 +12192,7 @@ let guideTrack = null;
 // tab is [key, label, adminOnly]; non-admins only ever see the personal section.
 const SETTINGS_GROUPS = [
   ['Access & security', [['users', 'Users', true], ['auth', 'Authentication', true], ['apitokens', 'API tokens', true], ['agentkey', 'Agent key', true]]],
-  ['Detection & alerts', [['analyse', 'Analysis', true], ['alerting', 'Alerting', true], ['severity', 'Severity rules', true], ['runbooks', 'Runbooks', true], ['integrations', 'ITSM', true], ['cmdb', 'CMDB', true], ['ai', 'AI', true], ['maintenance', 'Maintenance', true]]],
+  ['Detection & alerts', [['analyse', 'Analysis', true], ['alerting', 'Alerting', true], ['severity', 'Severity rules', true], ['thresholds', () => t('thr.tab'), true], ['runbooks', 'Runbooks', true], ['integrations', 'ITSM', true], ['cmdb', 'CMDB', true], ['ai', 'AI', true], ['maintenance', 'Maintenance', true]]],
   ['Data', [['database', 'Database', true], ['retention', 'Retention', true], ['types', 'Traffic types', true], ['map', 'Map', true]]],
   ['System', [['setup', 'Setup', true], ['updates', 'Updates', true], ['agents', 'Agents', true], ['snmp', 'SNMP devices', true], ['snmpcommunities', 'SNMP communities', true], ['screening', 'Test Settings', true], ['assurance', 'Service Assurance', true]]],
   ['Personal', [['appearance', 'Appearance', false], ['license', 'License', false]]],
@@ -11485,7 +12322,7 @@ function docsSteps(items) {
 }
 // A "What to expect" callout — success vs. failure signals for a task.
 function docsExpect(...kids) {
-  return el('div', { class: 'callout docs-expect' }, el('strong', {}, 'What to expect '), ...kids);
+  return el('div', { class: 'callout docs-expect' }, el('strong', {}, `${t('docs.expect')} `), ...kids);
 }
 // A three-column reference table: symptom / meaning / action (or you-see / etc.).
 function docsTable(head, rows) {
@@ -11517,7 +12354,7 @@ const DOCS = [
           docsTable(['Group', 'Use it for'], [
             [viewLink('fleet', 'Monitoring'), 'Overview (fleet health at a glance), Traffic, Sites (map) and Destinations (external traffic by country/ASN).'],
             [el('strong', {}, 'Fleet'), ['Per-', viewLink('agents', 'Agent'), ' drill-down, ', viewLink('interfaces', 'Interfaces'), ' health and NIC firmware inventory.']],
-            [el('strong', {}, 'Diagnostics'), ['Ad-hoc ', viewLink('probes', 'Probes & Tests'), ', ', viewLink('flows', 'Flows'), ', Topology, the ', viewLink('investigation', 'Troubleshooting'), ' investigator — and this Documentation.']],
+            [el('strong', {}, 'Diagnostics'), ['Ad-hoc ', viewLink('probes', 'Probes & Tests'), ', ', viewLink('flows', 'Flows'), ', Topology, ', viewLink('troubleshooting', 'Troubleshooting'), ', the ', viewLink('investigation', 'Investigate'), ' investigator — and this Documentation.']],
             [el('strong', {}, 'Insights'), ['Anomaly ', viewLink('findings', 'Analysis'), ', ', viewLink('events', 'Events'), ', ', viewLink('clusters', 'Situations'), ' (one event across many agents) and ', viewLink('reporting', 'Reporting'), ' (incl. NIS2).']],
             [el('strong', {}, 'Administration'), ['Locations, Enrollment, Logs and ', viewLink('settings', 'Settings'), '.']],
           ]),
@@ -11645,19 +12482,23 @@ const DOCS = [
         ],
       },
       {
-        id: 'agent-offline', title: 'An agent is offline', body: () => [
-          docsLead('An agent shows as disconnected, or dropped off the Overview. Work from the server outward.'),
+        // Through the catalogue (docs.ao.*): the troubleshooting article somebody
+        // reads with an agent down is the last place to leave in one language.
+        id: 'agent-offline', get title() { return t('docs.ao.title'); }, body: () => [
+          docsLead(t('docs.ao.lead')),
           docsSteps([
-            ['Open ', viewLink('fleet', 'Overview'), ' and find the agent — offline agents sort to the top with a grey/《offline》badge. Click it to open the agent page.'],
-            ['On the agent page, read the ', el('strong', {}, 'Connection'), ' card. It gives an explainable verdict (last seen, last WebSocket close reason, clock skew) — this usually names the cause outright.'],
-            'Check whether it is one agent or many. Many agents offline at once points at the server/network side (firewall, DNS, this server restarting); a single agent points at that host.',
-            ['If the agent is up but stale, use ', el('strong', {}, 'Reconnect'), ' (operator+) on the agent page to force it to re-dial the server.'],
-            ['On the host itself: confirm the agent process/service is running, and that it can reach this server’s URL and port. Re-running the installer (', el('code', {}, 'git pull && ./install.sh'), ') repairs a broken systemd install.'],
+            [t('docs.ao.s1a'), viewLink('fleet', t('nav.view.fleet')), t('docs.ao.s1b')],
+            [t('docs.ao.s2a'), el('strong', {}, t('docs.ao.s2strong')), t('docs.ao.s2b')],
+            t('docs.ao.s3'),
+            [t('docs.ao.s4a'), el('strong', {}, t('docs.ao.s4strong')), t('docs.ao.s4b')],
+            [t('docs.ao.s5a'), el('code', {}, 'git pull && ./install.sh'), t('docs.ao.s5b')],
           ]),
           docsExpect(
-            el('span', {}, 'A healthy agent reports within seconds of connecting and its ', el('strong', {}, 'Last seen'), ' stays under a minute. '),
-            el('span', {}, 'Common close reasons: ', el('code', {}, 'auth failed'), ' → the agent token was rotated/revoked (re-enroll); ', el('code', {}, 'timeout'), '/', el('code', {}, 'ECONNREFUSED'), ' → network path or the server is down; large ', el('strong', {}, 'clock skew'), ' → fix NTP on the host, it degrades data quality.')),
-          el('p', { class: 'muted' }, ['Related: ', viewLink('logs', 'Logs'), ' shows server-side connect/disconnect events, and Reporting → Audit records each agent online/offline transition.']),
+            el('span', {}, t('docs.ao.expect1a'), el('strong', {}, t('docs.ao.lastSeen')), t('docs.ao.expect1b')),
+            el('span', {}, t('docs.ao.expect2a'), el('code', {}, 'auth failed'), t('docs.ao.expect2b'),
+              el('code', {}, 'timeout'), '/', el('code', {}, 'ECONNREFUSED'), t('docs.ao.expect2c'),
+              el('strong', {}, t('docs.ao.skew')), t('docs.ao.expect2d'))),
+          el('p', { class: 'muted' }, [t('docs.ao.relatedA'), viewLink('logs', t('nav.view.logs')), t('docs.ao.relatedB')]),
         ],
       },
       {
@@ -11666,7 +12507,7 @@ const DOCS = [
           docsSteps([
             ['Open ', viewLink('map', 'Sites'), '. Locations are coloured by the health of the agents at them — click the site to list its agents.'],
             ['Switch to ', viewLink('fleet', 'Overview'), ' and click the count chips (Critical / Warning) to filter the fleet to just the unhealthy agents — is it every agent at the site (shared uplink/DNS) or one?'],
-            ['Use the ', viewLink('investigation', 'Troubleshooting'), ' investigator (operator+): pick ', el('strong', {}, 'Site/location'), ' as the scope and a time window. It correlates the anomalies at that site into one explained picture.'],
+            ['Use the ', viewLink('investigation', 'Investigate'), ' investigator (operator+): pick ', el('strong', {}, 'Site/location'), ' as the scope and a time window. It correlates the anomalies at that site into one explained picture.'],
             ['Check ', viewLink('geo', 'Destinations'), ' / Topology to see whether the site lost a key dependency (a DNS resolver, a SaaS endpoint, an upstream ASN).'],
           ]),
           docsExpect('A site anomaly that hits every agent simultaneously is almost always shared infrastructure (WAN link, firewall, DNS, power). A single agent standing out while its neighbours are green is a host- or NIC-local problem — jump to “Investigate an interface”.'),
@@ -11957,8 +12798,8 @@ const DOCS = [
             ['SSO (OIDC)', settingsLink('auth', 'Settings → Authentication'), ['env ', el('code', {}, 'OIDC_*'), ' (issuer/client)'], 'token claim → role'],
             ['SSO (SAML)', settingsLink('auth', 'Settings → Authentication'), ['env ', el('code', {}, 'SAML_*'), ' (IdP/SP)'], 'assertion attribute → role'],
           ]),
-          el('p', {}, ['The connection itself (bind host, issuer, IdP metadata) comes from server ', el('strong', {}, 'environment variables'), ' — set those on the server. The dashboard tab is where you map groups/claims/attributes to BlueEyes roles and read the login audit. Local accounts always remain as a fallback, so you can never lock yourself out.']),
-          docsExpect('Each method has a built-in test: an LDAP bind check, OIDC discovery, and a SAML reachability probe (all also surfaced in Test Settings). A successful test + a correct role map means a directory user lands on the right role on first login (just-in-time provisioning). Failures name the step: bind failed (credentials/DN), discovery failed (issuer/URL), signature/audience mismatch (SAML metadata).'),
+          el('p', {}, [t('docs.sso.connA'), el('strong', {}, t('docs.sso.connEnv')), t('docs.sso.connB')]),
+          docsExpect('Each method has a built-in check: an LDAP bind test and OIDC discovery on Settings → Authentication, and a SAML reachability probe in Test Settings (which screens all three). A successful test + a correct role map means a directory user lands on the right role on first login (just-in-time provisioning). Failures name the step: bind failed (credentials/DN), discovery failed (issuer/URL), signature/audience mismatch (SAML metadata).'),
         ],
       },
       {
@@ -12061,6 +12902,7 @@ const SETTINGS_SECTIONS = {
   analyse: settingsAnalyseView,
   alerting: settingsAlertingView,
   severity: settingsSeverityRulesView,
+  thresholds: settingsThresholdsView,
   runbooks: settingsRunbooksView,
   integrations: settingsIntegrationsView,
   cmdb: settingsCmdbView,
@@ -12079,15 +12921,19 @@ const SETTINGS_SECTIONS = {
   assurance: settingsAssuranceView,
 };
 
+// A section label is a string, or a function for one that goes through t() —
+// resolved per call, so a language switch relabels it.
+const settingsLabelText = (label) => (typeof label === 'function' ? label() : label);
 function settingsGroups() {
   // Drop admin-only sections for non-admins, then drop any group left empty.
   return SETTINGS_GROUPS
-    .map(([label, tabs]) => [label, tabs.filter(([, , adminOnly]) => isAdmin() || !adminOnly)])
+    .map(([label, tabs]) => [label, tabs.filter(([, , adminOnly]) => isAdmin() || !adminOnly)
+      .map(([k, l, a]) => [k, settingsLabelText(l), a])])
     .filter(([, tabs]) => tabs.length > 0);
 }
 function settingsLabel(key) {
   for (const [, tabs] of SETTINGS_GROUPS) {
-    for (const [k, label] of tabs) if (k === key) return label;
+    for (const [k, label] of tabs) if (k === key) return settingsLabelText(label);
   }
   return key;
 }
@@ -12418,8 +13264,11 @@ function serverUpdateActions(ver, targetVersion) {
     return out;
   }
 
-  out.push(el('p', { class: 'muted' }, 'Runs on the server host: ', el('code', {}, update.command),
-    '. The server restarts as part of the update, so the dashboard reconnects when it comes back.'));
+  // The command line is an admin's to see (the server sends null to others).
+  if (update.command) {
+    out.push(el('p', { class: 'muted' }, t('set.upd.runsOnA'), el('code', {}, update.command),
+      t('set.upd.runsOnB')));
+  }
 
   if (!canDelete()) {
     out.push(el('p', { class: 'muted' }, 'Only an admin can start an update.'));
@@ -12692,7 +13541,9 @@ async function settingsAiView() {
 //   * WHEN IT LAST ANSWERED, not just that it is failing. "Last answered 41
 //     minutes ago" is the difference between a switch that blipped and one that
 //     is gone.
-const SNMP_COLLECT_KINDS = ['if', 'fdb', 'lldp', 'vlan'];
+// 'cdp', 'arp' and 'entity' are collected by default for devices added from
+// migration 124 on; a device created before keeps its own list.
+const SNMP_COLLECT_KINDS = ['if', 'fdb', 'lldp', 'vlan', 'cdp', 'arp', 'entity'];
 
 async function settingsSnmpDevicesView() {
   const host = el('div', { class: 'settings-grid' });
@@ -12892,17 +13743,29 @@ async function settingsSnmpDevicesView() {
         el('td', {}, isAdmin() ? siteCell(d) : (
           locations.find((l) => Number(l.id) === d.locationId)
             ? locations.find((l) => Number(l.id) === d.locationId).name
-            : el('span', { class: 'muted' }, t('snmpdev.site.none')))),
+            : el('span', { class: 'muted' }, t('snmpdev.site.none'))),
+          // Below the site: the room or rack the device's own sysLocation
+          // names, so the list answers "where is it" at rack level.
+          d.sysLocation ? el('div', { class: 'meta-xs' }, t('snmpdev.list.sysLocation', { where: d.sysLocation })) : null),
         el('td', {}, supportedCell(d)),
         el('td', {}, stateCell(d)),
         el('td', {},
           el('button', {
             class: 'btn btn-secondary btn-xs',
-            onclick: async () => {
+            onclick: async (ev) => {
+              // The server waits (bounded) for the agent's answer, so the
+              // button says it is busy rather than inviting a second press.
+              const btn = ev.currentTarget;
+              btn.disabled = true;
+              btn.textContent = t('snmpdev.poll.running');
               try {
-                await api(`/api/snmp-devices/${d.id}/poll`, { method: 'POST' });
-                toast(t('snmpdev.poll.queued'));
-              } catch (e) { toast(errText(e)); }
+                const out = await api(`/api/snmp-devices/${d.id}/poll`, { method: 'POST' });
+                toast(snmpPollOutcome(out));
+                if (out && out.result) await refresh();
+              } catch (e) { toast(errText(e)); } finally {
+                btn.disabled = false;
+                btn.textContent = t('snmpdev.action.poll');
+              }
             },
           }, t('snmpdev.action.poll')),
           isAdmin() ? el('button', {
@@ -12921,6 +13784,20 @@ async function settingsSnmpDevicesView() {
 
   await refresh();
   return host;
+}
+
+// What "Poll now" came back with, in one sentence. 202 (`pending`) is an agent
+// still polling — or one too old to answer — and its data lands on the table
+// later; 200 carries the agent's own count, and the two answers an operator
+// can act on: this device is not the agent's, or the agent has none at all.
+function snmpPollOutcome(out) {
+  const r = out && out.result;
+  if (!r || out.pending) return t('snmpdev.poll.queued');
+  if (r.error) return t('snmpdev.poll.failed', { error: r.error });
+  if (r.devices === 0) return t('snmpdev.poll.noDevices');
+  if (r.deviceAssigned === false) return t('snmpdev.poll.notAssigned');
+  const n = r.devices == null ? (r.polled || 0) + (r.failed || 0) : r.devices;
+  return plural('snmpdev.poll.done', n, { n: String(n), polled: String(r.polled ?? 0), failed: String(r.failed ?? 0) });
 }
 
 // ---- Settings → SNMP communities -------------------------------------------
@@ -12997,6 +13874,9 @@ async function settingsSetupView() {
     const detailKey = `setup.check.${check.key}.${check.state}`;
     let detail = t(detailKey, check.detail || {});
     if (detail === detailKey) detail = t(`setup.state.${check.state}`);
+    // A row whose source could not be READ says that, whatever row it is —
+    // its own "unknown" text explains a different kind of not knowing.
+    if (check.detail && check.detail.reason === 'unreadable') detail = t('setup.reason.unreadable');
     return el('tr', {},
       el('td', {},
         el('strong', {}, t(`setup.check.${check.key}.title`)),
@@ -13004,6 +13884,31 @@ async function settingsSetupView() {
       el('td', {}, stateBadge(check.state)),
       el('td', {}, unlocksCell(check.unlocks)),
       el('td', {}, check.state === 'ok' ? null : fixControl(check)));
+  }
+
+  // Three answers, never two: work outstanding; nothing outstanding that can
+  // be seen but some rows could not be determined (NOT "complete" — an
+  // unread row may be hiding the work); or complete. `status` is absent from
+  // an older server, which only knew `complete`.
+  function setupBanner(data) {
+    const unreadable = data.unreadable || 0;
+    const status = data.status || (data.complete ? 'complete' : 'outstanding');
+    if (status === 'outstanding') {
+      return el('div', {},
+        el('span', { class: 'badge-ui warn' }, t('setup.outstanding', { n: data.outstanding || 0 })),
+        unreadable ? ' ' : null,
+        unreadable ? el('span', { class: 'badge-ui neutral' }, t('setup.unreadable', { n: unreadable })) : null);
+    }
+    if (status === 'unknown') {
+      return el('div', {},
+        el('strong', {}, t('setup.unknown.title')),
+        el('p', { class: 'muted' }, unreadable
+          ? t('setup.unknown.bodyUnreadable', { n: data.unknown || 0 })
+          : t('setup.unknown.body', { n: data.unknown || 0 })));
+    }
+    return el('div', {},
+      el('strong', {}, t('setup.complete.title')),
+      el('p', { class: 'muted' }, t('setup.complete.body')));
   }
 
   async function refresh() {
@@ -13019,11 +13924,7 @@ async function settingsSetupView() {
     const head = el('section', { class: 'card' },
       el('h3', {}, t('setup.title')),
       el('p', { class: 'muted' }, t('setup.lead')),
-      data.complete
-        ? el('div', {},
-          el('strong', {}, t('setup.complete.title')),
-          el('p', { class: 'muted' }, t('setup.complete.body')))
-        : el('span', { class: 'badge-ui warn' }, t('setup.outstanding', { n: data.outstanding || 0 })),
+      setupBanner(data),
       // The next question once the wiring is done: what is still not SEEN.
       // Same role as this screen (admin), so the link is never a dead end.
       el('p', { class: 'muted' }, t('setup.coverage.lead'), ' ', viewLink('coverage', t('nav.view.coverage'))));
@@ -13820,14 +14721,15 @@ async function settingsAlertingView() {
   // otherwise). An unknown licence (null) keeps the editor, per the "allow until we
   // know it's off" rule used for the assistant.
   const alertingLicensed = !data.license || data.license.alerting !== false;
-  root.append(el('p', { class: 'muted settings-intro' },
-    'When a finding is raised it can be dispatched by e-mail, webhook, Matrix or syslog. Turn alerting on, then enable the channels you want and set a minimum severity for each. Settings are stored in the database and take effect immediately — no restart.'));
+  root.append(el('p', { class: 'muted settings-intro' }, t('alerting.intro')));
   if (!alertingLicensed) {
     root.append(el('div', { class: 'settings-grid' }, alertingUnlicensedCard(data.license)));
     return root;
   }
+  const state = alertingStateLine();
+  refreshAlertingState = state.refresh;
   root.append(el('div', { class: 'settings-grid' },
-    alertingGeneralCard(a),
+    alertingGeneralCard(a, state),
     alertingEmailCard(ch.email),
     alertingWebhookCard(ch.webhook),
     alertingMatrixCard(ch.matrix),
@@ -13844,10 +14746,33 @@ function alertingUnlicensedCard(license) {
     licenseBadge(license, 'alerting'));
 }
 
-// Master switch + cooldown. Saves just { enabled, cooldownMs }; the server merges
-// it onto the stored config, leaving the per-channel settings untouched.
-function alertingGeneralCard(a) {
-  const enabledI = el('input', { type: 'checkbox' }); enabledI.checked = !!a.enabled;
+// The EFFECTIVE master switch and why (GET /api/alerting/config): automatic
+// mode turns alerting on as soon as one channel is configured, so the checkbox
+// alone could not say whether anything will actually be sent. Refreshed after
+// every save on this screen, channel cards included.
+let refreshAlertingState = () => {};
+function alertingStateLine() {
+  const line = el('p', { class: 'muted small' });
+  async function refresh() {
+    try {
+      const c = await api('/api/alerting/config');
+      const head = t(c.enabled ? 'alerting.state.on' : 'alerting.state.off');
+      line.textContent = c.enabledReason
+        ? `${head} — ${t(`alerting.reason.${c.enabledReason}`, { channels: (c.configuredChannels || []).join(', ') })}`
+        : head;
+    } catch { line.textContent = t('alerting.state.unknown'); }
+  }
+  refresh();
+  return { node: line, refresh };
+}
+
+// Master switch + cooldown. Saves just { enabledMode, cooldownMs }; the server
+// merges it onto the stored config, leaving the per-channel settings untouched.
+// The switch has three states (auto | on | off) — see docs/alerting.md.
+function alertingGeneralCard(a, state) {
+  const enabledI = el('select', {},
+    ...['auto', 'on', 'off'].map((m) => el('option', { value: m }, t(`alerting.mode.${m}`))));
+  enabledI.value = ['auto', 'on', 'off'].includes(a.enabledMode) ? a.enabledMode : (a.enabled ? 'on' : 'auto');
   const coolI = el('input', { type: 'number', min: '0', max: '1440', step: '1', value: String(Math.round((a.cooldownMs ?? 900000) / 60000)) });
   const err = el('p', { class: 'error' });
   const btn = el('button', { class: 'small' }, 'Save');
@@ -13863,15 +14788,16 @@ function alertingGeneralCard(a) {
       return;
     }
     btn.disabled = true;
-    try { await api('/api/settings/alerting', { method: 'PUT', body: { enabled: enabledI.checked, cooldownMs: Math.round(mins * 60000) } }); toast('Alerting saved'); }
+    try { await api('/api/settings/alerting', { method: 'PUT', body: { enabledMode: enabledI.value, cooldownMs: Math.round(mins * 60000) } }); toast('Alerting saved'); refreshAlertingState(); }
     catch (e2) { err.textContent = errText(e2); }
     finally { btn.disabled = false; }
   }
   btn.addEventListener('click', save);
   return el('div', { class: 'settings-card' }, el('h3', {}, 'Alerting'),
+    state ? state.node : null,
     el('div', { class: 'form-grid' },
-      el('label', { class: 'set-field' }, el('span', {}, 'Alerting enabled'), enabledI,
-        el('span', { class: 'muted small' }, 'Master switch. When off, findings are still recorded but never dispatched.')),
+      el('label', { class: 'set-field' }, el('span', {}, t('alerting.mode.label')), enabledI,
+        el('span', { class: 'muted small' }, t('alerting.mode.hint'))),
       el('label', { class: 'set-field' }, el('span', {}, 'Cooldown (minutes)'), coolI,
         el('span', { class: 'muted small' }, 'Minimum time between repeated alerts for the same condition on the same host. 0 = no throttling (every finding is sent).')),
       err, el('div', { class: 'form-actions' }, btn)));
@@ -13925,6 +14851,8 @@ function alertingChannelCard({ name, title, blurb, channel, bodyRows, gather, on
       const res = await api('/api/settings/alerting', { method: 'PUT', body: { [name]: slice } });
       toast(`${title} saved`);
       if (onSaved) onSaved(res.alerting || {});
+      // A channel becoming configured can switch automatic alerting on.
+      refreshAlertingState();
     } catch (e2) { err.textContent = errText(e2); }
     finally { saveBtn.disabled = false; }
   }
@@ -14049,8 +14977,9 @@ function alertingSyslogCard(channel) {
 // (config CRUD + connectivity test + login audit) and src/auth/ldap.js (the bind
 // + group→role resolution, run from src/routes/auth.js at login). Admin-only and
 // licence-gated (sso_ldap, Professional) — the server returns licensed:false and
-// refuses the writes when the plan doesn't include it.
-async function settingsAuthView() {
+// refuses the writes when the plan doesn't include it. One section of the tab —
+// settingsAuthView (below) composes it with the security policy and SSO.
+async function settingsLdapSection() {
   const cfgRes = await api('/api/ldap/config');
   const cfg = cfgRes.config || {};
   const licensed = cfgRes.licensed !== false; // server-computed; allow-until-known-off
@@ -14253,6 +15182,242 @@ function ldapAuditCard() {
   return card;
 }
 
+// ---- Settings → Authentication: the whole tab --------------------------------
+// Four sections on one page, in the order an admin works through them: the
+// baseline security policy every account is under (password history, max age,
+// IP allowlist by role — never licence-gated), then the three directory/SSO
+// methods. Each SSO section is self-contained, so a licence that lacks LDAP
+// still shows OIDC and SAML, and the security policy always shows.
+async function settingsAuthView() {
+  const root = el('div', { class: 'auth-settings' });
+  const section = (key, node) => el('section', { class: 'auth-section', 'data-auth-section': key }, node);
+  const safe = async (fn) => {
+    try { return await fn(); } catch (e) { return el('p', { class: 'error' }, errText(e)); }
+  };
+  root.append(
+    section('security', await safe(authSecuritySection)),
+    section('ldap', el('div', {}, el('h2', { class: 'auth-section-title' }, t('set.auth.ldap.title')), await safe(settingsLdapSection))),
+    section('oidc', await safe(() => ssoSection(SSO_KINDS.oidc))),
+    section('saml', await safe(() => ssoSection(SSO_KINDS.saml))));
+  return root;
+}
+
+// ---- Security policy (migration 041) ----------------------------------------
+// Backend: /api/settings/security (src/routes/authSecurity.js). The server owns
+// the bounds and the lock-out guard; the form only states them.
+async function authSecuritySection() {
+  const cfg = await api('/api/settings/security');
+  const limits = cfg.limits || {};
+  const wrap = el('div');
+  wrap.append(el('h2', { class: 'auth-section-title' }, t('set.sec.title')),
+    el('p', { class: 'muted settings-intro' }, t('set.sec.intro')));
+
+  // Password rules.
+  const histI = el('input', { type: 'number', min: '0', max: String(limits.passwordHistoryMax ?? 24), step: '1', value: String(cfg.passwordHistory ?? 5), 'data-sec': 'passwordHistory' });
+  const ageI = el('input', { type: 'number', min: '0', max: String(limits.passwordMaxAgeMaxDays ?? 3650), step: '1', value: String(cfg.passwordMaxAgeDays ?? 0), 'data-sec': 'passwordMaxAgeDays' });
+  const pwErr = el('p', { class: 'error' });
+  const pwSave = el('button', { class: 'small', 'data-sec-save': 'password' }, t('set.sec.save'));
+  pwSave.addEventListener('click', async () => {
+    pwErr.textContent = ''; pwSave.disabled = true;
+    try {
+      await api('/api/settings/security', { method: 'PUT', body: { passwordHistory: Number(histI.value), passwordMaxAgeDays: Number(ageI.value) } });
+      toast(t('set.sec.saved'));
+    } catch (e) { pwErr.textContent = errText(e); }
+    finally { pwSave.disabled = false; }
+  });
+  const pwCard = el('div', { class: 'settings-card' }, el('h3', {}, t('set.sec.pw.title')),
+    el('div', { class: 'form-grid' },
+      alertField(t('set.sec.pw.history'), histI, t('set.sec.pw.historyHint', { max: limits.passwordHistoryMax ?? 24 })),
+      alertField(t('set.sec.pw.maxAge'), ageI, t('set.sec.pw.maxAgeHint')),
+      pwErr,
+      el('div', { class: 'form-actions' }, pwSave)));
+
+  // IP allowlist by role — one address/CIDR per line, an empty box = unrestricted.
+  const roles = ['admin', 'operator', 'viewer'];
+  const boxes = {};
+  const lists = cfg.ipAllowlist || {};
+  const ipErr = el('p', { class: 'error' });
+  const ipSave = el('button', { class: 'small', 'data-sec-save': 'allowlist' }, t('set.sec.save'));
+  const rows = roles.map((r) => {
+    boxes[r] = el('textarea', { rows: '4', spellcheck: 'false', 'data-sec-role': r, placeholder: t('set.sec.ip.placeholder') });
+    boxes[r].value = (lists[r] || []).join('\n');
+    return alertField(t(`set.sec.ip.role.${r}`), boxes[r], r === 'admin' ? t('set.sec.ip.adminHint') : null);
+  });
+  ipSave.addEventListener('click', async () => {
+    ipErr.textContent = ''; ipSave.disabled = true;
+    const body = { ipAllowlist: {} };
+    for (const r of roles) body.ipAllowlist[r] = boxes[r].value.split(/[\s,]+/).map((x) => x.trim()).filter(Boolean);
+    try {
+      const saved = await api('/api/settings/security', { method: 'PUT', body });
+      for (const r of roles) boxes[r].value = (saved.ipAllowlist[r] || []).join('\n');
+      toast(t('set.sec.saved'));
+    } catch (e) { ipErr.textContent = errText(e); }
+    finally { ipSave.disabled = false; }
+  });
+  const ipCard = el('div', { class: 'settings-card wide' }, el('h3', {}, t('set.sec.ip.title')),
+    el('p', { class: 'muted small' }, t('set.sec.ip.intro')),
+    el('p', { class: 'small', 'data-sec-yourip': '' }, t('set.sec.ip.yourIp', { ip: cfg.yourIp || '?' })),
+    el('div', { class: 'form-grid' }, ...rows, ipErr, el('div', { class: 'form-actions' }, ipSave)));
+
+  wrap.append(el('div', { class: 'settings-grid' }, pwCard, ipCard));
+  return wrap;
+}
+
+// ---- SSO (OIDC / SAML) --------------------------------------------------------
+// Backend: src/routes/oidc.js / saml.js (admin API at /api/oidc, /api/saml):
+// read-only connection status (the IdP connection itself is env-configured and
+// no secret is ever returned), the claim/attribute → role map CRUD, the SSO
+// login audit, and for OIDC a discovery test. Admin-only; the writes are
+// licence-gated (sso_oidc / sso_saml) server-side, so an unlicensed install
+// sees the status and an explanation rather than controls that would 403.
+const SSO_KINDS = {
+  oidc: {
+    key: 'oidc', base: '/api/oidc', flag: 'OIDC_AUTH_ENABLED', envPrefix: 'OIDC_*', test: true,
+    fields: [
+      ['issuer', 'set.sso.f.issuer'], ['clientId', 'set.sso.f.clientId'], ['redirectUri', 'set.sso.f.redirectUri'],
+      ['scopes', 'set.sso.f.scopes'], ['roleClaim', 'set.sso.f.roleClaim'], ['clientSecretSet', 'set.sso.f.clientSecret'],
+    ],
+  },
+  saml: {
+    key: 'saml', base: '/api/saml', flag: 'SAML_AUTH_ENABLED', envPrefix: 'SAML_*', test: false, metadata: '/auth/saml/metadata',
+    fields: [
+      ['entryPoint', 'set.sso.f.entryPoint'], ['idpEntityId', 'set.sso.f.idpEntityId'], ['spEntityId', 'set.sso.f.spEntityId'],
+      ['audience', 'set.sso.f.audience'], ['callbackUrl', 'set.sso.f.callbackUrl'], ['roleAttribute', 'set.sso.f.roleAttribute'],
+      ['idpCertSet', 'set.sso.f.idpCert'],
+    ],
+  },
+};
+
+async function ssoSection(kind) {
+  const [status, roleMap] = await Promise.all([
+    api(`${kind.base}/config`),
+    api(`${kind.base}/role-map`).catch(() => []),
+  ]);
+  const licensed = status.licensed !== false;
+  const wrap = el('div');
+  wrap.append(el('h2', { class: 'auth-section-title' }, t(`set.sso.${kind.key}.title`)),
+    el('p', { class: 'muted settings-intro' }, t(`set.sso.${kind.key}.intro`), ' ',
+      el('span', { class: `badge ${licensed ? 'active' : 'offline'}`, 'data-sso-licence': kind.key },
+        t(licensed ? 'set.sso.licensed' : 'set.sso.unlicensed'))));
+  const cards = [ssoStatusCard(kind, status)];
+  if (licensed) cards.push(ssoRoleMapCard(kind, Array.isArray(roleMap) ? roleMap : []));
+  cards.push(ssoAuditCard(kind));
+  wrap.append(el('div', { class: 'settings-grid' }, ...cards));
+  return wrap;
+}
+
+// Status: is it live, and if not, which of the three conditions is missing —
+// the server flag, the licence, or the env connection settings.
+function ssoStatusCard(kind, s) {
+  const yesNo = (v) => el('span', { class: `badge ${v ? 'ok' : 'warn'}` }, t(v ? 'set.sso.yes' : 'set.sso.no'));
+  const live = s.enabled === true;
+  const err = el('p', { class: 'error' });
+  const card = el('div', { class: 'settings-card', 'data-sso-status': kind.key },
+    el('h3', {}, t('set.sso.status.title'), ' ',
+      el('span', { class: `badge ${live ? 'ok' : 'warn'}`, 'data-sso-live': live ? 'yes' : 'no' }, t(live ? 'set.sso.live' : 'set.sso.notLive'))));
+  const tbl = el('table', { class: 'kv' }, el('tbody', {},
+    el('tr', {}, el('td', {}, t('set.sso.flag', { flag: kind.flag })), el('td', {}, yesNo(s.authEnabledFlag === true))),
+    el('tr', {}, el('td', {}, t('set.sso.licence')), el('td', {}, yesNo(s.licensed !== false))),
+    el('tr', {}, el('td', {}, t('set.sso.configured')), el('td', {}, yesNo(s.configured === true))),
+    ...kind.fields.map(([f, label]) => el('tr', {}, el('td', {}, t(label)),
+      el('td', {}, typeof s[f] === 'boolean' ? yesNo(s[f]) : (s[f] ? el('code', {}, String(s[f])) : el('span', { class: 'muted' }, '–')))))));
+  card.append(tbl, el('p', { class: 'muted small' }, t('set.sso.envHint', { prefix: kind.envPrefix })));
+  const actions = el('div', { class: 'form-actions' });
+  if (kind.metadata) {
+    actions.append(el('a', { href: kind.metadata, target: '_blank', rel: 'noopener', class: 'btn btn-ghost btn-xs' }, t('set.sso.metadata')));
+  }
+  if (kind.test && s.licensed !== false) {
+    const testBtn = el('button', { class: 'small ghost', 'data-sso-test': kind.key }, t('set.sso.test'));
+    testBtn.addEventListener('click', async () => {
+      err.textContent = ''; testBtn.disabled = true;
+      try {
+        const r = await api(`${kind.base}/test`, { method: 'POST' });
+        if (r.ok) toast(t('set.sso.testOk', { detail: r.detail || 'ok' }));
+        else err.textContent = t('set.sso.testFailed', { detail: r.detail || '?' });
+      } catch (e) { err.textContent = errText(e); }
+      finally { testBtn.disabled = false; }
+    });
+    actions.append(testBtn);
+  }
+  if (actions.childNodes.length) card.append(err, actions);
+  return card;
+}
+
+// Claim/attribute value → role. Same shape as the LDAP group map: a change
+// PUTs immediately, add/delete re-render the tab. No match = no access.
+function ssoRoleMapCard(kind, roleMap) {
+  const card = el('div', { class: 'settings-card wide', 'data-sso-rolemap': kind.key },
+    el('h3', {}, t(`set.sso.${kind.key}.mapTitle`)),
+    el('p', { class: 'muted small' }, t(`set.sso.${kind.key}.mapIntro`)));
+  const err = el('p', { class: 'error' });
+  const listEl = el('div', { class: 'tablewrap' });
+  if (!roleMap.length) {
+    listEl.append(el('div', { class: 'empty' }, t('set.sso.mapEmpty')));
+  } else {
+    listEl.append(el('table', {},
+      el('thead', {}, el('tr', {}, el('th', {}, t(`set.sso.${kind.key}.value`)), el('th', {}, t('set.sso.role')), el('th', {}))),
+      el('tbody', {}, ...roleMap.map((m) => {
+        const sel = roleSelect(m.blueeye_role);
+        sel.addEventListener('change', async () => {
+          err.textContent = '';
+          try { await api(`${kind.base}/role-map/${m.id}`, { method: 'PUT', body: { claimValue: m.claim_value, role: sel.value } }); m.blueeye_role = sel.value; toast(t('set.sso.mapUpdated')); }
+          catch (e) { sel.value = m.blueeye_role; err.textContent = errText(e); }
+        });
+        const del = el('button', { class: 'small ghost danger', 'data-sso-del': String(m.id), onclick: async () => {
+          err.textContent = '';
+          try { await api(`${kind.base}/role-map/${m.id}`, { method: 'DELETE' }); render(); }
+          catch (e) { err.textContent = errText(e); }
+        } }, t('set.sso.delete'));
+        return el('tr', {}, el('td', {}, el('code', {}, m.claim_value)), el('td', {}, sel), el('td', {}, del));
+      }))));
+  }
+  const valueI = el('input', { type: 'text', 'data-sso-new': kind.key, placeholder: t(`set.sso.${kind.key}.placeholder`) });
+  const roleI = roleSelect('viewer');
+  const addBtn = el('button', { class: 'small', 'data-sso-add': kind.key }, t('set.sso.add'));
+  addBtn.addEventListener('click', async () => {
+    err.textContent = '';
+    const claimValue = valueI.value.trim();
+    if (!claimValue) { err.textContent = t('set.sso.valueRequired'); return; }
+    addBtn.disabled = true;
+    try { await api(`${kind.base}/role-map`, { method: 'POST', body: { claimValue, role: roleI.value } }); render(); }
+    catch (e) { err.textContent = e.status === 409 ? t('set.sso.duplicate') : errText(e); addBtn.disabled = false; }
+  });
+  card.append(listEl, el('div', { class: 'ldap-add' },
+    el('label', { class: 'set-field' }, el('span', {}, t(`set.sso.${kind.key}.value`)), valueI),
+    el('label', { class: 'set-field' }, el('span', {}, t('set.sso.role')), roleI),
+    addBtn), err);
+  return card;
+}
+
+// Recent SSO sign-ins for this provider (read-only; the shared
+// sso_login_audit). A refused sign-in says why — including ip-not-allowed.
+function ssoAuditCard(kind) {
+  const card = el('div', { class: 'settings-card wide', 'data-sso-audit': kind.key });
+  const body = el('div', {}, el('p', { class: 'muted small' }, t('set.sso.loading')));
+  const refresh = el('button', { class: 'small ghost' }, t('set.sso.refresh'));
+  card.append(el('div', { class: 'section-head' }, el('h3', {}, t('set.sso.auditTitle')), el('span', { class: 'spacer' }), refresh), body);
+  async function load() {
+    body.replaceChildren(el('p', { class: 'muted small' }, t('set.sso.loading')));
+    let rows;
+    try { rows = await api(`${kind.base}/login-audit?limit=25`); }
+    catch (e) { body.replaceChildren(el('p', { class: 'error' }, errText(e))); return; }
+    if (!Array.isArray(rows) || !rows.length) { body.replaceChildren(el('div', { class: 'empty' }, t('set.sso.auditEmpty'))); return; }
+    const heads = ['set.sso.a.when', 'set.sso.a.subject', 'set.sso.a.result', 'set.sso.role', 'set.sso.a.groups', 'set.sso.a.ip'];
+    body.replaceChildren(el('div', { class: 'tablewrap' }, el('table', {},
+      el('thead', {}, el('tr', {}, ...heads.map((h) => el('th', {}, t(h))))),
+      el('tbody', {}, ...rows.map((r) => el('tr', {},
+        el('td', { class: 'muted' }, fmtDate(r.created_at)),
+        el('td', {}, r.subject || '–'),
+        el('td', {}, r.ok ? el('span', { class: 'badge ok' }, 'ok') : el('span', { class: 'badge bad' }, r.reason || 'failed')),
+        el('td', {}, r.granted_role || '–'),
+        el('td', { class: 'muted' }, String(r.groups_matched ?? 0)),
+        el('td', { class: 'muted' }, r.source_ip || '–')))))));
+  }
+  refresh.addEventListener('click', load);
+  load();
+  return card;
+}
+
 // Maintenance windows: during an active window, alert notifications are
 // suppressed (findings are still recorded + shown). Global, per-location or
 // per-agent. Admin only.
@@ -14438,7 +15603,7 @@ async function editSeverityRule(r, prefill) {
   ];
 
   const modalFields = fields;
-  openModal(editing ? t('sev.editTitle') : t('sev.newTitle'), fields, async (vals) => {
+  const ruleBody = (vals) => {
     const body = {
       source: editing ? r.source : vals.source,
       severity: vals.severity,
@@ -14447,7 +15612,11 @@ async function editSeverityRule(r, prefill) {
     };
     // A blank box means "any", which the API spells as null. Sending '' would
     // be a rule that matches the empty string and therefore nothing.
-    for (const f of scopeFields) body[f.name] = vals[f.name].trim() || null;
+    for (const f of scopeFields) body[f.name] = (vals[f.name] || '').trim() || null;
+    return body;
+  };
+  openModal(editing ? t('sev.editTitle') : t('sev.newTitle'), fields, async (vals) => {
+    const body = ruleBody(vals);
     await api(editing ? `/api/severity-rules/${r.id}` : '/api/severity-rules', {
       method: editing ? 'PUT' : 'POST', body,
     });
@@ -14455,6 +15624,36 @@ async function editSeverityRule(r, prefill) {
     toast(t('sev.saved'));
     render();
   });
+
+  // Preview before Save: how many OPEN events this draft would change right
+  // now (POST /api/severity-rules/preview, scope 'open' — a dry run, nothing is
+  // written). A rule that matches nothing is a typo in a match field far more
+  // often than it is a rule for the future, and this is where that shows.
+  {
+    const card = $('#modal-card');
+    const form = card.querySelector('form');
+    const nodes = [...card.querySelectorAll('form input, form select, form textarea')];
+    const result = el('span', { class: 'muted small', role: 'status' });
+    const previewBtn = el('button', {
+      type: 'button', class: 'ghost small',
+      onclick: async () => {
+        const vals = {};
+        modalFields.forEach((f, i) => { if (nodes[i]) vals[f.name] = nodes[i].value; });
+        result.className = 'muted small';
+        result.textContent = t('sev.previewing');
+        try {
+          const p = await api('/api/severity-rules/preview', { method: 'POST', body: { rule: ruleBody(vals), scope: 'open' } });
+          result.textContent = p.changed
+            ? t('sev.previewResult', { count: p.changed, severity: p.severity })
+            : t('sev.previewNone', { severity: p.severity });
+        } catch (err) {
+          result.className = 'error small';
+          result.textContent = errText(err);
+        }
+      },
+    }, t('sev.preview'));
+    if (form) form.insertBefore(el('div', {}, previewBtn, ' ', result), form.querySelector('p.error'));
+  }
 
   // Switching the source rebuilds the form, because the fields below it BELONG
   // to the source: a Service Assurance rule has no agent, and a finding has no
@@ -14498,6 +15697,28 @@ async function deleteSeverityRule(r) {
   if (!confirm(t('sev.deleteConfirm'))) return;
   try { await api(`/api/severity-rules/${r.id}`, { method: 'DELETE' }); toast(t('sev.deleted')); render(); }
   catch (err) { toast(errText(err), true); }
+}
+
+// ---- Settings → Outage thresholds (built from ui.* — see public/thresholdsPanel.js)
+// The probe-outage thresholds (GET/PUT/DELETE /api/thresholds[/:location_id]).
+// An outage opens only for a metric that has one, so this is where "why did no
+// outage open" is answered.
+const thresholdsPanelState = {};
+function settingsThresholdsView() {
+  if (typeof window === 'undefined' || !window.ThresholdsPanel || !ui) return el('div', { class: 'empty error' }, t('thr.err.title'));
+  const scoped = (scope) => (scope === 'global' ? '/api/thresholds' : `/api/thresholds/${encodeURIComponent(scope)}`);
+  return window.ThresholdsPanel.create({
+    el, t, ui, errText,
+    state: thresholdsPanelState,
+    canEdit: isAdmin,
+    confirm: (msg) => confirm(msg),
+    toast: (msg, bad) => toast(msg, bad),
+    fetchLocations: () => api('/locations'),
+    fetchGlobal: () => api('/api/thresholds'),
+    fetchLocation: (id) => api(scoped(id)),
+    save: (scope, body) => api(scoped(scope), { method: 'PUT', body }),
+    remove: (scope, metric) => api(`${scoped(scope)}?metric=${encodeURIComponent(metric)}`, { method: 'DELETE' }),
+  }).view();
 }
 
 async function settingsRunbooksView() {
@@ -15059,6 +16280,27 @@ function geoipSettingsCard(geoip) {
   const updateBtn = el('button', { class: 'small' }, 'Update now (download latest)');
   const autoChk = el('input', { type: 'checkbox' });
   if (geoip && geoip.autoUpdate) autoChk.checked = true;
+  // City-level table: the traceroute map's fallback when a router's name does
+  // not say where it is (docs/geo.md). Built by "Update now" unless unticked.
+  const city0 = (geoip && geoip.city) || {};
+  const cityPath = el('input', { type: 'text', value: city0.dbPath || '', placeholder: '/data/geoip-city.csv' });
+  const cityStatus = el('p', { class: 'muted small' });
+  const cityBtn = el('button', { class: 'small' }, t('geoip.city.save'));
+  const cityChk = el('input', { type: 'checkbox' });
+  cityChk.checked = city0.include !== false;
+
+  function renderCity(c) {
+    const x = c || {};
+    const line = x.loading ? t('geoip.city.loading')
+      : x.configured ? t('geoip.city.loaded', { ranges: x.ranges })
+        : t('geoip.city.none');
+    const b = x.lastBuild;
+    cityStatus.replaceChildren(
+      el('span', x.configured ? { style: 'color:var(--ok);font-weight:600' } : { class: 'muted' }, line),
+      x.error ? el('span', { class: 'warn-text' }, ` · ${x.error}`) : null,
+      b ? el('span', { class: 'muted' }, ` · ${t('geoip.city.lastBuild', { month: b.month || '?', ranges: b.ranges })}`) : null);
+    if (typeof x.dbPath === 'string' && x.dbPath !== cityPath.value) cityPath.value = x.dbPath;
+  }
 
   function renderStatus(s) {
     const ok = s && s.configured;
@@ -15070,6 +16312,7 @@ function geoipSettingsCard(geoip) {
     const b = s && s.lastBuild;
     built.textContent = b ? `Last downloaded: ${b.month || '?'} · ${b.ranges} ranges · ${fmtDate(b.builtAt)}` : '';
     if (s && typeof s.dbPath === 'string' && s.dbPath !== path.value) path.value = s.dbPath;
+    renderCity(s && s.city);
   }
   renderStatus(geoip);
 
@@ -15092,7 +16335,11 @@ function geoipSettingsCard(geoip) {
       const { update: u } = await api('/api/settings/geoip/update');
       if (u.state === 'running') return; // keep polling
       clearInterval(polling); polling = null; setUpdating(false);
-      if (u.state === 'ok') { await refreshGeoip(); toast(`GeoIP updated to ${u.month} — ${u.ranges} ranges`); }
+      if (u.state === 'ok') {
+        await refreshGeoip();
+        toast(`GeoIP updated to ${u.month} — ${u.ranges} ranges`);
+        if (u.cityError) err.textContent = t('geoip.city.failed', { error: u.cityError });
+      }
       else if (u.state === 'error') { err.textContent = `Update failed: ${u.error || 'unknown error'}`; toast('GeoIP update failed', true); }
     } catch (e2) { clearInterval(polling); polling = null; setUpdating(false); err.textContent = errText(e2); }
   }
@@ -15108,9 +16355,28 @@ function geoipSettingsCard(geoip) {
     catch (e2) { autoChk.checked = !autoChk.checked; toast(errText(e2), true); }
   }
 
+  async function saveCity() {
+    err.textContent = ''; cityBtn.disabled = true;
+    try {
+      const res = await api('/api/settings/geoip', { method: 'PUT', body: { cityDbPath: cityPath.value.trim() } });
+      renderStatus(res.geoip);
+      toast(t('geoip.city.saved'));
+      // The table streams in on the server; look again once it has had a moment.
+      setTimeout(refreshGeoip, 4000);
+    } catch (e2) { err.textContent = errText(e2); } finally { cityBtn.disabled = false; }
+  }
+  async function toggleCity() {
+    try {
+      await api('/api/settings/geoip', { method: 'PUT', body: { includeCity: cityChk.checked } });
+      toast(cityChk.checked ? t('geoip.city.includeOn') : t('geoip.city.includeOff'));
+    } catch (e2) { cityChk.checked = !cityChk.checked; toast(errText(e2), true); }
+  }
+
   btn.addEventListener('click', save);
   updateBtn.addEventListener('click', updateNow);
   autoChk.addEventListener('change', toggleAuto);
+  cityBtn.addEventListener('click', saveCity);
+  cityChk.addEventListener('change', toggleCity);
 
   return el('div', { class: 'settings-card' }, el('h3', {}, 'GeoIP database (country + ASN)'),
     el('p', { class: 'muted small' }, 'Offline, EU-sourced IP→country/ASN range CSV used to place external destinations and traceroute hops on the maps. Without it the maps show only your sites. ', el('strong', {}, '“Update now”'), ' downloads the latest DB-IP Lite release (db-ip.com, CC-BY) and builds it on the server — no host file needed. Or point the path at a file you built with scripts/build-geoip.js. Reloads live, no restart. See docs/geo.md.'),
@@ -15118,7 +16384,14 @@ function geoipSettingsCard(geoip) {
       el('label', {}, 'GeoIP CSV path (server-side file)', path),
       status, built, err,
       el('label', { class: 'inline' }, autoChk, ' Auto-update monthly (the server fetches a fresh DB-IP release; needs outbound internet)'),
-      el('div', { class: 'form-actions' }, btn, updateBtn)));
+      el('div', { class: 'form-actions' }, btn, updateBtn)),
+    el('h4', {}, t('geoip.city.title')),
+    el('p', { class: 'muted small' }, t('geoip.city.blurb')),
+    el('div', { class: 'form-grid' },
+      el('label', {}, t('geoip.city.path'), cityPath),
+      cityStatus,
+      el('label', { class: 'inline' }, cityChk, ' ', t('geoip.city.include')),
+      el('div', { class: 'form-actions' }, cityBtn)));
 }
 
 // ---- Users (MIGRATED — see public/views/users.js)
@@ -15514,9 +16787,34 @@ function reportingSections() {
   // Analysis screen deliberately stopped answering when it became an overview
   // of what is wrong NOW.
   // Audit is RBAC-gated: only admins may see who did what on the server.
+  // `sla` — the availability and probe-outage reports, run on demand — sits
+  // next to findings: both answer "how did it go over this period".
   return role === 'admin'
-    ? ['findings', 'nis2', 'generator', 'schedules', 'audit']
-    : ['findings', 'nis2', 'generator', 'schedules'];
+    ? ['findings', 'sla', 'nis2', 'generator', 'schedules', 'audit']
+    : ['findings', 'sla', 'nis2', 'generator', 'schedules'];
+}
+
+// ---- Reporting → Availability & outages (built from ui.* — see public/slaReports.js)
+const slaReportsState = {};
+function slaReportsSection() {
+  if (typeof window === 'undefined' || !window.SlaReports || !ui) return el('div', { class: 'empty error' }, t('sla.err'));
+  return window.SlaReports.create({
+    el, t, ui, errText,
+    state: slaReportsState,
+    canWrite,
+    toast: (msg, bad) => toast(msg, bad),
+    fetch: (path) => api(path),
+    fetchLocations: () => api('/locations'),
+    download: (path, filename) => nis2Download(path, filename),
+    print: (path) => nis2Print(path),
+    fetchDraft: (id) => api(`/api/reports/nis2-draft/${encodeURIComponent(id)}`),
+    investigate: (id) => api('/api/investigation/from-event', { method: 'POST', body: { eventId: id } }),
+    card: (inv) => investigationCard(inv),
+    copy: (text) => copyText(text),
+    openAgent: (id) => { ui.closeOverlays(); openAgent(id); },
+    openTroubleshooting: () => { ui.closeOverlays(); gotoView('investigation'); },
+    openSchedules: () => { reportingState.section = 'schedules'; syncLocation(); render(); },
+  }).view();
 }
 
 // ---- Reporting → Findings over time ----------------------------------------
@@ -15660,6 +16958,7 @@ function getReportingPage() {
       return { lead: info.hero || '', title: info.title || t('rep.title'), body: info.body || (() => []) };
     },
     render: (key) => (key === 'findings' ? findingsReport()
+      : key === 'sla' ? slaReportsSection()
       : key === 'generator' ? reportGenerator()
         : key === 'schedules' ? reportSchedulesPanel()
           : key === 'audit' ? auditModule()
@@ -15860,6 +17159,7 @@ async function nis2Risks() {
     el('td', {}, nbadge(r.status, 'neutral')),
     el('td', {}, r.dueDate || '–'),
     el('td', {}, el('div', { class: 'row-actions' },
+      el('button', { class: 'small ghost', onclick: () => nis2OpenEvidence('risk', r.id, r.title) }, t('nis2ev.button')),
       canWrite() ? el('button', { class: 'small ghost', onclick: () => nis2EditRisk(r) }, 'Edit') : null,
       canWrite() ? el('button', { class: 'small ghost', onclick: () => nis2DeleteRisk(r) }, 'Delete') : null))));
   wrap.append(el('div', { class: 'tablewrap' }, el('table', {},
@@ -15933,11 +17233,26 @@ async function nis2Controls() {
     el('td', {}, c.hasEvidence ? nbadge('yes', 'ok') : nbadge('none', 'crit')),
     el('td', {}, nbadge(c.status, NIS2_CTRL_CLASS[c.status])),
     el('td', {}, el('div', { class: 'row-actions' },
+      el('button', { class: 'small ghost', onclick: () => nis2OpenEvidence('control', c.id, c.controlName) }, t('nis2ev.button')),
       canWrite() ? el('button', { class: 'small ghost', onclick: () => nis2EditControl(c) }, 'Edit') : null,
       canWrite() ? el('button', { class: 'small ghost', onclick: () => nis2DeleteControl(c) }, 'Delete') : null))));
   wrap.append(el('div', { class: 'tablewrap' }, el('table', {},
     el('thead', {}, el('tr', {}, ...head.map((h) => el('th', {}, h)))), el('tbody', {}, ...rows))));
   return wrap;
+}
+// Evidence references on a control / risk / incident (GET/POST/DELETE
+// /api/nis2/evidence) — a Drawer built from ui.* (public/nis2Evidence.js).
+// Readers see what is attached; operators attach and remove.
+function nis2OpenEvidence(entityType, entityId, label) {
+  if (typeof window === 'undefined' || !window.Nis2Evidence || !ui) return;
+  window.Nis2Evidence.create({
+    el, t, ui, errText, canWrite,
+    confirm: (msg) => confirm(msg),
+    toast: (msg, bad) => toast(msg, bad),
+    list: (type, id) => api(`/api/nis2/evidence?entityType=${encodeURIComponent(type)}&entityId=${encodeURIComponent(id)}`),
+    create: (body) => api('/api/nis2/evidence', { method: 'POST', body }),
+    remove: (id) => api(`/api/nis2/evidence/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  }).open(entityType, entityId, label);
 }
 function nis2EditControl(c) {
   const editing = c && c.id;
@@ -16052,6 +17367,7 @@ async function nis2Incidents() {
     el('td', {}, i.notificationRequired ? nbadge('required', 'crit') : '–'),
     el('td', {}, nis2DeadlineCell(i.deadlines)),
     el('td', {}, el('div', { class: 'row-actions' },
+      el('button', { class: 'small ghost', onclick: () => nis2OpenEvidence('incident', i.id, i.title) }, t('nis2ev.button')),
       canWrite() ? el('button', { class: 'small ghost', onclick: () => nis2EditIncident(i) }, 'Edit') : null,
       canWrite() ? el('button', { class: 'small ghost', onclick: () => nis2DeleteIncident(i) }, 'Delete') : null))));
   wrap.append(el('div', { class: 'tablewrap' }, el('table', {},
@@ -16169,6 +17485,9 @@ async function auditModule() {
   const wrap = el('div', { class: 'nis2-inner' });
   wrap.append(el('h3', { class: 'nis2-h3' }, 'Audit trail'));
   wrap.append(el('p', { class: 'muted' }, 'Actions performed by users on the server, and what each agent reported — with when, who and what. Repeated activity (continuous reporting, scheduled probes) is recorded once and annotated with how often it repeats.'));
+  // The separate, hash-chained security log, and the one thing it is for:
+  // proving nobody rewrote it (Administration → Audit log integrity).
+  wrap.append(el('p', {}, el('button', { class: 'linklike', onclick: () => gotoView('auditLog') }, t('auditlog.fromTrail'))));
 
   // Filters: actor type + action, plus refresh / CSV export.
   const actorSel = el('select', { class: 'small', onchange: () => { auditState.actorType = actorSel.value; load(); } },
@@ -16484,16 +17803,19 @@ PAGE_INFO.transactions = {
 };
 
 // ---- Transaction tests ------------------------------------------------------
-// Phase → diagnosis. MUST match src/analysis/transactionAlerts.js so the
-// UI diagnosis and the server alert text read identically.
-const TX_PHASE_LABELS = {
-  dns: 'DNS lookup failed — the hostname could not be resolved',
-  connect: 'TCP connection failed — network, firewall, or host down',
-  tls: 'TLS handshake failed — certificate or protocol problem',
-  http_status: 'Unexpected HTTP status code',
-  keyword: 'Response was missing the expected content',
-  timeout: 'The step timed out',
-  error: 'The test could not be run',
+// Phase → diagnosis, through the catalogue (tx.phase.*). The English strings
+// MUST match PHASE_LABELS in src/analysis/transactionAlerts.js so the UI
+// diagnosis and the server alert text read identically —
+// test/txPhaseLabels.test.js pins it. Spelled out per key rather than built
+// from the phase, because the UI gate sweeps literal t() keys.
+const TX_PHASE_KEYS = {
+  dns: () => t('tx.phase.dns'),
+  connect: () => t('tx.phase.connect'),
+  tls: () => t('tx.phase.tls'),
+  http_status: () => t('tx.phase.http_status'),
+  keyword: () => t('tx.phase.keyword'),
+  timeout: () => t('tx.phase.timeout'),
+  error: () => t('tx.phase.error'),
 };
 const TX_TYPES = ['http', 'tcp', 'dns', 'icmp'];
 const TX_DNS_RECORDS = ['A', 'AAAA', 'CNAME', 'MX', 'TXT', 'NS', 'SOA', 'PTR', 'SRV'];
@@ -16503,8 +17825,10 @@ const TX_STATUS_COLOR = { ok: '#2e7d32', fail: '#c62828', timeout: '#e65100', er
 function txDiagnose(detail, status) {
   const d = detail && typeof detail === 'object' ? detail : {};
   if (status === 'ok') return 'OK';
-  const base = TX_PHASE_LABELS[d.phase] || `Failed (${status || 'unknown'})`;
-  const step = d.step != null ? ` (step ${d.step})` : '';
+  const base = Object.prototype.hasOwnProperty.call(TX_PHASE_KEYS, d.phase)
+    ? TX_PHASE_KEYS[d.phase]()
+    : t('tx.phase.failed', { status: status || t('tx.phase.unknown') });
+  const step = d.step != null ? ` ${t('tx.phase.step', { step: d.step })}` : '';
   const errno = d.errno ? ` [${d.errno}]` : '';
   return `${base}${step}${errno}`;
 }
@@ -16989,7 +18313,7 @@ async function txDetailView(id, host) {
       const { results } = await api(`/api/transactions/${id}/results`);
       const recent = results.slice(0, 15);
       resHost.replaceChildren(recent.length ? el('table', { class: 'data-table' },
-        el('thead', {}, el('tr', {}, ...['Time', 'Agent', 'Status', 'Latency', t('tx.phase.where'), 'Diagnosis'].map((h) => el('th', {}, h)))),
+        el('thead', {}, el('tr', {}, ...['Time', 'Agent', 'Status', 'Latency', t('tx.timing.where'), 'Diagnosis'].map((h) => el('th', {}, h)))),
         el('tbody', {}, ...recent.map((r) => el('tr', {},
           el('td', {}, new Date(r.time).toLocaleString('en-GB'),
             r.has_capture ? el('span', { class: 'muted', title: t('tx.capture.has') }, ' \u25cf') : null),
@@ -17060,7 +18384,7 @@ const TX_PHASES = [
 // opinion about the same numbers.
 function txPhaseCell(result) {
   const v = result && result.phase_verdict;
-  if (!v || !v.split) return el('span', { class: 'muted', title: t('tx.phase.none') }, '—');
+  if (!v || !v.split) return el('span', { class: 'muted', title: t('tx.timing.none') }, '—');
   const label = t(`tx.verdict.${v.verdict}`) || v.verdict;
   return el('div', { class: 'tx-phase-cell', title: v.explanation || '' },
     el('span', { class: 'chip' }, label),
@@ -17081,7 +18405,7 @@ function txPhaseBar(stepPhases, stepIndex) {
     const ms = p[key];
     if (!Number.isFinite(ms) || ms <= 0) continue;
     const seg = el('div', { style: `width:${(ms / total) * 100}%;background:${colour}` });
-    seg.title = `${t(`tx.phase.${key}`)}: ${ms} ms`;
+    seg.title = `${t(`tx.timing.${key}`)}: ${ms} ms`;
     bar.append(seg);
   }
   return bar;
@@ -17104,10 +18428,10 @@ function txRunResult(out, agents) {
     const totals = out.totals || {};
     wrap.append(el('div', { class: 'muted small' }, TX_PHASES
       .filter(([key]) => Number.isFinite(totals[key]))
-      .map(([key]) => `${t(`tx.phase.${key}`)} ${totals[key]} ms`)
-      .join(' · ') || t('tx.phase.none')));
+      .map(([key]) => `${t(`tx.timing.${key}`)} ${totals[key]} ms`)
+      .join(' · ') || t('tx.timing.none')));
   } else {
-    wrap.append(el('div', { class: 'muted small' }, t('tx.phase.none')));
+    wrap.append(el('div', { class: 'muted small' }, t('tx.timing.none')));
   }
   return wrap;
 }
@@ -17337,11 +18661,160 @@ function syncLocation() {
   if (!Routes || !Routes.VIEWS[currentView]) return;
   try {
     const target = Routes.pathFor(currentView, { tab: routeTabFor(currentView), id: routeIdFor(currentView) });
-    if (Routes.normalise(window.location.pathname) === target) return;
-    const url = target + (window.location.search || '') + (window.location.hash || '');
+    const search = pendingSearch != null ? pendingSearch : null;
+    pendingSearch = null;
+    if (Routes.normalise(window.location.pathname) === target) {
+      if (search != null) window.history.replaceState(null, '', target + search + (window.location.hash || ''));
+      return;
+    }
+    const url = target + (search != null ? search : searchForNextView(currentView)) + (window.location.hash || '');
     if (routerReplacing) window.history.replaceState(null, '', url);
     else window.history.pushState(null, '', url);
   } catch { /* URL/History API off — the app still works, the address does not follow */ }
+}
+
+// ---- Fault context: agent, target and window, carried between screens ------
+// A technician chasing one fault used to pick the same agent three times: on
+// Probes, on Diagnose and on Investigate, with nothing filled in from the event
+// or situation they came from. openInContext() hands the context over — the
+// screen opens with the agent, the target and a matching window already chosen
+// — and puts it in the address (?agent=12&target=10.0.0.1&window=60), so the
+// link can be sent to a colleague and opens on the same thing.
+const CONTEXT_KEYS = ['agent', 'target', 'window'];
+const CONTEXT_VIEWS = new Set(['diagnose', 'investigation', 'deviceLog', 'probes', 'troubleshooting']);
+// Owned by the path chart on ONE record (an event, a probe row). Carried to
+// the next screen they replaced that screen's own window with a stale one.
+const EPHEMERAL_KEYS = ['from', 'to', 'metric', 'overlay'];
+let pendingSearch = null;
+
+// The query string to keep when the path changes: filters that are shared
+// across screens stay, the context only where a screen reads it, and the
+// per-record chart window never.
+function searchForNextView(view) {
+  try {
+    const q = new URLSearchParams(window.location.search || '');
+    for (const k of EPHEMERAL_KEYS) q.delete(k);
+    if (!CONTEXT_VIEWS.has(view)) for (const k of CONTEXT_KEYS) q.delete(k);
+    const qs = q.toString();
+    return qs ? `?${qs}` : '';
+  } catch { return window.location.search || ''; }
+}
+
+function contextFromUrl() {
+  try {
+    const q = new URLSearchParams(window.location.search || '');
+    const agent = Number.parseInt(q.get('agent') || '', 10);
+    const win = Number.parseInt(q.get('window') || '', 10);
+    return {
+      agentId: Number.isInteger(agent) && agent > 0 ? agent : null,
+      target: (q.get('target') || '').trim().slice(0, 255) || null,
+      windowMin: Number.isInteger(win) && win > 0 ? win : null,
+    };
+  } catch { return { agentId: null, target: null, windowMin: null }; }
+}
+
+// Mirror a screen's current choice into the address without a history step.
+function writeContextParams(ctx) {
+  try {
+    const q = new URLSearchParams(window.location.search || '');
+    const set = (k, v) => { if (v == null || v === '') q.delete(k); else q.set(k, String(v)); };
+    if ('agentId' in ctx) set('agent', ctx.agentId);
+    if ('target' in ctx) set('target', ctx.target);
+    if ('windowMin' in ctx) set('window', ctx.windowMin);
+    const qs = q.toString();
+    window.history.replaceState(null, '', window.location.pathname + (qs ? `?${qs}` : '') + (window.location.hash || ''));
+  } catch { /* URL API off — the hand-off still works, the address does not follow */ }
+}
+
+// The smallest offered window that still covers `minutes`; the largest when
+// none does.
+function windowCovering(minutes, offered) {
+  const list = offered.map(Number).sort((a, b) => a - b);
+  if (!(minutes > 0)) return null;
+  return list.find((w) => w >= minutes) || list[list.length - 1];
+}
+
+// Minutes from `sinceMs` until now, with a quarter added in front so the
+// minutes BEFORE the fault are in view too — the baseline is half the story.
+function windowSince(sinceMs) {
+  const ms = Number(sinceMs);
+  if (!Number.isFinite(ms)) return null;
+  const minutes = Math.max(1, (Date.now() - ms) / 60000);
+  return Math.ceil(minutes * 1.25) + 5;
+}
+
+function applyContext(view, ctx) {
+  const { agentId = null, target = null, windowMin = null } = ctx || {};
+  switch (view) {
+    case 'diagnose':
+      if (!diagnoseState) diagnoseState = {};
+      if (agentId != null) diagnoseState.agentId = agentId;
+      if (target) diagnoseState.target = target;
+      break;
+    case 'investigation':
+      if (agentId != null) { investigateState.type = 'agent'; investigateState.value = String(agentId); }
+      if (windowMin) investigateState.window = String(windowCovering(windowMin, [15, 30, 60, 240, 1440]));
+      break;
+    case 'deviceLog':
+      if (!deviceLogState) deviceLogState = {};
+      deviceLogState.agentId = agentId;
+      if (windowMin) deviceLogState.minutes = windowCovering(windowMin, [15, 60, 120, 480, 1440, 4320, 10080]);
+      break;
+    case 'probes':
+      probesTab = 'run';
+      probeRunContext = { agentId, target };
+      break;
+    case 'troubleshooting':
+      if (windowMin) troubleshootingState.window = String(windowCovering(windowMin, [60, 360, 1440, 10080]));
+      troubleshootingState.brush = null;
+      break;
+    default:
+      break;
+  }
+}
+
+function openInContext(view, ctx = {}) {
+  applyContext(view, ctx);
+  // A result for another target is not an answer to this one.
+  if (view === 'investigation') investigateState.lastResult = null;
+  const q = new URLSearchParams();
+  if (ctx.agentId != null) q.set('agent', String(ctx.agentId));
+  if (ctx.target) q.set('target', String(ctx.target));
+  if (ctx.windowMin) q.set('window', String(Math.round(ctx.windowMin)));
+  pendingSearch = q.toString() ? `?${q}` : '';
+  if (typeof closeDrawer === 'function') closeDrawer();
+  currentView = view;
+  render();
+}
+
+// A deep link (or a reload) on one of the context screens: the address is the
+// source of truth for what it opens on.
+function applyContextFromUrl(view) {
+  const ctx = contextFromUrl();
+  if (ctx.agentId == null && !ctx.target && !ctx.windowMin) return;
+  applyContext(view, ctx);
+}
+
+// The row of hand-off buttons a record shows: the same fault, opened on each
+// screen that can take it further. `ctx` is { agentId, target, sinceMs }.
+function contextActions(ctx, { exclude = [] } = {}) {
+  const c = {
+    agentId: ctx.agentId != null && Number(ctx.agentId) > 0 ? Number(ctx.agentId) : null,
+    target: ctx.target || null,
+    windowMin: ctx.windowMin || windowSince(ctx.sinceMs),
+  };
+  if (c.agentId == null && !c.target) return null;
+  const can = (v) => !exclude.includes(v) && viewAllowed(v);
+  const items = [
+    can('probes') && c.agentId != null ? ['probes', 'ctx.probe'] : null,
+    can('diagnose') ? ['diagnose', 'ctx.diagnose'] : null,
+    can('investigation') && c.agentId != null ? ['investigation', 'ctx.investigate'] : null,
+    can('deviceLog') && c.agentId != null ? ['deviceLog', 'ctx.deviceLog'] : null,
+  ].filter(Boolean);
+  if (!items.length) return null;
+  return el('div', { class: 'ui ctx-actions', role: 'group', 'aria-label': t('ctx.label') },
+    el('span', { class: 'meta-xs' }, t('ctx.label')),
+    ...items.map(([view, key]) => ui.button('secondary', t(key), { size: 'xs', onclick: () => openInContext(view, c) })));
 }
 
 // Section / page / sub-page, rebuilt from the route on every render. The labels
@@ -17562,6 +19035,13 @@ async function render({ silent = false } = {}) {
     $('#login').classList.add('hidden');
     $('#app').classList.add('hidden');
     $('#force-change').classList.remove('hidden');
+    // The same screen serves a one-time password and an expired one; only the
+    // wording differs. The data-i18n keys move too, so a language switch keeps it.
+    const lead = $('#force-change-form p.meta');
+    const curLabel = $('label[for="fc-current"]');
+    const keys = passwordExpired ? ['auth.fc.expiredLead', 'auth.fc.currentPlain'] : ['auth.fc.lead', 'auth.fc.current'];
+    if (lead) { lead.setAttribute('data-i18n', keys[0]); lead.textContent = t(keys[0]); }
+    if (curLabel) { curLabel.setAttribute('data-i18n', keys[1]); curLabel.textContent = t(keys[1]); }
     const cur = $('#fc-current');
     if (cur && document.activeElement !== cur) cur.focus();
     return;
@@ -17678,13 +19158,39 @@ function noteRefreshFailure(err) {
 }
 
 // ---- Auto-refresh ---------------------------------------------------------
+// A silent refresh rebuilds the whole screen. That is right for a list that is
+// only being watched and wrong for one somebody is working in: it wiped a
+// half-typed Diagnose description, dropped an Investigate result, reset filters
+// and closed every drawer, every five seconds. So a tick is skipped while
+//   * the screen is a form or an on-demand result (nothing there to refresh),
+//   * a drawer, popover or row menu is open,
+//   * focus is in a field on the screen, or
+//   * text on the screen is selected (somebody is copying an address).
+const NO_AUTOREFRESH_VIEWS = new Set([
+  'diagnose', 'investigation', 'guide', 'docs', 'settings', 'about', 'enrollment',
+  'reporting', 'discovery', 'users', 'kitchenSink',
+]);
+function autoRefreshShouldWait() {
+  if (NO_AUTOREFRESH_VIEWS.has(currentView)) return true;
+  if (ui && typeof ui.overlayOpen === 'function' && ui.overlayOpen()) return true;
+  if (drawerEls) return true; // the help drawer
+  const view = document.getElementById('view');
+  const active = document.activeElement;
+  if (view && active && view.contains(active)) {
+    const tag = (active.tagName || '').toLowerCase();
+    if (tag === 'input' || tag === 'textarea' || tag === 'select' || active.isContentEditable) return true;
+  }
+  const sel = typeof window.getSelection === 'function' ? window.getSelection() : null;
+  if (view && sel && !sel.isCollapsed && sel.anchorNode && view.contains(sel.anchorNode)) return true;
+  return false;
+}
 let autoTimer = null;
 function setAutoRefresh(on) {
   if (autoTimer) { clearInterval(autoTimer); autoTimer = null; }
   if (on) {
     autoTimer = setInterval(() => {
       // Don't disrupt an open editing modal; refresh quietly otherwise.
-      if (token && !modalOpen()) render({ silent: true });
+      if (token && !modalOpen() && !autoRefreshShouldWait()) render({ silent: true });
     }, 5000);
   }
 }
@@ -17694,7 +19200,7 @@ $('#login-form').addEventListener('submit', async (e) => {
   e.preventDefault();
   $('#login-error').textContent = '';
   try { await login($('#email').value, $('#password').value); render(); }
-  catch (err) { $('#login-error').textContent = err.message; }
+  catch (err) { $('#login-error').textContent = errText(err); }
 });
 
 // Forced password change (first login with a one-time password). Posts the
@@ -17711,6 +19217,7 @@ $('#force-change-form').addEventListener('submit', async (e) => {
   if (newPassword !== confirm) { errEl.textContent = t('auth.fc.mismatch'); return; }
   try {
     const data = await api('/auth/change-password', { method: 'POST', body: { currentPassword, newPassword } });
+    passwordExpired = false;
     token = data.token;
     role = data.user.role;
     email = data.user.email;
@@ -17732,7 +19239,7 @@ $('#fc-logout').addEventListener('click', () => logout());
 async function renderSsoOptions() {
   const host = $('#sso-options');
   if (!host) return;
-  if (ssoLoginError) $('#login-error').textContent = t('auth.sso.failed', { message: ssoLoginError });
+  if (ssoLoginError) $('#login-error').textContent = ssoLoginError === 'ip-not-allowed' ? t('auth.ipDenied') : t('auth.sso.failed', { message: ssoLoginError });
   let sso = null;
   try { sso = await (await fetch('/auth/sso')).json(); } catch { sso = null; }
   const methods = [];
@@ -17959,6 +19466,12 @@ const RS_SEVERITIES = ['info', 'warning', 'critical'];
 async function reportSchedulesPanel() {
   const wrap = el('div', { class: 'rs' });
   wrap.append(el('p', { class: 'muted nis2-note' }, t('rs.lead')));
+  // The same two reports, for any period, on screen — and the place to check
+  // what a schedule will send before it sends it.
+  wrap.append(el('p', {}, el('button', {
+    class: 'linklike',
+    onclick: () => { reportingState.section = 'sla'; syncLocation(); render(); },
+  }, t('rs.runNow'))));
 
   const [schedules, locations] = await Promise.all([
     api('/api/report-schedules'),

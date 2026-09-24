@@ -15,10 +15,16 @@ const { SEVERITY_NAMES, EVENT_TYPE_GROUPS, describeEventType } = require('../dev
 // technician who can see that a link went down should not need operator rights
 // to read the line where the switch says so.
 //
-// The route OWNS NO ANALYSIS. It reads `device_events` and attaches the two
-// things the row cannot carry itself: the human name of the device it resolved
-// to, and the catalogue entry that explains what the event_type means.
-function createDeviceEventsRouter({ deviceEventsRepo, agentsRepo, logger = null }) {
+// The route OWNS NO ANALYSIS. It reads `device_events` and attaches the things
+// the row cannot carry itself: the human names of the agent and the polled
+// switch it resolved to, and the catalogue entry that explains what the
+// event_type means.
+//
+// TWO ID SPACES. `deviceId` is an AGENT id (the agent host that sent the line);
+// `snmpDeviceId` (migration 133) is the polled SWITCH that sent it. Each has its
+// own filter and its own name, and neither is ever looked up in the other's
+// table.
+function createDeviceEventsRouter({ deviceEventsRepo, agentsRepo, snmpDevicesRepo = null, logger = null }) {
   const router = express.Router();
   const viewer = [requireAuth, requireRole(ROLES.VIEWER, ROLES.OPERATOR, ROLES.ADMIN)];
 
@@ -45,6 +51,22 @@ function createDeviceEventsRouter({ deviceEventsRepo, agentsRepo, logger = null 
     return names;
   }
 
+  // The polled switches' names, one read per page like nameMap above. The name
+  // an admin gave the device, else what it calls itself, else its address.
+  async function switchNameMap(rows) {
+    const names = new Map();
+    if (!snmpDevicesRepo || !rows.some((r) => r.snmpDeviceId != null)) return names;
+    try {
+      const devices = await snmpDevicesRepo.list({});
+      for (const d of devices || []) {
+        names.set(Number(d.id), d.displayName || d.sysName || d.host);
+      }
+    } catch (err) {
+      if (logger) logger.warn(`device-events: could not resolve switch names (${err.message})`);
+    }
+    return names;
+  }
+
   // GET /api/device-events — the log itself.
   router.get('/', ...viewer, asyncHandler(async (req, res) => {
     const errors = {};
@@ -62,13 +84,21 @@ function createDeviceEventsRouter({ deviceEventsRepo, agentsRepo, logger = null 
       const agent = await agentsRepo.findById(filter.agentId);
       if (!agent) return res.status(404).json({ error: 'Agent not found' });
     }
+    // The same rule for a switch: "no events" and "no such switch" differ. A
+    // server with no SNMP inventory wired has no switch by any id.
+    let filterSwitch = null;
+    if (filter.snmpDeviceId != null) {
+      filterSwitch = snmpDevicesRepo ? await snmpDevicesRepo.findById(filter.snmpDeviceId) : null;
+      if (!filterSwitch) return res.status(404).json({ error: 'SNMP device not found' });
+    }
 
     const rows = await deviceEventsRepo.list(filter);
-    const names = await nameMap(rows);
+    const [names, switchNames] = await Promise.all([nameMap(rows), switchNameMap(rows)]);
 
     const events = rows.map((r) => ({
       ...r,
       deviceName: r.deviceId != null ? (names.get(r.deviceId) || null) : null,
+      snmpDeviceName: r.snmpDeviceId != null ? (switchNames.get(r.snmpDeviceId) || null) : null,
       agentName: names.get(r.agentId) || null,
       severityName: SEVERITY_NAMES[r.severity] || String(r.severity),
       // What this event_type MEANS, in the operator's language. Null for a type
@@ -87,6 +117,7 @@ function createDeviceEventsRouter({ deviceEventsRepo, agentsRepo, logger = null 
         minutes: filter.minutes,
         deviceId: filter.deviceId ?? null,
         agentId: filter.agentId ?? null,
+        snmpDeviceId: filter.snmpDeviceId ?? null,
       });
     } catch (err) {
       if (logger) logger.warn(`device-events: severity counts failed (${err.message})`);
@@ -95,6 +126,11 @@ function createDeviceEventsRouter({ deviceEventsRepo, agentsRepo, logger = null 
     res.json({
       window: { minutes: filter.minutes },
       filter,
+      // The switch the log is narrowed to, named, so the screen can say whose
+      // log this is without a second request.
+      snmpDevice: filterSwitch
+        ? { id: filterSwitch.id, name: filterSwitch.displayName || filterSwitch.sysName || filterSwitch.host, host: filterSwitch.host }
+        : null,
       counts,
       events,
       // A full page means there is probably more; the UI uses this to decide

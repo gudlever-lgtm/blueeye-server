@@ -79,6 +79,77 @@ test('an UNKNOWN row never holds the checklist open', () => {
   assert.equal(done.complete, true, 'an unknown is not outstanding work');
 });
 
+test('an unreadable list is UNKNOWN with a reason, never an empty list', () => {
+  // null is "could not be read"; a missing key is still "there are none".
+  const r = buildSetupChecklist({ agents: null, snmpDevices: null, locations: null });
+  for (const key of ['agents', 'flowSource', 'snmpDevices', 'siteCoordinates']) {
+    assert.equal(byKey(r, key).state, 'unknown', key);
+    assert.equal(byKey(r, key).detail.reason, 'unreadable', key);
+  }
+  assert.equal(byKey(r, 'snmpCredentials'), undefined, 'no device list, nothing to count credentials against');
+  assert.equal(r.unreadable, 4);
+
+  const fresh = buildSetupChecklist({});
+  assert.equal(byKey(fresh, 'agents').state, 'todo', 'a fresh install still has work to do');
+  assert.equal(fresh.unreadable, 0);
+});
+
+test('with nothing outstanding, an unreadable row makes the status UNKNOWN, never complete', () => {
+  const r = buildSetupChecklist({
+    agents: null,
+    snmpDevices: [{ id: 1, enabled: true, agentId: 1, locationId: 3 }],
+    credentialed: 1,
+    deviceEvents: 12,
+    geoipRanges: 1000,
+    locations: [{ id: 1, latitude: 56.1, longitude: 10.2 }],
+  });
+  assert.equal(r.outstanding, 0);
+  assert.equal(r.complete, false, 'the agents row was never looked at');
+  assert.equal(r.status, 'unknown');
+  assert.equal(r.unknown, 2);
+});
+
+test('a scalar fact that THREW is tagged unreadable; one that is merely absent is not', () => {
+  const facts = {
+    agents: [AGENT({ monitor_config: { source: 'sflow' } })],
+    snmpDevices: [{ id: 1, enabled: true, agentId: 1, locationId: 3 }],
+    credentialed: null, deviceEvents: null, geoipRanges: null,
+    locations: [{ id: 1, latitude: 56.1, longitude: 10.2 }],
+  };
+  const absent = buildSetupChecklist(facts);
+  assert.equal(byKey(absent, 'geoip').detail.reason, undefined);
+  assert.equal(absent.unreadable, 0);
+
+  const threw = buildSetupChecklist({ ...facts, failed: ['credentialed', 'deviceEvents', 'geoipRanges'] });
+  for (const key of ['snmpCredentials', 'deviceLog', 'geoip']) {
+    assert.equal(byKey(threw, key).state, 'unknown', key);
+    assert.equal(byKey(threw, key).detail.reason, 'unreadable', key);
+  }
+  assert.equal(threw.unreadable, 3);
+  assert.equal(threw.complete, false);
+});
+
+test('the banner status: outstanding, unknown, complete', () => {
+  const base = {
+    agents: [AGENT({ monitor_config: { source: 'sflow' } })],
+    snmpDevices: [{ id: 1, enabled: true, agentId: 1, locationId: 3 }],
+    credentialed: 1,
+    geoipRanges: 1000,
+    locations: [{ id: 1, latitude: 56.1, longitude: 10.2 }],
+  };
+  assert.equal(buildSetupChecklist({ ...base, snmpDevices: [], deviceEvents: 5 }).status, 'outstanding');
+  // A quiet device log is unknown BY NATURE: not work, so `complete` holds —
+  // but the banner must still not say "everything is set up".
+  const quiet = buildSetupChecklist({ ...base, deviceEvents: 0 });
+  assert.equal(quiet.complete, true);
+  assert.equal(quiet.status, 'unknown');
+  assert.equal(quiet.unknown, 1);
+  assert.equal(quiet.unreadable, 0);
+  const done = buildSetupChecklist({ ...base, deviceEvents: 5 });
+  assert.equal(done.status, 'complete');
+  assert.equal(done.unknown, 0);
+});
+
 // ======================================================== the flow source
 test('proc is not a flow source, however many agents run it', () => {
   // The single most common reason a screen is empty here, and the one nobody
@@ -175,14 +246,42 @@ test('the checklist answers on an install with nothing wired up', async () => {
   assert.equal(res.body.complete, false);
 });
 
-test('a repository that throws costs its row, never the page', async () => {
+test('a repository that throws costs its row, never the page — and the row is UNKNOWN, not TODO', async () => {
+  // Deliberately changed: this used to assert 'todo', which was the bug. The
+  // route read a failed agents query as "no agents" and told an install with
+  // forty of them to enrol one. The documented rule (src/routes/setup.js) is
+  // that an unreadable source makes its row UNKNOWN, never zero.
   const app = makeApp({
     agentsRepo: makeAgentsRepo({ findAll: throwingAsync() }),
     locationsRepo: makeLocationsRepo({ findAll: throwingAsync() }),
+    snmpDevicesRepo: makeSnmpDevicesRepo({ list: throwingAsync() }),
   });
   const res = await adminGet(app, '/api/setup/checklist');
   assert.equal(res.status, 200, 'best-effort: a broken source must not take the screen down');
-  assert.equal(res.body.checks.find((c) => c.key === 'agents').state, 'todo');
+  for (const key of ['agents', 'flowSource', 'snmpDevices', 'siteCoordinates']) {
+    const row = res.body.checks.find((c) => c.key === key);
+    assert.equal(row.state, 'unknown', key);
+    assert.deepEqual(row.detail, { reason: 'unreadable' }, `${key} carries no invented numbers`);
+  }
+  assert.equal(res.body.complete, false, 'an unread source may hide work: never "complete"');
+  assert.equal(res.body.unreadable, 4);
+});
+
+test('a credential resolver or GeoIP read that throws is UNKNOWN with a reason, and blocks "complete"', async () => {
+  const snmpProfilesRepo = makeSnmpProfilesRepo({ resolveForAgent: throwingAsync() });
+  const snmpDevicesRepo = makeSnmpDevicesRepo({}, { credentialProfilesRepo: snmpProfilesRepo });
+  await snmpDevicesRepo.create({ agentId: 9, host: '10.14.0.11', locationId: 3 });
+  const app = makeApp({
+    agentsRepo: makeAgentsRepo({ findAll: async () => [AGENT({ id: 9 })] }),
+    snmpDevicesRepo,
+    snmpProfilesRepo,
+  });
+  const res = await adminGet(app, '/api/setup/checklist');
+  assert.equal(res.status, 200);
+  const creds = res.body.checks.find((c) => c.key === 'snmpCredentials');
+  assert.equal(creds.state, 'unknown');
+  assert.equal(creds.detail.reason, 'unreadable');
+  assert.equal(res.body.complete, false);
 });
 
 test('a switch with its OWN community counts as credentialed', async () => {

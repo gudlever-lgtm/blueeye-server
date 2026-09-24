@@ -62,7 +62,7 @@ test('empty everything returns a well-formed, zeroed payload', async () => {
   const out = await service.getOverview({ now });
   assert.deepEqual(out.summary, {
     activeFaults: 0, affectedDevices: 0, rootCauses: 0, anomalies: 0,
-    devicesDown: 0, devicesUnreachable: 0,
+    devicesDown: 0, devicesUnreachable: 0, devicesDegraded: 0,
   });
   assert.deepEqual(out.rootCauses, []);
   assert.deepEqual(out.anomalies, []);

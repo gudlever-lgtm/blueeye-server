@@ -194,6 +194,44 @@ test('creating a rule posts the shape the API documents', async (t) => {
   });
 });
 
+// Preview before Save: the draft goes to POST /api/severity-rules/preview with
+// scope 'open' (a dry run), and the answer is a sentence in the form — a rule
+// that matches nothing is usually a typo in a match field.
+test('Preview counts the open events a draft would change, without saving it', async (t) => {
+  const { doc, calls, errors } = await boot(t, {
+    'GET /api/severity-rules': [],
+    'POST /api/severity-rules/preview': { scope: 'open', matched: 12, changed: 12, severity: 'WARN', explanation: 'CRIT downgraded to WARN by a rule' },
+  });
+  await openSeverityRules(doc);
+  await click(byText(doc, '#view button', '+ New rule'), 40);
+  const form = doc.querySelector('#modal-card form');
+  const inputs = [...form.querySelectorAll('input, select, textarea')];
+  inputs[1].value = 'packet_loss';
+  inputs[4].value = 'WARN';
+  inputs[5].value = 'noisy';
+  await click(byText(doc, '#modal-card button', 'Preview'), 80);
+
+  assert.deepEqual(errors, []);
+  const preview = calls.find((c) => c.method === 'POST' && c.path === '/api/severity-rules/preview');
+  assert.ok(preview, 'Preview never asked the server');
+  assert.equal(preview.body.scope, 'open');
+  assert.equal(preview.body.rule.match_metric, 'packet_loss');
+  assert.equal(preview.body.rule.match_kind, null);
+  assert.ok(!calls.some((c) => c.method === 'POST' && c.path === '/api/severity-rules'), 'Preview saved the rule');
+  assert.match(form.textContent, /Would set 12 open event\(s\) to WARN right now/);
+});
+
+test('a Preview the server refuses shows its reason in the form', async (t) => {
+  const { doc } = await boot(t, {
+    'GET /api/severity-rules': [],
+    'POST /api/severity-rules/preview': { status: 400, body: { error: 'Validation failed', details: { _: 'a rule must match on at least one field' } } },
+  });
+  await openSeverityRules(doc);
+  await click(byText(doc, '#view button', '+ New rule'), 40);
+  await click(byText(doc, '#modal-card button', 'Preview'), 80);
+  assert.match(doc.querySelector('#modal-card form').textContent, /a rule must match on at least one field/);
+});
+
 test('a Service Assurance rule offers only the fields that source has', async (t) => {
   const { doc, calls } = await boot(t, {
     'GET /api/severity-rules': [],

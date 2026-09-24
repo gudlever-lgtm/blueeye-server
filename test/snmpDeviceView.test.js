@@ -138,3 +138,83 @@ test('a switch without VLAN names or sysDescr gets no empty panel', async (t) =>
   assert.equal(tableRows(doc, 'VLAN'), null);
   assert.doesNotMatch(doc.querySelector('#view').textContent, /Reports itself as/);
 });
+
+// Migrations 124-126: where the device is (site + sysLocation), what it is
+// (ENTITY-MIB), its neighbours with the protocol named, and a router's ARP table.
+test('the page says where the device is, what it is, its CDP/LLDP neighbours and its ARP table', async (t) => {
+  const page = {
+    ...DEVICE,
+    siteName: 'Plant A',
+    device: {
+      ...DEVICE.device,
+      supported: ['if', 'lldp', 'cdp', 'arp', 'entity'],
+      sysLocation: 'Hal 2, tavlerum, rack A3',
+      sysContact: 'OT-drift',
+      hardware: { vendor: 'Cisco', model: 'WS-C3850-48P', serial: 'FOC1234X0AB' },
+    },
+    neighbours: [
+      { protocol: 'lldp', localIfName: 'Gi1/0/1', remoteChassisId: 'aa:bb:cc:11:22:33', remoteSysName: 'sw-dist-1', remotePortId: 'Gi1/0/5' },
+      { protocol: 'cdp', localIfName: 'Gi1/0/1', remoteChassisId: 'sw-dist-1', remoteSysName: 'sw-dist-1', remotePortId: 'Gi1/0/5', remoteAddress: '10.14.0.11', remotePlatform: 'cisco WS-C3850-48P' },
+    ],
+    arp: [{ ip: '10.20.0.84', mac: '00:1b:44:11:3a:b7', ifName: 'Vlan20', lastSeen: new Date().toISOString() }],
+    arpTotal: 812,
+    inventory: [
+      { entIndex: 1, class: 'chassis', name: 'Switch 1', model: 'WS-C3850-48P', serial: 'FOC1234X0AB', softwareRev: '16.12.04' },
+      { entIndex: 1000, class: 'chassis', name: 'Switch 2', model: 'WS-C3850-48P', serial: 'FOC9999Z2EF' },
+    ],
+  };
+  const { doc, errors } = boot({ t, routes: SESSION({ 'GET /api/snmp-devices/1': page }) });
+  await settle();
+  assert.deepEqual(errors, []);
+  const text = doc.querySelector('#view').textContent;
+  assert.match(text, /Where: Plant A · Hal 2, tavlerum, rack A3/);
+  assert.match(text, /S\/N FOC1234X0AB/);
+
+  const nb = tableRows(doc, 'Protocol');
+  assert.ok(nb, 'the neighbour table rendered');
+  assert.deepEqual(nb.rows.map((r) => r.querySelectorAll('td')[nb.head.indexOf('Protocol')].textContent.trim()), ['LLDP', 'CDP']);
+  assert.match(nb.rows[1].textContent, /10\.14\.0\.11/);
+
+  const arp = tableRows(doc, 'IP address');
+  assert.ok(arp, 'the ARP table rendered');
+  assert.match(arp.rows[0].textContent, /00:1b:44:11:3a:b7/);
+  assert.match(text, /1 of 812/);
+
+  const hw = tableRows(doc, 'Serial number');
+  assert.ok(hw, 'the inventory rendered');
+  assert.equal(hw.rows.length, 2, 'one row per stack member');
+});
+
+// Migration 133: the name the switch gives itself, and its own device log.
+test('the page shows the switch\'s sysName and opens the device log narrowed to it', async (t) => {
+  const page = { ...DEVICE, device: { ...DEVICE.device, sysName: 'SW-CORE-1.plant.local' } };
+  const event = {
+    id: 1, agentId: 3, deviceId: null, snmpDeviceId: 1, snmpDeviceName: 'sw-core-1', sourceIp: '10.14.0.11',
+    receivedAt: new Date().toISOString(), transport: 'syslog', severity: 3, severityName: 'error',
+    eventType: 'link.down', summary: 'Interface Fa0/7, changed state to down', ifname: 'Fa0/7', occurrences: 1,
+  };
+  const { window, doc, errors } = boot({
+    t,
+    routes: SESSION({
+      'GET /api/snmp-devices/1': page,
+      'GET /api/device-events': { events: [event], counts: [], snmpDevice: { id: 1, name: 'sw-core-1', host: '10.14.0.11' } },
+      'GET /api/device-events/catalog': { severities: [], groups: [] },
+    }),
+  });
+  const asked = [];
+  const fetch0 = window.fetch;
+  window.fetch = (u, o) => { asked.push(String(u)); return fetch0(u, o); };
+  await settle();
+  assert.deepEqual(errors, []);
+  assert.match(doc.querySelector('#view').textContent, /Calls itself: SW-CORE-1\.plant\.local/);
+
+  const btn = [...doc.querySelectorAll('#view button')].find((b) => b.textContent.trim() === 'Device log');
+  assert.ok(btn, 'the switch page offers its device log');
+  btn.click();
+  await settle();
+  assert.ok(asked.some((u) => /\/api\/device-events\?.*snmpDeviceId=1\b/.test(u)), `asked: ${asked.join(' ')}`);
+  const text = doc.querySelector('#view').textContent;
+  assert.match(text, /Only what sw-core-1 said\./);
+  assert.match(text, /Interface Fa0\/7, changed state to down/);
+  assert.doesNotMatch(text, /unknown sender/, 'a switch-resolved sender is not "unknown"');
+});

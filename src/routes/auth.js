@@ -8,6 +8,9 @@ const { requireAuth } = require('../auth/middleware');
 const { createUserProvisioner } = require('../auth/provision');
 const { createLoginThrottle } = require('../auth/loginThrottle');
 const { validatePasswordChange } = require('../validation/userValidation');
+const { passwordSetAt, isPasswordExpired } = require('../auth/securityPolicy');
+const { IP_DENIED_BODY } = require('../auth/securityGate');
+const { passwordReusedBody } = require('../auth/passwordHistory');
 const { config } = require('../config');
 
 // Authentication routes (public). Supports two paths behind the SAME endpoint:
@@ -15,7 +18,12 @@ const { config } = require('../config');
 //      user is just-in-time provisioned so the rest of the system is unchanged;
 //   2) local JWT auth — the original flow, and the fallback when LDAP is
 //      disabled or doesn't authenticate the user.
-function createAuthRouter({ usersRepo, ldapAuth = null, ldapLoginAuditRepo = null, auditLogger = null, oidcAuth = null, samlAuth = null, loginThrottle = null }) {
+//
+// Baseline security (migration 041, `securityPolicy`/`passwordHistory`): every
+// sign-in checks the role-based IP allowlist once the credential is known good,
+// a local sign-in reports an expired password (opt-in max age), and a password
+// change refuses one of the user's last N passwords.
+function createAuthRouter({ usersRepo, ldapAuth = null, ldapLoginAuditRepo = null, auditLogger = null, oidcAuth = null, samlAuth = null, loginThrottle = null, securityPolicy = null, passwordHistory = null }) {
   const router = express.Router();
   const provisioner = createUserProvisioner({ usersRepo });
 
@@ -55,6 +63,22 @@ function createAuthRouter({ usersRepo, ldapAuth = null, ldapLoginAuditRepo = nul
     }
     return dummyHashPromise;
   };
+
+  // Role-based IP allowlist at sign-in. Runs only AFTER the credential checked
+  // out (the role is not known before), so it answers 403 — distinct from a bad
+  // password — and is audited. Returns true when the request was refused.
+  async function refusedByIpAllowlist(req, res, user, via) {
+    if (!securityPolicy) return false;
+    await securityPolicy.get();
+    const verdict = securityPolicy.checkIp(user.role, req.ip);
+    if (verdict.allowed) return false;
+    await auditLogin(req, {
+      action: 'login_ip_denied', outcome: 'denied', email: user.email, role: user.role, userId: user.id,
+      detail: `auth=${via}; ${verdict.reason}`,
+    });
+    res.status(403).json(IP_DENIED_BODY);
+    return true;
+  }
 
   // Records an LDAP login attempt (best-effort; auditing never blocks login).
   async function auditLdap(username, result, sourceIp) {
@@ -109,6 +133,7 @@ function createAuthRouter({ usersRepo, ldapAuth = null, ldapLoginAuditRepo = nul
           if (result && result.enabled) await auditLdap(identifier, result, req.ip);
           if (result && result.ok) {
             const user = await provisioner.provision({ email: result.email, role: result.role });
+            if (await refusedByIpAllowlist(req, res, user, 'ldap')) return undefined;
             const token = issueToken(user);
             throttle.recordSuccess(throttleId);
             await auditLogin(req, { action: 'login_success', outcome: 'success', email: user.email, role: user.role, userId: user.id, detail: 'auth=ldap' });
@@ -133,6 +158,8 @@ function createAuthRouter({ usersRepo, ldapAuth = null, ldapLoginAuditRepo = nul
         await auditLogin(req, { action: 'login_failure', outcome: 'failure', email: email || '(none)', detail: 'invalid credentials' });
         return res.status(401).json({ error: 'Invalid credentials' });
       }
+
+      if (await refusedByIpAllowlist(req, res, user, 'local')) return undefined;
 
       // One-time-password handling. The credential itself was correct, so the
       // brute-force counter is cleared either way — but a temp password that has
@@ -162,14 +189,22 @@ function createAuthRouter({ usersRepo, ldapAuth = null, ldapLoginAuditRepo = nul
         });
       }
 
-      const token = issueToken(user);
+      // The token carries when this password was set, so the request gate can
+      // enforce the (opt-in) max age without a read per request. An expired
+      // password still signs in — the session is then held to the change
+      // screen (403 password_expired everywhere else) until it is replaced.
+      const setAt = passwordSetAt(user);
+      const policy = securityPolicy ? await securityPolicy.get() : null;
+      const expired = Boolean(policy && isPasswordExpired(setAt, policy.passwordMaxAgeDays));
+      const token = issueToken({ ...user, passwordSetAt: setAt });
       throttle.recordSuccess(throttleId);
-      await auditLogin(req, { action: 'login_success', outcome: 'success', email: user.email, role: user.role, userId: user.id, detail: 'auth=local' });
+      await auditLogin(req, { action: 'login_success', outcome: 'success', email: user.email, role: user.role, userId: user.id, detail: expired ? 'auth=local, password_expired' : 'auth=local' });
       return res.json({
         token,
         tokenType: 'Bearer',
         expiresIn: config.auth.jwtExpiresIn,
         user: { id: user.id, email: user.email, role: user.role },
+        ...(expired ? { passwordExpired: true } : {}),
       });
     })
   );
@@ -206,15 +241,27 @@ function createAuthRouter({ usersRepo, ldapAuth = null, ldapLoginAuditRepo = nul
       if (value.newPassword === value.currentPassword) {
         return res.status(422).json({ error: 'Password policy not met', details: ['new password must differ from the current password'] });
       }
+      // Password history: not one of the last N (the current one counts). A
+      // one-time password is excluded by construction — it was never recorded.
+      if (passwordHistory) {
+        const reuse = await passwordHistory.checkReuse(user.id, value.newPassword, {
+          currentHash: user.must_change_password ? null : user.password_hash,
+        });
+        if (!reuse.ok) {
+          await auditLogin(req, { action: 'password_change_failure', outcome: 'failure', email: user.email, userId: user.id, detail: 'password reused' });
+          return res.status(400).json(passwordReusedBody(reuse.depth, 'newPassword'));
+        }
+      }
 
       const newHash = await hashPassword(value.newPassword);
       await usersRepo.clearTempPassword(user.id, newHash);
+      if (passwordHistory) await passwordHistory.remember(user.id, newHash);
       await auditLogin(req, { action: 'password_changed', outcome: 'success', email: user.email, role: user.role, userId: user.id, detail: 'password changed' });
 
       // A brand-new token (no must_change flag). Its iat >= the revocation cutoff
       // just set, so the revocation registry does not reject it (same-second
       // tolerance in src/auth/revocation.js).
-      const token = issueToken({ id: user.id, email: user.email, role: user.role });
+      const token = issueToken({ id: user.id, email: user.email, role: user.role, passwordSetAt: new Date() });
       return res.json({
         token,
         tokenType: 'Bearer',

@@ -77,7 +77,7 @@ raised *after* it), so every writer is covered:
 
 | Source | Identity | New when |
 | --- | --- | --- |
-| ARP (`capabilities.arp` report, evidence snapshots → `arp_entries`) | MAC | no agent **at the same site** has ever had this MAC in its ARP table (no site: this agent). A known MAC on a new IP (DHCP) is not new. |
+| ARP (`capabilities.arp` report, evidence snapshots → `arp_entries`) | MAC | no agent **at the same site** has this MAC in its ARP table (no site: this agent), **and** the site's known-device memory has not seen it in the last 400 days, **and** discovery has not already reported the same IP inside the baseline window. A known MAC on a new IP (DHCP) is not new. |
 | Discovery (server sweep, or an agent's `run-discovery` → `discovered_devices`) | IP (a sweep sees no MAC) | no candidate row for the IP **and** no agent's ARP table has the IP. |
 
 **No first-snapshot flood.** An agent's first neighbour table is entirely
@@ -107,7 +107,25 @@ folded into whatever event the agent has open.
 | `NEW_DEVICE_MAX_PER_HOUR` | 20 | findings per agent (or per discovery) per hour before the summary |
 | `NEW_DEVICE_SEVERITY` | WARN | INFO / WARN / CRIT |
 
-Limits worth knowing: an ARP entry ages out after `RETENTION_ARP_DAYS` (30), so
-a device away for longer than that is "new" again when it returns; a device
-first found by a sweep and later seen in ARP is reported twice (once by IP,
-once with its MAC and vendor). Tests: `test/newDeviceDetector.test.js`.
+**The known-device memory.** An ARP entry ages out after `RETENTION_ARP_DAYS`
+(30) — right for "where is this MAC now", wrong for "has this site ever seen
+it": a laptop back from a month away used to be "new". `known_devices`
+(migration 131, `src/repositories/knownDevicesRepository.js`) keeps one row per
+(scope, MAC) — scope `site:<id>`, or `agent:<id>` for an agent without a site —
+with `first_seen`, `last_seen` and the last IP. Every ARP report touches it
+(all MACs, not only new ones, so `last_seen` follows the device), and the
+detector consults it before calling a MAC new. It ages on `last_seen` after
+`RETENTION_KNOWN_DEVICE_DAYS` (400, docs/retention.md), so a device away for
+longer than that is new again. The migration seeds it from `arp_entries`. A
+memory that cannot be read is treated as empty (the detector falls back to
+what the ARP tables hold, the hourly cap still applies).
+
+**One device, one finding.** A device first found by a sweep (by IP) and later
+seen in an ARP table (with its MAC) used to be reported twice. The ARP path now
+stays quiet for an address discovery reported inside the baseline window
+(`NEW_DEVICE_BASELINE_HOURS`) — known in memory when this process raised it,
+otherwise from the candidate row: first seen inside the window, after
+discovery's own baseline, and at the same site when the finder has one. The
+MAC still lands in `arp_entries` and the memory; the suppression is logged. The
+reverse order was already covered: discovery skips an address an ARP table
+knows. Tests: `test/newDeviceDetector.test.js`, `test/knownDevices.test.js`.

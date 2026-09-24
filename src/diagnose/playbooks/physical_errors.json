@@ -104,6 +104,24 @@
       }
     },
     {
+      "id": "crc_on_full_duplex",
+      "when": "iface.frame_err_per_sec > 0 && iface.duplex == 'full'",
+      "effect": "confirm",
+      "because": {
+        "en": "Frame (CRC/alignment) errors on a full-duplex link: the frames are arriving damaged, and with both ends at full duplex that is the cable, the patch lead, the optic or the port — not a configuration.",
+        "da": "Frame-fejl (CRC/alignment) på et fuld-duplex-link: frames ankommer ødelagte, og med begge ender på fuld duplex er det kablet, patchkablet, optikken eller porten — ikke en konfiguration."
+      }
+    },
+    {
+      "id": "carrier_errors",
+      "when": "iface.carrier_err_per_sec > 0",
+      "effect": "confirm",
+      "because": {
+        "en": "The transmitter is losing carrier — the link drops out under it. That is a flapping link: cable, connector or the far port.",
+        "da": "Senderen mister carrier — linket falder ud under den. Det er et link der flapper: kabel, stik eller porten i den anden ende."
+      }
+    },
+    {
       "id": "link_down",
       "when": "iface.link_down == true",
       "effect": "confirm",

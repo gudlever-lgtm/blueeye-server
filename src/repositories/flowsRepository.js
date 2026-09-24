@@ -10,7 +10,22 @@ const COLUMNS = [
   'agent_id', 'ts', 'src_ip', 'dst_ip', 'ext_ip', 'direction', 'proto',
   'src_port', 'dst_port', 'bytes', 'packets', 'flows', 'internal',
   'country', 'asn', 'asn_name',
+  // Migration 127: the 802.1Q VLAN and the exporter's in/out ifIndex. NULL
+  // whenever the agent did not report them (NetFlow v5, older agents).
+  'vlan', 'in_if', 'out_if',
 ];
+
+// A VLAN id (1..4094) / ifIndex (positive 32-bit) or NULL. The agent already
+// validates both; this keeps a bad value from failing a whole bulk insert on a
+// column range.
+const vlanOrNull = (v) => {
+  const n = Number(v);
+  return v != null && Number.isInteger(n) && n >= 1 && n <= 4094 ? n : null;
+};
+const ifOrNull = (v) => {
+  const n = Number(v);
+  return v != null && Number.isInteger(n) && n > 0 && n <= 0xffffffff ? n : null;
+};
 
 // Maps a geo-enriched flow record (camelCase) to a positional row for INSERT.
 function toRow(r) {
@@ -32,6 +47,9 @@ function toRow(r) {
     r.country ?? null,
     r.asn ?? null,
     r.asnName ?? null,
+    vlanOrNull(r.vlan),
+    ifOrNull(r.inIf),
+    ifOrNull(r.outIf),
   ];
 }
 
@@ -445,4 +463,4 @@ function createFlowsRepository(db) {
   return { insertMany, aggregateExternalDestinations, destinationExists, agentIdsForDestination, selectFlows, exploreFlows, mapFlows, topologyEdges, tcpServiceFlows, agentIdsForIp, agentIdsForPort, asnSeries, lastFlowAtByAgent };
 }
 
-module.exports = { createFlowsRepository, toRow };
+module.exports = { createFlowsRepository, toRow, COLUMNS };

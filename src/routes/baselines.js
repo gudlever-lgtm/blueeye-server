@@ -39,7 +39,7 @@ function createBaselinesRouter({ flowPairBaselinesRepo = null, agentsRepo = null
   const router = express.Router();
   const reader = requireRole(ROLES.VIEWER, ROLES.OPERATOR, ROLES.ADMIN);
 
-  // GET /api/baselines/flow-pair?host=<agentId>&limit=
+  // GET /api/baselines/flow-pair?host=<agentId>&limit=[&dst=<agentId>&port=<n>]
   //
   // The host's outbound flow-pair baselines, keyed by (dst, port, dow, hour).
   // Each row carries `observationCount` and `updatedAt` so the UI can show the
@@ -63,11 +63,46 @@ function createBaselinesRouter({ flowPairBaselinesRepo = null, agentsRepo = null
       }
     }
 
+    // Optional pair filter: ?dst=<agentId>&port=<n> narrows to one flow pair
+    // (the pair detail), either alone narrows by that field.
+    let dstHostId = null;
+    if (req.query.dst !== undefined && req.query.dst !== '') {
+      dstHostId = parseId(req.query.dst);
+      if (dstHostId === null) return res.status(400).json({ error: 'dst must be a positive agent id' });
+    }
+    let dstPort = null;
+    if (req.query.port !== undefined && req.query.port !== '') {
+      dstPort = Number(req.query.port);
+      if (!Number.isInteger(dstPort) || dstPort < 0 || dstPort > 65535) {
+        return res.status(400).json({ error: 'port must be an integer 0..65535' });
+      }
+    }
+
     if (agentsRepo && typeof agentsRepo.findById === 'function' && !(await agentsRepo.findById(hostId))) {
       return res.status(404).json({ error: 'Host not found' });
     }
 
-    const baselines = await flowPairBaselinesRepo.listForHost({ hostId, limit });
+    const [baselines, latest] = await Promise.all([
+      flowPairBaselinesRepo.listForHost({ hostId, limit, dstHostId, dstPort }),
+      typeof flowPairBaselinesRepo.latestHourlyForHost === 'function'
+        ? flowPairBaselinesRepo.latestHourlyForHost({ hostId, dstHostId, dstPort })
+        : Promise.resolve([]),
+    ]);
+
+    // "Now" for the comparison: the last complete hour the rollup recorded for
+    // these pairs, with the weekday/hour slot (UTC, as the baselines are keyed)
+    // it belongs to, so the UI compares it with the matching slot and not with
+    // whatever hour the reader happens to open the page in.
+    let current = null;
+    if (latest.length) {
+      const at = new Date(latest[0].bucket);
+      current = {
+        bucket: at.toISOString(),
+        dow: at.getUTCDay(),
+        hour: at.getUTCHours(),
+        pairs: latest.map((r) => ({ dstHostId: r.dstHostId, dstPort: r.dstPort, bytes: r.bytes })),
+      };
+    }
 
     // An empty list is 200, not 404: on a fresh install flow_pair_baselines is
     // empty for the first ~14 days (history builds FORWARD — raw flows cannot be
@@ -79,6 +114,7 @@ function createBaselinesRouter({ flowPairBaselinesRepo = null, agentsRepo = null
       // Named so the UI can say WHY there is no context, rather than leaving the
       // technician to wonder whether the page is broken.
       building: baselines.length === 0,
+      current,
     });
   }));
 

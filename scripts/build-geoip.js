@@ -14,7 +14,13 @@
 //   node scripts/build-geoip.js --country dbip-country-lite.csv[.gz] \
 //        [--asn dbip-asn-lite.csv[.gz]] [--out geoip.csv]
 //   node scripts/build-geoip.js --country-url <URL> [--asn-url <URL>] [--out geoip.csv]
-//   node scripts/build-geoip.js --latest [--country-only] [--out geoip.csv]
+//   node scripts/build-geoip.js --latest [--country-only] [--with-city] [--out geoip.csv]
+//   node scripts/build-geoip.js --city dbip-city-lite.csv[.gz] [--city-out geoip-city.csv]
+//
+// --city / --city-url / --with-city (with --latest) also build the city-level
+// table the traceroute map falls back on (GEOIP_CITY_DB_PATH):
+//   start_ip,end_ip,country,lat,lng,city
+// It can be built on its own, without the country table.
 //
 // --latest fetches the current-month DB-IP Lite files from db-ip.com (override the
 // base with --base-url). Inputs may be plain CSV or gzip (.gz, auto-detected); with
@@ -22,14 +28,14 @@
 //
 // Lite files (free, monthly): https://db-ip.com/db/lite.php
 
-const { buildFromSources, dbipUrls, monthCandidates, openSource, DEFAULT_DBIP_BASE } = require('../src/geo/geoipBuild');
+const { buildFromSources, buildCityFromSource, dbipUrls, monthCandidates, openSource, DEFAULT_DBIP_BASE } = require('../src/geo/geoipBuild');
 
 function parseArgs(argv) {
   const out = {};
   for (let i = 0; i < argv.length; i += 1) {
     const a = argv[i];
     if (a === '--help' || a === '-h') return { help: true };
-    if (a === '--latest' || a === '--country-only') { out[a.slice(2)] = true; continue; }
+    if (a === '--latest' || a === '--country-only' || a === '--with-city') { out[a.slice(2)] = true; continue; }
     if (a.startsWith('--')) { out[a.slice(2)] = argv[i + 1]; i += 1; }
   }
   return out;
@@ -46,7 +52,7 @@ async function resolveLatest(baseUrl, includeAsn) {
     try {
       const s = await openSource({ url: urls.country });
       s.destroy();
-      return { month, country: { url: urls.country }, asn: includeAsn ? { url: urls.asn } : null };
+      return { month, country: { url: urls.country }, asn: includeAsn ? { url: urls.asn } : null, city: { url: urls.city } };
     } catch { /* try the previous month */ }
   }
   throw new Error('could not find a published DB-IP Lite file for this or last month');
@@ -54,15 +60,24 @@ async function resolveLatest(baseUrl, includeAsn) {
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
-  if (args.help || (!args.country && !args['country-url'] && !args.latest)) {
+  const cityOnly = !args.country && !args['country-url'] && !args.latest && (args.city || args['city-url']);
+  if (args.help || (!args.country && !args['country-url'] && !args.latest && !cityOnly)) {
     log('Build the server GeoIP CSV from DB-IP Lite files (IPv4, EU-sourced).\n');
     log('  node scripts/build-geoip.js --country <file.csv[.gz]> [--asn <file.csv[.gz]>] [--out geoip.csv]');
     log('  node scripts/build-geoip.js --country-url <URL> [--asn-url <URL>] [--out geoip.csv]');
-    log('  node scripts/build-geoip.js --latest [--country-only] [--base-url <URL>] [--out geoip.csv]\n');
+    log('  node scripts/build-geoip.js --latest [--country-only] [--with-city] [--base-url <URL>] [--out geoip.csv]');
+    log('  node scripts/build-geoip.js --city <file.csv[.gz]> | --city-url <URL> [--city-out geoip-city.csv]\n');
     log('Get the Lite CSVs from https://db-ip.com/db/lite.php (CC-BY-4.0).');
     process.exit(args.help ? 0 : 1);
   }
   const out = args.out || 'geoip.csv';
+  const cityOut = args['city-out'] || 'geoip-city.csv';
+
+  let citySource = args.city ? { file: args.city } : (args['city-url'] ? { url: args['city-url'] } : null);
+  if (cityOnly) {
+    await buildCity(citySource, cityOut);
+    return;
+  }
 
   let sources;
   if (args.latest) {
@@ -70,6 +85,7 @@ async function main() {
     const r = await resolveLatest(args['base-url'] || DEFAULT_DBIP_BASE, !args['country-only']).catch((e) => die(e.message));
     log(`  using ${r.month}`);
     sources = { country: r.country, asn: r.asn };
+    if (args['with-city']) citySource = r.city;
   } else {
     sources = {
       country: args.country ? { file: args.country } : { url: args['country-url'] },
@@ -83,6 +99,15 @@ async function main() {
   log(`  ${countryRanges} country ranges, ${asnRanges} ASN ranges`);
   log(`\nWrote ${rows} ranges to ${out}`);
   log('Point the server at it: GEOIP_DB_PATH=<path> (or Settings → Map → GeoIP database).');
+  if (citySource) await buildCity(citySource, cityOut);
+}
+
+async function buildCity(source, cityOut) {
+  log('Building the city table…');
+  const { rows, sourceRows } = await buildCityFromSource({ city: source, out: cityOut }).catch((e) => die(e.message));
+  log(`  ${sourceRows} IPv4 city rows, merged to ${rows}`);
+  log(`\nWrote ${rows} city ranges to ${cityOut}`);
+  log('Point the server at it: GEOIP_CITY_DB_PATH=<path> (or Settings → Map → City database).');
 }
 
 main().catch((e) => die(e.message));

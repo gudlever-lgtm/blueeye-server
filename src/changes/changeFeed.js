@@ -289,10 +289,15 @@ const CLUSTER_BASIS = Object.freeze({
   high: 'within 5 min, same site, same metric',
 });
 
+// A cluster that stored its grouping basis (migration 130) says what actually
+// related its findings — a shared target, a switch, the site — instead of the
+// tier's generic reading, which since target-aware grouping no longer names
+// one relation.
 function clusterSummary(c) {
   if (c.title) return c.title;
   const n = (c.memberFindingIds || []).length;
-  const basis = CLUSTER_BASIS[c.confidence];
+  const stored = c.groupingBasis && Array.isArray(c.groupingBasis.why) ? c.groupingBasis.why.filter(Boolean) : [];
+  const basis = stored.length ? `within 5 min, ${stored.join('; ')}` : CLUSTER_BASIS[c.confidence];
   const head = `Situation across ${n} finding${n === 1 ? '' : 's'}`;
   const why = basis ? `${head} — ${basis}` : head;
   return c.suspectedCommonCause ? `${why}; suspected cause: ${c.suspectedCommonCause}` : why;
@@ -723,12 +728,27 @@ function ackKeyFor(e) {
   return crypto.createHash('sha256').update(raw).digest('hex');
 }
 
+// --- mute key ----------------------------------------------------------------
+// "Mute this rule" (change_mutes, migration 134) silences a KIND of row rather
+// than one row: every row of this source + type, on every host, for a while.
+// That is the difference from acknowledging — an ack is "I have dealt with this
+// one", a mute is "stop showing me version skew until tomorrow".
+//
+// Severity and host are deliberately left out: a mute that a WARN → CRIT
+// escalation silently walked through would be worse than no mute, but a mute
+// that only covered one host would just be a slower acknowledge. The route shows
+// muted CRIT rows the same as any other — the reader chose to mute the type.
+function muteKeyFor(e) {
+  return crypto.createHash('sha256').update(['rule', e.source, e.type].join('|')).digest('hex');
+}
+
 // `caseId`, `primaryFindingId` and `stateKey` are internal plumbing, not part of
 // the feed's contract — dropped so the response describes only what the UI
-// renders. `ackKey` is added here, from the row as it stands after correlation.
+// renders. `ackKey` and `muteKey` are added here, from the row as it stands after
+// correlation.
 function stripInternals(e) {
   const { caseId, primaryFindingId, stateKey, ...rest } = e;
-  return { ...rest, ackKey: ackKeyFor(e) };
+  return { ...rest, ackKey: ackKeyFor(e), muteKey: muteKeyFor(e) };
 }
 
 // Builds the final feed: filter to the window, order, group by severity, cap.
@@ -780,6 +800,7 @@ module.exports = {
   withinWindow,
   correlationKey,
   ackKeyFor,
+  muteKeyFor,
   rollUpFindings,
   collapseRecurring,
   correlateEvents,

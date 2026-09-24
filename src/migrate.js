@@ -100,8 +100,10 @@ async function seedAdminIfNeeded(conn) {
   }
 
   const passwordHash = await hashPassword(password);
+  // password_changed_at stamped like every other write of password_hash (the
+  // password max-age clock starts here, not at a created_at fallback).
   await conn.query(
-    'INSERT INTO users (email, password_hash, role) VALUES (?, ?, ?)',
+    'INSERT INTO users (email, password_hash, password_changed_at, role) VALUES (?, ?, NOW(), ?)',
     [email, passwordHash, ROLES.ADMIN]
   );
 

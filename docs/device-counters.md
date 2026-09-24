@@ -64,6 +64,7 @@ indistinguishable from a measurement.
 | `renumber` | The port's ifIndex moved between polls | Raw counters, no rates |
 | `gap` | The interval was over 10 minutes, under 5 seconds, or nonsensical | Raw counters, no rates |
 | `wrap` | A 32-bit counter went backwards | Raw counters, no rates |
+| `counter_reset` | A counter went backwards that a wrap does not explain (a 64-bit counter), while the device did **not** restart — somebody ran `clear counters` (migration 133) | Raw counters, no rates |
 | `NULL` | The delta is real | Everything |
 
 ### The reboot case everybody forgets
@@ -91,7 +92,10 @@ null and the row says `wrap`.
 
 On a 64-bit counter a decrease is never a wrap — an octet counter would have to
 run for months at 100 Gbit/s to reach 2^64 — so a decrease there means the
-device is wrong, and the honest answer is the same: null.
+counters were reset under a device that stayed up (`clear counters`), and the
+honest answer is the same: null, with the row saying `counter_reset`. Any
+counter on the port doing so voids the whole row, as a wrap does: a clear
+resets them all, and half a row invites reading the other half as fine.
 
 A wrap on **either** direction voids the whole row. Both directions are read
 from the same device at the same moment, and half a trustworthy row invites

@@ -40,14 +40,18 @@
       // The window and the reference marker live in app.js: they outlive this
       // view, because a window the user chose must survive leaving the page and
       // the marker moves only on an explicit "Mark as seen".
-      var state = {
+      // The filters live in app.js too (deps.filterState): created here they
+      // were reset by every rebuild, so a refresh threw away what the reader
+      // had narrowed the list to.
+      var state = deps.filterState ? deps.filterState() : {};
+      if (state.status == null) {
         // Acknowledged rows are hidden by default: acknowledging is how a
         // reader says "I have dealt with this one", so it leaves the list.
-        status: 'open',
-        severity: '',
-        host: '',
-        sort: { key: 'time', dir: 'desc' },
-      };
+        state.status = 'open';
+        state.severity = '';
+        state.host = '';
+        state.sort = { key: 'time', dir: 'desc' };
+      }
       var names = {};
       var body = el('div', {});
       var stripHost = el('div', {});
@@ -77,6 +81,7 @@
               el('p', {}, t('changes.help.p2')),
               el('p', {}, t('changes.help.p3')),
               el('p', {}, t('changes.help.p4')),
+              el('p', {}, t('changes.help.p5')),
             ];
           },
         },
@@ -102,7 +107,8 @@
             })),
             ui.filter(t('changes.filter.status'), ui.select({
               label: t('changes.filter.status'), value: state.status,
-              options: [['open', t('changes.status.open')], ['acked', t('changes.status.acked')], ['all', t('changes.status.all')]],
+              options: [['open', t('changes.status.open')], ['acked', t('changes.status.acked')],
+                ['muted', t('changes.status.muted')], ['all', t('changes.status.all')]],
               onchange: function (e) { state.status = e.target.value; onChange(); },
             })),
             ui.filter(t('changes.filter.host'), el('input', {
@@ -134,7 +140,39 @@
           .catch(function (e) { ui.toast(t('changes.title'), errText(e), { bad: true }); });
       }
 
+      // Mute / unmute a RULE: every row sharing this muteKey (source + type, any
+      // host), for the caller only (POST/DELETE /api/changes/mute).
+      function setMute(ev, on) {
+        var req = on
+          ? api('/api/changes/mute', { method: 'POST', body: { key: ev.muteKey } })
+          : api('/api/changes/mute/' + encodeURIComponent(ev.muteKey), { method: 'DELETE' });
+        return req
+          .then(function (res) {
+            var until = on ? ((res && res.mutedUntil) || new Date(Date.now() + 24 * 3600 * 1000).toISOString()) : null;
+            (data.events || []).forEach(function (e) { if (e.muteKey === ev.muteKey) e.mutedUntil = until; });
+            ui.closeDrawer();
+            ui.toast(on ? t('changes.act.muted') : t('changes.act.unmuted'), kindLabel(ev.kind) + ' · ' + (ev.type || ''));
+            draw();
+          })
+          .catch(function (e) { ui.toast(t('changes.title'), errText(e), { bad: true }); });
+      }
+
       function hostName(id) { return names[id] || (t('changes.agentN', { id: id })); }
+
+      // The record a row is about, when it has a page of its own: an event
+      // opens the event, a situation the situation. Without this the row only
+      // led to the host, and the event had to be found again in its own list.
+      function recordAction(ev) {
+        var id = ev.refId != null ? ev.refId : ev.ref_id;
+        if (id == null) return null;
+        if (ev.kind === 'event' && deps.openEvent) {
+          return { label: t('changes.act.event'), onclick: function () { ui.closeDrawer(); deps.openEvent(Number(id)); } };
+        }
+        if (ev.kind === 'cluster' && deps.openCluster) {
+          return { label: t('changes.act.situation'), onclick: function () { ui.closeDrawer(); deps.openCluster(Number(id)); } };
+        }
+        return null;
+      }
 
       function openRowDrawer(ev, tr) {
         var tone = SEV_TONE[ev.severity] || 'info';
@@ -154,7 +192,14 @@
             [ui.fmt.short(ev.firstAt || ev.timestamp), t('changes.drawer.first')],
             [ui.fmt.short(ev.timestamp), t('changes.drawer.last')],
             [null, t('changes.drawer.seen', { count: Number(ev.count) || 1 })],
-          ].concat(ev.acknowledgedAt ? [[ui.fmt.short(ev.acknowledgedAt), t('changes.drawer.acked')]] : []))),
+          ].concat(ev.acknowledgedAt ? [[ui.fmt.short(ev.acknowledgedAt), t('changes.drawer.acked')]] : [])
+            .concat(ev.mutedUntil ? [[ui.fmt.short(ev.mutedUntil), t('changes.drawer.mutedUntil')]] : []))),
+          // The same host and moment, opened on the screens that take it
+          // further (Probes, Diagnose, Investigate, Device log).
+          deps.contextActions && ev.agentId != null ? deps.contextActions({
+            agentId: Number(ev.agentId), target: ev.target || null,
+            sinceMs: Date.parse(ev.firstAt || ev.timestamp),
+          }) : null,
         ];
         ui.openDrawer({
           title: ev.summary,
@@ -166,11 +211,12 @@
             ev.ackKey ? ui.button('secondary', ev.acknowledgedAt ? t('changes.act.unack') : t('changes.act.ack'), {
               onclick: function () { setAck(ev, !ev.acknowledgedAt); },
             }) : null,
-          ].filter(Boolean), ev.agentId == null ? [] : [
-            ui.button('primary', t('changes.drawer.openHost'), {
+          ].filter(Boolean), [
+            recordAction(ev) ? ui.button('primary', recordAction(ev).label, { onclick: recordAction(ev).onclick }) : null,
+            ev.agentId == null ? null : ui.button(recordAction(ev) ? 'secondary' : 'primary', t('changes.drawer.openHost'), {
               onclick: function () { ui.closeDrawer(); openAgent(Number(ev.agentId)); },
             }),
-          ]),
+          ].filter(Boolean)),
         });
       }
 
@@ -183,8 +229,10 @@
               time: ui.fmt.short(ev.timestamp),
               severity: ui.badge(SEV_TONE[ev.severity] || 'info', String(ev.severity || '')),
               type: ui.meta(kindLabel(ev.kind)),
-              title: ev.acknowledgedAt
-                ? el('span', {}, ev.summary, ' ', ui.badge('neutral', t('changes.status.acked')))
+              title: ev.acknowledgedAt || ev.mutedUntil
+                ? el('span', {}, ev.summary,
+                  ev.acknowledgedAt ? [' ', ui.badge('neutral', t('changes.status.acked'))] : null,
+                  ev.mutedUntil ? [' ', ui.badge('neutral', t('changes.status.muted'))] : null)
                 : ev.summary,
               // Host is a link in its own column, never a chip on the title.
               host: ev.agentId == null ? ui.meta('—')
@@ -198,9 +246,12 @@
                 } : null,
                 [
                   { label: t('changes.act.open'), onclick: function () { openRowDrawer(ev, null); } },
+                  recordAction(ev),
                   ev.agentId == null ? null : { label: t('changes.act.host'), onclick: function () { openAgent(Number(ev.agentId)); } },
                   '-',
-                  { label: t('changes.act.mute'), danger: true, onclick: function () { ui.toast(t('changes.act.muted'), ev.summary); } },
+                  !ev.muteKey ? null : ev.mutedUntil
+                    ? { label: t('changes.act.unmute'), onclick: function () { setMute(ev, false); } }
+                    : { label: t('changes.act.mute'), danger: true, onclick: function () { setMute(ev, true); } },
                 ].filter(Boolean)),
             },
           };
@@ -235,8 +286,9 @@
       // so acknowledging a WARN takes it off the WARN card too.
       function byStatus() {
         return (data.events || []).filter(function (ev) {
-          if (state.status === 'open') return !ev.acknowledgedAt;
+          if (state.status === 'open') return !ev.acknowledgedAt && !ev.mutedUntil;
           if (state.status === 'acked') return !!ev.acknowledgedAt;
+          if (state.status === 'muted') return !!ev.mutedUntil;
           return true;
         });
       }
@@ -271,6 +323,9 @@
         var pool = byStatus();
         var ackedHidden = state.status === 'open'
           ? (data.events || []).filter(function (ev) { return ev.acknowledgedAt; }).length : 0;
+        // A row both acknowledged and muted is counted once, as acknowledged.
+        var mutedHidden = state.status === 'open'
+          ? (data.events || []).filter(function (ev) { return ev.mutedUntil && !ev.acknowledgedAt; }).length : 0;
         pool.forEach(function (ev) { if (counts[ev.severity] !== undefined) counts[ev.severity]++; });
         var pick = function (sev) {
           return function () { state.severity = state.severity === sev ? '' : sev; draw(); };
@@ -286,7 +341,8 @@
         var kids = [toolbar(draw)];
         kids.push(ui.inlineNote(t('changes.since', { when: ui.fmt.abs(data.since) })
           + (data.correlated > 0 ? ' · ' + t('changes.correlated', { rows: data.total, raw: data.rawTotal }) : '')
-          + (ackedHidden > 0 ? ' · ' + t('changes.ackedHidden', { n: ackedHidden }) : '')));
+          + (ackedHidden > 0 ? ' · ' + t('changes.ackedHidden', { n: ackedHidden }) : '')
+          + (mutedHidden > 0 ? ' · ' + t('changes.mutedHidden', { n: mutedHidden }) : '')));
         // A partial result is a fact about the DATA, so it sits above the table
         // as an inline note — never a banner, never hidden behind the (?).
         if (data.partial && (data.failedSources || []).length) {

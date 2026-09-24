@@ -143,12 +143,19 @@ function createInterfaceStatesRepository(db) {
   // Collapses a reversing transition onto the existing row instead of adding a
   // second one: an interface bouncing every 20 seconds is ONE finding
   // ("flapping 14 times"), not 14 unreadable rows.
+  //
+  // THE ORDER OF THE SET LIST IS LOAD-BEARING. MySQL evaluates single-table
+  // UPDATE assignments left to right, and a later one sees the value an
+  // earlier one just wrote. With flap_count incremented first, the summary
+  // read the NEW count and added one again — "flapping 3×" beside
+  // flap_count = 2. The summary is therefore written FIRST, from the old
+  // count + 1, and the counter after it.
   async function markFlapping(id, { at }) {
     const [res] = await pool.query(
       `UPDATE interface_state_transitions
-          SET flapping = 1, flap_count = flap_count + 1, detected_at = ?,
-              severity = 'WARN',
-              summary = CONCAT(SUBSTRING_INDEX(summary, ' (flapping', 1), ' (flapping ', flap_count + 1, '×)')
+          SET summary = CONCAT(SUBSTRING_INDEX(summary, ' (flapping', 1), ' (flapping ', flap_count + 1, '×)'),
+              flapping = 1, flap_count = flap_count + 1, detected_at = ?,
+              severity = 'WARN'
         WHERE id = ?`,
       [at, id]
     );

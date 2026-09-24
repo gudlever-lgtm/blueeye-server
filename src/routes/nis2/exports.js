@@ -5,7 +5,9 @@ const { asyncHandler } = require('../../middleware/asyncHandler');
 const { requireAuth } = require('../../auth/middleware');
 const { toCsv } = require('../../lib/csv');
 const { computeDashboard, actionText } = require('../../nis2/dashboard');
-const { buildExecutiveReport, renderExecutiveHtml, renderRegisterHtml } = require('../../nis2/report');
+const {
+  buildExecutiveReport, renderExecutiveHtml, renderRegisterHtml, incidentRegisterSections,
+} = require('../../nis2/report');
 const { createT } = require('../../nis2/i18n');
 
 // The compliance pack's artefacts: CSV for the three registers, and print-ready
@@ -120,14 +122,8 @@ function createExportsRouter(ctx) {
   router.get('/export/incident.html', requireAuth, reader, asyncHandler(async (req, res) => {
     const rows = await nis2IncidentsRepo.findAll();
     const t = createT(localeOf(req));
-    const dash = t('doc.dash');
-    const when = (v) => (v ? new Date(v).toLocaleString(t.htmlLang) : dash);
-    sendHtml(res, renderRegisterHtml(t('title.incident'), [{
-      heading: t('incident.heading', { n: rows.length }),
-      intro: t('incident.intro'),
-      headers: [t('col.ref'), t('col.title'), t('col.severity'), t('col.detected'), t('col.resolved'), t('col.status'), t('col.nis2'), t('col.notify')],
-      rows: rows.map((i) => [i.incidentId, i.title, t.enum('severity', i.severity), when(i.detectedAt), when(i.resolvedAt), t.enum('incidentStatus', i.status), t.yesNo(i.nis2Relevant), t.yesNo(i.notificationRequired)]),
-    }], { org: orgOf(req), locale: t.locale }));
+    // The overview plus the Article 23 reporting record (src/nis2/report.js).
+    sendHtml(res, renderRegisterHtml(t('title.incident'), incidentRegisterSections(rows, t), { org: orgOf(req), locale: t.locale }));
   }));
 
   return router;

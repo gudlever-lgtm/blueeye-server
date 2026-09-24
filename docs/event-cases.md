@@ -34,6 +34,7 @@ subsystem** in this codebase; playbook-related fields are surfaced as `null`.
 | 048 | `findings.event_case_id` | nullable FK, `ON DELETE SET NULL` — the grouping link |
 | 049 | `config_snapshots` | raw device config: `device_id`→`agents`, `config_text`, `captured_at`, `captured_via` (manual/agent_poll/change_detected) |
 | 050 | `event_cases.config_change_id` | nullable FK→`config_snapshots` — the suspected trigger |
+| 129 | `event_cases.cluster_id` | nullable FK→`event_clusters`, `ON DELETE SET NULL`, indexed — the **situation** (cross-agent cluster) the case is part of |
 
 ## Auto-creation & grouping
 
@@ -117,7 +118,34 @@ another site immediately shows its current name/site on old events too.
 closed`, plus `closed → open` (reopen, **requires a comment**, stored in the audit
 trail). Any other transition is rejected with 409. `autoResolveJob.js` is a
 leader-only job that resolves events stuck in `investigating` once no new anomaly
-has linked within the inactivity window (audited, actor `system`).
+has linked within the inactivity window (audited, actor `system`) — **unless the
+case is part of a situation that is still open or acknowledged** (below).
+
+## Situations: a case knows its cluster
+
+A case groups findings **per device**; a situation (`event_clusters`, see
+`docs/cross-agent-correlation.md`) groups findings **across agents**. The same
+outage seen from three agents is three cases and one situation, and until
+migration 129 nothing linked them. Now:
+
+- **Linking.** Whenever the cluster sweep (`crossAgentClusterService`) opens or
+  updates a situation, it stamps `event_cases.cluster_id` on the cases of the
+  situation's member findings (`eventCasesRepository.linkCluster`). The **first
+  live** situation wins: a case already part of another situation that is still
+  open/acknowledged keeps it; one whose situation has since been resolved moves to
+  the new one.
+- **Shown.** The event page's lead says "Part of situation #N" (a link), the Events
+  list shows the same on the row, and the Situation page lists its member findings
+  and the linked cases (`GET /api/event-clusters/:id` → `eventCases`), each opening
+  its own page.
+- **Auto-resolve waits for the situation.** "No new anomaly on THIS device for 15
+  min" is not "the condition is over" while the same fault is still firing on the
+  other agents of its situation. So `autoResolveJob` (given the clusters repo) skips
+  an `investigating` case whose situation is still `open`/`acknowledged`, and
+  resolves it on the first sweep after the situation ends (situations auto-resolve
+  after their own 30-min quiet period, never while an unacknowledged CRIT member is
+  held). A situation that cannot be read is treated as not live — a lookup outage
+  never holds a case open. Manual transitions are unaffected.
 
 ## Device config: snapshots, diff, risk, correlation
 

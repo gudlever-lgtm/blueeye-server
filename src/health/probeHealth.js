@@ -1,6 +1,10 @@
 'use strict';
 
 const { throughputHealthSummary } = require('./throughputHealth');
+// The probe types that do not vote on reachability (path_mtu, tls, rdns, dhcp)
+// — one list, owned by the repository whose SQL already leaves them out of the
+// fleet-health read and the uptime figure.
+const { DIAGNOSTIC_TYPES } = require('../repositories/probeResultsRepository');
 
 // Fleet probe-health: turns an agent's recent active-probe results (ping / TCP /
 // DNS / traceroute) into a single, explainable health verdict driven by the
@@ -137,9 +141,19 @@ function computeAgentHealth(rows, { now = Date.now() } = {}) {
   };
   if (!Array.isArray(rows) || rows.length === 0) return empty;
 
+  // Diagnostic probes are judged on their own terms (probeFindings.js) and
+  // never count as targets here — the same rule the fleet-health read applies
+  // in SQL (probeResultsRepository.fleetHealth). A DHCP test that heard no
+  // offer, or a TLS handshake a plain-HTTP port refused, is not "1/5 targets
+  // not responding": every caller that hands this function an agent's raw
+  // rows (the probe findings, the per-agent fleet drill-down, the export, the
+  // assistant) used to count them as if they were.
+  const measured = rows.filter((r) => r && !DIAGNOSTIC_TYPES.includes(r.type));
+  if (!measured.length) return empty;
+
   // Group by (type,target), preserving newest-first order within each group.
   const groups = new Map();
-  for (const r of rows) {
+  for (const r of measured) {
     const key = `${r.type}|${r.target}`;
     if (!groups.has(key)) groups.set(key, []);
     groups.get(key).push(r);
@@ -258,7 +272,16 @@ function interfaceReason(iface) {
   const w = iface.worst || {};
   const where = w.iface ? ` (${w.iface})` : '';
   if (iface.status === 'down') return `Link down${where}.`;
+  // A named cause beats a bare error rate: "errors 3/s" sends someone to the
+  // cable, "duplex mismatch" sends them to the port configuration, and only
+  // one of those is the fix (src/health/interfaceHealth.js reasonsOf).
+  const reasons = Array.isArray(w.reasons) ? w.reasons : [];
+  if (reasons.includes('duplex_mismatch')) return `Duplex mismatch suspected${where}: half duplex with collisions or frame errors increasing.`;
+  if (reasons.includes('crc_errors')) return `Frame/CRC errors ${w.frameErrPerSec}/s${where} — suspect cabling, patch lead or SFP.`;
+  if (reasons.includes('carrier_errors')) return `Carrier errors ${w.carrierErrPerSec}/s${where} — the link is flapping or the cabling is bad.`;
   if (iface.status === 'bad') return w.errPerSec > 0 ? `Interface errors ${w.errPerSec}/s${where}.` : `Interface nearly saturated${where}.`;
+  if (iface.status === 'warn' && reasons.includes('half_duplex')) return `Link negotiated half duplex${where}.`;
+  if (iface.status === 'warn' && reasons.includes('fifo_overrun')) return `NIC receive FIFO overruns ${w.fifoErrPerSec}/s${where} — the host is not draining the NIC fast enough.`;
   if (iface.status === 'warn') return w.dropPerSec > 0 ? `Interface discards ${w.dropPerSec}/s${where}.` : `High interface utilisation${where}.`;
   return 'Interfaces healthy.';
 }

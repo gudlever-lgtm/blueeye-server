@@ -148,15 +148,37 @@ test('a sender that matches an agent-reported IP resolves to that agent', async 
   assert.equal(deviceEventsRepo.rows[0].device_id, 9);
 });
 
-test('an unknown sender falls back to the ARP table', async () => {
+// UPDATED DELIBERATELY (migration 133). This used to assert that an ARP row
+// agent 4 REPORTED made 10.14.0.77 agent 4's — i.e. the observer was credited
+// with the sender, which put a whole switch's log on the collector host. The
+// ARP table now resolves only through ownership: the MAC behind the sender is
+// also behind an address an agent reports as its OWN.
+test('an unknown sender falls back to the ARP table only through an agent\'s own MAC', async () => {
+  const arpEntriesRepo = makeArpEntriesRepo();
+  // Agent 4 saw 10.14.0.77 at a MAC — and the SAME MAC is behind 10.14.0.50,
+  // which agent 9 reports as its own address. 10.14.0.77 is agent 9's host.
+  await arpEntriesRepo.upsertMany(4, [
+    { ip: '10.14.0.77', mac: '00:11:22:33:44:55', interface: 'eth0' },
+    { ip: '10.14.0.50', mac: '00:11:22:33:44:55', interface: 'eth0' },
+  ]);
+  const deviceEventsRepo = makeDeviceEventsRepo();
+  const app = makeApp({ agentsRepo: fleet(), agentTokensRepo: agentToken(), deviceEventsRepo, arpEntriesRepo });
+
+  const res = await post(app, [EVENT({ sourceIp: '10.14.0.77' })]);
+  assert.equal(res.body.resolved, 1);
+  assert.equal(deviceEventsRepo.rows[0].device_id, 9, 'the host that owns the MAC, not the agent that saw it');
+});
+
+test('an ARP row names the OBSERVER, and the observer is never credited with the sender', async () => {
   const arpEntriesRepo = makeArpEntriesRepo();
   await arpEntriesRepo.upsertMany(4, [{ ip: '10.14.0.77', mac: '00:11:22:33:44:55', interface: 'eth0' }]);
   const deviceEventsRepo = makeDeviceEventsRepo();
   const app = makeApp({ agentsRepo: fleet(), agentTokensRepo: agentToken(), deviceEventsRepo, arpEntriesRepo });
 
   const res = await post(app, [EVENT({ sourceIp: '10.14.0.77' })]);
-  assert.equal(res.body.resolved, 1);
-  assert.equal(deviceEventsRepo.rows[0].device_id, 4);
+  assert.equal(res.body.unresolved, 1);
+  assert.equal(deviceEventsRepo.rows[0].device_id, null, 'agent 4 merely saw the address');
+  assert.equal(deviceEventsRepo.rows[0].source_ip, '10.14.0.77');
 });
 
 test('a sender nobody can resolve is STORED, not dropped', async () => {

@@ -59,3 +59,16 @@ test('a repository failure is swallowed (best-effort), returns 0', async () => {
   const n = await pipe.processResults(9, [payload([{ srcIp: '10.0.0.5', dstIp: '8.8.8.8' }])]);
   assert.equal(n, 0); // did not throw
 });
+
+test('the VLAN and in/out ifIndex survive enrichment and reach the store', async () => {
+  const flowsRepo = fakeRepo();
+  const pipe = createFlowPipeline({ flowsRepo, enricher: buildEnricher(), config: { geoEnabled: true } });
+  await pipe.processResults(9, [payload([
+    { srcIp: '10.0.0.5', dstIp: '8.8.8.8', bytes: 100, vlan: 20, inIf: 3, outIf: 49 },
+    { srcIp: '10.0.0.5', dstIp: '10.0.0.9', bytes: 50 },
+  ])]);
+  const ext = flowsRepo.rows.find((r) => r.dstIp === '8.8.8.8');
+  assert.deepEqual([ext.vlan, ext.inIf, ext.outIf, ext.country], [20, 3, 49, 'US']);
+  const internal = flowsRepo.rows.find((r) => r.dstIp === '10.0.0.9');
+  assert.deepEqual([internal.vlan, internal.inIf, internal.outIf], [null, null, null]);
+});

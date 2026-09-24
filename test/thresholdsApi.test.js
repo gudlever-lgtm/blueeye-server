@@ -89,3 +89,53 @@ test('PUT /api/thresholds/:location_id is admin-only (403 viewer) and 404 unknow
   const unknown = makeApp({ locationsRepo: makeLocationsRepo({ findById: async () => null }) });
   assert.equal((await request(unknown).put('/api/thresholds/999').set('Authorization', authHeader('admin')).send({ metric: 'latency', warning_value: 1, critical_value: 2 })).status, 404);
 });
+
+// ---- DELETE /api/thresholds[/:location_id]?metric= -------------------------
+// The settings panel removes a threshold: a location override falls back to
+// the global default, and a global default removed means the metric is not
+// evaluated at all (no probe outage opens for it).
+
+test('DELETE /api/thresholds?metric= removes a global default (admin, 200) and 404s the second time', async () => {
+  const thresholdsRepo = makeProbeThresholdsRepo();
+  const app = makeApp({ thresholdsRepo });
+  const res = await request(app).delete('/api/thresholds?metric=latency').set('Authorization', authHeader('admin'));
+  assert.equal(res.status, 200);
+  assert.deepEqual(res.body.removed, { scope: 'global', metric: 'latency' });
+  assert.ok(!thresholdsRepo.rows.some((r) => r.location_id == null && r.metric === 'latency'));
+  const again = await request(app).delete('/api/thresholds?metric=latency').set('Authorization', authHeader('admin'));
+  assert.equal(again.status, 404);
+});
+
+test('DELETE /api/thresholds validates the metric (400) and is admin-only (401/403)', async () => {
+  const app = makeApp();
+  assert.equal((await request(app).delete('/api/thresholds?metric=cpu').set('Authorization', authHeader('admin'))).status, 400);
+  assert.equal((await request(app).delete('/api/thresholds').set('Authorization', authHeader('admin'))).status, 400);
+  assert.equal((await request(app).delete('/api/thresholds?metric=latency')).status, 401);
+  for (const role of ['viewer', 'operator']) {
+    assert.equal((await request(app).delete('/api/thresholds?metric=latency').set('Authorization', authHeader(role))).status, 403, role);
+  }
+});
+
+test('DELETE /api/thresholds/:location_id?metric= removes only the override; the global default stays', async () => {
+  const thresholdsRepo = makeProbeThresholdsRepo();
+  thresholdsRepo.rows.push({ id: 50, location_id: 7, metric: 'latency', warning_value: 10, critical_value: 20, debounce_count: 2 });
+  const app = withLocation({ thresholdsRepo });
+  const res = await request(app).delete('/api/thresholds/7?metric=latency').set('Authorization', authHeader('admin'));
+  assert.equal(res.status, 200);
+  assert.deepEqual(res.body.removed, { scope: 'location', locationId: 7, metric: 'latency' });
+  assert.ok(thresholdsRepo.rows.some((r) => r.location_id == null && r.metric === 'latency'), 'global default kept');
+  // Nothing left to remove for that location.
+  assert.equal((await request(app).delete('/api/thresholds/7?metric=latency').set('Authorization', authHeader('admin'))).status, 404);
+});
+
+test('DELETE /api/thresholds/:location_id: 400 bad id / metric, 404 unknown location, 403 viewer, 500 on DB failure', async () => {
+  const app = withLocation();
+  assert.equal((await request(app).delete('/api/thresholds/abc?metric=latency').set('Authorization', authHeader('admin'))).status, 400);
+  assert.equal((await request(app).delete('/api/thresholds/7?metric=nope').set('Authorization', authHeader('admin'))).status, 400);
+  assert.equal((await request(app).delete('/api/thresholds/7?metric=latency').set('Authorization', authHeader('viewer'))).status, 403);
+  const unknown = makeApp({ locationsRepo: makeLocationsRepo({ findById: async () => null }) });
+  assert.equal((await request(unknown).delete('/api/thresholds/999?metric=latency').set('Authorization', authHeader('admin'))).status, 404);
+  const broken = withLocation({ thresholdsRepo: makeProbeThresholdsRepo({ remove: throwingAsync() }) });
+  const res = await request(broken).delete('/api/thresholds/7?metric=latency').set('Authorization', authHeader('admin'));
+  assert.equal(res.status, 500);
+});

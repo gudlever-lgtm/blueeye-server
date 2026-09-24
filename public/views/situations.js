@@ -28,9 +28,13 @@
     // Still live, so still resolvable — the same pair the server calls
     // LIVE_STATUSES in src/routes/eventClusters.js.
     var LIVE = ['open', 'acknowledged'];
-    var STATUS_TONE = { open: 'info', acknowledged: 'warn', resolved: 'ok', closed: 'neutral' };
-    var CONF_TONE = { high: 'crit', medium: 'warn', low: 'neutral' };
+    // The same tones as the situation page (views/situation.js). High
+    // confidence was red here and green there — the same value, two answers.
+    var STATUS_TONE = { open: 'crit', acknowledged: 'warn', resolved: 'ok', closed: 'neutral' };
+    var CONF_TONE = { high: 'ok', medium: 'warn', low: 'neutral' };
     var CONF_RANK = { high: 3, medium: 2, low: 1 };
+    var SEV_TONE = { CRIT: 'crit', WARN: 'warn', INFO: 'info' };
+    var SEV_RANK = { CRIT: 3, WARN: 2, INFO: 1 };
 
     function view() {
       var state = deps.state;
@@ -175,6 +179,7 @@
         }
         var dir = state.sort.dir === 'asc' ? 1 : -1;
         var read = {
+          severity: function (c) { return SEV_RANK[c.alertLastSeverity] || 0; },
           confidence: function (c) { return CONF_RANK[c.confidence] || 0; },
           status: function (c) { return String(c.status || ''); },
           members: function (c) { return (c.memberFindingIds || []).length; },
@@ -195,6 +200,9 @@
           note: t('sit.count', { n: loaded.length }),
           children: [ui.dataTable({
             columns: [
+              // How bad it is, first: the severity the situation last alerted
+              // at. Confidence says how sure the grouping is — not how urgent.
+              { key: 'severity', label: t('sit.col.severity'), width: '100px', sortable: true },
               { key: 'confidence', label: t('sit.col.confidence'), width: '130px', sortable: true },
               { key: 'status', label: t('sit.col.status'), width: '140px', sortable: true },
               { key: 'members', label: t('sit.col.members'), width: '110px', sortable: true, num: true },
@@ -214,6 +222,9 @@
                 cluster: c,
                 key: c.id,
                 cells: {
+                  severity: c.alertLastSeverity
+                    ? ui.badge(SEV_TONE[c.alertLastSeverity] || 'neutral', c.alertLastSeverity)
+                    : ui.meta('–'),
                   confidence: ui.badge(CONF_TONE[c.confidence] || 'neutral', t('sit.conf.' + c.confidence)),
                   status: ui.badge(STATUS_TONE[c.status] || 'neutral', t('sit.status.' + c.status)),
                   members: String((c.memberFindingIds || []).length),

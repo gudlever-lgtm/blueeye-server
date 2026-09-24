@@ -140,7 +140,38 @@ function createDeviceInterfacesRepository(db) {
          last_seen    = VALUES(last_seen)`,
       params,
     );
-    return { upserted: Number(res.affectedRows || 0), renumbered, statusChanges };
+    const retired = await retirePlaceholders(deviceId, rows, at);
+    return { upserted: Number(res.affectedRows || 0), renumbered, statusChanges, retired };
+  }
+
+  // PLACEHOLDER ROWS. The sFlow counter ingest creates `ifIndex N` rows
+  // (name_source 'ifIndex') for ports it hears of before any inventory has
+  // named them (src/devices/sflowCounterIngest.js). When a poll then stores the
+  // real, named port with the same ifIndex, two rows claim one index and a
+  // lookup by index could land on either. The placeholder is RETIRED: its
+  // if_index is cleared (and if_index_changed_at stamped), nothing else.
+  //
+  // Why not delete it: device_counter_samples has no foreign key on
+  // interface_id (migration 109), so deleting the row would leave its samples
+  // pointing at nothing — history nobody can attribute to a port. Kept, the row
+  // still says which index it was (its name), its samples stay readable, it no
+  // longer competes for the index, and the retention purge removes it once it
+  // has not been seen for the window, like any port that went away.
+  //
+  // Only for real-named rows in THIS batch (a placeholder never retires a
+  // placeholder), and never a row the batch itself wrote. Returns rows retired.
+  async function retirePlaceholders(deviceId, rows, at) {
+    const named = rows.filter((i) => (i.nameSource || 'ifName') !== 'ifIndex' && i.ifIndex != null);
+    if (!named.length) return 0;
+    const indexes = [...new Set(named.map((i) => Number(i.ifIndex)))];
+    const [res] = await pool.query(
+      `UPDATE device_interfaces
+          SET if_index = NULL, if_index_changed_at = ?
+        WHERE device_id = ? AND name_source = 'ifIndex'
+          AND if_index IN (?) AND if_name NOT IN (?)`,
+      [at, deviceId, indexes, rows.map((i) => i.ifName)],
+    );
+    return Number((res && res.affectedRows) || 0);
   }
 
   // Records a port's link state learned OUTSIDE a poll — a trap or a syslog
@@ -161,15 +192,28 @@ function createDeviceInterfacesRepository(db) {
 
   // ifName -> row id, for one device. The counter path resolves its samples
   // through this rather than carrying an ifIndex into a time series.
+  //
+  // byIndex: when two rows share an ifIndex — an sFlow placeholder (`ifIndex
+  // N`, name_source 'ifIndex') not yet retired next to the real port — the
+  // real-named row wins, and among equals the oldest row (lowest id), so the
+  // answer never depends on the order MySQL happens to return rows in.
   async function idMapForDevice(deviceId) {
     const [rows] = await pool.query(
-      'SELECT id, if_name, if_index FROM device_interfaces WHERE device_id = ?', [deviceId],
+      'SELECT id, if_name, if_index, name_source FROM device_interfaces WHERE device_id = ? ORDER BY id',
+      [deviceId],
     );
     const byName = new Map();
     const byIndex = new Map();
+    const placeholder = new Set(); // indexes currently held by a placeholder row
     for (const r of rows) {
       byName.set(r.if_name, Number(r.id));
-      if (r.if_index != null) byIndex.set(Number(r.if_index), Number(r.id));
+      if (r.if_index == null) continue;
+      const idx = Number(r.if_index);
+      const isPlaceholder = r.name_source === 'ifIndex';
+      if (!byIndex.has(idx) || (placeholder.has(idx) && !isPlaceholder)) {
+        byIndex.set(idx, Number(r.id));
+        if (isPlaceholder) placeholder.add(idx); else placeholder.delete(idx);
+      }
     }
     return { byName, byIndex };
   }

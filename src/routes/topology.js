@@ -17,7 +17,7 @@ const DEFAULT_TOP_N = 50;
 // Flow-derived dependency / topology map. Mounted at /api/topology behind the
 // user JWT. Builds a who-talks-to-whom graph from the ingested 5-tuple flows
 // (whole fleet, or one agent via ?agentId=), over a ?minutes window. viewer+.
-function createTopologyRouter({ flowsRepo = null, agentsRepo = null, locationsRepo = null, centroids = null, lldpNeighborsRepo = null, serviceDependenciesRepo = null, serviceDependencyJob = null, blastRadiusService = null, topologyChangesRepo = null, flowPairBaselinesRepo = null, flowPairBaselineJob = null, snmpDevicesRepo = null, getCategories = null }) {
+function createTopologyRouter({ flowsRepo = null, agentsRepo = null, locationsRepo = null, centroids = null, lldpNeighborsRepo = null, serviceDependenciesRepo = null, serviceDependencyJob = null, blastRadiusService = null, topologyChangesRepo = null, flowPairBaselinesRepo = null, flowPairBaselineJob = null, snmpDevicesRepo = null, snmpNeighborsRepo = null, deviceInterfacesRepo = null, getCategories = null }) {
   const router = express.Router();
   const reader = requireRole(ROLES.VIEWER, ROLES.OPERATOR, ROLES.ADMIN);
   const writer = requireRole(ROLES.OPERATOR, ROLES.ADMIN);
@@ -193,13 +193,28 @@ function createTopologyRouter({ flowsRepo = null, agentsRepo = null, locationsRe
   // GET /api/topology/graph — the UNIFIED graph carrying both edge types:
   // 'l2_link' (LLDP adjacencies) + 'service_dep' (TCP dependencies). viewer+.
   if (lldpNeighborsRepo || serviceDependenciesRepo) {
+    // The polled switches (snmp_devices), their own LLDP and the port MACs
+    // that resolve it go on this graph too. They used to be left out, so the
+    // Layers map showed agents only while blast radius — built by
+    // blastRadiusService.graph() from the same inputs — walked the switches.
+    // One source when the service is wired, so the map and the answer can
+    // never disagree about what is on the network; every read is bounded by
+    // its repository's own limit.
+    const readOr = (repo, method, args) => (repo && typeof repo[method] === 'function'
+      ? repo[method](args) : Promise.resolve([]));
     router.get('/graph', requireAuth, reader, asyncHandler(async (req, res) => {
-      const [l2, serviceDeps, agents] = await Promise.all([
-        lldpNeighborsRepo && typeof lldpNeighborsRepo.listAll === 'function' ? lldpNeighborsRepo.listAll({}) : Promise.resolve([]),
-        serviceDependenciesRepo && typeof serviceDependenciesRepo.listAll === 'function' ? serviceDependenciesRepo.listAll({}) : Promise.resolve([]),
+      if (blastRadiusService && typeof blastRadiusService.graph === 'function') {
+        return res.json(await blastRadiusService.graph());
+      }
+      const [l2, serviceDeps, agents, devices, deviceNeighbours, deviceMacs] = await Promise.all([
+        readOr(lldpNeighborsRepo, 'listAll', {}),
+        readOr(serviceDependenciesRepo, 'listAll', {}),
         agentsRepo && typeof agentsRepo.findAll === 'function' ? agentsRepo.findAll() : Promise.resolve([]),
+        readOr(snmpDevicesRepo, 'list', {}),
+        readOr(snmpNeighborsRepo, 'listAll', {}),
+        readOr(deviceInterfacesRepo, 'listMacs', {}),
       ]);
-      res.json(buildTopologyGraph({ l2, serviceDeps, agents }));
+      return res.json(buildTopologyGraph({ l2, serviceDeps, agents, devices, deviceNeighbours, deviceMacs }));
     }));
   }
 

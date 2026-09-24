@@ -55,10 +55,12 @@ function createUsersRepository(db) {
   }
 
   // Includes the password hash + one-time-password state — used only by the
-  // login flow (verify the password, then enforce the forced-change/expiry rules).
+  // login flow (verify the password, then enforce the forced-change/expiry rules)
+  // and the password-history checks. `password_changed_at` (migration 041)
+  // drives the opt-in password max age.
   async function findByEmailWithHash(email) {
     const [rows] = await pool.query(
-      'SELECT id, email, password_hash, role, must_change_password, temp_password_expires_at, created_at, updated_at FROM users WHERE email = ?',
+      'SELECT id, email, password_hash, password_changed_at, role, must_change_password, temp_password_expires_at, created_at, updated_at FROM users WHERE email = ?',
       [email]
     );
     const row = rows[0];
@@ -76,8 +78,11 @@ function createUsersRepository(db) {
     tempPasswordExpiresAt = null,
     tempPasswordCreatedBy = null,
   }) {
+    // password_changed_at (migration 041) is stamped on every write of
+    // password_hash in this file, so the max-age clock always starts at the
+    // password actually in use.
     const [result] = await pool.query(
-      'INSERT INTO users (email, name, password_hash, role, protected, must_change_password, temp_password_expires_at, temp_password_created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+      'INSERT INTO users (email, name, password_hash, password_changed_at, role, protected, must_change_password, temp_password_expires_at, temp_password_created_by) VALUES (?, ?, ?, NOW(), ?, ?, ?, ?, ?)',
       [
         email,
         name,
@@ -116,6 +121,7 @@ function createUsersRepository(db) {
     if (patch.passwordHash !== undefined) {
       fields.push('password_hash = ?');
       params.push(patch.passwordHash);
+      fields.push('password_changed_at = NOW()');
     }
 
     // A role or password change must invalidate any tokens issued earlier (the
@@ -144,6 +150,7 @@ function createUsersRepository(db) {
     const [result] = await pool.query(
       `UPDATE users
           SET password_hash = ?,
+              password_changed_at = NOW(),
               must_change_password = 1,
               temp_password_expires_at = ?,
               temp_password_created_by = ?,
@@ -162,6 +169,7 @@ function createUsersRepository(db) {
     const [result] = await pool.query(
       `UPDATE users
           SET password_hash = ?,
+              password_changed_at = NOW(),
               must_change_password = 0,
               temp_password_expires_at = NULL,
               temp_password_created_by = NULL,
@@ -263,6 +271,39 @@ function createUsersRepository(db) {
     return res.affectedRows > 0;
   }
 
+  // "Mute this rule" on the Changes page (migration 134). Only live mutes are
+  // read — an expired one is simply gone. Returns Map<muteKey, Date until>.
+  async function listChangeMutes(userId) {
+    const [rows] = await pool.query(
+      'SELECT mute_key, muted_until FROM change_mutes WHERE user_id = ? AND muted_until > NOW(3)',
+      [userId]
+    );
+    const out = new Map();
+    for (const r of rows) out.set(String(r.mute_key), r.muted_until instanceof Date ? r.muted_until : new Date(r.muted_until));
+    return out;
+  }
+
+  // Mutes (or re-mutes, replacing the end time) one rule, and prunes this user's
+  // expired mutes on the way so the table stays bounded without a sweep.
+  async function muteChange(userId, key, until) {
+    await pool.query(
+      'INSERT INTO change_mutes (user_id, mute_key, muted_until) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE muted_until = VALUES(muted_until)',
+      [userId, key, until]
+    );
+    await pool.query('DELETE FROM change_mutes WHERE user_id = ? AND muted_until <= NOW(3)', [userId]);
+    return until;
+  }
+
+  // Unmute. True only when a LIVE mute was removed — an expired one is already
+  // not muting anything, so there was nothing to undo.
+  async function unmuteChange(userId, key) {
+    const [res] = await pool.query(
+      'DELETE FROM change_mutes WHERE user_id = ? AND mute_key = ? AND muted_until > NOW(3)',
+      [userId, key]
+    );
+    return res.affectedRows > 0;
+  }
+
   return {
     findAll,
     findById,
@@ -281,6 +322,9 @@ function createUsersRepository(db) {
     listChangeAcks,
     ackChange,
     unackChange,
+    listChangeMutes,
+    muteChange,
+    unmuteChange,
     updatePreferences,
   };
 }

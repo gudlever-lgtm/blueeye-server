@@ -472,7 +472,9 @@ function evalExpression(model, expr, ctx) {
   const text = expr.replace(/\s+/g, ' ').trim();
 
   if (/^DATABASE\(\)$/i.test(text)) return 'blueeye';
-  if (/^'.*'$/.test(text)) return text.slice(1, -1);
+  // A SQL string literal. A quote inside one is doubled (`DEFAULT ''lldp''`
+  // in a guarded ALTER), and MySQL reads it back as one — so does the model.
+  if (/^'.*'$/.test(text)) return text.slice(1, -1).replace(/''/g, "'");
 
   // IF(<cond>, '<sql>', '<sql>')  — including IF(EXISTS(<subquery>), ...)
   //

@@ -66,3 +66,19 @@ jobs:
           DB_PASSWORD: ''
           JWT_SECRET: ci-only-not-a-real-secret
         run: node scripts/verify-repositories-against-mysql.js
+
+      # The unit and gate suites wire fakes, so they cannot see a route whose
+      # SQL is invalid, a dependency server.js forgot to pass, or an ingest
+      # that answers 201 and writes nothing. This boots src/server.js exactly
+      # as production does against a scratch database, seeds it through the
+      # public API, posts a realistic agent's payloads to every ingest endpoint,
+      # checks the rows landed, then calls every route as every role and fails
+      # on any 500, stack trace, SQL text or internal path. docs/tests.md.
+      - name: Boot the real app and sweep every route against the real database
+        env:
+          DB_HOST: 127.0.0.1
+          DB_PORT: '3306'
+          DB_USER: root
+          DB_PASSWORD: ''
+          JWT_SECRET: ci-only-not-a-real-secret
+        run: node scripts/verify-routes-against-mysql.js

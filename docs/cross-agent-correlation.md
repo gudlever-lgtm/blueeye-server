@@ -7,46 +7,80 @@ single **event cluster** with a suspected common cause and a confidence tier —
 so a fault hitting several agents at once surfaces as ONE event, not N
 look-alike findings.
 
-Local + explainable, like the rest of the analysis stack: time clustering + a
-weighted signal score, no ML, every cluster carries a plain-language cause hint.
+Local + explainable, like the rest of the analysis stack: pairwise relations with
+a named reason, no ML, every cluster carries a plain-language cause hint AND the
+list of reasons it was grouped on.
 
-## Matching signals & confidence
+## What a finding is about (its subject)
 
-Weighted signals, in the spirit of the L2-loop-style confidence in
-`investigation/locator.js`:
+Grouping used to be "same 5-minute bucket, then same site". That merged two
+independent faults on one site into one situation, and left the same target
+failing from two sites as a weak `low` cluster. Grouping is now **target-aware**:
+every finding has a **subject** — `subjectOf()` in `src/analysis/crossAgentCorrelator.js`
+— read from the finding's own columns and its first evidence sample:
 
-| Signal | Meaning |
+| Finding | Subject key |
 | --- | --- |
-| **Time** | findings from **≥2 distinct agents** within `windowMs` (default 5 min) |
-| **Topology** | those agents share a **site** (`agents.location_id`) |
-| **Type** | ≥2 members share the same finding-type (`metric`) |
+| `probe.*`, `probe_outage.*` | `target:<host>` — the probe target, normalised (a URL → its hostname, `host:port` → host, lower-case). A **private** address or single-label name (`10.0.0.1`, `printer`) only means one machine within one site, so it is scoped: `target:site:<id>@10.0.0.1` (or `agent:<id>@…` without a site) |
+| `transaction.*` | `transaction:<testId>` |
+| `device.new` | `mac:<mac>` |
+| `l2.loop` (a switch) | `device:<deviceId>` |
+| `if.<port>.*` (counters, link down/flapping, duplex) | `port:<deviceId>/<interfaceId>` |
+| anything else (`agent.offline`, cpu, …) | `agent:<hostId>:<condition>` — the agent itself |
 
-| Signals present | Confidence |
+## Relations, reasons & confidence
+
+Two findings within `windowMs` (default 5 min) **of each other** are related when,
+in this order:
+
+| Reason | When |
 | --- | --- |
-| time only | **low** |
-| time + topology | **medium** |
-| time + topology + same type | **high** |
+| **target** | same subject — the same target seen by several agents, **whatever their sites** |
+| **switch** | both are about the same switch (two ports, or a port and the loop on it) |
+| **upstream** | one is about a switch, the other comes from an agent the blast-radius graph (`src/topology/blastRadius.js`, LLDP + switch neighbours) puts downstream of it |
+| **site** | both are about the **agents themselves**, share a site (`agents.location_id`) and report the same condition — N agents at one site going dark together |
+| **lldp** | their agents are adjacent in the LLDP neighbour graph (`lldp_neighbors`, mig 063) |
+| condition *(weak)* | agent-level findings, same condition, different/unknown sites |
 
-A **same-type-but-different-site** cluster stays **low**: medium/high require the
-topology signal.
+Anything else stays **apart**: two unrelated subjects on one site are two
+situations. The site relates agent-level findings only — the site *is* an
+agent's place in the topology, whereas the place of a probe target is unknown,
+so two different targets failing at one site are not related by the site alone.
+A cluster is a connected component of these relations spanning **≥2 distinct
+agents**.
 
-### Topology = shared site only (documented gap)
+| Relations present | Confidence |
+| --- | --- |
+| target / switch / upstream / site / lldp **and** ≥2 agents share a condition | **high** |
+| target / switch / upstream / lldp, mixed conditions | **medium** |
+| weak same-condition only | **low** |
 
-Signal 2 uses a **shared site** (`agents.location_id`) — the only cross-agent
-adjacency BlueEyes has today. **Subnet / VLAN / LLDP-neighbour adjacency does not
-exist**: agents don't report it and there's no schema for it. A missing/`null`
-site is treated as "no topology signal" — never faked. Adding subnet/VLAN/LLDP
-would require agent-side collection (a `blueeye-agent` change + redeploy) plus a
-schema/repository addition; until then this is a known gap, not a bug.
+"Condition" is the metric with a switch-port id folded out (`if.12.link.down` and
+`if.40.link.down` are both `if.link.down`).
+
+**Time: a sliding window, not buckets.** A relation needs the two findings within
+`windowMs` of each other, and a cluster is the connected component — anchored on its
+earliest member (`firstSeenAt`) and sliding forward (`detectedAt`) while related
+findings keep arriving. A fault straddling a bucket boundary is no longer split in
+two. The sweep reads **two** windows of findings, so a pair up to one window apart is
+always seen together even though the sweep runs only every ~60 s.
+
+**Why, stored.** Each cluster stores its `grouping_basis` (migration 130):
+`{ subjects, reasons: [{ kind, detail, agents }], why: [...] }`. The suspected cause
+ends with "Grouped because: …", the detail API's `evidenceSummary.drivers` and
+`confidenceBreakdown.explanation` name the reasons, and the Changes feed summarises a
+situation by them. Clusters stored before 130 have none and are explained from their
+tier, as before.
 
 ## Modules
 
 - **`src/analysis/crossAgentCorrelator.js`** — pure detector. `detect(findings,
-  { siteOf })` → candidate clusters (`{ memberFindingIds, hostIds, confidence,
-  signals, site, commonType, severity, detectedAt, suspectedCommonCause }`). No I/O.
-  Fixed-anchor time buckets across all hosts; within each bucket it peels off, in
-  decreasing confidence: per-site groups (≥2 agents) → topology clusters, then
-  per-metric groups → type-only clusters, then a time-only leftover.
+  { siteOf, topology })` → candidate clusters (`{ memberFindingIds, hostIds,
+  confidence, signals, site, topologySource, topologyDetail, commonType, grouping,
+  severity, firstSeenAt, detectedAt, suspectedCommonCause }`). No I/O. `topology`
+  carries `related(a, b)` (LLDP) and `downstreamOf(deviceId)` (blast radius), both
+  optional. `subjectOf()` is exported for anything else that needs "what is this
+  finding about".
 - **`src/repositories/eventClustersRepository.js`** — data access for
   `event_clusters` (migration 057). `create` / `listOpen` / `updateMembership` /
   `updateStatus` (guarded) / `listStaleOpen` / `list`.
@@ -54,9 +88,13 @@ schema/repository addition; until then this is a known gap, not a bug.
   `detectAndPersist()` loads recent findings across ALL agents
   (`findingStore.list(undefined, since)`), builds `siteOf` from the agent roster,
   runs the detector, then **dedups**: a candidate that overlaps an open cluster
-  (shares ≥1 member finding) **updates** that cluster (union members, re-evaluate
-  confidence, bump `detected_at`) instead of spawning a new one. `resolveStale()`
-  closes open clusters gone inactive. Best-effort — never throws.
+  (shares ≥1 member finding) — or, for a recurring fault whose earlier members
+  have scrolled out of the window, names the same target/port/switch/transaction
+  subject in its stored grouping basis — **updates** that cluster (union members
+  and reasons, re-evaluate confidence, bump `detected_at`) instead of spawning a
+  new one. It then stamps the cluster onto the **event cases** of its member
+  findings (`event_cases.cluster_id`, migration 129 — see `docs/event-cases.md`).
+  `resolveStale()` closes open clusters gone inactive. Best-effort — never throws.
 - **`src/analysis/crossAgentClusterJob.js`** — leader-only sweep (`{ runOnce, start,
   stop }`, ~60 s) wired into `server.js`'s `backgroundJobs`. Each tick runs a
   detection pass then a resolution pass. Detection lives in the sweep (not the
@@ -65,9 +103,11 @@ schema/repository addition; until then this is a known gap, not a bug.
 
 ## Dedup & resolution
 
-- **Dedup**: an open cluster whose member set overlaps a fresh candidate is
-  updated (member union, re-evaluated confidence/cause, advanced `detected_at`), so
-  a recurring pattern never spawns duplicate clusters.
+- **Dedup**: an open cluster whose member set overlaps a fresh candidate — or
+  whose stored subjects include one of the candidate's target/port/switch/
+  transaction subjects — is updated (member union, merged grouping basis,
+  re-evaluated confidence/cause, advanced `detected_at`), so a recurring pattern
+  never spawns duplicate clusters.
 - **Resolution**: findings carry no explicit "cleared" event, so resolution is
   **inactivity-based** (mirrors `eventCases/autoResolveJob.js`): an open cluster
   whose `detected_at` is older than the inactivity window (default 15 min, i.e. no
@@ -156,8 +196,10 @@ its evidence-sample count), **affected agents/targets**, a **confidence breakdow
 `src/analysis/crossAgentCorrelator.js` `confidenceBreakdown`), a suspected
 **root-cause layer** (`network-layer`/`application-layer`/`undetermined`, reusing the
 L2 `isAppMetric`/`isNetMetric` classifiers from `investigation/locator.js`) and a
-plain-language **evidence summary**. Pure assembly in `src/analysis/clusterView.js`.
-**viewer+**.
+plain-language **evidence summary** (naming the stored grouping reasons), the
+stored `groupingBasis`, and **`eventCases`** — the event cases linked to the
+situation (migration 129), listed on the Situation page with a link to each.
+Pure assembly in `src/analysis/clusterView.js`. **viewer+**.
 
 `POST /api/event-clusters/:id/ack` — `open` → `acknowledged` (**operator+**,
 hash-chained audit via `auditLogger`). `409` if not `open`.

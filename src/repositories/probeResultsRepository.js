@@ -14,9 +14,13 @@
 // PTR are both real faults and neither is a REACHABILITY fault — the host
 // answers. Counting them would put a perfectly reachable service in the outage
 // numbers and drag an SLA figure down for something no network change can fix.
-const DIAGNOSTIC_TYPES = ['path_mtu', 'tls', 'rdns'];
+// `dhcp` (migration 132) likewise: "no DHCP server answered" and "two DHCP
+// servers answered" are findings of their own (probeFindings.js), but the agent
+// that measured them is reachable, and a broadcast test of the segment must not
+// be read as an outage of the host running it.
+const DIAGNOSTIC_TYPES = ['path_mtu', 'tls', 'rdns', 'dhcp'];
 
-const COLUMNS = ['agent_id', 'ts', 'type', 'target', 'ok', 'rtt_ms', 'min_ms', 'max_ms', 'jitter_ms', 'loss_pct', 'status', 'cert_expiry_days', 'bytes', 'content_type', 'elements', 'hops', 'mtu', 'sizes', 'tls', 'rdns', 'error_code', 'failure', 'resolver', 'detail'];
+const COLUMNS = ['agent_id', 'ts', 'type', 'target', 'ok', 'rtt_ms', 'min_ms', 'max_ms', 'jitter_ms', 'loss_pct', 'status', 'cert_expiry_days', 'bytes', 'content_type', 'elements', 'hops', 'mtu', 'sizes', 'tls', 'rdns', 'error_code', 'failure', 'resolver', 'dhcp', 'detail'];
 
 function toRow(agentId, r) {
   const ts = r.ts instanceof Date ? r.ts : (r.ts ? new Date(r.ts) : new Date());
@@ -50,6 +54,8 @@ function toRow(agentId, r) {
     r.errorCode != null ? String(r.errorCode).slice(0, 32) : null,
     r.failure != null ? String(r.failure).slice(0, 16) : null,
     r.resolver != null ? String(r.resolver).slice(0, 64) : null,
+    // The DHCP offers (migration 132), written whole by the dhcp probe only.
+    r.dhcp && typeof r.dhcp === 'object' ? JSON.stringify(r.dhcp) : null,
     r.detail != null ? String(r.detail).slice(0, 255) : null,
   ];
 }
@@ -100,6 +106,10 @@ function fromRow(row) {
     errorCode: row.error_code ?? null,
     failure: row.failure ?? null,
     resolver: row.resolver ?? null,
+    // What the DHCP test heard (migration 132). NULL on every other type, on
+    // rows before the migration, and on a test that could not run — "not
+    // measured"; an empty `offers` list is the measurement "nobody answered".
+    dhcp: parseJson(row.dhcp),
     detail: row.detail,
   };
 }

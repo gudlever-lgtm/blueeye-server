@@ -42,6 +42,7 @@
     transactions: { path: '/transaction-tests', tabs: ['list', 'matrix'], tabKey: 'txTab' },
     flows: { path: '/flows' },
     topology: { path: '/topology' },
+    pathLocation: { path: '/path-location' },
     delta: { path: '/topology-delta' },
     diagnose: { path: '/diagnose' },
     deviceLog: { path: '/device-log' },
@@ -62,7 +63,7 @@
     cluster: { path: '/situations', param: true },
     reporting: {
       path: '/reporting',
-      tabs: ['findings', 'nis2', 'generator', 'schedules', 'audit'],
+      tabs: ['findings', 'sla', 'nis2', 'generator', 'schedules', 'audit'],
       tabKey: 'reportingSection',
     },
 
@@ -77,6 +78,7 @@
     enrollment: { path: '/enrollment' },
     discovery: { path: '/discovery' },
     coverage: { path: '/coverage' },
+    auditLog: { path: '/audit-log' },
     logs: { path: '/logs' },
     userLogs: { path: '/user-logs' },
     screening: { path: '/test-settings' },
@@ -84,7 +86,7 @@
     license: { path: '/license' },
     settings: {
       path: '/settings',
-      tabs: ['users', 'auth', 'apitokens', 'agentkey', 'analyse', 'alerting', 'severity', 'runbooks',
+      tabs: ['users', 'auth', 'apitokens', 'agentkey', 'analyse', 'alerting', 'severity', 'thresholds', 'runbooks',
         'integrations', 'cmdb', 'ai', 'maintenance', 'database', 'retention', 'types', 'map',
         'updates', 'agents', 'snmp', 'screening', 'assurance', 'appearance', 'license'],
       tabKey: 'settingsTab',
@@ -119,9 +121,9 @@
   // them too, but a typed URL does not go through the nav). Checked in the
   // client — the server has no session on an HTML request.
   var MIN_ROLE = {
-    delta: 'operator', troubleshooting: 'operator', investigation: 'operator',
+    delta: 'operator', investigation: 'operator',
     enrollment: 'operator', serviceAssurance: 'operator',
-    discovery: 'admin', coverage: 'admin', logs: 'admin', userLogs: 'admin', users: 'admin', screening: 'admin',
+    discovery: 'admin', coverage: 'admin', auditLog: 'admin', logs: 'admin', userLogs: 'admin', users: 'admin', screening: 'admin',
     kitchenSink: 'admin',
   };
 

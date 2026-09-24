@@ -2,11 +2,13 @@
 
 const { DEFAULT_CATEGORIES, listCategories } = require('../flows/categories');
 const { baseUrlBlockedReason } = require('../integrations/ssrfGuard');
+const { resolveAlertingEnabled, refreshEffectiveEnabled } = require('../analysis/alerting/config');
 const {
   isProviderId, resolveBaseUrl, defaultModel, inferProvider, listProvidersSafe, getProvider,
 } = require('../analysis/assistantProviders');
 const { MONITOR_SOURCES } = require('../validation/agentValidation');
 const { parseCidr } = require('../discovery/cidr');
+const { normalizeSecurity, validateSecurity, mergeSecurity } = require('../auth/securityPolicy');
 
 // Traffic sources that make sense as a fleet-wide default. SNMP is excluded: it
 // needs a per-device host, so it can only be configured per agent, never as a
@@ -55,7 +57,7 @@ function badRequest(message, details) {
 // the env defaults. The map tile source and the traffic-type categories are
 // editable from the UI; everything else stays env-driven. Validation lives here
 // so the route stays thin.
-function createSettingsService({ settingsRepo, config, liveAnalysis = null, liveRetention = null, liveAlerting = null, liveGeo = null, secretBox = null }) {
+function createSettingsService({ settingsRepo, config, liveAnalysis = null, liveRetention = null, liveAlerting = null, liveGeo = null, liveGeoCity = null, secretBox = null }) {
   // Encrypt/decrypt the assistant API key for storage at rest (AES-256-GCM via
   // secretBox, the same scheme integration credentials + the LDAP bind password
   // use). When no box is wired (some tests) values pass through as plaintext. A
@@ -143,6 +145,35 @@ function createSettingsService({ settingsRepo, config, liveAnalysis = null, live
   function geoEnvPath() {
     return (config.geo && config.geo.dbPath) || '';
   }
+  function geoCityEnvPath() {
+    return (config.geo && config.geo.cityDbPath) || '';
+  }
+
+  // The city-level table (traceroute hop placement only). Same override rules
+  // as the country table: a settings path wins over the env path. `include`
+  // decides whether "Update now" also builds it — on unless turned off.
+  function cityStatus(o) {
+    const hasPath = typeof o.cityDbPath === 'string';
+    const envPath = geoCityEnvPath();
+    const st = liveGeoCity && typeof liveGeoCity.status === 'function'
+      ? liveGeoCity.status()
+      : { configured: false, size: 0, error: null, loading: false };
+    return {
+      dbPath: hasPath ? o.cityDbPath : envPath,
+      source: hasPath ? 'settings' : (envPath ? 'env' : null),
+      configured: !!st.configured,
+      ranges: st.size || 0,
+      loading: !!st.loading,
+      error: st.error || null,
+      include: o.includeCity !== false,
+      lastBuild: o.cityBuild || null,
+    };
+  }
+  function reloadCity(dbPath) {
+    if (!liveGeoCity || typeof liveGeoCity.reload !== 'function') return;
+    // Streams in the background; status() reports `loading` meanwhile.
+    Promise.resolve(liveGeoCity.reload({ dbPath: dbPath || '' })).catch(() => { /* status carries the error */ });
+  }
 
   // Effective GeoIP status: the configured path (settings override or env), where
   // it came from, whether the live provider actually has ranges loaded, plus the
@@ -164,6 +195,7 @@ function createSettingsService({ settingsRepo, config, liveAnalysis = null, live
       error: st.error || null,
       autoUpdate: o.autoUpdate === true, // opt-in (egress only when an admin enables it)
       lastBuild: o.build || null,
+      city: cityStatus(o),
     };
   }
 
@@ -177,6 +209,12 @@ function createSettingsService({ settingsRepo, config, liveAnalysis = null, live
       else value.dbPath = s; // '' clears the override → fall back to env / disabled
     }
     if (p.autoUpdate !== undefined) value.autoUpdate = p.autoUpdate === true || p.autoUpdate === 'true';
+    if (p.cityDbPath !== undefined) {
+      const s = String(p.cityDbPath).trim();
+      if (s.length > 1024) errors.cityDbPath = 'cityDbPath must be at most 1024 characters';
+      else value.cityDbPath = s; // '' clears the override → fall back to env / none
+    }
+    if (p.includeCity !== undefined) value.includeCity = !(p.includeCity === false || p.includeCity === 'false');
     return { errors: Object.keys(errors).length ? errors : null, value };
   }
 
@@ -194,25 +232,42 @@ function createSettingsService({ settingsRepo, config, liveAnalysis = null, live
       else o.dbPath = value.dbPath;
     }
     if (value.autoUpdate !== undefined) o.autoUpdate = value.autoUpdate;
+    if (value.cityDbPath !== undefined) {
+      if (value.cityDbPath === '') { delete o.cityDbPath; delete o.cityBuild; }
+      else o.cityDbPath = value.cityDbPath;
+    }
+    if (value.includeCity !== undefined) {
+      if (value.includeCity) delete o.includeCity; else o.includeCity = false;
+    }
     await settingsRepo.set('geoip', Object.keys(o).length ? o : null);
     const eff = await getGeoip();
     if (liveGeo && typeof liveGeo.reload === 'function') {
       try { liveGeo.reload({ dbPath: eff.dbPath || '' }); } catch { /* status reflects configured:false */ }
     }
+    // Only a path change reloads the city table: it is large, and toggling
+    // `includeCity` must not throw away a table that is already loaded.
+    if (value.cityDbPath !== undefined) reloadCity(eff.city.dbPath);
     return await getGeoip();
   }
 
   // Records a freshly built database (path + month/ranges/time) from the in-app
   // updater, preserving the auto-update flag, and live-reloads the provider.
-  async function recordGeoipBuild({ dbPath, month = null, ranges = 0 }) {
+  // `city` ({ dbPath, ranges }) is present when the same run also built the
+  // city table.
+  async function recordGeoipBuild({ dbPath, month = null, ranges = 0, city = null }) {
     const cur = await loadOverride('geoip');
     const o = cur && typeof cur === 'object' ? { ...cur } : {};
     o.dbPath = String(dbPath);
     o.build = { builtAt: new Date().toISOString(), month, ranges };
+    if (city && city.dbPath) {
+      o.cityDbPath = String(city.dbPath);
+      o.cityBuild = { builtAt: o.build.builtAt, month, ranges: city.ranges || 0 };
+    }
     await settingsRepo.set('geoip', o);
     if (liveGeo && typeof liveGeo.reload === 'function') {
       try { liveGeo.reload({ dbPath: o.dbPath }); } catch { /* status reflects configured:false */ }
     }
+    if (city && city.dbPath) reloadCity(o.cityDbPath);
     return getGeoip();
   }
 
@@ -659,6 +714,36 @@ function createSettingsService({ settingsRepo, config, liveAnalysis = null, live
   // Normalises any config-ish object into the full effective shape (with secrets).
   // Used both for the env defaults (liveAlerting) and for a stored override, so a
   // value missing from either falls back to a sensible built-in default.
+  //
+  // The master switch is `enabledMode`: 'auto' (on iff a channel is
+  // configured), 'on' or 'off' — see analysis/alerting/config.js. `enabled` in
+  // this shape is the EFFECTIVE answer, derived from the mode and the channels.
+  const ENABLED_MODES = ['auto', 'on', 'off'];
+  // Whether the operator switched alerting off in the environment
+  // (ALERTING_ENABLED=false), captured once at construction — liveAlerting is
+  // later overwritten in place by stored settings, so it cannot be asked again.
+  const envExplicitOff = !!liveAlerting && liveAlerting.enabledSetting === false;
+  function modeOf(a) {
+    if (ENABLED_MODES.includes(a.enabledMode)) return a.enabledMode;
+    // The running config (env-loaded or live-applied) carries the setting as
+    // true | false | null.
+    if (Object.prototype.hasOwnProperty.call(a, 'enabledSetting')) {
+      return a.enabledSetting === true ? 'on' : a.enabledSetting === false ? 'off' : 'auto';
+    }
+    // A row stored before the switch had three states. `true` was somebody
+    // switching alerting on. `false` cannot be told apart from "never touched":
+    // every channel-card save wrote the then-default false along with the
+    // channel, which is exactly how a configured channel ended up silent. So a
+    // stored false reads as automatic — on once a channel is configured — and
+    // an explicit Off is one click away in the same screen that now says why.
+    // EXCEPT when the environment says ALERTING_ENABLED=false: that is an
+    // explicit operator Off, and an ambiguous legacy false must not turn
+    // alerting on over it after an upgrade. (A legacy `true` was an admin
+    // switching it on in the UI, which always replaced the env default.)
+    if (a.enabled === true) return 'on';
+    return envExplicitOff ? 'off' : 'auto';
+  }
+  const settingOf = (mode) => (mode === 'on' ? true : mode === 'off' ? false : null);
   function normAlerting(src) {
     const a = src && typeof src === 'object' ? src : {};
     const ch = a.channels || {};
@@ -666,8 +751,9 @@ function createSettingsService({ settingsRepo, config, liveAnalysis = null, live
     const w = ch.webhook || {};
     const m = ch.matrix || {};
     const s = ch.syslog || {};
-    return {
-      enabled: !!a.enabled,
+    const out = {
+      enabledMode: modeOf(a),
+      enabled: false,
       cooldownMs: Number.isFinite(a.cooldownMs) ? a.cooldownMs : DEFAULT_COOLDOWN_MS,
       channels: {
         email: {
@@ -686,6 +772,12 @@ function createSettingsService({ settingsRepo, config, liveAnalysis = null, live
         },
       },
     };
+    out.enabled = effectiveOf(out).enabled;
+    return out;
+  }
+  // The effective switch + reason for a normalised config.
+  function effectiveOf(cfg) {
+    return resolveAlertingEnabled({ enabledSetting: settingOf(cfg.enabledMode), channels: cfg.channels });
   }
 
   // Effective alerting config INCLUDING the raw secrets — server-internal only
@@ -701,8 +793,14 @@ function createSettingsService({ settingsRepo, config, liveAnalysis = null, live
   function redactAlerting(cfg) {
     const e = cfg.channels.email; const w = cfg.channels.webhook; const m = cfg.channels.matrix;
     const mask = (k) => (k ? `••••${k.slice(-4)}` : '');
+    const eff = effectiveOf(cfg);
     return {
-      enabled: cfg.enabled, cooldownMs: cfg.cooldownMs,
+      // `enabled` is the effective answer (a boolean, as it always was);
+      // `enabledMode` is the switch the admin sets and `enabledReason` why the
+      // two agree or not.
+      enabled: eff.enabled, enabledMode: cfg.enabledMode, enabledReason: eff.reason,
+      configuredChannels: eff.configuredChannels,
+      cooldownMs: cfg.cooldownMs,
       channels: {
         email: {
           enabled: e.enabled, minSeverity: e.minSeverity, to: e.to, from: e.from,
@@ -732,7 +830,15 @@ function createSettingsService({ settingsRepo, config, liveAnalysis = null, live
     const errors = {};
     const value = {};
 
-    if (p.enabled !== undefined) value.enabled = p.enabled === true || p.enabled === 'true';
+    // The master switch: `enabledMode` (auto | on | off), or the older boolean
+    // `enabled` (true → on, false → off, null/'auto' → auto).
+    if (p.enabledMode !== undefined) {
+      if (!ENABLED_MODES.includes(p.enabledMode)) errors.enabledMode = 'enabledMode must be auto, on or off';
+      else value.enabledMode = p.enabledMode;
+    } else if (p.enabled !== undefined) {
+      if (p.enabled === null || p.enabled === 'auto') value.enabledMode = 'auto';
+      else value.enabledMode = p.enabled === true || p.enabled === 'true' ? 'on' : 'off';
+    }
     if (p.cooldownMs !== undefined) {
       const n = Number(p.cooldownMs);
       if (!Number.isInteger(n) || n < 0 || n > MAX_COOLDOWN_MS) errors.cooldownMs = `cooldownMs must be an integer between 0 and ${MAX_COOLDOWN_MS}`;
@@ -881,7 +987,7 @@ function createSettingsService({ settingsRepo, config, liveAnalysis = null, live
   // Deep-merges the validated partial `value` onto the current full config.
   function mergeAlertingPatch(cur, value) {
     const out = JSON.parse(JSON.stringify(cur));
-    if (value.enabled !== undefined) out.enabled = value.enabled;
+    if (value.enabledMode !== undefined) out.enabledMode = value.enabledMode;
     if (value.cooldownMs !== undefined) out.cooldownMs = value.cooldownMs;
     for (const name of ['email', 'webhook', 'matrix', 'syslog']) {
       const v = value[name];
@@ -891,6 +997,7 @@ function createSettingsService({ settingsRepo, config, liveAnalysis = null, live
         else out.channels[name][k] = v[k];
       }
     }
+    out.enabled = effectiveOf(out).enabled;
     return out;
   }
 
@@ -900,7 +1007,7 @@ function createSettingsService({ settingsRepo, config, liveAnalysis = null, live
   function applyAlertingToLive(m) {
     const live = liveAlerting;
     if (!live) return;
-    live.enabled = m.enabled;
+    live.enabledSetting = settingOf(m.enabledMode);
     live.cooldownMs = m.cooldownMs;
     live.channels = live.channels || {};
     for (const name of ['email', 'webhook', 'matrix', 'syslog']) {
@@ -915,6 +1022,9 @@ function createSettingsService({ settingsRepo, config, liveAnalysis = null, live
         }
       }
     }
+    // The effective switch depends on the channels just applied (automatic
+    // mode), so it is recomputed last.
+    refreshEffectiveEnabled(live);
   }
 
   // Validates + persists the (partial) alerting config and live-applies it onto
@@ -989,6 +1099,7 @@ function createSettingsService({ settingsRepo, config, liveAnalysis = null, live
       if (g && typeof g.dbPath === 'string' && liveGeo && typeof liveGeo.reload === 'function') {
         liveGeo.reload({ dbPath: g.dbPath });
       }
+      if (g && typeof g.cityDbPath === 'string') reloadCity(g.cityDbPath);
     } catch { /* ignore */ }
   }
 
@@ -1064,6 +1175,28 @@ function createSettingsService({ settingsRepo, config, liveAnalysis = null, live
     return getDiscovery();
   }
 
+  // ---- Baseline security (Settings → Authentication → Security) -----------
+  // Password history depth, the opt-in password max age and the role-based IP
+  // allowlist (migration 041). Always on, never licence-gated. The pure rules
+  // live in src/auth/securityPolicy.js, shared with the request gate that
+  // enforces them; the lock-out guard (an admin may not save an admin allowlist
+  // that excludes the address they are saving from) needs the request, so it is
+  // in src/routes/authSecurity.js.
+  // `strict` lets a read error THROW instead of reading as "nothing stored":
+  // the request gate's cache uses it to keep the last-known policy through a
+  // database hiccup rather than silently dropping every allowlist.
+  async function getSecurity({ strict = false } = {}) {
+    return normalizeSecurity(strict ? await settingsRepo.get('security') : await loadOverride('security'));
+  }
+
+  async function setSecurity(patch) {
+    const { errors, value } = validateSecurity(patch || {});
+    if (errors) throw badRequest('invalid security settings', errors);
+    const merged = mergeSecurity(await getSecurity(), value);
+    await settingsRepo.set('security', merged);
+    return merged;
+  }
+
   return {
     getMap, setMap, validateMap,
     getGeoip, setGeoip, validateGeoip, recordGeoipBuild,
@@ -1072,6 +1205,7 @@ function createSettingsService({ settingsRepo, config, liveAnalysis = null, live
     getAnalysis, setAnalysis, validateAnalysis,
     getRetention, setRetention, validateRetention,
     getDiscovery, setDiscovery, validateDiscovery,
+    getSecurity, setSecurity, validateSecurity,
     getThroughput, setThroughput, validateThroughput,
     getAgents, setAgents, validateAgents, getDefaultMonitorConfig,
     getAssistant, getAssistantSafe, setAssistant, validateAssistant,

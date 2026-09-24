@@ -1,0 +1,3175 @@
+{
+ "devices": [
+  {
+   "deviceId": 1,
+   "sysUpTimeTicks": 3110697828,
+   "sysName": "DUMSYS-64",
+   "sysDescr": "ProCurve 516733-B21 6120XG Blade Switch, revision Z.14.31, ROM Z.14.09 (/ws/swbuildm/ec_Z_zint4b_qaoff/code/build/vern(ec_Z_zint1.3.6.1.4.1.11.2.3.7.11.107",
+   "sysLocation": null,
+   "sysContact": null,
+   "sysObjectId": "1.3.6.1.4.1.11.2.3.7.11.107",
+   "interfaces": [
+    {
+     "ifIndex": 1,
+     "ifName": "1",
+     "nameSource": "ifName",
+     "ifAlias": null,
+     "ifDescr": "1",
+     "ifType": 6,
+     "speedMbps": 10000,
+     "adminStatus": "up",
+     "operStatus": "up",
+     "physAddress": "ac:16:2d:92:7d:3f"
+    },
+    {
+     "ifIndex": 2,
+     "ifName": "2",
+     "nameSource": "ifName",
+     "ifAlias": null,
+     "ifDescr": "2",
+     "ifType": 6,
+     "speedMbps": 10000,
+     "adminStatus": "up",
+     "operStatus": "up",
+     "physAddress": "ac:16:2d:92:7d:3e"
+    },
+    {
+     "ifIndex": 3,
+     "ifName": "3",
+     "nameSource": "ifName",
+     "ifAlias": null,
+     "ifDescr": "3",
+     "ifType": 6,
+     "speedMbps": 10000,
+     "adminStatus": "up",
+     "operStatus": "up",
+     "physAddress": "ac:16:2d:92:7d:3d"
+    },
+    {
+     "ifIndex": 4,
+     "ifName": "4",
+     "nameSource": "ifName",
+     "ifAlias": null,
+     "ifDescr": "4",
+     "ifType": 6,
+     "speedMbps": 10000,
+     "adminStatus": "up",
+     "operStatus": "up",
+     "physAddress": "ac:16:2d:92:7d:3c"
+    },
+    {
+     "ifIndex": 5,
+     "ifName": "5",
+     "nameSource": "ifName",
+     "ifAlias": null,
+     "ifDescr": "5",
+     "ifType": 6,
+     "speedMbps": 10000,
+     "adminStatus": "up",
+     "operStatus": "up",
+     "physAddress": "ac:16:2d:92:7d:3b"
+    },
+    {
+     "ifIndex": 6,
+     "ifName": "6",
+     "nameSource": "ifName",
+     "ifAlias": null,
+     "ifDescr": "6",
+     "ifType": 6,
+     "speedMbps": 10000,
+     "adminStatus": "down",
+     "operStatus": "down",
+     "physAddress": "ac:16:2d:92:7d:3a"
+    },
+    {
+     "ifIndex": 7,
+     "ifName": "7",
+     "nameSource": "ifName",
+     "ifAlias": null,
+     "ifDescr": "7",
+     "ifType": 6,
+     "speedMbps": 10000,
+     "adminStatus": "down",
+     "operStatus": "down",
+     "physAddress": "ac:16:2d:92:7d:39"
+    },
+    {
+     "ifIndex": 8,
+     "ifName": "8",
+     "nameSource": "ifName",
+     "ifAlias": null,
+     "ifDescr": "8",
+     "ifType": 6,
+     "speedMbps": 10000,
+     "adminStatus": "up",
+     "operStatus": "up",
+     "physAddress": "ac:16:2d:92:7d:38"
+    },
+    {
+     "ifIndex": 9,
+     "ifName": "9",
+     "nameSource": "ifName",
+     "ifAlias": null,
+     "ifDescr": "9",
+     "ifType": 6,
+     "speedMbps": 10000,
+     "adminStatus": "up",
+     "operStatus": "up",
+     "physAddress": "ac:16:2d:92:7d:37"
+    },
+    {
+     "ifIndex": 10,
+     "ifName": "10",
+     "nameSource": "ifName",
+     "ifAlias": null,
+     "ifDescr": "10",
+     "ifType": 6,
+     "speedMbps": 10000,
+     "adminStatus": "up",
+     "operStatus": "up",
+     "physAddress": "ac:16:2d:92:7d:36"
+    },
+    {
+     "ifIndex": 11,
+     "ifName": "11",
+     "nameSource": "ifName",
+     "ifAlias": null,
+     "ifDescr": "11",
+     "ifType": 6,
+     "speedMbps": 10000,
+     "adminStatus": "up",
+     "operStatus": "up",
+     "physAddress": "ac:16:2d:92:7d:35"
+    },
+    {
+     "ifIndex": 12,
+     "ifName": "12",
+     "nameSource": "ifName",
+     "ifAlias": null,
+     "ifDescr": "12",
+     "ifType": 6,
+     "speedMbps": 10000,
+     "adminStatus": "up",
+     "operStatus": "up",
+     "physAddress": "ac:16:2d:92:7d:34"
+    },
+    {
+     "ifIndex": 13,
+     "ifName": "13",
+     "nameSource": "ifName",
+     "ifAlias": null,
+     "ifDescr": "13",
+     "ifType": 6,
+     "speedMbps": 10000,
+     "adminStatus": "up",
+     "operStatus": "up",
+     "physAddress": "ac:16:2d:92:7d:33"
+    },
+    {
+     "ifIndex": 14,
+     "ifName": "14",
+     "nameSource": "ifName",
+     "ifAlias": null,
+     "ifDescr": "14",
+     "ifType": 6,
+     "speedMbps": 10000,
+     "adminStatus": "down",
+     "operStatus": "down",
+     "physAddress": "ac:16:2d:92:7d:32"
+    },
+    {
+     "ifIndex": 15,
+     "ifName": "15",
+     "nameSource": "ifName",
+     "ifAlias": null,
+     "ifDescr": "15",
+     "ifType": 6,
+     "speedMbps": 10000,
+     "adminStatus": "up",
+     "operStatus": "up",
+     "physAddress": "ac:16:2d:92:7d:31"
+    },
+    {
+     "ifIndex": 16,
+     "ifName": "16",
+     "nameSource": "ifName",
+     "ifAlias": null,
+     "ifDescr": "16",
+     "ifType": 6,
+     "speedMbps": 10000,
+     "adminStatus": "up",
+     "operStatus": "up",
+     "physAddress": "ac:16:2d:92:7d:30"
+    },
+    {
+     "ifIndex": 17,
+     "ifName": "17",
+     "nameSource": "ifName",
+     "ifAlias": null,
+     "ifDescr": "17",
+     "ifType": 6,
+     "speedMbps": 10000,
+     "adminStatus": "up",
+     "operStatus": "up",
+     "physAddress": "ac:16:2d:92:7d:2f"
+    },
+    {
+     "ifIndex": 18,
+     "ifName": "18",
+     "nameSource": "ifName",
+     "ifAlias": null,
+     "ifDescr": "18",
+     "ifType": 6,
+     "speedMbps": 10000,
+     "adminStatus": "up",
+     "operStatus": "down",
+     "physAddress": "ac:16:2d:92:7d:2e"
+    },
+    {
+     "ifIndex": 19,
+     "ifName": "19",
+     "nameSource": "ifName",
+     "ifAlias": null,
+     "ifDescr": "19",
+     "ifType": 6,
+     "speedMbps": 10000,
+     "adminStatus": "up",
+     "operStatus": "down",
+     "physAddress": "ac:16:2d:92:7d:2d"
+    },
+    {
+     "ifIndex": 20,
+     "ifName": "20",
+     "nameSource": "ifName",
+     "ifAlias": null,
+     "ifDescr": "20",
+     "ifType": 6,
+     "speedMbps": 10000,
+     "adminStatus": "up",
+     "operStatus": "down",
+     "physAddress": "ac:16:2d:92:7d:2c"
+    },
+    {
+     "ifIndex": 21,
+     "ifName": "21",
+     "nameSource": "ifName",
+     "ifAlias": null,
+     "ifDescr": "21",
+     "ifType": 6,
+     "speedMbps": 10000,
+     "adminStatus": "up",
+     "operStatus": "down",
+     "physAddress": "ac:16:2d:92:7d:2b"
+    },
+    {
+     "ifIndex": 22,
+     "ifName": "22",
+     "nameSource": "ifName",
+     "ifAlias": null,
+     "ifDescr": "22",
+     "ifType": 6,
+     "speedMbps": 10000,
+     "adminStatus": "up",
+     "operStatus": "down",
+     "physAddress": "ac:16:2d:92:7d:2a"
+    },
+    {
+     "ifIndex": 23,
+     "ifName": "23",
+     "nameSource": "ifName",
+     "ifAlias": null,
+     "ifDescr": "23",
+     "ifType": 6,
+     "speedMbps": 10000,
+     "adminStatus": "down",
+     "operStatus": "down",
+     "physAddress": "ac:16:2d:92:7d:29"
+    },
+    {
+     "ifIndex": 24,
+     "ifName": "24",
+     "nameSource": "ifName",
+     "ifAlias": null,
+     "ifDescr": "24",
+     "ifType": 6,
+     "speedMbps": 10000,
+     "adminStatus": "down",
+     "operStatus": "down",
+     "physAddress": "ac:16:2d:92:7d:28"
+    },
+    {
+     "ifIndex": 76,
+     "ifName": "DEFAULT_VLAN",
+     "nameSource": "ifName",
+     "ifAlias": "DEFAULT_VLAN",
+     "ifDescr": "DEFAULT_VLAN",
+     "ifType": 53,
+     "speedMbps": null,
+     "adminStatus": "up",
+     "operStatus": "up",
+     "physAddress": "ac:16:2d:92:7d:21"
+    },
+    {
+     "ifIndex": 125,
+     "ifName": "VLAN50",
+     "nameSource": "ifName",
+     "ifAlias": "VLAN50",
+     "ifDescr": "VLAN50",
+     "ifType": 53,
+     "speedMbps": null,
+     "adminStatus": "up",
+     "operStatus": "up",
+     "physAddress": "ac:16:2d:92:7d:21"
+    },
+    {
+     "ifIndex": 127,
+     "ifName": "VLAN52",
+     "nameSource": "ifName",
+     "ifAlias": "VLAN52",
+     "ifDescr": "VLAN52",
+     "ifType": 53,
+     "speedMbps": null,
+     "adminStatus": "up",
+     "operStatus": "up",
+     "physAddress": "ac:16:2d:92:7d:21"
+    },
+    {
+     "ifIndex": 128,
+     "ifName": "VLAN53",
+     "nameSource": "ifName",
+     "ifAlias": "VLAN53",
+     "ifDescr": "VLAN53",
+     "ifType": 53,
+     "speedMbps": null,
+     "adminStatus": "up",
+     "operStatus": "up",
+     "physAddress": "ac:16:2d:92:7d:21"
+    },
+    {
+     "ifIndex": 145,
+     "ifName": "VLAN70",
+     "nameSource": "ifName",
+     "ifAlias": "VLAN70",
+     "ifDescr": "VLAN70",
+     "ifType": 53,
+     "speedMbps": null,
+     "adminStatus": "up",
+     "operStatus": "up",
+     "physAddress": "ac:16:2d:92:7d:21"
+    },
+    {
+     "ifIndex": 146,
+     "ifName": "VLAN71",
+     "nameSource": "ifName",
+     "ifAlias": "VLAN71",
+     "ifDescr": "VLAN71",
+     "ifType": 53,
+     "speedMbps": null,
+     "adminStatus": "up",
+     "operStatus": "up",
+     "physAddress": "ac:16:2d:92:7d:21"
+    },
+    {
+     "ifIndex": 152,
+     "ifName": "VLAN77",
+     "nameSource": "ifName",
+     "ifAlias": "VLAN77",
+     "ifDescr": "VLAN77",
+     "ifType": 53,
+     "speedMbps": null,
+     "adminStatus": "up",
+     "operStatus": "up",
+     "physAddress": "ac:16:2d:92:7d:21"
+    },
+    {
+     "ifIndex": 153,
+     "ifName": "VLAN78",
+     "nameSource": "ifName",
+     "ifAlias": "VLAN78",
+     "ifDescr": "VLAN78",
+     "ifType": 53,
+     "speedMbps": null,
+     "adminStatus": "up",
+     "operStatus": "up",
+     "physAddress": "ac:16:2d:92:7d:21"
+    },
+    {
+     "ifIndex": 4170,
+     "ifName": "lo0",
+     "nameSource": "ifName",
+     "ifAlias": "lo0",
+     "ifDescr": "HP ProCurve Switch software loopback interface",
+     "ifType": 24,
+     "speedMbps": null,
+     "adminStatus": "up",
+     "operStatus": "up",
+     "physAddress": null
+    },
+    {
+     "ifIndex": 4171,
+     "ifName": "lo1",
+     "nameSource": "ifName",
+     "ifAlias": "lo1",
+     "ifDescr": "HP ProCurve Switch software loopback interface",
+     "ifType": 24,
+     "speedMbps": null,
+     "adminStatus": "down",
+     "operStatus": "down",
+     "physAddress": null
+    },
+    {
+     "ifIndex": 4172,
+     "ifName": "lo2",
+     "nameSource": "ifName",
+     "ifAlias": "lo2",
+     "ifDescr": "HP ProCurve Switch software loopback interface",
+     "ifType": 24,
+     "speedMbps": null,
+     "adminStatus": "down",
+     "operStatus": "down",
+     "physAddress": null
+    },
+    {
+     "ifIndex": 4173,
+     "ifName": "lo3",
+     "nameSource": "ifName",
+     "ifAlias": "lo3",
+     "ifDescr": "HP ProCurve Switch software loopback interface",
+     "ifType": 24,
+     "speedMbps": null,
+     "adminStatus": "down",
+     "operStatus": "down",
+     "physAddress": null
+    },
+    {
+     "ifIndex": 4174,
+     "ifName": "lo4",
+     "nameSource": "ifName",
+     "ifAlias": "lo4",
+     "ifDescr": "HP ProCurve Switch software loopback interface",
+     "ifType": 24,
+     "speedMbps": null,
+     "adminStatus": "down",
+     "operStatus": "down",
+     "physAddress": null
+    },
+    {
+     "ifIndex": 4175,
+     "ifName": "lo5",
+     "nameSource": "ifName",
+     "ifAlias": "lo5",
+     "ifDescr": "HP ProCurve Switch software loopback interface",
+     "ifType": 24,
+     "speedMbps": null,
+     "adminStatus": "down",
+     "operStatus": "down",
+     "physAddress": null
+    },
+    {
+     "ifIndex": 4176,
+     "ifName": "lo6",
+     "nameSource": "ifName",
+     "ifAlias": "lo6",
+     "ifDescr": "HP ProCurve Switch software loopback interface",
+     "ifType": 24,
+     "speedMbps": null,
+     "adminStatus": "down",
+     "operStatus": "down",
+     "physAddress": null
+    },
+    {
+     "ifIndex": 4177,
+     "ifName": "lo7",
+     "nameSource": "ifName",
+     "ifAlias": "lo7",
+     "ifDescr": "HP ProCurve Switch software loopback interface",
+     "ifType": 24,
+     "speedMbps": null,
+     "adminStatus": "down",
+     "operStatus": "down",
+     "physAddress": null
+    },
+    {
+     "ifIndex": 4178,
+     "ifName": "oobm0",
+     "nameSource": "ifName",
+     "ifAlias": "oobm0",
+     "ifDescr": "HP Procurve Out Of Band Management Port",
+     "ifType": 6,
+     "speedMbps": null,
+     "adminStatus": "up",
+     "operStatus": "up",
+     "physAddress": "ac:16:2d:92:7d:20"
+    },
+    {
+     "ifIndex": 4179,
+     "ifName": "lo0",
+     "nameSource": "ifName",
+     "ifAlias": "lo0",
+     "ifDescr": "HP Procurve Out Of Band Management loopback Interface",
+     "ifType": 24,
+     "speedMbps": null,
+     "adminStatus": "up",
+     "operStatus": "up",
+     "physAddress": null
+    }
+   ],
+   "fdb": [
+    {
+     "mac": "10:60:4b:b4:5f:48",
+     "vlan": 6,
+     "bridgePort": 4,
+     "ifIndex": 4,
+     "ifName": "4",
+     "status": "learned",
+     "portMacCount": 1
+    },
+    {
+     "mac": "10:60:4b:b4:ff:60",
+     "vlan": 6,
+     "bridgePort": 5,
+     "ifIndex": 5,
+     "ifName": "5",
+     "status": "learned",
+     "portMacCount": 1
+    },
+    {
+     "mac": "00:50:56:93:42:9e",
+     "vlan": 2,
+     "bridgePort": 8,
+     "ifIndex": 8,
+     "ifName": "8",
+     "status": "learned",
+     "portMacCount": 1
+    },
+    {
+     "mac": "10:60:4b:b4:dc:e8",
+     "vlan": 6,
+     "bridgePort": 12,
+     "ifIndex": 12,
+     "ifName": "12",
+     "status": "learned",
+     "portMacCount": 1
+    },
+    {
+     "mac": "10:60:4b:b4:ff:48",
+     "vlan": 2,
+     "bridgePort": 13,
+     "ifIndex": 13,
+     "ifName": "13",
+     "status": "learned",
+     "portMacCount": 1
+    },
+    {
+     "mac": "00:50:56:88:03:b9",
+     "vlan": 7,
+     "bridgePort": 2,
+     "ifIndex": 2,
+     "ifName": "2",
+     "status": "learned",
+     "portMacCount": 3
+    },
+    {
+     "mac": "00:50:56:88:6d:b2",
+     "vlan": 7,
+     "bridgePort": 2,
+     "ifIndex": 2,
+     "ifName": "2",
+     "status": "learned",
+     "portMacCount": 3
+    },
+    {
+     "mac": "00:50:56:88:7a:c6",
+     "vlan": 7,
+     "bridgePort": 2,
+     "ifIndex": 2,
+     "ifName": "2",
+     "status": "learned",
+     "portMacCount": 3
+    },
+    {
+     "mac": "00:50:56:88:09:f3",
+     "vlan": 7,
+     "bridgePort": 3,
+     "ifIndex": 3,
+     "ifName": "3",
+     "status": "learned",
+     "portMacCount": 3
+    },
+    {
+     "mac": "00:50:56:88:1b:90",
+     "vlan": 7,
+     "bridgePort": 3,
+     "ifIndex": 3,
+     "ifName": "3",
+     "status": "learned",
+     "portMacCount": 3
+    },
+    {
+     "mac": "00:50:56:88:01:77",
+     "vlan": 8,
+     "bridgePort": 3,
+     "ifIndex": 3,
+     "ifName": "3",
+     "status": "learned",
+     "portMacCount": 3
+    },
+    {
+     "mac": "00:50:56:93:22:64",
+     "vlan": 2,
+     "bridgePort": 15,
+     "ifIndex": 15,
+     "ifName": "15",
+     "status": "learned",
+     "portMacCount": 3
+    },
+    {
+     "mac": "00:50:56:93:54:88",
+     "vlan": 7,
+     "bridgePort": 15,
+     "ifIndex": 15,
+     "ifName": "15",
+     "status": "learned",
+     "portMacCount": 3
+    },
+    {
+     "mac": "00:50:56:93:57:b0",
+     "vlan": 7,
+     "bridgePort": 15,
+     "ifIndex": 15,
+     "ifName": "15",
+     "status": "learned",
+     "portMacCount": 3
+    },
+    {
+     "mac": "00:50:56:93:0e:04",
+     "vlan": 2,
+     "bridgePort": 16,
+     "ifIndex": 16,
+     "ifName": "16",
+     "status": "learned",
+     "portMacCount": 3
+    },
+    {
+     "mac": "00:50:56:93:09:ec",
+     "vlan": 4,
+     "bridgePort": 16,
+     "ifIndex": 16,
+     "ifName": "16",
+     "status": "learned",
+     "portMacCount": 3
+    },
+    {
+     "mac": "00:50:56:93:4a:d5",
+     "vlan": 4,
+     "bridgePort": 16,
+     "ifIndex": 16,
+     "ifName": "16",
+     "status": "learned",
+     "portMacCount": 3
+    },
+    {
+     "mac": "00:50:56:88:08:88",
+     "vlan": 2,
+     "bridgePort": 9,
+     "ifIndex": 9,
+     "ifName": "9",
+     "status": "learned",
+     "portMacCount": 5
+    },
+    {
+     "mac": "00:50:56:88:73:2d",
+     "vlan": 2,
+     "bridgePort": 9,
+     "ifIndex": 9,
+     "ifName": "9",
+     "status": "learned",
+     "portMacCount": 5
+    },
+    {
+     "mac": "00:50:56:93:6e:f3",
+     "vlan": 2,
+     "bridgePort": 9,
+     "ifIndex": 9,
+     "ifName": "9",
+     "status": "learned",
+     "portMacCount": 5
+    },
+    {
+     "mac": "00:50:56:93:7b:7b",
+     "vlan": 2,
+     "bridgePort": 9,
+     "ifIndex": 9,
+     "ifName": "9",
+     "status": "learned",
+     "portMacCount": 5
+    },
+    {
+     "mac": "00:50:56:93:6b:a1",
+     "vlan": 4,
+     "bridgePort": 9,
+     "ifIndex": 9,
+     "ifName": "9",
+     "status": "learned",
+     "portMacCount": 5
+    },
+    {
+     "mac": "00:50:56:88:79:6e",
+     "vlan": 2,
+     "bridgePort": 10,
+     "ifIndex": 10,
+     "ifName": "10",
+     "status": "learned",
+     "portMacCount": 5
+    },
+    {
+     "mac": "00:50:56:93:2a:d6",
+     "vlan": 2,
+     "bridgePort": 10,
+     "ifIndex": 10,
+     "ifName": "10",
+     "status": "learned",
+     "portMacCount": 5
+    },
+    {
+     "mac": "00:50:56:93:7f:2f",
+     "vlan": 2,
+     "bridgePort": 10,
+     "ifIndex": 10,
+     "ifName": "10",
+     "status": "learned",
+     "portMacCount": 5
+    },
+    {
+     "mac": "00:50:56:88:61:06",
+     "vlan": 4,
+     "bridgePort": 10,
+     "ifIndex": 10,
+     "ifName": "10",
+     "status": "learned",
+     "portMacCount": 5
+    },
+    {
+     "mac": "00:50:56:93:21:5b",
+     "vlan": 4,
+     "bridgePort": 10,
+     "ifIndex": 10,
+     "ifName": "10",
+     "status": "learned",
+     "portMacCount": 5
+    },
+    {
+     "mac": "00:50:56:88:01:25",
+     "vlan": 2,
+     "bridgePort": 11,
+     "ifIndex": 11,
+     "ifName": "11",
+     "status": "learned",
+     "portMacCount": 11
+    },
+    {
+     "mac": "00:50:56:88:10:f2",
+     "vlan": 2,
+     "bridgePort": 11,
+     "ifIndex": 11,
+     "ifName": "11",
+     "status": "learned",
+     "portMacCount": 11
+    },
+    {
+     "mac": "00:50:56:93:28:63",
+     "vlan": 2,
+     "bridgePort": 11,
+     "ifIndex": 11,
+     "ifName": "11",
+     "status": "learned",
+     "portMacCount": 11
+    },
+    {
+     "mac": "00:50:56:93:42:ac",
+     "vlan": 2,
+     "bridgePort": 11,
+     "ifIndex": 11,
+     "ifName": "11",
+     "status": "learned",
+     "portMacCount": 11
+    },
+    {
+     "mac": "00:50:56:88:13:c9",
+     "vlan": 4,
+     "bridgePort": 11,
+     "ifIndex": 11,
+     "ifName": "11",
+     "status": "learned",
+     "portMacCount": 11
+    },
+    {
+     "mac": "00:50:56:88:42:a9",
+     "vlan": 4,
+     "bridgePort": 11,
+     "ifIndex": 11,
+     "ifName": "11",
+     "status": "learned",
+     "portMacCount": 11
+    },
+    {
+     "mac": "00:50:56:88:6d:f6",
+     "vlan": 4,
+     "bridgePort": 11,
+     "ifIndex": 11,
+     "ifName": "11",
+     "status": "learned",
+     "portMacCount": 11
+    },
+    {
+     "mac": "00:50:56:93:0d:c3",
+     "vlan": 4,
+     "bridgePort": 11,
+     "ifIndex": 11,
+     "ifName": "11",
+     "status": "learned",
+     "portMacCount": 11
+    },
+    {
+     "mac": "00:50:56:93:30:06",
+     "vlan": 7,
+     "bridgePort": 11,
+     "ifIndex": 11,
+     "ifName": "11",
+     "status": "learned",
+     "portMacCount": 11
+    },
+    {
+     "mac": "00:50:56:93:38:65",
+     "vlan": 7,
+     "bridgePort": 11,
+     "ifIndex": 11,
+     "ifName": "11",
+     "status": "learned",
+     "portMacCount": 11
+    },
+    {
+     "mac": "00:50:56:93:60:5c",
+     "vlan": 7,
+     "bridgePort": 11,
+     "ifIndex": 11,
+     "ifName": "11",
+     "status": "learned",
+     "portMacCount": 11
+    },
+    {
+     "mac": "00:50:56:88:67:ab",
+     "vlan": 7,
+     "bridgePort": 1,
+     "ifIndex": 1,
+     "ifName": "1",
+     "status": "learned",
+     "portMacCount": 22
+    },
+    {
+     "mac": "00:50:56:88:02:65",
+     "vlan": 8,
+     "bridgePort": 1,
+     "ifIndex": 1,
+     "ifName": "1",
+     "status": "learned",
+     "portMacCount": 22
+    },
+    {
+     "mac": "00:50:56:88:13:9b",
+     "vlan": 8,
+     "bridgePort": 1,
+     "ifIndex": 1,
+     "ifName": "1",
+     "status": "learned",
+     "portMacCount": 22
+    },
+    {
+     "mac": "00:50:56:88:17:a3",
+     "vlan": 8,
+     "bridgePort": 1,
+     "ifIndex": 1,
+     "ifName": "1",
+     "status": "learned",
+     "portMacCount": 22
+    },
+    {
+     "mac": "00:50:56:88:17:aa",
+     "vlan": 8,
+     "bridgePort": 1,
+     "ifIndex": 1,
+     "ifName": "1",
+     "status": "learned",
+     "portMacCount": 22
+    },
+    {
+     "mac": "00:50:56:88:1a:6a",
+     "vlan": 8,
+     "bridgePort": 1,
+     "ifIndex": 1,
+     "ifName": "1",
+     "status": "learned",
+     "portMacCount": 22
+    },
+    {
+     "mac": "00:50:56:88:1d:e2",
+     "vlan": 8,
+     "bridgePort": 1,
+     "ifIndex": 1,
+     "ifName": "1",
+     "status": "learned",
+     "portMacCount": 22
+    },
+    {
+     "mac": "00:50:56:88:1e:b8",
+     "vlan": 8,
+     "bridgePort": 1,
+     "ifIndex": 1,
+     "ifName": "1",
+     "status": "learned",
+     "portMacCount": 22
+    },
+    {
+     "mac": "00:50:56:88:23:77",
+     "vlan": 8,
+     "bridgePort": 1,
+     "ifIndex": 1,
+     "ifName": "1",
+     "status": "learned",
+     "portMacCount": 22
+    },
+    {
+     "mac": "00:50:56:88:37:61",
+     "vlan": 8,
+     "bridgePort": 1,
+     "ifIndex": 1,
+     "ifName": "1",
+     "status": "learned",
+     "portMacCount": 22
+    },
+    {
+     "mac": "00:50:56:88:3e:e5",
+     "vlan": 8,
+     "bridgePort": 1,
+     "ifIndex": 1,
+     "ifName": "1",
+     "status": "learned",
+     "portMacCount": 22
+    },
+    {
+     "mac": "00:50:56:88:48:f0",
+     "vlan": 8,
+     "bridgePort": 1,
+     "ifIndex": 1,
+     "ifName": "1",
+     "status": "learned",
+     "portMacCount": 22
+    },
+    {
+     "mac": "00:50:56:88:49:1e",
+     "vlan": 8,
+     "bridgePort": 1,
+     "ifIndex": 1,
+     "ifName": "1",
+     "status": "learned",
+     "portMacCount": 22
+    },
+    {
+     "mac": "00:50:56:88:4d:ca",
+     "vlan": 8,
+     "bridgePort": 1,
+     "ifIndex": 1,
+     "ifName": "1",
+     "status": "learned",
+     "portMacCount": 22
+    },
+    {
+     "mac": "00:50:56:88:51:99",
+     "vlan": 8,
+     "bridgePort": 1,
+     "ifIndex": 1,
+     "ifName": "1",
+     "status": "learned",
+     "portMacCount": 22
+    },
+    {
+     "mac": "00:50:56:88:52:04",
+     "vlan": 8,
+     "bridgePort": 1,
+     "ifIndex": 1,
+     "ifName": "1",
+     "status": "learned",
+     "portMacCount": 22
+    },
+    {
+     "mac": "00:50:56:88:53:f1",
+     "vlan": 8,
+     "bridgePort": 1,
+     "ifIndex": 1,
+     "ifName": "1",
+     "status": "learned",
+     "portMacCount": 22
+    },
+    {
+     "mac": "00:50:56:88:53:fe",
+     "vlan": 8,
+     "bridgePort": 1,
+     "ifIndex": 1,
+     "ifName": "1",
+     "status": "learned",
+     "portMacCount": 22
+    },
+    {
+     "mac": "00:50:56:88:5d:87",
+     "vlan": 8,
+     "bridgePort": 1,
+     "ifIndex": 1,
+     "ifName": "1",
+     "status": "learned",
+     "portMacCount": 22
+    },
+    {
+     "mac": "00:50:56:88:5e:1e",
+     "vlan": 8,
+     "bridgePort": 1,
+     "ifIndex": 1,
+     "ifName": "1",
+     "status": "learned",
+     "portMacCount": 22
+    },
+    {
+     "mac": "00:50:56:88:79:4f",
+     "vlan": 8,
+     "bridgePort": 1,
+     "ifIndex": 1,
+     "ifName": "1",
+     "status": "learned",
+     "portMacCount": 22
+    },
+    {
+     "mac": "00:50:56:88:7c:e9",
+     "vlan": 8,
+     "bridgePort": 1,
+     "ifIndex": 1,
+     "ifName": "1",
+     "status": "learned",
+     "portMacCount": 22
+    },
+    {
+     "mac": "00:00:0c:07:ac:32",
+     "vlan": 2,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "00:21:28:7e:31:a2",
+     "vlan": 2,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "00:50:56:88:01:23",
+     "vlan": 2,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "00:50:56:88:01:24",
+     "vlan": 2,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "00:50:56:88:0e:8b",
+     "vlan": 2,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "00:50:56:88:12:ac",
+     "vlan": 2,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "00:50:56:88:16:fa",
+     "vlan": 2,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "00:50:56:88:17:1f",
+     "vlan": 2,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "00:50:56:88:17:93",
+     "vlan": 2,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "00:50:56:88:17:fa",
+     "vlan": 2,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "00:50:56:88:19:ff",
+     "vlan": 2,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "00:50:56:88:1d:3e",
+     "vlan": 2,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "00:50:56:88:1f:02",
+     "vlan": 2,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "00:50:56:88:24:3b",
+     "vlan": 2,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "00:50:56:88:24:a7",
+     "vlan": 2,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "00:50:56:88:31:e8",
+     "vlan": 2,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "00:50:56:88:32:e2",
+     "vlan": 2,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "00:50:56:88:3a:eb",
+     "vlan": 2,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "00:50:56:88:3e:0c",
+     "vlan": 2,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "00:50:56:88:41:18",
+     "vlan": 2,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "00:50:56:88:4c:d9",
+     "vlan": 2,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "00:50:56:88:58:50",
+     "vlan": 2,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "00:50:56:88:5a:69",
+     "vlan": 2,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "00:50:56:88:5d:3b",
+     "vlan": 2,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "00:50:56:88:63:c6",
+     "vlan": 2,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "00:50:56:88:65:ad",
+     "vlan": 2,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "00:50:56:88:6a:35",
+     "vlan": 2,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "00:50:56:88:6b:99",
+     "vlan": 2,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "00:50:56:88:6e:f4",
+     "vlan": 2,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "00:50:56:88:6f:81",
+     "vlan": 2,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "00:50:56:93:05:56",
+     "vlan": 2,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "00:50:56:93:0a:1d",
+     "vlan": 2,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "00:50:56:93:0c:94",
+     "vlan": 2,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "00:50:56:93:0e:1d",
+     "vlan": 2,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "00:50:56:93:0e:bb",
+     "vlan": 2,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "00:50:56:93:10:6b",
+     "vlan": 2,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "00:50:56:93:11:be",
+     "vlan": 2,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "00:50:56:93:13:1c",
+     "vlan": 2,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "00:50:56:93:18:9f",
+     "vlan": 2,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "00:50:56:93:1c:9c",
+     "vlan": 2,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "00:50:56:93:21:53",
+     "vlan": 2,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "00:50:56:93:21:a7",
+     "vlan": 2,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "00:50:56:93:22:73",
+     "vlan": 2,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "00:50:56:93:28:2c",
+     "vlan": 2,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "00:50:56:93:2b:cf",
+     "vlan": 2,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "00:50:56:93:2c:15",
+     "vlan": 2,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "00:50:56:93:30:39",
+     "vlan": 2,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "00:50:56:93:31:1c",
+     "vlan": 2,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "00:50:56:93:31:8f",
+     "vlan": 2,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "00:50:56:93:35:43",
+     "vlan": 2,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "00:50:56:93:3a:3f",
+     "vlan": 2,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "00:50:56:93:3d:99",
+     "vlan": 2,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "00:50:56:93:3d:b2",
+     "vlan": 2,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "00:50:56:93:40:1a",
+     "vlan": 2,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "00:50:56:93:41:81",
+     "vlan": 2,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "00:50:56:93:42:0e",
+     "vlan": 2,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "00:50:56:93:46:ed",
+     "vlan": 2,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "00:50:56:93:47:6e",
+     "vlan": 2,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "00:50:56:93:4a:dc",
+     "vlan": 2,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "00:50:56:93:4b:78",
+     "vlan": 2,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "00:50:56:93:4c:3e",
+     "vlan": 2,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "00:50:56:93:4c:f5",
+     "vlan": 2,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "00:50:56:93:4d:23",
+     "vlan": 2,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "00:50:56:93:50:35",
+     "vlan": 2,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "00:50:56:93:51:14",
+     "vlan": 2,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "00:50:56:93:53:7f",
+     "vlan": 2,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "00:50:56:93:54:73",
+     "vlan": 2,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "00:50:56:93:54:a8",
+     "vlan": 2,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "00:50:56:93:56:51",
+     "vlan": 2,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "00:50:56:93:5d:6e",
+     "vlan": 2,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "00:50:56:93:5d:73",
+     "vlan": 2,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "00:50:56:93:61:46",
+     "vlan": 2,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "00:50:56:93:61:96",
+     "vlan": 2,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "00:50:56:93:63:bf",
+     "vlan": 2,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "00:50:56:93:66:10",
+     "vlan": 2,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "00:50:56:93:66:97",
+     "vlan": 2,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "00:50:56:93:67:b1",
+     "vlan": 2,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "00:50:56:93:69:b2",
+     "vlan": 2,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "00:50:56:93:6a:76",
+     "vlan": 2,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "00:50:56:93:6b:0e",
+     "vlan": 2,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "00:50:56:93:6b:26",
+     "vlan": 2,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "00:50:56:93:6c:09",
+     "vlan": 2,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "00:50:56:93:70:ae",
+     "vlan": 2,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "00:50:56:93:72:82",
+     "vlan": 2,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "00:50:56:93:75:b1",
+     "vlan": 2,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "00:50:56:93:76:1e",
+     "vlan": 2,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "00:50:56:93:76:a5",
+     "vlan": 2,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "00:50:56:93:7a:27",
+     "vlan": 2,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "00:50:56:93:7b:b9",
+     "vlan": 2,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "00:50:56:93:7b:cd",
+     "vlan": 2,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "00:50:56:93:7c:59",
+     "vlan": 2,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "02:01:00:00:00:00",
+     "vlan": 2,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "34:40:b5:9d:67:cc",
+     "vlan": 2,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "5c:f3:fc:09:2b:94",
+     "vlan": 2,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "5c:f3:fc:09:2b:e0",
+     "vlan": 2,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "6c:ae:8b:1d:cb:12",
+     "vlan": 2,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "6c:ae:8b:1d:e7:82",
+     "vlan": 2,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "6c:ae:8b:39:7a:9a",
+     "vlan": 2,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "8c:60:4f:19:16:3a",
+     "vlan": 2,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "8c:60:4f:19:16:7c",
+     "vlan": 2,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "8c:60:4f:19:1c:01",
+     "vlan": 2,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "fe:fc:fe:26:c6:19",
+     "vlan": 2,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "fe:fc:fe:94:bc:58",
+     "vlan": 2,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "00:00:0c:07:ac:34",
+     "vlan": 3,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "00:21:28:7e:31:9a",
+     "vlan": 3,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "00:21:28:7e:5e:8e",
+     "vlan": 3,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "00:50:56:88:49:cf",
+     "vlan": 3,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "8c:60:4f:19:16:3a",
+     "vlan": 3,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "8c:60:4f:19:16:7c",
+     "vlan": 3,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "8c:60:4f:19:1c:01",
+     "vlan": 3,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "ac:16:2d:92:7d:20",
+     "vlan": 3,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "ac:16:2d:92:7d:e0",
+     "vlan": 3,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "00:00:0c:07:ac:35",
+     "vlan": 4,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "00:11:25:8c:0b:04",
+     "vlan": 4,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "00:50:56:88:14:62",
+     "vlan": 4,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "00:50:56:88:57:94",
+     "vlan": 4,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "00:50:56:88:6b:77",
+     "vlan": 4,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "00:50:56:93:0f:2c",
+     "vlan": 4,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "00:50:56:93:29:1b",
+     "vlan": 4,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "00:50:56:93:2f:e3",
+     "vlan": 4,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "00:50:56:93:44:96",
+     "vlan": 4,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "00:50:56:93:44:b8",
+     "vlan": 4,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "00:50:56:93:48:5c",
+     "vlan": 4,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "00:50:56:93:4d:10",
+     "vlan": 4,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "00:50:56:93:54:5d",
+     "vlan": 4,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "00:50:56:93:65:19",
+     "vlan": 4,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "34:40:b5:9e:08:b4",
+     "vlan": 4,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "5c:f3:fc:da:a3:64",
+     "vlan": 4,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "8c:60:4f:19:16:3a",
+     "vlan": 4,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "8c:60:4f:19:16:7c",
+     "vlan": 4,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "8c:60:4f:19:1c:01",
+     "vlan": 4,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "00:00:0c:07:ac:46",
+     "vlan": 5,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "58:6a:b1:4f:42:88",
+     "vlan": 5,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "60:da:83:3f:c5:40",
+     "vlan": 5,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "74:ea:cb:73:fc:b5",
+     "vlan": 5,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "74:ea:cb:74:5b:97",
+     "vlan": 5,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "74:ea:cb:74:5b:d3",
+     "vlan": 5,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "74:ea:cb:74:5c:2d",
+     "vlan": 5,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "74:ea:cb:74:96:cb",
+     "vlan": 5,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "74:ea:cb:74:98:f9",
+     "vlan": 5,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "74:ea:cb:74:99:05",
+     "vlan": 5,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "74:ea:cb:74:99:3b",
+     "vlan": 5,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "74:ea:cb:74:9c:83",
+     "vlan": 5,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "74:ea:cb:75:17:37",
+     "vlan": 5,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "7c:1c:f1:f8:2e:e5",
+     "vlan": 5,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "7c:1c:f1:f8:2f:5c",
+     "vlan": 5,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "7c:1c:f1:f8:30:20",
+     "vlan": 5,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "7c:1c:f1:f8:30:ac",
+     "vlan": 5,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "8c:60:4f:19:16:3a",
+     "vlan": 5,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "8c:60:4f:19:16:7c",
+     "vlan": 5,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "8c:60:4f:19:1c:01",
+     "vlan": 5,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "fe:fc:fe:04:5e:28",
+     "vlan": 5,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "fe:fc:fe:0e:6c:0a",
+     "vlan": 5,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "fe:fc:fe:17:f4:03",
+     "vlan": 5,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "fe:fc:fe:25:9b:61",
+     "vlan": 5,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "fe:fc:fe:27:2e:9d",
+     "vlan": 5,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "fe:fc:fe:35:18:5f",
+     "vlan": 5,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "fe:fc:fe:6b:6e:b5",
+     "vlan": 5,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "fe:fc:fe:92:0b:69",
+     "vlan": 5,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "fe:fc:fe:97:3b:f9",
+     "vlan": 5,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "fe:fc:fe:9b:25:9e",
+     "vlan": 5,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "00:00:0c:07:ac:47",
+     "vlan": 6,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "00:0c:29:e2:a7:23",
+     "vlan": 6,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "00:0e:1e:a4:d6:f0",
+     "vlan": 6,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "00:0e:1e:a4:fb:90",
+     "vlan": 6,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "00:25:b5:00:00:1e",
+     "vlan": 6,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "00:25:b5:00:00:34",
+     "vlan": 6,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "00:25:b5:00:00:81",
+     "vlan": 6,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "00:50:56:93:67:43",
+     "vlan": 6,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "10:60:4b:b4:1d:50",
+     "vlan": 6,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "10:60:4b:b4:4f:28",
+     "vlan": 6,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "10:60:4b:b4:5f:4c",
+     "vlan": 6,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "10:60:4b:b4:dc:ec",
+     "vlan": 6,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "10:60:4b:b4:ff:64",
+     "vlan": 6,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "8c:60:4f:19:16:3a",
+     "vlan": 6,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "8c:60:4f:19:1c:01",
+     "vlan": 6,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "00:00:0c:07:ac:4d",
+     "vlan": 7,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "00:0c:29:04:df:86",
+     "vlan": 7,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "00:0c:29:64:a6:4c",
+     "vlan": 7,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "00:0c:29:9b:ac:87",
+     "vlan": 7,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "00:50:56:88:0d:08",
+     "vlan": 7,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "00:50:56:88:0f:6e",
+     "vlan": 7,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "00:50:56:88:37:33",
+     "vlan": 7,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "00:50:56:88:46:f3",
+     "vlan": 7,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "00:50:56:88:51:74",
+     "vlan": 7,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "00:50:56:88:62:64",
+     "vlan": 7,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "00:50:56:88:6d:1e",
+     "vlan": 7,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "00:50:56:88:77:a8",
+     "vlan": 7,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "00:50:56:88:7e:53",
+     "vlan": 7,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "00:50:56:93:28:27",
+     "vlan": 7,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "00:50:56:93:37:f4",
+     "vlan": 7,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "00:50:56:93:4e:dc",
+     "vlan": 7,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "00:50:56:93:59:cd",
+     "vlan": 7,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "00:50:56:93:6c:47",
+     "vlan": 7,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "00:50:56:93:7f:e1",
+     "vlan": 7,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "04:25:c5:a7:93:3f",
+     "vlan": 7,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "04:25:c5:a7:94:b7",
+     "vlan": 7,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "8c:60:4f:19:16:3a",
+     "vlan": 7,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "8c:60:4f:19:16:7c",
+     "vlan": 7,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "8c:60:4f:19:1c:01",
+     "vlan": 7,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "00:00:0c:07:ac:4e",
+     "vlan": 8,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "00:50:56:88:08:a1",
+     "vlan": 8,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "00:50:56:88:0b:d2",
+     "vlan": 8,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "00:50:56:88:11:9d",
+     "vlan": 8,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "00:50:56:88:16:51",
+     "vlan": 8,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "00:50:56:88:1a:1f",
+     "vlan": 8,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "00:50:56:88:1b:09",
+     "vlan": 8,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "00:50:56:88:1b:cb",
+     "vlan": 8,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "00:50:56:88:1e:f5",
+     "vlan": 8,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "00:50:56:88:2e:08",
+     "vlan": 8,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "00:50:56:88:33:d0",
+     "vlan": 8,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "00:50:56:88:38:f6",
+     "vlan": 8,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "00:50:56:88:68:3a",
+     "vlan": 8,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "00:50:56:88:78:2c",
+     "vlan": 8,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "8c:60:4f:19:16:3a",
+     "vlan": 8,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "8c:60:4f:19:16:7c",
+     "vlan": 8,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    },
+    {
+     "mac": "8c:60:4f:19:1c:01",
+     "vlan": 8,
+     "bridgePort": 17,
+     "ifIndex": 17,
+     "ifName": "17",
+     "status": "learned",
+     "portMacCount": 217
+    }
+   ],
+   "fdbTruncated": false,
+   "neighbours": [
+    {
+     "protocol": "lldp",
+     "localPort": 8,
+     "localIfIndex": 8,
+     "localIfName": "8",
+     "remoteChassisId": "e8:39:35:1a:ca:99",
+     "remotePortId": "e8:39:35:1a:ca:99",
+     "remotePortDesc": null,
+     "remoteSysName": null
+    },
+    {
+     "protocol": "lldp",
+     "localPort": 15,
+     "localIfIndex": 15,
+     "localIfName": "15",
+     "remoteChassisId": "e8:39:35:1a:3c:65",
+     "remotePortId": "e8:39:35:1a:3c:65",
+     "remotePortDesc": null,
+     "remoteSysName": null
+    },
+    {
+     "protocol": "lldp",
+     "localPort": 16,
+     "localIfIndex": 16,
+     "localIfName": "16",
+     "remoteChassisId": "e8:39:35:1a:ca:91",
+     "remotePortId": "e8:39:35:1a:ca:91",
+     "remotePortDesc": null,
+     "remoteSysName": null
+    },
+    {
+     "protocol": "lldp",
+     "localPort": 17,
+     "localIfIndex": 17,
+     "localIfName": "17",
+     "remoteChassisId": "8c:60:4f:19:16:3a",
+     "remotePortId": "Eth1/19",
+     "remotePortDesc": "Ethernet1/19",
+     "remoteSysName": "NWPU-CA-5548-01"
+    },
+    {
+     "protocol": "lldp",
+     "localPort": 17,
+     "localIfIndex": 17,
+     "localIfName": "17",
+     "remoteChassisId": "NWPU-CA-5548-01(SSI183706KP)",
+     "remotePortId": "Ethernet1/19",
+     "remotePortDesc": null,
+     "remoteSysName": null
+    },
+    {
+     "protocol": "cdp",
+     "localPort": 8,
+     "localIfIndex": 8,
+     "localIfName": "8",
+     "remoteChassisId": "e8:39:35:1a:ca:99",
+     "remotePortId": "�95\u001aʙ",
+     "remotePortDesc": null,
+     "remoteSysName": null,
+     "remoteAddress": null,
+     "remotePlatform": "Emulex OneConnect 10Gb Multi function Adapter"
+    },
+    {
+     "protocol": "cdp",
+     "localPort": 15,
+     "localIfIndex": 15,
+     "localIfName": "15",
+     "remoteChassisId": "e8:39:35:1a:3c:65",
+     "remotePortId": "�95\u001a<e",
+     "remotePortDesc": null,
+     "remoteSysName": null,
+     "remoteAddress": null,
+     "remotePlatform": "Emulex OneConnect 10Gb Multi function Adapter"
+    },
+    {
+     "protocol": "cdp",
+     "localPort": 16,
+     "localIfIndex": 16,
+     "localIfName": "16",
+     "remoteChassisId": "e8:39:35:1a:ca:91",
+     "remotePortId": "�95\u001aʑ",
+     "remotePortDesc": null,
+     "remoteSysName": null,
+     "remoteAddress": null,
+     "remotePlatform": "Emulex OneConnect 10Gb Multi function Adapter"
+    },
+    {
+     "protocol": "cdp",
+     "localPort": 17,
+     "localIfIndex": 17,
+     "localIfName": "17",
+     "remoteChassisId": "8c:60:4f:19:16:3a",
+     "remotePortId": "Eth1/19",
+     "remotePortDesc": null,
+     "remoteSysName": null,
+     "remoteAddress": "10.40.1.19",
+     "remotePlatform": "\"Cisco Nexus Operating System (NX-OS) Software 6.0(2)N2(3)"
+    },
+    {
+     "protocol": "cdp",
+     "localPort": 17,
+     "localIfIndex": 17,
+     "localIfName": "17",
+     "remoteChassisId": "NWPU-CA-5548-01(SSI183706KP)",
+     "remotePortId": "Ethernet1/19",
+     "remotePortDesc": null,
+     "remoteSysName": "NWPU-CA-5548-01(SSI183706KP)",
+     "remoteAddress": "222.24.192.252",
+     "remotePlatform": "Cisco Nexus Operating System (NX-OS) Software, Version 6.0(2)N2(3)N5K-C5548UP"
+    }
+   ],
+   "vlans": [
+    {
+     "vlan": 1,
+     "name": "DEFAULT_VLAN"
+    },
+    {
+     "vlan": 50,
+     "name": "VLAN50"
+    },
+    {
+     "vlan": 52,
+     "name": "VLAN52"
+    },
+    {
+     "vlan": 53,
+     "name": "VLAN53"
+    },
+    {
+     "vlan": 70,
+     "name": "VLAN70"
+    },
+    {
+     "vlan": 71,
+     "name": "VLAN71"
+    },
+    {
+     "vlan": 77,
+     "name": "VLAN77"
+    },
+    {
+     "vlan": 78,
+     "name": "VLAN78"
+    }
+   ],
+   "supported": [
+    "if",
+    "fdb",
+    "lldp",
+    "vlan",
+    "cdp"
+   ],
+   "fdbTotal": 277,
+   "arp": [],
+   "arpSource": null,
+   "arpTruncated": false,
+   "arpTotal": 0,
+   "inventory": []
+  }
+ ],
+ "errors": []
+}

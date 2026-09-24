@@ -76,6 +76,10 @@
           ],
         }));
 
+        // This agent, opened on the screens that chase a fault further.
+        var ctx = deps.contextActions ? deps.contextActions({ agentId: Number(id) }) : null;
+        if (ctx) page.append(ctx);
+
         // The health verdict and the metrics behind it. The body is filled by
         // the poller, so the panel is built once and kept.
         var healthBody = el('div', { class: 'agent-health' });

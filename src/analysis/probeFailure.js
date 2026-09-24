@@ -143,4 +143,81 @@ function describeFailures(rows) {
   return out;
 }
 
-module.exports = { describeFailure, describeFailures, splitHostPort, DNS_CODES, TCP_FAILURES };
+// --- DHCP ---------------------------------------------------------------------
+//
+// The DHCP test (blueeye-agent src/probes/dhcp.js) answers two questions, and
+// each has its own sentence:
+//
+//   no offer         — the test RAN (an `offers` list is stored) and nobody
+//                      answered within the window. The DHCP server, or the relay
+//                      (ip helper-address) in front of it, is down or not
+//                      reachable from this segment. Existing leases keep
+//                      working until they expire; a device that reboots or is
+//                      plugged in now gets no address.
+//   several servers  — more than one DISTINCT server identifier answered one
+//                      DISCOVER. On a flat (OT) network that is a rogue or
+//                      misconfigured server, and whichever answers first hands
+//                      out the default gateway and the resolver — which is why
+//                      it is a security finding, not only an availability one.
+//
+// A test that could not run (no `offers` list: no permission for port 68, no
+// IPv4 interface) says nothing about the network, and gets no sentence here —
+// its reason is already in `detail` and in the agent.probe-failed audit row.
+
+// How many offers are spelled out in one sentence.
+const MAX_OFFERS_EXPLAINED = 4;
+
+const secs = (ms) => {
+  const n = Number(ms);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return Math.round(n / 100) / 10;
+};
+
+// One offer, the way a technician reads it off a capture.
+function describeOffer(o) {
+  if (!o) return '';
+  const bits = [];
+  if (o.offeredIp) bits.push(`offers ${o.offeredIp}${o.subnetMask ? `/${o.subnetMask}` : ''}`);
+  if (o.router) bits.push(`router ${o.router}`);
+  if (o.dns && o.dns.length) bits.push(`DNS ${o.dns.join(', ')}`);
+  if (o.relay) bits.push(`via relay ${o.relay}`);
+  return `${o.serverId || 'a server with no server identifier'}${bits.length ? ` (${bits.join(', ')})` : ''}`;
+}
+
+// Describes the newest dhcp row. Returns null for any other row type, for a
+// test that could not run, and for a healthy single-server answer.
+//
+//   { type:'dhcp', target, kind:'no_offer'|'multiple_servers', iface, timeoutMs,
+//     serverCount, serverIds, offers, text }
+function describeDhcp(row) {
+  if (!row || row.type !== 'dhcp' || !row.dhcp || !Array.isArray(row.dhcp.offers)) return null;
+  const d = row.dhcp;
+  const iface = d.iface || row.target;
+  const base = { type: 'dhcp', target: row.target, iface, timeoutMs: d.timeoutMs ?? null };
+  if (d.offers.length === 0) {
+    const s = secs(d.timeoutMs);
+    return {
+      ...base,
+      kind: 'no_offer',
+      serverCount: 0,
+      serverIds: [],
+      offers: [],
+      text: `No DHCP server answered on ${iface}${s != null ? ` within ${s} s` : ''}: the DHCP server, or the relay in front of it, is down or unreachable from this segment. Existing leases keep working until they expire; a device that reboots or is plugged in now gets no address`,
+    };
+  }
+  const serverIds = [...new Set(d.offers.map((o) => o && o.serverId).filter(Boolean))];
+  const count = Number.isInteger(d.serverCount) ? d.serverCount : serverIds.length;
+  if (count <= 1) return null;
+  const listed = d.offers.slice(0, MAX_OFFERS_EXPLAINED).map(describeOffer).join('; ');
+  const more = d.offers.length > MAX_OFFERS_EXPLAINED ? ` (+${d.offers.length - MAX_OFFERS_EXPLAINED} more)` : '';
+  return {
+    ...base,
+    kind: 'multiple_servers',
+    serverCount: count,
+    serverIds,
+    offers: d.offers,
+    text: `${count} DHCP servers answered on ${iface}: ${serverIds.join(', ') || 'unidentified servers'} — a rogue or misconfigured DHCP server. Whichever answers first hands out the default gateway and DNS, so clients on this segment can be sent anywhere. Offers: ${listed}${more}`,
+  };
+}
+
+module.exports = { describeFailure, describeFailures, describeDhcp, describeOffer, splitHostPort, DNS_CODES, TCP_FAILURES };

@@ -1,7 +1,10 @@
 'use strict';
 
-// Stores one SNMP topology cycle: the forwarding tables, LLDP neighbours and
-// VLAN names an agent read from the switches assigned to it.
+const { disambiguateIfNames } = require('./ifNames');
+
+// Stores one SNMP topology cycle: the forwarding tables, LLDP and CDP
+// neighbours, VLAN names, router ARP tables and ENTITY-MIB inventory an agent
+// read from the switches assigned to it.
 //
 // THE OWNERSHIP CHECK IS THE POINT OF THIS FILE. An agent submits results for
 // device ids, and it must only be able to write the devices the server assigned
@@ -40,6 +43,11 @@ function createSnmpTopologyIngest({
   // Switch-seen LLDP changes into topology_changes
   // (topologyChangeService.processDeviceSnapshot).
   topologyChangeService = null,
+  // The ARP table of a router or L3 switch (IP-MIB, migration 125). Its own
+  // table, not arp_entries: that one keys on an agent. Wired through the
+  // new-device detector in server.js, so a MAC the router sees for the first
+  // time at a site is raised like one an agent sees.
+  deviceArpRepo = null,
   logger = null,
   now = () => new Date(),
 }) {
@@ -58,14 +66,27 @@ function createSnmpTopologyIngest({
   // neighbour seen inside retention; the ones from the last snapshot are those
   // sharing its (newest) last_seen. Anything older is a neighbour that had
   // already gone, and must not be "removed" a second time.
+  //
+  // PER PROTOCOL (migration 124). LLDP and CDP are walked separately, and one
+  // can fail while the other answers; the poll that lost its CDP walk still
+  // moved the LLDP rows' last_seen. A single "newest" across both would then
+  // drop every CDP row out of the previous snapshot, and the next poll that
+  // reads CDP again would announce each of them as newly added.
   function lastSnapshot(stored) {
     const ms = (v) => (v == null ? NaN : new Date(v).getTime());
-    let newest = -Infinity;
-    for (const n of stored) { const t = ms(n.lastSeen); if (t > newest) newest = t; }
-    if (!Number.isFinite(newest)) return [];
+    const newest = new Map();
+    for (const n of stored) {
+      const t = ms(n.lastSeen);
+      const p = (n && n.protocol) || 'lldp';
+      if (Number.isFinite(t) && t > (newest.get(p) ?? -Infinity)) newest.set(p, t);
+    }
+    if (!newest.size) return [];
     // One second of slack: last_seen is a DATETIME, and a sweep's rows share
     // one `at` that MySQL may have rounded.
-    return stored.filter((n) => newest - ms(n.lastSeen) <= 1000);
+    return stored.filter((n) => {
+      const top = newest.get((n && n.protocol) || 'lldp');
+      return top != null && top - ms(n.lastSeen) <= 1000;
+    });
   }
 
   function asEdge(n) {
@@ -74,6 +95,31 @@ function createSnmpTopologyIngest({
       remoteChassisId: n.remoteChassisId,
       remotePort: n.remotePortId ?? '',
       remoteName: n.remoteSysName || null,
+    };
+  }
+
+  const protocolOf = (n) => (n && n.protocol) || 'lldp';
+
+  // The previous snapshot as the diff should see it: only the protocols THIS
+  // poll reported. The diff already treats an empty current table as "the walk
+  // failed", not "every neighbour left"; the same holds per protocol — a
+  // switch whose CDP walk timed out while LLDP answered has not lost its CDP
+  // neighbours, and they must not be announced as removed.
+  function comparable(previous, current) {
+    const reported = new Set(current.map(protocolOf));
+    return previous.filter((n) => reported.has(protocolOf(n)));
+  }
+
+  // The first chassis the device reported — what the device list shows as its
+  // model and serial. Null when the device reported no inventory at all, which
+  // keeps whatever is stored (COALESCE in recordPoll).
+  function primaryHardware(inventory) {
+    const list = Array.isArray(inventory) ? inventory : [];
+    const e = list.find((x) => x.class === 'chassis') || null;
+    if (!e) return null;
+    return {
+      vendor: e.vendor, model: e.model, serial: e.serial,
+      hardwareRev: e.hardwareRev, firmwareRev: e.firmwareRev, softwareRev: e.softwareRev,
     };
   }
 
@@ -89,6 +135,8 @@ function createSnmpTopologyIngest({
     let vlanRows = 0;
     let portTransitions = 0;
     let neighbourChanges = 0;
+    let arpRows = 0;
+    let inventoryRows = 0;
     let refused = 0;
     const deviceErrors = [];
     // Ports whose ifIndex moved since the last poll. Reported back to the
@@ -118,7 +166,7 @@ function createSnmpTopologyIngest({
         let storedNeighbours = null;
         if (snmpNeighborsRepo && (switchPortStateService || topologyChangeService)) {
           try {
-            storedNeighbours = await snmpNeighborsRepo.listForDevice(d.deviceId, { limit: 512 });
+            storedNeighbours = await snmpNeighborsRepo.listForDevice(d.deviceId, { limit: 1024 });
           } catch (err) {
             if (logger) logger.warn(`snmp-topology: previous neighbours unavailable for device ${d.deviceId} (${err.message})`);
           }
@@ -131,7 +179,7 @@ function createSnmpTopologyIngest({
         // must not cost the forwarding table somebody is waiting for.
         if (deviceInterfacesRepo && d.interfaces && d.interfaces.length) {
           try {
-            const out = await deviceInterfacesRepo.upsertMany(d.deviceId, d.interfaces, { at });
+            const out = await deviceInterfacesRepo.upsertMany(d.deviceId, disambiguateIfNames(d.interfaces), { at });
             interfaceRows += out.upserted;
             for (const r of out.renumbered) renumbered.push({ deviceId: d.deviceId, ...r });
             // Ports whose link state this poll changed. Recorded as history
@@ -171,7 +219,7 @@ function createSnmpTopologyIngest({
               agentId,
               deviceId: d.deviceId,
               deviceName: device.displayName || device.host,
-              prev: previousSnapshot.map(asEdge),
+              prev: comparable(previousSnapshot, d.neighbours).map(asEdge),
               next: d.neighbours.map(asEdge),
             });
             neighbourChanges += diff.changes.length;
@@ -193,8 +241,39 @@ function createSnmpTopologyIngest({
             if (logger) logger.warn(`snmp-topology: neighbour ingest failed for device ${d.deviceId} (${err.message})`);
           }
         }
+        // The router's ARP table. Best-effort like the neighbours: an identity
+        // source failing to store must not cost the forwarding table. The
+        // device and the polling agent travel with it so the new-device
+        // detector wrapping this repository can scope "never seen" to the
+        // device's site and name who observed it.
+        if (deviceArpRepo && Array.isArray(d.arp) && d.arp.length) {
+          try {
+            arpRows += await deviceArpRepo.upsertMany(d.deviceId, d.arp, { at, device, agentId });
+          } catch (err) {
+            if (logger) logger.warn(`snmp-topology: ARP ingest failed for device ${d.deviceId} (${err.message})`);
+          }
+        }
+        // The ENTITY-MIB inventory, replaced — it is the box as it is now. An
+        // empty report replaces nothing: a walk that timed out has not
+        // unplugged a line card.
+        if (Array.isArray(d.inventory) && d.inventory.length
+          && typeof snmpDevicesRepo.replaceInventory === 'function') {
+          try {
+            inventoryRows += await snmpDevicesRepo.replaceInventory(d.deviceId, d.inventory, { at });
+          } catch (err) {
+            if (logger) logger.warn(`snmp-topology: inventory ingest failed for device ${d.deviceId} (${err.message})`);
+          }
+        }
         await snmpDevicesRepo.recordPoll(d.deviceId, {
-          ok: true, supported: d.supported, sysDescr: d.sysDescr ?? null, at,
+          ok: true,
+          supported: d.supported,
+          sysDescr: d.sysDescr ?? null,
+          sysName: d.sysName ?? null,
+          sysLocation: d.sysLocation ?? null,
+          sysContact: d.sysContact ?? null,
+          sysObjectId: d.sysObjectId ?? null,
+          hardware: primaryHardware(d.inventory),
+          at,
         });
         stored += 1;
         if (d.fdb.length) storedDeviceIds.push(d.deviceId);
@@ -239,7 +318,7 @@ function createSnmpTopologyIngest({
 
     return {
       stored, fdbRows, neighbourRows, interfaceRows, vlanRows, renumbered, loops,
-      portTransitions, neighbourChanges,
+      portTransitions, neighbourChanges, arpRows, inventoryRows,
       refused, failuresRecorded, deviceErrors,
     };
   }

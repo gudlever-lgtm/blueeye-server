@@ -234,3 +234,38 @@ test('the standalone module still owns its own heading without the flag', async 
   assert.match(src, /function renderHeader/, 'the standalone heading was removed');
   void t;
 });
+
+// ---- members + linked event cases (migration 129) --------------------------
+
+test('the situation lists its member findings and the event cases they sit in; a case opens its page', async (t) => {
+  const { doc, window, errors } = boot({ t, routes: SESSION({
+    'GET /api/event-clusters/14': CLUSTER({
+      members: [
+        { findingId: 'a', host: '7', metric: 'probe.reachability', severity: 'CRIT', explanation: 'erp.example.com not responding', createdAt: '2026-09-17T13:40:00.000Z' },
+        { findingId: 'b', host: '8', metric: 'probe.loss', severity: 'WARN', explanation: 'loss 40% to erp.example.com', createdAt: '2026-09-17T13:41:00.000Z' },
+      ],
+      eventCases: [
+        { id: 31, title: 'CRIT probe.reachability on oslo-edge-01', status: 'open', severity: 'CRIT', agentName: 'oslo-edge-01', locationName: 'Oslo HQ', firstEventAt: '2026-09-17T13:40:00.000Z' },
+      ],
+    }),
+    'GET /api/events/31': { event: { id: 31, title: 'CRIT probe.reachability on oslo-edge-01', severity: 'CRIT', status: 'open', hostId: 7, clusterId: 14, firstEventAt: '2026-09-17T13:40:00.000Z', lastEventAt: '2026-09-17T13:41:00.000Z' }, anomalies: [] },
+  }) });
+  await settle();
+  assert.deepEqual(errors, []);
+  const text = doc.querySelector('#view').textContent;
+  assert.match(text, /Findings in this situation/);
+  assert.match(text, /erp\.example\.com not responding/);
+  assert.match(text, /Event cases in this situation/);
+  const caseLink = [...doc.querySelectorAll('#view .hostlink')].find((a) => /oslo-edge-01/.test(a.textContent) && /CRIT probe/.test(a.textContent));
+  assert.ok(caseLink, 'the linked case is not a link');
+  caseLink.dispatchEvent(new window.Event('click', { bubbles: true }));
+  await settle();
+  assert.match(doc.querySelector('#view .page-head h1').textContent, /CRIT probe\.reachability on oslo-edge-01/);
+  assert.match(doc.querySelector('#view .page-head p').textContent, /Part of situation #14/);
+});
+
+test('a situation with no linked cases says so instead of an empty box', async (t) => {
+  const { doc } = boot({ t, routes: SESSION({ 'GET /api/event-clusters/14': CLUSTER({ eventCases: [] }) }) });
+  await settle();
+  assert.match(doc.querySelector('#view').textContent, /No event cases linked yet/);
+});

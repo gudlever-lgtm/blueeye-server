@@ -2,8 +2,11 @@
 
 // Pulls raw flow records out of an agent result payload. Two shapes are
 // supported:
-//   1) traffic.flows: [{ srcIp, dstIp, proto, srcPort, dstPort, bytes, packets, flows }]
-//      — the preferred, explicit schema.
+//   1) traffic.flows: [{ srcIp, dstIp, proto, srcPort, dstPort, bytes, packets, flows,
+//                        vlan?, inIf?, outIf? }]
+//      — the preferred, explicit schema. vlan/inIf/outIf are optional (newer agents
+//      send them for sFlow and NetFlow v9/IPFIX when the exporter
+//      reports them); anything that is not a valid VLAN id / ifIndex is null.
 //   2) traffic.topTalkers: [{ pair, bytes, packets, flows, proto }]
 //      — best-effort fallback; the pair string is parsed for two IPs.
 // Returns raw (un-enriched) records the geo enricher can consume.
@@ -13,6 +16,18 @@ const IPV4 = /(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})(?::(\d+))?/g;
 function num(v) {
   const n = Number(v);
   return Number.isFinite(n) ? n : 0;
+}
+
+// 802.1Q VLAN id (1..4094) or null.
+function vlanOf(v) {
+  const n = Number(v);
+  return v != null && Number.isInteger(n) && n >= 1 && n <= 4094 ? n : null;
+}
+
+// An ifIndex (positive 32-bit integer) or null.
+function ifIndexOf(v) {
+  const n = Number(v);
+  return v != null && Number.isInteger(n) && n > 0 && n <= 0xffffffff ? n : null;
 }
 
 // Parses "1.2.3.4:443 <-> 5.6.7.8:55000" (any of ↔ <-> -> → - , |) into two
@@ -54,6 +69,9 @@ function extractFlows(agentId, payload, now = () => new Date()) {
         bytes: num(f.bytes),
         packets: num(f.packets),
         flows: num(f.flows) || 1,
+        vlan: vlanOf(f.vlan),
+        inIf: ifIndexOf(f.inIf),
+        outIf: ifIndexOf(f.outIf),
       });
     }
     return records;

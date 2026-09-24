@@ -145,7 +145,13 @@ function createAuditLogRepository(db) {
 
   // Walks the hash chain (oldest→newest over the rows that carry a hash) and
   // recomputes each entry_hash. Returns { ok, checked, brokenAt } where brokenAt
-  // is the id of the first tampered/removed row, or null when intact.
+  // is the id of the first tampered/removed row, or null when intact. A break
+  // also says WHICH check failed, so the screen can explain it rather than just
+  // report a row number:
+  //   reason 'unlinked' — the row does not point at the hash of the row before
+  //                       it: a row between them was removed (or reordered);
+  //   reason 'altered'  — the row's own fields no longer hash to its stored
+  //                       entry_hash: the row itself was edited after writing.
   async function verifyChain({ limit = 100000 } = {}) {
     const [rows] = await pool.query(
       `SELECT ${COLS}, prev_hash, entry_hash FROM audit_log WHERE entry_hash IS NOT NULL ORDER BY id ASC LIMIT ?`,
@@ -155,10 +161,10 @@ function createAuditLogRepository(db) {
     let prev = rows[0].prev_hash || '';
     for (const row of rows) {
       if ((row.prev_hash || '') !== (prev || '')) {
-        return { ok: false, checked: rows.length, brokenAt: row.id };
+        return { ok: false, checked: rows.length, brokenAt: row.id, reason: 'unlinked' };
       }
       if (row.entry_hash !== entryHashFor(prev, row)) {
-        return { ok: false, checked: rows.length, brokenAt: row.id };
+        return { ok: false, checked: rows.length, brokenAt: row.id, reason: 'altered' };
       }
       prev = row.entry_hash;
     }

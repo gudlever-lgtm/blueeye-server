@@ -101,8 +101,10 @@ login and still does.
 | Config row unreadable | fail | **work** | offered (reads as disabled) | server log: `ldap: could not read the directory config …` |
 | Licence/provider check throws | fail | **work** | **403, indeterminate** | server log: `users: could not determine whether LDAP/AD sign-in is active …` |
 | LDAP disabled by an admin | n/a | **work** | offered | Settings → Authentication |
+| Admin's address outside the admin IP allowlist | n/a | **refused (403 `ip_not_allowed`)** | n/a | `audit_log` `login_ip_denied`; step 3a below |
 
-The row that matters: **local logins work in every case.**
+The row that matters: **local logins work in every directory failure.** The last
+row is not a directory failure — it is a policy the admin set on purpose.
 
 ## Getting back in
 
@@ -118,6 +120,20 @@ with SSO active or indeterminate, needs no mail server.
 **3. Turn the directory off so the guard opens.** *Settings → Authentication* →
 clear `enabled`, or set `LDAP_AUTH_ENABLED=false` and restart. The invite flow
 comes back and the 403 goes away. Fix the directory, then switch it back on.
+
+**3a. Locked out by the IP allowlist.** The one rule local accounts are under
+too is the role-based IP allowlist (*Settings → Authentication → Security*,
+[security-hardening.md](security-hardening.md)). The dashboard refuses to save an
+admin list that excludes the saving admin's own address, but a network change
+(a new NAT address, a proxy that stops sending `X-Forwarded-For`) can still leave
+every admin outside it. Sign in from an allowed address; failing that, clear the
+policy in the database (shell access) — it is read again within seconds:
+
+```sql
+UPDATE app_settings
+   SET value = JSON_SET(value, '$.ipAllowlist.admin', JSON_ARRAY())
+ WHERE setting_key = 'security';
+```
 
 **4. Break glass (needs shell + database access).** If no local admin exists at
 all:

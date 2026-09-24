@@ -131,7 +131,7 @@ test('non-ok topology nodes join the impact footprint and are broken out', () =>
 test('empty state yields all zeros, never a throw', () => {
   assert.deepEqual(buildSummary(), {
     activeFaults: 0, affectedDevices: 0, rootCauses: 0, anomalies: 0,
-    devicesDown: 0, devicesUnreachable: 0,
+    devicesDown: 0, devicesUnreachable: 0, devicesDegraded: 0,
   });
   assert.deepEqual(buildSummary({ rootCauses: null, topology: null, anomalies: null }).affectedDevices, 0);
 });

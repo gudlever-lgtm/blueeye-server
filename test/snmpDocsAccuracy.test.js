@@ -63,3 +63,14 @@ test('l2-loop.md quotes the thresholds the detector actually applies', () => {
   assert.ok(MIN_SURGING_PORTS <= MAX_BASELINE_PORTS,
     'the baseline cap is below the number of surging ports the rule needs — the rule could never fire');
 });
+
+test('snmp-topology.md quotes the ARP cap and the new-device default collect the code uses', () => {
+  const { MAX_ARP_PER_DEVICE, DEFAULT_COLLECT, LEGACY_DEFAULT_COLLECT } = require('../src/validation/snmpDeviceValidation');
+  const topo = doc('snmp-topology.md');
+  assert.ok(topo.includes(`At most **${MAX_ARP_PER_DEVICE} rows per device**`),
+    `the doc does not state the ${MAX_ARP_PER_DEVICE}-row ARP cap`);
+  assert.ok(topo.includes(`\`DEFAULT_COLLECT\` = \`${DEFAULT_COLLECT.join(', ')}\``),
+    'the doc does not state the default collect list for new devices');
+  assert.ok(topo.includes(`legacy \`${LEGACY_DEFAULT_COLLECT.join(', ')}\``),
+    'the doc does not state what a NULL collect means');
+});

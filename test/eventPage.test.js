@@ -191,13 +191,21 @@ test('a viewer is offered no move, only the way back', async (t) => {
   assert.ok(!panelTitles(doc).includes('Config context'));
 });
 
-test('the work log is first, because that is what the next shift reads first', async (t) => {
+test('the evidence comes first and the work log straight after it', async (t) => {
   const { doc } = boot({ t, routes: SESSION() });
   await settle();
-  const first = doc.querySelector('#view .ui-page > *:nth-child(2)');
-  assert.match(first.textContent, /Work log/);
+  const kids = [...doc.querySelectorAll('#view .ui-page > *')];
+  const at = (re) => kids.findIndex((k) => re.test(k.textContent));
+  const anomalies = at(/Anomalies/);
+  const log = at(/Work log/);
+  assert.ok(anomalies > 0, 'no anomalies panel');
+  assert.ok(log > anomalies, 'the work log is above the evidence');
+  // Nothing but evidence sits between the anomalies and the work log.
+  for (const k of kids.slice(anomalies + 1, log)) {
+    assert.match(k.textContent, /Affected path|Traffic and interface errors/);
+  }
   // It draws its own card, so the page does not put a panel around it.
-  assert.ok(!first.classList.contains('panel-ui'), 'the work log is double-framed');
+  assert.ok(!kids[log].classList.contains('panel-ui'), 'the work log is double-framed');
 });
 
 test('the anomalies panel says how many and reads as a history', async (t) => {
@@ -348,4 +356,24 @@ test('the NIS2 register shows each Art. 23 deadline, coloured from the badge pal
   assert.match(find(/Final due/).cls, /\bneutral\b/);
   assert.ok(find(/Suspected malicious/));
   assert.match(doc.querySelector('#view').textContent, /From event case #11/);
+});
+
+test('a case that is part of a situation says so, and the link opens the situation (migration 129)', async (t) => {
+  const { doc, window } = boot({ t, routes: SESSION({
+    'GET /api/events/11': EVENT({ clusterId: 14 }),
+    'GET /api/event-clusters/14': { cluster: { id: 14, status: 'open', confidence: 'high', suspectedRootCause: { classification: 'network-layer' }, affectedAgents: ['7', '8'], members: [], eventCases: [] } },
+  }) });
+  await settle();
+  const lead = doc.querySelector('#view .page-head p');
+  const link = [...lead.querySelectorAll('.hostlink')].find((a) => /Part of situation #14/.test(a.textContent));
+  assert.ok(link, 'no "part of situation" link on a clustered case');
+  link.dispatchEvent(new window.Event('click', { bubbles: true }));
+  await settle();
+  assert.match(window.location.pathname, /14/);
+});
+
+test('a case in no situation carries no situation link', async (t) => {
+  const { doc } = boot({ t, routes: SESSION() });
+  await settle();
+  assert.doesNotMatch(doc.querySelector('#view .page-head p').textContent, /situation/i);
 });

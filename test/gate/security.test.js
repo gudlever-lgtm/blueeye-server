@@ -46,6 +46,7 @@ const PUBLIC_ROUTES = new Set([
   'GET /enroll/config',
   'GET /enroll/agent-release-key',
   'GET /enroll/agent-source.tgz',
+  'GET /enroll/agent-source.sha256',
   'GET /enroll/agent-release',
   'GET /enroll/agent-release.tgz',
   'GET /enroll/uninstall.sh',
@@ -74,6 +75,10 @@ const VIEWER_WRITE_ALLOWED = new Set([
   // 115) — the same footing as marking the page seen.
   'POST /api/changes/ack',
   'DELETE /api/changes/ack/:key',
+  // Muting a rule on the Changes page is the same: own view only (migration
+  // 116), time-boxed, and it never touches alerting.
+  'POST /api/changes/mute',
+  'DELETE /api/changes/mute/:key',
   'POST /api/nis2/custom-reports/preview',
   'POST /api/nis2/custom-reports/export',
   'POST /api/logs/client',

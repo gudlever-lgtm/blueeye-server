@@ -96,14 +96,42 @@ function createFlowPairBaselinesRepository(db) {
   }
 
   // Baselines where the host is the source (its outbound flow-pair profile).
-  async function listForHost({ hostId, limit = 500 }) {
+  // Optionally narrowed to one destination and/or port (one flow pair).
+  async function listForHost({ hostId, limit = 500, dstHostId = null, dstPort = null }) {
     const lim = Number.isInteger(limit) && limit > 0 && limit <= 5000 ? limit : 500;
+    const where = ['src_host_id = ?'];
+    const params = [hostId];
+    if (dstHostId != null) { where.push('dst_host_id = ?'); params.push(dstHostId); }
+    if (dstPort != null) { where.push('dst_port = ?'); params.push(dstPort); }
+    params.push(lim);
     const [rows] = await pool.query(
-      `SELECT * FROM flow_pair_baselines WHERE src_host_id = ?
+      `SELECT * FROM flow_pair_baselines WHERE ${where.join(' AND ')}
        ORDER BY dst_host_id, dst_port, dow, hour LIMIT ?`,
-      [hostId, lim],
+      params,
     );
     return rows.map(mapBaseline);
+  }
+
+  // The host's most recent rolled-up hour — "now" for a baseline comparison.
+  // Only complete hours are ever rolled up, so this is the last full hour the
+  // job saw, never a partial one. Same optional pair filter as listForHost; the
+  // latest bucket is taken over the SAME filter, so a quiet pair reports its
+  // own last hour rather than an hour it had no traffic in. Bounded.
+  async function latestHourlyForHost({ hostId, dstHostId = null, dstPort = null, limit = 5000 }) {
+    const lim = Number.isInteger(limit) && limit > 0 && limit <= 5000 ? limit : 5000;
+    const where = ['src_host_id = ?'];
+    const params = [hostId];
+    if (dstHostId != null) { where.push('dst_host_id = ?'); params.push(dstHostId); }
+    if (dstPort != null) { where.push('dst_port = ?'); params.push(dstPort); }
+    const clause = where.join(' AND ');
+    const [rows] = await pool.query(
+      `SELECT src_host_id, dst_host_id, dst_port, proto, bucket, bytes, packets, conn_count
+       FROM flow_pair_hourly
+       WHERE ${clause} AND bucket = (SELECT MAX(bucket) FROM flow_pair_hourly WHERE ${clause})
+       ORDER BY dst_host_id, dst_port LIMIT ?`,
+      [...params, ...params, lim],
+    );
+    return rows.map(mapHourly);
   }
 
   async function countForHost({ hostId }) {
@@ -111,7 +139,7 @@ function createFlowPairBaselinesRepository(db) {
     return rows && rows[0] ? Number(rows[0].n) : 0;
   }
 
-  return { insertHourly, purgeHourlyBefore, hourlySince, rowsForBucket, upsertBaselines, baselinesForSlot, listForHost, countForHost };
+  return { insertHourly, purgeHourlyBefore, hourlySince, rowsForBucket, upsertBaselines, baselinesForSlot, listForHost, latestHourlyForHost, countForHost };
 }
 
 module.exports = { createFlowPairBaselinesRepository, mapHourly, mapBaseline };

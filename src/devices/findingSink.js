@@ -27,6 +27,8 @@
 // builds the SNMP ingest before the alerting dispatcher exists, so it hands in a
 // getter; reading it at emit time is what makes that late binding work.
 
+const { storedOr } = require('../analysis/pipeline');
+
 const silentLogger = { info() {}, warn() {}, error() {}, debug() {} };
 
 function createDeviceFindingSink({
@@ -61,14 +63,28 @@ function createDeviceFindingSink({
     try { return Boolean(clusterAlertGate.suppressedCluster(finding)); } catch { return false; }
   }
 
-  // Raises one finding. Returns it, or null when it was not stored.
-  async function emit(finding) {
-    if (!finding || !isOn(enabled)) return null;
+  // Raises one finding. Returns it AS STORED, or null when it was not stored.
+  //
+  // What findingStore.save() answers carries the severity rules' verdict
+  // (migration 086) — a rule that downgrades a metric to INFO exists precisely
+  // so it does not page. So the stored finding, not the caller's draft, is what
+  // gets published, grouped, alerted and handed on (see storedOr); a store that
+  // answers nothing leaves the draft in place.
+  //
+  // `opts.alert === false` stores, publishes and groups the finding but sends
+  // no alert and no integration hand-off of its own — for a caller that knows
+  // the same fault has already been alerted through another path (a probe
+  // outage whose target the probe pipeline has just raised; see
+  // probeOutages/probeOutageService.js). Same treatment as a cluster-covered
+  // finding.
+  async function emit(draft, opts = {}) {
+    if (!draft || !isOn(enabled)) return null;
+    let finding = draft;
     if (findingStore) {
       try {
-        await findingStore.save(finding);
+        finding = storedOr(await findingStore.save(draft), draft);
       } catch (err) {
-        log.error(`device-finding: could not save ${finding.metric} (${err.message})`);
+        log.error(`device-finding: could not save ${draft.metric} (${err.message})`);
         return null;
       }
     }
@@ -76,11 +92,19 @@ function createDeviceFindingSink({
       log.warn(`device-finding: publish failed (${err.message})`);
     }
     if (eventCaseService && typeof eventCaseService.assignFinding === 'function') {
-      try { await eventCaseService.assignFinding(finding); } catch (err) {
+      try {
+        const placed = await eventCaseService.assignFinding(finding);
+        // The caller may need the case it landed in (a probe outage attaches its
+        // recovery to it) — on the draft it still holds, too.
+        if (placed && placed.eventCaseId != null) {
+          finding.eventCaseId = placed.eventCaseId;
+          draft.eventCaseId = placed.eventCaseId;
+        }
+      } catch (err) {
         log.warn(`device-finding: event assignment failed for ${finding.id} (${err.message})`);
       }
     }
-    const quiet = await suppressed(finding);
+    const quiet = (opts && opts.alert === false) || await suppressed(finding);
     const d = resolveDispatcher();
     if (d && isOn(alertingEnabled) && !quiet) {
       try { await d.dispatch(finding, null); } catch (err) {

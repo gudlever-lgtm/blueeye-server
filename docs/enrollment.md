@@ -71,6 +71,7 @@ Routes (admin): `GET/POST/DELETE /api/settings/agent-release-key` — status / g
 | --- | --- | --- |
 | `GET /enroll/config` | none | `{ serverUrl, certFingerprint, releasePublicKey }` for the agent to self-configure |
 | `GET /enroll/agent-source.tgz` | none | the agent **source bundle** (+ `X-Content-SHA256`); 404 if `AGENT_SOURCE_DIR` is unset/empty |
+| `GET /enroll/agent-source.sha256` | none | the SHA-256 of that bundle as it is **right now**, one line of plain text; 404 if none is published |
 | `GET /enroll/agent-release-key` | none | the release trust anchor (PEM) the agent pins to verify **signed self-updates**; 404 if no key is configured |
 | `GET /enroll/agent/:platform` | none | *legacy/optional* pre-built binary, only if one was dropped in the artifacts dir; 404 otherwise |
 | `GET /enroll/:code/install.sh` | none | the self-contained installer for that code (Linux + macOS); 404 if unknown/expired/exhausted |
@@ -275,8 +276,52 @@ log says so at boot:
 enroll: this tar cannot build a reproducible archive (…). Falling back …
 ```
 
-If you hit a checksum mismatch, re-fetching the install script is the
-workaround: it embeds the checksum of whatever the server currently serves.
+### What a mismatch means now
+
+Reproducible packaging removes the drift the server causes. It cannot remove the
+drift something *between* the server and the host causes — a CDN or reverse proxy
+that caches the `.tgz` (a static-looking extension) happily hands out a bundle
+from an older build, and the mismatch then survives every retry rather than
+clearing on its own.
+
+Three things close that:
+
+* every `/enroll` response is `Cache-Control: no-store`, so nothing in the path is
+  invited to keep a script or a bundle;
+* the scripts ask for the bundle by checksum —
+  `GET /enroll/agent-source.tgz?sha=<embedded>`. The URL differs per server build,
+  so a cache cannot answer it with older bytes, and a server that HAS repackaged
+  since answers **409** instead of serving a tarball the script would then reject;
+* `GET /enroll/agent-source.sha256` returns, as one line of plain text, the
+  checksum the server serves right now. When verification fails anyway, the script
+  reads it and names the side that is stale:
+
+```
+[blueeye] ERROR: this script is out of date: it expects agent source 1c59…,
+          but the server now serves 55d2… - which is what was just downloaded.
+          Re-run the one-liner - it downloads a fresh script carrying the current checksum.
+```
+
+versus
+
+```
+[blueeye] ERROR: the agent source that arrived is not what the server says it
+          serves (expected 1c59…, got 55d2…) - something between this host and the
+          server returned a stale or altered copy. Check any proxy or cache in the
+          path, then retry.
+```
+
+The first is fixed by re-running the one-liner. The second is a cache or proxy in
+front of the server, and re-running will not help until it is dealt with; compare
+what the host sees with what the server says:
+
+```
+curl -s https://<server>/enroll/agent-source.sha256          # from the host
+docker compose logs server | grep 'agent source packaged'    # on the server
+```
+
+Either way the refusal itself is correct — the inputs were inconsistent, and an
+agent is never installed from bytes that were not verified.
 
 ## Air-gapped networks
 

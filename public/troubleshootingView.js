@@ -14,9 +14,14 @@
   // has been established about it yet and the poller may not have reached its
   // first cycle, so drawing it green is a claim the data does not support, and
   // green is the one colour nobody looks at twice.
-  var STATES = { ok: 1, down: 1, unreachable_downstream: 1, unknown: 1 };
+  //
+  // 'degraded' is a node we CAN hear with an open fault on it — a switch whose
+  // uplink port is down, an agent whose probes are failing. Green there is the
+  // screen saying nothing is broken.
+  var STATES = { ok: 1, degraded: 1, down: 1, unreachable_downstream: 1, unknown: 1 };
   var STATE_LABELS = {
     ok: 'OK',
+    degraded: 'Degraded',
     down: 'Down',
     unreachable_downstream: 'Unreachable downstream',
     unknown: 'Not polled yet',
@@ -29,7 +34,20 @@
 
   // State → CSS modifier. Green = ok, red = down, grey = we cannot hear it.
   function stateClass(state) { return 'ts-' + normalizeState(state); }
-  function stateLabel(state) { return STATE_LABELS[normalizeState(state)]; }
+  // With a translator (`t`), the label goes through the catalogue
+  // (`tshoot.nodeState.*`); without one — the SVG's own tooltips — the English
+  // label is the fallback.
+  var STATE_KEYS = {
+    ok: 'tshoot.nodeState.ok',
+    degraded: 'tshoot.nodeState.degraded',
+    down: 'tshoot.nodeState.down',
+    unreachable_downstream: 'tshoot.nodeState.unreachable_downstream',
+    unknown: 'tshoot.nodeState.unknown',
+  };
+  function stateLabel(state, t) {
+    var s = normalizeState(state);
+    return typeof t === 'function' ? t(STATE_KEYS[s]) : STATE_LABELS[s];
+  }
 
   var SEVERITIES = { INFO: 1, WARN: 1, CRIT: 1 };
   function severityClass(sev) {
@@ -92,8 +110,15 @@
 
   function rootCauseModel(rc) {
     var affected = (rc && rc.affectedDeviceIds) || [];
+    // A cause is a live cross-agent situation, or one host's open event case
+    // (a single-host fault never forms a situation). The id spaces overlap,
+    // so the record to open is `clusterId` or `caseId`, never `id`.
+    var source = rc && rc.source === 'case' ? 'case' : 'cluster';
     return {
       id: rc && rc.id,
+      source: source,
+      clusterId: source === 'cluster' ? (rc && rc.clusterId != null ? rc.clusterId : rc && rc.id) : null,
+      caseId: source === 'case' && rc && rc.caseId != null ? rc.caseId : null,
       severity: severityClass(rc && rc.severity),
       cause: (rc && rc.cause) || 'Correlated anomalies.',
       affectedDeviceIds: affected,
@@ -126,7 +151,9 @@
     var host = f.hostId == null ? null : String(f.hostId);
     return {
       findingId: f.findingId == null ? null : f.findingId,
+      source: f.source === 'case' ? 'case' : 'cluster',
       clusterId: f.clusterId == null ? null : f.clusterId,
+      caseId: f.caseId == null ? null : f.caseId,
       severity: severityClass(f.severity),
       missing: !!f.missing,
       acked: !!f.acked,
@@ -290,7 +317,8 @@
         var id = step && typeof step === 'object' ? step.hostId : step;
         if (id == null || seen[id]) continue;
         seen[id] = 1;
-        out.push(Number(id));
+        // A switch keeps its `d:<id>`; Number() would make it NaN.
+        out.push(/^d:/.test(String(id)) ? String(id) : Number(id));
       }
     }
     return out;

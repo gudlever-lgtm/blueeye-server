@@ -150,3 +150,25 @@ test('findById reads the full row directly — it never sorts, so it never neede
   assert.equal(found.id, 4);
   assert.deepEqual(found.memberFindingIds, ['f-1', 'f-2']);
 });
+
+// ---- grouping basis (migration 130) ----------------------------------------
+
+test('create + updateMembership write the grouping basis; omitted on update it is kept (COALESCE)', async () => {
+  const pool = fakePool((sql) => (/INSERT/.test(sql) ? [{ insertId: 7 }] : [{ affectedRows: 1 }]));
+  const repo = createEventClustersRepository({ pool });
+  const basis = { subjects: ['target:x'], reasons: [{ kind: 'target', detail: 'x' }], why: ['shared target: x'] };
+  assert.equal(await repo.create({ confidence: 'high', memberFindingIds: ['a'], groupingBasis: basis, detectedAt: new Date() }), 7);
+  assert.match(pool.calls[0].sql, /grouping_basis/);
+  assert.equal(pool.calls[0].params[3], JSON.stringify(basis));
+  await repo.updateMembership(7, { confidence: 'high', memberFindingIds: ['a'], suspectedCommonCause: 'c', detectedAt: new Date() });
+  assert.match(pool.calls[1].sql, /grouping_basis = COALESCE\(\?, grouping_basis\)/);
+  assert.equal(pool.calls[1].params[3], null);
+});
+
+test('mapRow parses the grouping basis defensively (NULL on old rows)', () => {
+  const { mapRow } = require('../src/repositories/eventClustersRepository');
+  assert.equal(mapRow(row(1)).groupingBasis, null);
+  assert.equal(mapRow(row(1, { grouping_basis: 'not json' })).groupingBasis, null);
+  const g = mapRow(row(1, { grouping_basis: JSON.stringify({ subjects: ['port:9/4'], reasons: [], why: ['same switch'] }) })).groupingBasis;
+  assert.deepEqual(g, { subjects: ['port:9/4'], reasons: [], why: ['same switch'] });
+});

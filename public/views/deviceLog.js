@@ -55,11 +55,14 @@
 
     function sevTone(n) { return SEV_TONE[n] || 'neutral'; }
 
-    function fmtTime(iso) {
+    // Past a day the clock alone is ambiguous — 14:02 today or three days
+    // ago — so the date joins it.
+    function fmtTime(iso, withDate) {
       if (!iso) return '–';
       var d = new Date(iso);
       if (isNaN(d.getTime())) return '–';
-      return d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+      var time = d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+      return withDate ? d.toLocaleDateString(undefined, { day: '2-digit', month: '2-digit' }) + ' ' + time : time;
     }
 
     // A clock difference worth naming. Under a second is noise; past that it is
@@ -70,6 +73,15 @@
       return ms > 0 ? t('devlog.skew.behind', { s: secs }) : t('devlog.skew.ahead', { s: secs });
     }
 
+    // Who sent it, for a person. The polled SWITCH first (migration 133 — the
+    // sender resolved against snmp_devices), then the agent host, then what
+    // the device called itself, then its address.
+    function senderName(e) {
+      return e.snmpDeviceName || e.deviceName || e.deviceHostname || e.sourceIp;
+    }
+    // Neither a switch nor an agent: kept, and said so.
+    function unresolved(e) { return e.deviceId == null && e.snmpDeviceId == null; }
+
     function view() {
       var st = deps.state;
       if (st.minutes == null) st.minutes = 120;
@@ -77,6 +89,7 @@
 
       var page = ui.page();
       var chipHost = el('div', {});
+      var scopeHost = el('div', {});
       var listHost = el('div', {});
       var statusHost = el('span', { class: 'meta-xs' });
 
@@ -93,7 +106,11 @@
         label: t('devlog.filter.window'),
         value: String(st.minutes),
         options: WINDOWS.map(function (m) { return [String(m), t('devlog.window.' + m)]; }),
-        onchange: function (e) { st.minutes = Number(e.target.value); refresh(); },
+        onchange: function (e) {
+          st.minutes = Number(e.target.value);
+          if (deps.onContext) deps.onContext({ windowMin: st.minutes });
+          refresh();
+        },
       });
 
       var typeSel = ui.select({
@@ -140,7 +157,7 @@
           statusHost,
           ui.button('secondary', t('devlog.refresh'), { onclick: function () { refresh(); } }),
         ],
-      }), chipHost, listHost);
+      }), scopeHost, chipHost, listHost);
 
       // ---- the severity chips ----------------------------------------------
       //
@@ -178,13 +195,44 @@
         chipHost.replaceChildren(ui.statStrip(cards));
       }
 
+      // ---- scope: one agent or one device ----------------------------------
+      // Set by a hand-off from another screen (the agent that collected the
+      // log) or by clicking a device in the list. Stated above the list with a
+      // way out, so a narrowed log never passes for the whole one.
+      // One polled switch (from its page), one device, or one agent.
+      function drawScope(data) {
+        if (st.agentId == null && st.deviceId == null && st.snmpDeviceId == null) { scopeHost.replaceChildren(); return; }
+        var sw = data && data.snmpDevice;
+        var text = st.snmpDeviceId != null
+          ? t('devlog.scope.switch', { name: sw ? sw.name : ('#' + st.snmpDeviceId) })
+          : st.deviceId != null
+            ? t('devlog.scope.device', { name: st.deviceName || deps.agentName(st.deviceId) })
+            : t('devlog.scope.agent', { name: deps.agentName(st.agentId) });
+        scopeHost.replaceChildren(el('div', { class: 'ctx-scope' },
+          ui.metaXs(text), ' ',
+          ui.button('ghost', t('devlog.scope.clear'), {
+            size: 'xs',
+            onclick: function () {
+              st.agentId = null; st.deviceId = null; st.deviceName = null; st.snmpDeviceId = null;
+              if (deps.onContext) deps.onContext({ agentId: null });
+              refresh();
+            },
+          })));
+      }
+      function scopeToDevice(e) {
+        st.deviceId = e.deviceId;
+        st.deviceName = e.deviceName || e.deviceHostname || null;
+        st.agentId = null;
+        refresh();
+      }
+
       // ---- the drawer -------------------------------------------------------
       function openRow(e) {
         var skew = skewNote(e.clockSkewMs);
         ui.openDrawer({
           title: e.summary,
           status: ui.badge(sevTone(e.severity), e.severityName),
-          meta: (e.deviceName || e.deviceHostname || e.sourceIp) + ' · ' + fmtTime(e.receivedAt),
+          meta: senderName(e) + ' · ' + fmtTime(e.receivedAt, true),
           sections: [
             ui.drawerSection(t('devlog.drawer.what'), ui.keyValues([
               [t('devlog.field.type'), eventTypeLabel(e.eventType, e.typeLabel)],
@@ -194,14 +242,15 @@
               e.occurrences > 1 ? [t('devlog.field.occurrences'), String(e.occurrences)] : null,
             ])),
             ui.drawerSection(t('devlog.drawer.who'), ui.keyValues([
-              [t('devlog.field.sender'), e.sourceIp],
+              [t('devlog.field.sender'), deps.copyable ? deps.copyable(e.sourceIp) : e.sourceIp],
+              e.snmpDeviceId != null ? [t('devlog.field.switch'), e.snmpDeviceName || ('#' + e.snmpDeviceId)] : null,
               e.deviceName ? [t('devlog.field.device'), e.deviceName] : null,
               e.deviceHostname ? [t('devlog.field.selfName'), e.deviceHostname] : null,
               [t('devlog.field.receivedBy'), e.agentName || ('#' + e.agentId)],
               // An unresolved sender is stated, not left as a gap. The row was
               // kept precisely because an incomplete inventory is what an
               // outage produces.
-              e.deviceId == null ? [t('devlog.field.device'), t('devlog.unresolved')] : null,
+              unresolved(e) ? [t('devlog.field.device'), t('devlog.unresolved')] : null,
             ])),
             ui.drawerSection(t('devlog.drawer.when'), ui.keyValues([
               [t('devlog.field.received'), new Date(e.receivedAt).toLocaleString()],
@@ -211,16 +260,26 @@
             e.raw ? ui.drawerSection(t('devlog.drawer.raw'),
               el('pre', { class: 'devlog-raw' }, e.raw)) : null,
           ].filter(Boolean),
-          // The one action worth offering from here: everything this device
-          // said around the same moment.
-          footer: e.deviceId != null ? ui.drawerFooter([
-            ui.button('secondary', t('devlog.action.timeline'), {
+          // The actions worth offering from here: the switch's own page, only
+          // this device's lines, and everything the agent host said around
+          // the same moment.
+          footer: (e.snmpDeviceId != null && deps.openSwitch) || e.deviceId != null ? ui.drawerFooter([
+            e.snmpDeviceId != null && deps.openSwitch ? ui.button('secondary', t('devlog.action.switch'), {
+              onclick: function () {
+                ui.closeDrawer();
+                deps.openSwitch(e.snmpDeviceId);
+              },
+            }) : null,
+            e.deviceId != null ? ui.button('secondary', t('devlog.action.onlyDevice'), {
+              onclick: function () { ui.closeDrawer(); scopeToDevice(e); },
+            }) : null,
+            e.deviceId != null ? ui.button('secondary', t('devlog.action.timeline'), {
               onclick: function () {
                 ui.closeDrawer();
                 deps.openTimeline(e.deviceId);
               },
-            }),
-          ]) : null,
+            }) : null,
+          ].filter(Boolean)) : null,
         });
       }
 
@@ -228,10 +287,21 @@
       function drawList(data) {
         var events = data.events || [];
         if (!events.length) {
+          var filtered = st.maxSeverity != null || st.eventType || st.transport || st.q
+            || st.agentId != null || st.deviceId != null || st.snmpDeviceId != null;
           listHost.replaceChildren(ui.emptyState({
             kind: 'nodata',
             title: t('devlog.empty.title'),
             body: t('devlog.empty.body'),
+            action: filtered ? ui.button('secondary', t('devlog.clearFilters'), {
+              onclick: function () {
+                st.maxSeverity = null; st.eventType = null; st.transport = null; st.q = null;
+                st.agentId = null; st.deviceId = null; st.deviceName = null; st.snmpDeviceId = null;
+                searchIn.value = ''; typeSel.value = ''; transportSel.value = '';
+                if (deps.onContext) deps.onContext({ agentId: null });
+                refresh();
+              },
+            }) : null,
           }));
           return;
         }
@@ -240,7 +310,7 @@
           children: [ui.dataTable({
             dense: true,
             columns: [
-              { key: 'time', label: t('devlog.col.time'), width: '92px', time: true },
+              { key: 'time', label: t('devlog.col.time'), width: st.minutes > 1440 ? '136px' : '92px', time: true },
               { key: 'sev', label: t('devlog.col.severity'), width: '96px' },
               { key: 'device', label: t('devlog.col.device'), width: '170px' },
               { key: 'message', label: t('devlog.col.message') },
@@ -250,13 +320,15 @@
               var skew = skewNote(e.clockSkewMs);
               return {
                 cells: {
-                  time: el('span', { title: new Date(e.receivedAt).toLocaleString() }, fmtTime(e.receivedAt)),
+                  time: el('span', { title: new Date(e.receivedAt).toLocaleString() }, fmtTime(e.receivedAt, st.minutes > 1440)),
                   sev: ui.badge(sevTone(e.severity), e.severityName),
                   device: el('span', {},
-                    e.deviceName || e.deviceHostname || e.sourceIp,
+                    e.deviceId != null && e.snmpDeviceId == null
+                      ? ui.hostLink(senderName(e), function () { scopeToDevice(e); })
+                      : senderName(e),
                     // A sender nobody could resolve says so quietly rather than
                     // looking like a device the inventory knows.
-                    e.deviceId == null ? ui.metaXs(' ' + t('devlog.unresolvedShort')) : null),
+                    unresolved(e) ? ui.metaXs(' ' + t('devlog.unresolvedShort')) : null),
                   message: el('span', {},
                     e.summary,
                     e.occurrences > 1 ? ui.metaXs(' ×' + e.occurrences) : null,
@@ -281,8 +353,12 @@
           eventType: st.eventType,
           transport: st.transport,
           q: st.q,
+          agentId: st.agentId,
+          deviceId: st.deviceId,
+          snmpDeviceId: st.snmpDeviceId,
         }).then(function (data) {
           statusHost.textContent = t('devlog.count', { n: (data.events || []).length });
+          drawScope(data);
           drawChips(data.counts);
           drawList(data);
         }).catch(function (err) {

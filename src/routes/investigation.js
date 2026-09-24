@@ -6,6 +6,10 @@ const { requireAuth, requireRole } = require('../auth/middleware');
 const { ROLES } = require('../auth/roles');
 const { silentLogger } = require('../logger');
 
+// The one value `nis2DraftError` ever carries. A stable code, translated by the
+// dashboard — never an internal error message.
+const NIS2_DRAFT_FAILED = 'nis2_draft_failed';
+
 // Lokationsdrevet investigation-API. Monteret på /api/investigation.
 // RBAC:
 //   POST /run            — operator+
@@ -53,8 +57,15 @@ function createInvestigationRouter({
   // call and persist it via the existing nis2IncidentsRepo. Never auto-submits:
   // notificationRequired is always false, status always 'open'.
   // Returns { nis2Draft: <created incident> } on success,
-  // { nis2DraftError: <message> } on failure, or {} when the feature is off.
-  async function maybeCreateNis2Draft(result) {
+  // { nis2DraftError: NIS2_DRAFT_FAILED } on failure, or {} when the feature
+  // is off.
+  //
+  // The failure is a CODE, not the error's message: the message is whatever
+  // the LLM client or the repository threw (an upstream URL, a SQL error, a
+  // host and port) and says nothing the caller can act on. The dashboard turns
+  // the code into words (t('investigation.nis2DraftFailed')); the detail goes
+  // to the request's log.
+  async function maybeCreateNis2Draft(result, log = logger) {
     if (!assistant || typeof assistant.generateNis2Draft !== 'function') return {};
     if (!assistant.isEnabled()) return {};
     if (!nis2IncidentsRepo) return {};
@@ -74,7 +85,8 @@ function createInvestigationRouter({
       });
       return { nis2Draft: created };
     } catch (err) {
-      return { nis2DraftError: err.message || 'NIS2 draft could not be created' };
+      log.warn(`investigation: NIS2 draft failed (${err && err.message})`);
+      return { nis2DraftError: NIS2_DRAFT_FAILED };
     }
   }
 
@@ -109,7 +121,7 @@ function createInvestigationRouter({
       result = await maybeAddNarrative(result);
 
       // Independent NIS2 draft generation — failure never suppresses Output 1.
-      const nis2 = await maybeCreateNis2Draft(result);
+      const nis2 = await maybeCreateNis2Draft(result, req.log || logger);
 
       try {
         await investigationsRepo.save(result);
@@ -166,7 +178,7 @@ function createInvestigationRouter({
 
       result = await maybeAddNarrative(result);
 
-      const nis2 = await maybeCreateNis2Draft(result);
+      const nis2 = await maybeCreateNis2Draft(result, req.log || logger);
 
       try {
         await investigationsRepo.save(result);
@@ -222,4 +234,4 @@ function createInvestigationRouter({
   return router;
 }
 
-module.exports = { createInvestigationRouter };
+module.exports = { createInvestigationRouter, NIS2_DRAFT_FAILED };

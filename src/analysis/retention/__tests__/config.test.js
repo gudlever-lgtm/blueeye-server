@@ -44,6 +44,16 @@ test('probe history outlives the widest availability/outage report the product a
   assert.ok(c.probeOutageRetentionDays >= 366);
 });
 
+test('the known-device memory outlives the ARP window it exists to outlast (400 days, env-configurable)', () => {
+  // arp_entries forgets a MAC after RETENTION_ARP_DAYS; the new-device
+  // detector's memory must remember it far longer, or a device back from a
+  // month away is "new" again.
+  const c = loadRetentionConfig({});
+  assert.equal(c.knownDeviceRetentionDays, 400);
+  assert.ok(c.knownDeviceRetentionDays > c.arpRetentionDays);
+  assert.equal(loadRetentionConfig({ RETENTION_KNOWN_DEVICE_DAYS: '800' }).knownDeviceRetentionDays, 800);
+});
+
 test('transaction results outlive the longest trend the API serves (90 days)', () => {
   assert.ok(loadRetentionConfig({}).transactionResultRetentionDays >= 90);
 });

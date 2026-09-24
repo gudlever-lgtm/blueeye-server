@@ -6,6 +6,7 @@
 // another domain already produces:
 //
 //   rootCauses  <- src/analysis/clusterView.js  buildClusterDetail()  (cross-agent correlator)
+//                  + the open event cases outside a live situation (single-host faults)
 //   blast radius<- src/topology/blastRadius.js  computeBlastRadius()
 //   topology    <- src/topology/graph.js        buildTopologyGraph()
 //   anomalies   <- analysis findings with metric 'flow.volume' (flowPairBaselineJob)
@@ -28,6 +29,12 @@ const SEVERITY_RANK = Object.freeze({ INFO: 1, WARN: 2, CRIT: 3 });
 
 // Node states rendered on the topology panel:
 //   ok                     — the agent is reporting in
+//   degraded               — reachable, but an open fault sits on it: an
+//                            unacknowledged CRIT/WARN finding of a live
+//                            situation or an open event case names it (a
+//                            switch port down or flapping, a probe outage, a
+//                            failed transaction). We can hear it; something
+//                            on it is still broken.
 //   down                   — the agent is offline (the fault itself)
 //   unreachable_downstream — L2-isolated behind a `down` node; we cannot tell
 //                            whether it is healthy, only that we cannot hear it.
@@ -36,6 +43,7 @@ const SEVERITY_RANK = Object.freeze({ INFO: 1, WARN: 2, CRIT: 3 });
 //                            is offline next to it.
 const NODE_STATE = Object.freeze({
   OK: 'ok',
+  DEGRADED: 'degraded',
   DOWN: 'down',
   UNREACHABLE_DOWNSTREAM: 'unreachable_downstream',
 });
@@ -159,6 +167,12 @@ function buildRootCauses(clusters, { blastByNode = new Map() } = {}) {
 
     out.push({
       id: cluster.id,
+      // Where the cause comes from: a cross-agent situation, or (see
+      // buildCaseRootCauses) one host's open event case. The two id spaces
+      // overlap, so `clusterId`/`caseId` say which record to open.
+      source: 'cluster',
+      clusterId: cluster.id,
+      caseId: null,
       severity: worstSeverity(cluster.members) || 'INFO',
       cause: causeText(cluster),
       affectedDeviceIds,
@@ -180,14 +194,154 @@ function buildRootCauses(clusters, { blastByNode = new Map() } = {}) {
     });
   }
 
-  // Worst first, then most recent — the operator's reading order.
-  out.sort((a, b) => {
-    const bySeverity = (SEVERITY_RANK[b.severity] || 0) - (SEVERITY_RANK[a.severity] || 0);
-    if (bySeverity !== 0) return bySeverity;
-    const byTime = new Date(b.lastSeen || 0) - new Date(a.lastSeen || 0);
-    if (byTime !== 0) return byTime;
-    return Number(b.id) - Number(a.id);
-  });
+  return out.sort(compareRootCauses);
+}
+
+// Worst first, then most recent — the operator's reading order. The tie-break
+// compares ids as strings too: a case cause's id is `case:<n>`, and `a - b`
+// over it is NaN, which makes a sort silently do nothing.
+function compareRootCauses(a, b) {
+  const bySeverity = (SEVERITY_RANK[b.severity] || 0) - (SEVERITY_RANK[a.severity] || 0);
+  if (bySeverity !== 0) return bySeverity;
+  const byTime = new Date(b.lastSeen || 0) - new Date(a.lastSeen || 0);
+  if (byTime !== 0) return byTime;
+  const an = Number(a.id);
+  const bn = Number(b.id);
+  if (Number.isFinite(an) && Number.isFinite(bn)) return bn - an;
+  return String(b.id).localeCompare(String(a.id));
+}
+
+// The first sentence of a finding's explanation — "Port Gi0/1 on sw-1 went
+// down (SNMP poll)." — which is what the detector concluded, in its own
+// words. Bounded so one verbose detector cannot push the row off the panel.
+function firstSentence(text, max = 200) {
+  const s = String(text || '').trim();
+  if (!s) return null;
+  const m = /^(.+?[.!?])(\s+[A-Z]|$)/s.exec(s);
+  const out = (m ? m[1] : s).replace(/\s+/g, ' ');
+  return out.length > max ? `${out.slice(0, max - 1)}…` : out;
+}
+
+// ---------------------------------------------------------------------------
+// rootCauses[] from open EVENT CASES — the single-host half of the rollup.
+//
+// The cross-agent correlator only forms a cluster from findings on ≥2 agents,
+// so a site with ONE agent never has one: its uplink can be down on both
+// switches, with probe outages and a failed transaction on top, and the
+// cluster path reports nothing. The open event case is where that work
+// already lives (eventCaseService groups a host's findings within the
+// activity window), so each open case outside a live situation becomes one
+// cause here — the same collapse, one level down: N findings -> ONE cause.
+//
+//   cases        — eventCasesRepo.listOpenOutsideSituations() rows
+//   membersByCase— caseId -> the case's findings (light rows), already stripped
+//                  of any finding a live cluster counts, so nothing counts twice
+//   primaryById  — findingId -> full finding, for the cause text
+//   blastByNode  — as buildRootCauses
+//
+// The ROOT finding is the case's own primary finding (the one that opened it,
+// `primary_finding_id`), falling back to its earliest remaining member when
+// the primary is gone or counted by a situation. The cause text is that
+// finding's first sentence, falling back to the case title.
+// A case with no member left is dropped: a live cluster already counts all of
+// it, or retention purged it — either way there is nothing to add.
+// ---------------------------------------------------------------------------
+function buildCaseRootCauses(cases, { membersByCase = new Map(), primaryById = new Map(), blastByNode = new Map() } = {}) {
+  const out = [];
+  const membersOf = (id) => asArray(membersByCase instanceof Map
+    ? (membersByCase.get(Number(id)) ?? membersByCase.get(String(id)))
+    : membersByCase && membersByCase[id]);
+  const primaryOf = (id) => (primaryById instanceof Map
+    ? primaryById.get(String(id))
+    : primaryById && primaryById[id]) || null;
+
+  for (const c of asArray(cases)) {
+    if (!c || c.id == null) continue;
+    const members = membersOf(c.id);
+    if (!members.length) continue;
+
+    const root = caseRoot(c, members);
+    const full = primaryOf(root && root.id);
+
+    // The host the case is about, then every switch its findings name. A port
+    // finding carries the polling agent in hostId AND the switch in deviceId
+    // (migration 110) — the switch is what is affected.
+    const agents = new Set();
+    const devices = new Set();
+    const hostAgent = toNodeId(c.hostId);
+    if (hostAgent !== null) agents.add(hostAgent);
+    for (const m of members) {
+      if (m && m.deviceId != null && Number.isInteger(Number(m.deviceId))) devices.add(deviceNode(m.deviceId));
+    }
+    const agentIds = [...agents].sort((a, b) => a - b);
+    const affectedDeviceIds = [...agentIds, ...[...devices].sort(compareNodes)];
+    const blast = collateBlastRadius(agentIds, blastByNode);
+
+    const rootDevice = root && root.deviceId != null ? deviceNode(root.deviceId) : null;
+    out.push({
+      id: `case:${c.id}`,
+      source: 'case',
+      clusterId: null,
+      caseId: Number(c.id),
+      severity: worstSeverity(members) || normalizeSeverity(c.severity) || 'INFO',
+      cause: firstSentence(full && full.explanation) || String(c.title || `Event #${c.id}`),
+      title: c.title ?? null,
+      affectedDeviceIds,
+      blastRadiusCount: blast.count,
+      status: c.status ?? null,
+      // A case is one host's findings grouped by time, not a correlation
+      // judgement — there is no confidence or layer to report, and inventing
+      // one would be advice without evidence.
+      confidence: null,
+      classification: null,
+      memberCount: members.length,
+      firstSeen: toIso(c.firstEventAt),
+      lastSeen: toIso(c.lastEventAt),
+      // "Show path" from the switch the root finding names, else the host.
+      primaryDeviceId: rootDevice || (agentIds.length ? agentIds[0] : null),
+      primaryFindingId: root ? root.id : null,
+      primaryMetric: root ? (root.metric ?? null) : null,
+      locationName: c.locationName ?? null,
+      blastRadius: {
+        directlyIsolated: blast.directlyIsolated,
+        dependencyAffected: blast.dependencyAffected,
+      },
+    });
+  }
+  return out.sort(compareRootCauses);
+}
+
+// The finding a case's cause is named after: its own primary finding (the one
+// that opened it) while that is still among the members counted here, else
+// the earliest remaining member. One rule, used by the overview and the fault
+// list alike, so both name a case's cause the same way.
+function caseRoot(c, members) {
+  const list = asArray(members).filter(Boolean);
+  if (!list.length) return null;
+  const primary = c && c.primaryFindingId != null ? String(c.primaryFindingId) : null;
+  return (primary && list.find((m) => String(m.id) === primary)) || list[0];
+}
+
+// The nodes an OPEN fault sits on — what turns an `ok` node `degraded`.
+//
+// `findings` are the members of the live situations and open cases (never
+// the whole findings table: an acknowledged or closed-out alarm is history).
+// Only unacknowledged CRIT/WARN count; INFO is a note, not a fault. A finding
+// that names a switch (deviceId) marks the SWITCH, not the agent that polled
+// it — the agent is fine, it is the port that is down.
+function openFaultNodes(findings) {
+  const out = new Set();
+  for (const f of asArray(findings)) {
+    if (!f || f.acked) continue;
+    const sev = normalizeSeverity(f.severity);
+    if (sev !== 'CRIT' && sev !== 'WARN') continue;
+    if (f.deviceId != null && Number.isInteger(Number(f.deviceId)) && Number(f.deviceId) > 0) {
+      out.add(nodeKey(deviceNode(f.deviceId)));
+      continue;
+    }
+    const agent = toNodeId(f.hostId);
+    if (agent !== null) out.add(nodeKey(agent));
+  }
   return out;
 }
 
@@ -216,12 +370,18 @@ function buildRootCauses(clusters, { blastByNode = new Map() } = {}) {
 // degraded SERVICE, not lost reachability, and stays on the root-cause panel's
 // blast-radius count where it belongs.
 //
+//   3. a node still `ok` (or a switch not polled yet) that an open fault
+//      names becomes `degraded` (see openFaultNodes). Applied AFTER the
+//      downstream pass, so it never changes who is reachable: a degraded
+//      node is one we can hear.
+//
 // Link state is the worse of its two endpoints — no new vocabulary.
 // ---------------------------------------------------------------------------
 const STATE_RANK = Object.freeze({
   [NODE_STATE.OK]: 0,
-  [NODE_STATE.UNREACHABLE_DOWNSTREAM]: 1,
-  [NODE_STATE.DOWN]: 2,
+  [NODE_STATE.DEGRADED]: 1,
+  [NODE_STATE.UNREACHABLE_DOWNSTREAM]: 2,
+  [NODE_STATE.DOWN]: 3,
 });
 
 function stateFromAgentStatus(status) {
@@ -257,7 +417,7 @@ function worseState(a, b) {
 // Reading an agent's status for a switch would report every switch as offline,
 // because no agent row has that id.
 function buildTopologyView({
-  graph = null, agents = [], devices = [], blastByNode = new Map(),
+  graph = null, agents = [], devices = [], blastByNode = new Map(), faultNodes = null,
 } = {}) {
   const nodes = asArray(graph && graph.nodes);
   const edges = asArray(graph && graph.edges);
@@ -338,6 +498,17 @@ function buildTopologyView({
       state.set(hostKey, NODE_STATE.UNREACHABLE_DOWNSTREAM);
     }
   }
+
+  // --- 2b. an open fault on a node we can hear -----------------------------
+  // A switch whose uplink port is down answers its poll perfectly well; so
+  // does an agent whose probes are all failing. Painting either green is the
+  // screen saying nothing is broken. Only `ok` and `unknown` move: `down` and
+  // `unreachable_downstream` already say more.
+  const faulted = faultNodes instanceof Set ? faultNodes : new Set(asArray(faultNodes).map(nodeKey));
+  for (const k of faulted) {
+    const current = state.get(k);
+    if (current === NODE_STATE.OK || current === 'unknown') state.set(k, NODE_STATE.DEGRADED);
+  }
   for (const node of out) node.state = state.get(nodeKey(node.id)) || NODE_STATE.OK;
 
   // --- 3. links, tagged by layer, state = worse endpoint ------------------
@@ -362,15 +533,16 @@ function buildTopologyView({
     });
   }
 
-  // The three canonical states are always present; `unknown` only when
-  // something is in it. It is a state no agent can be in — a legend entry that
-  // always reads 0 is one nobody reads.
+  // The three canonical states are always present; `unknown` and `degraded`
+  // only when something is in them. A legend entry that always reads 0 is one
+  // nobody reads.
   const counts = { ok: 0, down: 0, unreachable_downstream: 0 };
   for (const node of out) {
     if (counts[node.state] === undefined) counts[node.state] = 0;
     counts[node.state] += 1;
   }
   if (!counts.unknown) delete counts.unknown;
+  if (!counts.degraded) delete counts.degraded;
 
   return {
     nodes: out.sort((a, b) => compareNodes(a.id, b.id)),
@@ -463,8 +635,9 @@ function buildAnomalies(findings) {
 // summary — the four key-figure cards.
 //
 //   activeFaults   — raw open alarm signals: the member findings behind the
-//                    live root causes. Paired with `rootCauses` this is the
-//                    rollup made visible ("47 alarms -> 3 causes").
+//                    live root causes — a situation's members, and an open
+//                    event case's findings. Paired with `rootCauses` this is
+//                    the rollup made visible ("47 alarms -> 3 causes").
 //   affectedDevices— the full impact footprint: every device named by a root
 //                    cause, everything in its blast radius, and every node the
 //                    topology reports as not-ok. Counted once each.
@@ -497,11 +670,17 @@ function buildSummary({ rootCauses = [], topology = null, anomalies = [] } = {})
     // --- additive breakdown behind `affectedDevices` ---
     devicesDown: Number(counts.down) || 0,
     devicesUnreachable: Number(counts.unreachable_downstream) || 0,
+    devicesDegraded: Number(counts.degraded) || 0,
   };
 }
 
 module.exports = {
   buildRootCauses,
+  buildCaseRootCauses,
+  caseRoot,
+  compareRootCauses,
+  openFaultNodes,
+  firstSentence,
   buildTopologyView,
   buildAnomalies,
   buildSummary,

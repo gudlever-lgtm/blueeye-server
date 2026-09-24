@@ -11,11 +11,16 @@ const { ROLES } = require('../auth/roles');
 //   POST /api/changes/seen                       — move the per-user marker
 //   POST   /api/changes/ack       { key }        — acknowledge one row (own view)
 //   DELETE /api/changes/ack/:key                 — undo it
+//   POST   /api/changes/mute      { key, hours } — mute a rule (own view, 1..168h)
+//   DELETE /api/changes/mute/:key                — unmute it
 //
 // viewer+. Read-only aggregation over existing sources; owns no tables beyond
 // the per-user marker column (migration 074) and the per-user acknowledgements
-// (migration 115).
+// (migration 115) and mutes (migration 134).
 //
+// MUTE RULE: a mute covers every row with the same muteKey (source + type, on
+// any host) until `mutedUntil`. It is always time-boxed and never touches
+// alerting — it only changes what the caller's Changes page shows.
 // ACKNOWLEDGEMENT RULE: a row is acknowledged while (a) the caller has an ack
 // for its ackKey and (b) nothing newer has happened — its newest timestamp is
 // not after the ack. A condition that fires again after it was acknowledged is
@@ -61,6 +66,11 @@ function parseIntParam(raw, { min, max, fallback }) {
 
 // A row's ackKey is a sha256 hex digest (ackKeyFor in changeFeed.js).
 const ACK_KEY_RE = /^[0-9a-f]{64}$/;
+// Mute length. 24h is what the UI offers; up to a week is accepted so a
+// weekend or a planned change can be covered, but never longer — a mute that
+// outlives its reason is how the page quietly stops showing what matters.
+const DEFAULT_MUTE_HOURS = 24;
+const MAX_MUTE_HOURS = 168;
 
 function isAcknowledged(ev, ackedAt) {
   if (!ackedAt) return false;
@@ -74,6 +84,10 @@ function createChangesRouter({ changesService, usersRepo = null, auditLogger = n
     && typeof usersRepo.listChangeAcks === 'function'
     && typeof usersRepo.ackChange === 'function'
     && typeof usersRepo.unackChange === 'function';
+  const canMute = () => usersRepo
+    && typeof usersRepo.listChangeMutes === 'function'
+    && typeof usersRepo.muteChange === 'function'
+    && typeof usersRepo.unmuteChange === 'function';
 
   const router = express.Router();
   const reader = requireRole(ROLES.VIEWER, ROLES.OPERATOR, ROLES.ADMIN);
@@ -130,9 +144,25 @@ function createChangesRouter({ changesService, usersRepo = null, auditLogger = n
         if (logger && typeof logger.warn === 'function') logger.warn(`changes: acknowledgements failed (${err.message})`);
       }
     }
+    // Same degradation for mutes: a failed lookup shows everything, and says so.
+    let mutes = new Map();
+    if (canMute()) {
+      try {
+        mutes = await usersRepo.listChangeMutes(req.user.id);
+      } catch (err) {
+        failedSources.push('mutes');
+        if (logger && typeof logger.warn === 'function') logger.warn(`changes: mutes failed (${err.message})`);
+      }
+    }
+    const nowMs = Date.now();
     const annotate = (ev) => {
       const at = acks.get(ev.ackKey);
-      return { ...ev, acknowledgedAt: isAcknowledged(ev, at) ? at.toISOString() : null };
+      const until = mutes.get(ev.muteKey);
+      return {
+        ...ev,
+        acknowledgedAt: isAcknowledged(ev, at) ? at.toISOString() : null,
+        mutedUntil: until && until.getTime() > nowMs ? until.toISOString() : null,
+      };
     };
     const events = (feed.events || []).map(annotate);
     const groups = (feed.groups || []).map((g) => ({ ...g, events: (g.events || []).map(annotate) }));
@@ -145,6 +175,7 @@ function createChangesRouter({ changesService, usersRepo = null, auditLogger = n
       events,
       groups,
       acknowledged: events.filter((e) => e.acknowledgedAt).length,
+      muted: events.filter((e) => e.mutedUntil).length,
       partial: failedSources.length > 0,
       failedSources,
       sinceMode,
@@ -226,7 +257,48 @@ function createChangesRouter({ changesService, usersRepo = null, auditLogger = n
     return res.status(204).end();
   }));
 
+  // POST /api/changes/mute — mute every row of one rule (source + type) for the
+  // caller, for `hours` (default 24, max 168). viewer+: own view only, like ack.
+  router.post('/mute', requireAuth, reader, asyncHandler(async (req, res) => {
+    if (!canMute()) return res.status(503).json({ error: 'Mutes are not available' });
+    const body = req.body || {};
+    const key = typeof body.key === 'string' ? body.key : '';
+    if (!ACK_KEY_RE.test(key)) return res.status(400).json({ error: 'key must be a row muteKey (64 hex characters)' });
+    let hours = DEFAULT_MUTE_HOURS;
+    if (body.hours !== undefined && body.hours !== null) {
+      if (!Number.isInteger(body.hours) || body.hours < 1 || body.hours > MAX_MUTE_HOURS) {
+        return res.status(400).json({ error: `hours must be an integer 1..${MAX_MUTE_HOURS}` });
+      }
+      hours = body.hours;
+    }
+
+    const until = new Date(Date.now() + hours * 3600 * 1000);
+    await usersRepo.muteChange(req.user.id, key, until);
+    if (auditLogger) {
+      await auditLogger.record(req, {
+        category: 'user', action: 'change_rule_muted', target: String(req.user.id),
+        detail: `muted change rule ${key.slice(0, 12)} for ${hours}h`,
+      });
+    }
+    return res.json({ key, mutedUntil: until.toISOString() });
+  }));
+
+  // DELETE /api/changes/mute/:key — unmute. 404 when nothing live to undo.
+  router.delete('/mute/:key', requireAuth, reader, asyncHandler(async (req, res) => {
+    if (!canMute()) return res.status(503).json({ error: 'Mutes are not available' });
+    const key = String(req.params.key || '');
+    const removed = ACK_KEY_RE.test(key) ? await usersRepo.unmuteChange(req.user.id, key) : false;
+    if (!removed) return res.status(404).json({ error: 'That rule is not muted' });
+    if (auditLogger) {
+      await auditLogger.record(req, {
+        category: 'user', action: 'change_rule_unmuted', target: String(req.user.id),
+        detail: `unmuted change rule ${key.slice(0, 12)}`,
+      });
+    }
+    return res.status(204).end();
+  }));
+
   return router;
 }
 
-module.exports = { createChangesRouter, isAcknowledged, ACK_KEY_RE, parseWindow, MAX_WINDOW_MS, MAX_LIMIT, DEFAULT_WINDOW_MS };
+module.exports = { createChangesRouter, isAcknowledged, ACK_KEY_RE, DEFAULT_MUTE_HOURS, MAX_MUTE_HOURS, parseWindow, MAX_WINDOW_MS, MAX_LIMIT, DEFAULT_WINDOW_MS };

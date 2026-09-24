@@ -156,6 +156,8 @@ states are shown rather than a blank screen.
 | --- | --- | --- |
 | `GEO_ENABLED` | `true` | Enrich + store flow records. |
 | `GEOIP_DB_PATH` | – | Path to the offline GeoIP/ASN range CSV. |
+| `GEOIP_CITY_DB_PATH` | – | Path to the city table (traceroute hop placement only). |
+| `GEOIP_CITY_BUILD_PATH` | `/data/geoip-city.csv` | Where "Update now" writes the city table. |
 | `MAP_TILE_URL` | OpenStreetMap (EU) | Tile URL served to the frontend. Point at self-hosted/EU tiles in production. |
 | `MAP_TILE_ATTRIBUTION` | `© OpenStreetMap contributors` | Tile attribution. |
 | `MAP_TILE_MAX_ZOOM` | `19` | Max zoom. |
@@ -163,10 +165,79 @@ states are shown rather than a blank screen.
 ## Country centroids
 
 `src/geo/countryCentroids.json` maps ISO-3166 alpha-2 → approximate `[lat, lng]`.
-**Country level only — deliberately not city precision.** City-level GeoIP is too
+**Flows and destinations stay at country level.** City-level GeoIP is too
 imprecise to build selection or alerts on; centroids give stable marker
 positions without pretending to a precision the data doesn't have. Extend the
 table as needed.
+
+## Traceroute hops (city level where it can be shown)
+
+A traceroute hop is a router, and a router's name usually says where it stands:
+`ae3.cph-bb1.telia.net`, `be2376.ccr41.fra03.atlas.cogentco.com`,
+`ae-5.r20.frnkge08.de.bb.gin.ntt.net`. So the traceroute maps place hops more
+precisely than flows. `src/geo/hopLocation.js` (`locateHop`) tries three
+sources, best first:
+
+| Source | `place.source` | Precision | Where it comes from |
+| --- | --- | --- | --- |
+| Router name | `rdns` | city | The hop's PTR name (agent 0.40+ looks it up after the trace, public hops only), read against the curated code table in `src/geo/networkPlaces.js` by `hostnameHints.js` |
+| City GeoIP | `geoip-city` | city | DB-IP City Lite (`cityProvider.js`). Often the operator's head office rather than the router, which is why it comes second |
+| Country | `geoip-country` | country | The country centroid, as before |
+
+**Reading a name.** The registered domain (`telia.net`, `example.co.uk`) is
+dropped, the rest is split at dots, dashes and digits (`fra03` → `fra`), and
+each word is looked up as an IATA/carrier/CLLI code or city name, or as a
+UN/LOCODE (`dkcph`). A name that yields two different cities (`ams-fra-link`,
+the two ends of a link) gives no place. The table is curated on purpose: most
+of the ~9000 IATA codes collide with words routers use for other things (`tor`,
+`man`, `bdr`, `per`), and a wrong code draws the hop in the wrong city. Add a
+code to `networkPlaces.js` only when it cannot mean anything else;
+`test/hopPlacement.test.js` checks the table.
+
+**The speed-of-light check.** Light in fibre covers about 200 km per ms, so a
+reply that took R ms round trip came from at most R × 100 km (+150 km slack)
+from the agent. Each candidate is checked against the hop's **fastest** reply
+across the aggregated runs; one that is too far is skipped for the next source.
+A slow reply never pulls a hop anywhere — routers answer ICMP from their slow
+path, so a long RTT says nothing about distance. The check needs the agent's
+site coordinates; without them nothing is rejected.
+
+When every candidate is ruled out — typically an anycast address such as a
+public DNS resolver, registered in the US and answering from 3 ms away — the hop
+gets no coordinates and `geoRejected` lists what was ruled out and why. The map
+leaves it off and says so under the map.
+
+Each node carries `hostname`, `place` (`{ city, country, precision, source,
+code? }`) and `geoRejected`; `country`/`asn` keep their meaning (the GeoIP
+registration). Live hops (`trace-hop`) go through the same function, with the
+agent's site looked up once a minute per agent. The agent looks names up after
+the trace finishes, so a live hop has no name yet and is placed by GeoIP; the
+finished run replaces it with the name-based placement.
+
+### City table
+
+`GEOIP_CITY_DB_PATH` (or **Settings → Map → City-level data**) points at a CSV:
+
+```
+start_ip,end_ip,country,lat,lng,city
+2.16.0.0,2.16.0.255,DK,55.6761,12.5683,Copenhagen
+```
+
+"Update now" builds it from DB-IP City Lite (same month, same source as the
+country table) into `GEOIP_CITY_BUILD_PATH` (default `/data/geoip-city.csv`)
+unless **Include city-level data when updating** is unticked. It is the largest
+download (about 120 MB) and a failure there is reported but does not fail the
+update. By hand:
+
+```
+node scripts/build-geoip.js --city dbip-city-lite.csv.gz --city-out /data/geoip-city.csv
+node scripts/build-geoip.js --latest --with-city
+```
+
+Adjacent ranges on the same point are merged. The provider holds the table in
+typed arrays (about 20 bytes a range, roughly 60 MB for the IPv4 lite file) and
+streams it in the background: lookups answer null until it is loaded, and the
+settings card says "loading". Only the traceroute maps read it.
 
 ## Tests
 

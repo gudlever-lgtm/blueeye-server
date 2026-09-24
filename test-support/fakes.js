@@ -3278,8 +3278,9 @@ function makeSpeedtestResultsRepo(overrides = {}) {
 function makeTransactionsRepo(overrides = {}) {
   const rows = [];          // tests
   const assignments = [];   // { test_id, agent_id }
-  const resultRows = [];    // { time, test_id, agent_id, status, latency_ms, step_timings, step_failed, deviation, detail }
+  const resultRows = [];    // { time, test_id, agent_id, status, latency_ms, step_timings, step_phases, step_failed, deviation, detail }
   const baselines = [];     // { test_id, agent_id, step, median_ms, mad_ms, sample_count }
+  const captureRows = [];   // { time, test_id, agent_id, packets, analysis, … }
   let seq = 0;
   const agentIdsFor = (testId) => assignments.filter((a) => a.test_id === testId).map((a) => a.agent_id).sort((x, y) => x - y);
   const shape = (r, withSecrets = false) => {
@@ -3287,6 +3288,7 @@ function makeTransactionsRepo(overrides = {}) {
     const base = {
       id: r.id, name: r.name, type: r.type, target: r.target ?? null, config: r.config || {},
       secret_names: Object.keys(r.secrets || {}), interval_sec: r.interval_sec ?? 60,
+      capture: r.capture || 'off',
       enabled: r.enabled !== false, agent_ids: agentIdsFor(r.id),
       created_by: r.created_by ?? null, created_at: r.created_at,
     };
@@ -3294,7 +3296,7 @@ function makeTransactionsRepo(overrides = {}) {
     return base;
   };
   return {
-    rows, assignments, resultRows, baselines,
+    rows, assignments, resultRows, baselines, captureRows,
     list: overrides.list || (async () => rows.map((r) => shape(r))),
     findById: overrides.findById || (async (id) => shape(rows.find((r) => r.id === id)) || null),
     findByIdWithSecrets: overrides.findByIdWithSecrets || (async (id) => shape(rows.find((r) => r.id === id), true) || null),
@@ -3303,6 +3305,7 @@ function makeTransactionsRepo(overrides = {}) {
       const row = {
         id, name: p.name, type: p.type, target: p.target ?? null, config: p.config || {},
         secrets: p.secrets ? { ...p.secrets } : {}, interval_sec: p.interval_sec ?? 60,
+        capture: p.capture || 'off',
         enabled: p.enabled !== false, created_by: p.created_by ?? null, created_at: '2026-01-01T00:00:00.000Z',
       };
       rows.push(row);
@@ -3317,6 +3320,7 @@ function makeTransactionsRepo(overrides = {}) {
       if (p.config !== undefined) row.config = p.config;
       if (p.secrets !== undefined) row.secrets = p.secrets ? { ...p.secrets } : {};
       if (p.interval_sec !== undefined) row.interval_sec = p.interval_sec;
+      if (p.capture !== undefined) row.capture = p.capture;
       if (p.enabled !== undefined) row.enabled = p.enabled;
       return shape(row);
     }),
@@ -3338,8 +3342,13 @@ function makeTransactionsRepo(overrides = {}) {
       .map((r) => shape(r, true))),
     assignedTestIds: overrides.assignedTestIds || (async (agentId) => new Set(assignments.filter((a) => a.agent_id === agentId).map((a) => a.test_id))),
     insertResults: overrides.insertResults || (async (batch) => { resultRows.push(...batch); return batch.length; }),
+    // Mirrors the real repository's parseResult: `time` comes back as an ISO
+    // STRING, not a Date. Routes build keys out of it (a result is matched to
+    // its capture by test+agent+time), so a fake that hands back Date objects
+    // would make those tests pass against a shape production never produces.
     results: overrides.results || (async ({ testId, agentId = null }) => resultRows
-      .filter((r) => r.test_id === testId && (agentId == null || r.agent_id === agentId))),
+      .filter((r) => r.test_id === testId && (agentId == null || r.agent_id === agentId))
+      .map((r) => ({ ...r, time: r.time instanceof Date ? r.time.toISOString() : r.time }))),
     heatmap: overrides.heatmap || (async () => []),
     trend: overrides.trend || (async () => []),
     recentStatuses: overrides.recentStatuses || (async (testId, agentId, limit = 10) => resultRows
@@ -3359,6 +3368,40 @@ function makeTransactionsRepo(overrides = {}) {
     okResultsSince: overrides.okResultsSince || (async ({ testId, agentId }) => resultRows
       .filter((r) => r.test_id === testId && r.agent_id === agentId && r.status === 'ok')
       .map((r) => ({ latency_ms: r.latency_ms, step_timings: r.step_timings || null }))),
+    // Captures. REPLACE semantics like the real one: the key is
+    // (test_id, agent_id, time), so a redelivered frame is the same capture.
+    insertCapture: overrides.insertCapture || (async (row) => {
+      const key = (c) => `${c.test_id}|${c.agent_id}|${new Date(c.time).toISOString()}`;
+      const i = captureRows.findIndex((c) => key(c) === key(row));
+      const stored = { ...row, packet_count: Array.isArray(row.packets) ? row.packets.length : 0 };
+      if (i >= 0) captureRows[i] = stored; else captureRows.push(stored);
+      return 1;
+    }),
+    captures: overrides.captures || (async ({ testId, agentId = null }) => captureRows
+      .filter((c) => c.test_id === testId && (agentId == null || c.agent_id === agentId))
+      .map(({ packets, analysis, ...rest }) => ({ ...rest, ...(analysis || {}), packet_count: rest.packet_count }))),
+    findCapture: overrides.findCapture || (async ({ testId, agentId, time }) => {
+      const want = new Date(time).toISOString();
+      const c = captureRows.find((x) => x.test_id === testId && x.agent_id === agentId && new Date(x.time).toISOString() === want);
+      return c ? { ...c, ...(c.analysis || {}), packets: c.packets || [] } : null;
+    }),
+    captureKeysFor: overrides.captureKeysFor || (async (testId, times) => {
+      // Unparseable times are dropped, like the real repository does: this is a
+      // marker on a list, and one bad timestamp must not fail the request.
+      const iso = (t) => { const d = t instanceof Date ? t : new Date(t); return Number.isNaN(d.getTime()) ? null : d.toISOString(); };
+      const wanted = new Set((times || []).map(iso).filter(Boolean));
+      return new Set(captureRows
+        .filter((c) => c.test_id === testId && wanted.has(iso(c.time)))
+        .map((c) => `${c.agent_id}|${iso(c.time)}`));
+    }),
+    purgeCaptures: overrides.purgeCaptures || (async (before) => {
+      const cut = new Date(before).getTime();
+      let n = 0;
+      for (let i = captureRows.length - 1; i >= 0; i -= 1) {
+        if (new Date(captureRows[i].time).getTime() < cut) { captureRows.splice(i, 1); n += 1; }
+      }
+      return n;
+    }),
   };
 }
 

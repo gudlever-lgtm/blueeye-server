@@ -5,7 +5,16 @@
 // Secrets are a write-only { name: value } map; http steps may reference them as
 // `{{secret:name}}` — a reference to an undeclared secret is rejected.
 
+const net = require('net');
+
 const TEST_TYPES = ['http', 'tcp', 'dns', 'icmp'];
+// How a test captures around its runs. 'off' means tcpdump is never spawned —
+// not spawned and discarded. Default everywhere.
+const CAPTURE_MODES = ['off', 'on_fault', 'always'];
+// The phases a step is split into (agent: src/transactions/phases.js). Fixed
+// list: a phase the server does not know about is dropped rather than stored,
+// so the column's shape stays something the dashboard can rely on.
+const PHASE_KEYS = ['dns', 'tcp', 'tls', 'ttfb', 'transfer'];
 const HTTP_METHODS = ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'];
 const DNS_RECORD_TYPES = ['A', 'AAAA', 'CNAME', 'MX', 'TXT', 'NS', 'SOA', 'PTR', 'SRV'];
 const EXTRACT_TYPES = ['regex', 'json', 'cookie'];
@@ -193,6 +202,17 @@ function validateTransactionInput(body, { existingSecretNames = [] } = {}) {
     else intervalSec = n;
   }
 
+  // Header capture around this test's runs. Defaults to 'off', and an
+  // unrecognised value is an ERROR rather than a silent fall back to 'off' — a
+  // typo that quietly disables collection is worse than one that is refused, and
+  // the same typo falling the other way would enable it by accident.
+  let capture = 'off';
+  if (b.capture !== undefined && b.capture !== null && b.capture !== '') {
+    const mode = String(b.capture).toLowerCase();
+    if (!CAPTURE_MODES.includes(mode)) errors.capture = `capture must be one of ${CAPTURE_MODES.join(', ')}`;
+    else capture = mode;
+  }
+
   if (Object.keys(errors).length) return { errors };
 
   if (thr.value) config.thresholds = thr.value;
@@ -204,6 +224,7 @@ function validateTransactionInput(body, { existingSecretNames = [] } = {}) {
       config,
       secrets, // undefined = keep existing; object = replace
       interval_sec: intervalSec,
+      capture,
       enabled: b.enabled !== false,
     },
   };
@@ -254,6 +275,37 @@ function validateResultIngest(payload) {
       if (!Array.isArray(r.step_timings) || r.step_timings.length > 64) return { errors: { [`results[${i}].step_timings`]: 'step_timings must be an array (<=64)' } };
       stepTimings = r.step_timings.map((v) => { const n = Number(v); return Number.isFinite(n) ? Math.round(n) : null; });
     }
+    // Phase breakdown per step: { dns, tcp, tls, ttfb, transfer, reused?,
+    // address?, localPort?, remotePort? }, each number or null. NULL IS KEPT AS
+    // NULL — it means the moment never happened (no TLS, a reused keep-alive
+    // socket), and coercing it to 0 would make a missing handshake render as an
+    // instant one, which is the exact case worth seeing.
+    let stepPhases = null;
+    if (r.step_phases !== undefined && r.step_phases !== null) {
+      if (!Array.isArray(r.step_phases) || r.step_phases.length > 64) {
+        return { errors: { [`results[${i}].step_phases`]: 'step_phases must be an array (<=64)' } };
+      }
+      stepPhases = r.step_phases.map((raw) => {
+        if (!isPlainObject(raw)) return null;
+        const out = {};
+        for (const key of PHASE_KEYS) {
+          const v = raw[key];
+          if (v === undefined || v === null) { out[key] = null; continue; }
+          const n = Number(v);
+          out[key] = Number.isFinite(n) && n >= 0 ? Math.round(n) : null;
+        }
+        if (raw.reused === true) out.reused = true;
+        // The address the name actually resolved to. Validated as an address
+        // rather than trusted as a string: it is agent-supplied and ends up on
+        // a screen next to the test's configured target.
+        if (typeof raw.address === 'string' && net.isIP(raw.address.trim())) out.address = raw.address.trim();
+        for (const key of ['localPort', 'remotePort']) {
+          const n = Number(raw[key]);
+          if (Number.isInteger(n) && n > 0 && n <= 65535) out[key] = n;
+        }
+        return out;
+      });
+    }
     let stepFailed = null;
     if (r.step_failed !== undefined && r.step_failed !== null && r.step_failed !== '') {
       const n = Number(r.step_failed);
@@ -267,15 +319,86 @@ function validateResultIngest(payload) {
       if (json.length > 255) return { errors: { [`results[${i}].detail`]: 'detail is too large (max 255 chars)' } };
       detail = r.detail;
     }
-    out.push({ test_id: testId, status, latency_ms: latencyMs, time, step_timings: stepTimings, step_failed: stepFailed, detail });
+    out.push({ test_id: testId, status, latency_ms: latencyMs, time, step_timings: stepTimings, step_phases: stepPhases, step_failed: stepFailed, detail });
   }
   return { value: { results: out } };
+}
+
+// A `transaction_capture` frame from an agent. The packet records are bounded
+// and every field is re-read here: the agent is authenticated, but a row that
+// lands in the database is a row somebody will read as fact, and "the agent
+// said so" is not a validation.
+//
+// FIELDS NOT ON THIS LIST ARE DROPPED. That is the privacy boundary restated on
+// the ingest side: even an agent that somehow sent a payload field could not get
+// one stored, because only these keys are copied out.
+const PACKET_INT_KEYS = ['sport', 'dport', 'len', 'ttl', 'seq', 'ack', 'win', 'mss', 'payload', 'proto'];
+const MAX_PACKETS = 2000;
+
+function validateCaptureIngest(payload) {
+  const b = isPlainObject(payload) ? payload : {};
+  const testId = Number(b.test_id);
+  if (!Number.isInteger(testId) || testId < 1) return { errors: { test_id: 'test_id must be a positive integer' } };
+
+  let time = null;
+  if (b.time) { const d = new Date(b.time); if (Number.isNaN(d.getTime())) return { errors: { time: 'time must be a valid date' } }; time = d; }
+  if (!time) return { errors: { time: 'time is required — it is how the capture is matched to its result' } };
+
+  const c = isPlainObject(b.capture) ? b.capture : null;
+  if (!c) return { errors: { capture: 'capture must be an object' } };
+  if (!Array.isArray(c.packets)) return { errors: { 'capture.packets': 'capture.packets must be an array' } };
+  if (c.packets.length > MAX_PACKETS) return { errors: { 'capture.packets': `too many packets (max ${MAX_PACKETS})` } };
+
+  const packets = [];
+  for (const raw of c.packets) {
+    if (!isPlainObject(raw)) continue;
+    const rec = {};
+    const t = Number(raw.t);
+    rec.t = Number.isFinite(t) && t >= 0 ? Math.round(t * 1000) / 1000 : 0;
+    for (const key of ['src', 'dst']) {
+      const v = typeof raw[key] === 'string' ? raw[key].trim() : '';
+      rec[key] = net.isIP(v) ? v : null;
+    }
+    for (const key of PACKET_INT_KEYS) {
+      const n = Number(raw[key]);
+      rec[key] = Number.isInteger(n) && n >= 0 ? n : null;
+    }
+    // Flag letters only — the set tcpdump prints. Anything else is not a flag
+    // field, whatever it claims to be.
+    rec.flags = typeof raw.flags === 'string' && /^[FSRPAUEC]{0,8}$/.test(raw.flags) ? raw.flags : null;
+    if (isPlainObject(raw.icmp)) {
+      const type = Number(raw.icmp.type);
+      const code = Number(raw.icmp.code);
+      rec.icmp = Number.isInteger(type) && Number.isInteger(code) ? { type, code } : null;
+    } else rec.icmp = null;
+    packets.push(rec);
+  }
+
+  const posInt = (v, max) => { const n = Number(v); return Number.isInteger(n) && n >= 0 && n <= max ? n : null; };
+  return {
+    value: {
+      test_id: testId,
+      time,
+      reason: typeof c.reason === 'string' ? c.reason.slice(0, 64) : null,
+      iface: typeof c.iface === 'string' ? c.iface.slice(0, 32) : null,
+      filter: typeof c.filter === 'string' ? c.filter.slice(0, 512) : null,
+      snaplen: posInt(c.snaplen, 65535),
+      duration_ms: posInt(c.duration_ms, 3600000),
+      observed: posInt(c.observed, 1000000),
+      foreign_count: posInt(c.foreign, 1000000),
+      truncated: c.truncated === true,
+      packets,
+    },
+  };
 }
 
 module.exports = {
   validateTransactionInput,
   validateAgentAssignment,
   validateResultIngest,
+  validateCaptureIngest,
   TEST_TYPES,
   DNS_RECORD_TYPES,
+  CAPTURE_MODES,
+  PHASE_KEYS,
 };

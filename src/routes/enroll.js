@@ -161,6 +161,7 @@ function createEnrollRouter({ artifactStore, sourceStore, binaryStore, releaseSt
   // version/sha256/signature to verify against. 404 when no release is published.
   router.get('/agent-release', asyncHandler(async (req, res) => {
     const rel = releaseStore && typeof releaseStore.latest === 'function' ? releaseStore.latest() : null;
+    noStore(res);
     if (!rel) {
       return res.status(404).json({ error: 'No signed agent release published on this server' });
     }
@@ -174,7 +175,18 @@ function createEnrollRouter({ artifactStore, sourceStore, binaryStore, releaseSt
   router.get('/agent-release.tgz', asyncHandler(async (req, res) => {
     const rel = releaseStore && typeof releaseStore.latest === 'function' ? releaseStore.latest() : null;
     const full = rel && typeof releaseStore.get === 'function' ? releaseStore.get(rel.version) : null;
+    noStore(res);
     if (!full || !full.buffer) {
+      // A release is indexed but its bytes could not be served: the store found
+      // them missing or not matching the manifest it signed (it logs which).
+      // Saying "none published" there would be a lie the operator cannot act on
+      // — every agent would just keep reporting a checksum mismatch.
+      if (rel) {
+        return res.status(503).json({
+          error: `The published agent release ${rel.version} cannot be served: its stored bytes do not match the manifest it was signed with`,
+          hint: 'Restart the server to re-sign the release from the agent source, or re-upload it. See the server log.',
+        });
+      }
       return res.status(404).json({ error: 'No signed agent release published on this server' });
     }
     res.setHeader('Content-Type', 'application/gzip');

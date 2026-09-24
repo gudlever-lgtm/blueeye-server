@@ -2568,6 +2568,9 @@ function makeReleaseStore(overrides = {}) {
     latest: overrides.latest || (() => (added.length ? added[added.length - 1] : null)),
     get: overrides.get || ((v) => added.find((r) => r.version === v) || null),
     reload: overrides.reload || (() => {}),
+    // The real store re-hashes the stored bytes and reports any release that no
+    // longer matches the manifest it was signed with.
+    verify: overrides.verify || (() => []),
     hasStorage: overrides.hasStorage || (() => true),
   };
 }

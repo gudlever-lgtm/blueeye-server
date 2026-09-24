@@ -2,6 +2,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 
 // Persistent store of SIGNED agent release tarballs.
 //
@@ -85,9 +86,18 @@ function createAgentReleaseStore({ dir, fsImpl = fs, logger = console } = {}) {
   // Persists a release whose signature + checksum the CALLER has already verified.
   function add({ version, buffer, sha256, size, signature, manifest, uploadedBy = null }) {
     if (!dir) throw new Error('release store has no directory configured');
-    fsImpl.writeFileSync(tgzPath(version), buffer);
+    // Tarball first, through a temp file and a rename, then the sidecar. The
+    // sidecar is what says which bytes were signed, so a half-written pair is
+    // a release that can never verify on any agent: it downloads, hashes, and
+    // reports "checksum mismatch" for ever. Rename is atomic on POSIX, so a
+    // reader sees either the old file or the whole new one — never a partial.
+    const tmp = `${tgzPath(version)}.tmp`;
+    fsImpl.writeFileSync(tmp, buffer);
+    fsImpl.renameSync(tmp, tgzPath(version));
     const meta = { version, sha256, size, signature, manifest, uploadedBy, createdAt: new Date().toISOString() };
-    fsImpl.writeFileSync(metaPath(version), JSON.stringify(meta));
+    const metaTmp = `${metaPath(version)}.tmp`;
+    fsImpl.writeFileSync(metaTmp, JSON.stringify(meta));
+    fsImpl.renameSync(metaTmp, metaPath(version));
     index.set(version, meta);
     if (logger && typeof logger.info === 'function') {
       logger.info(`releases: stored agent ${version} (${size} bytes, sha256 ${String(sha256).slice(0, 12)}…).`);
@@ -96,6 +106,14 @@ function createAgentReleaseStore({ dir, fsImpl = fs, logger = console } = {}) {
   }
 
   // Metadata + the tarball buffer for a version (read from disk), or null.
+  //
+  // The bytes are re-hashed and checked against the sha256 the sidecar says was
+  // signed. An agent verifies the same thing after downloading and refuses to
+  // install on a mismatch, so serving a pair that cannot agree only produces
+  // "checksum mismatch — refusing to install" on every host, for ever, with
+  // nothing in the server log. Better to answer "no release" and say why: the
+  // next restart re-signs from source and repairs it. Cheap — a release is a
+  // few MB and this runs once per download.
   function get(version) {
     const meta = index.get(version);
     if (!meta) return null;
@@ -105,10 +123,40 @@ function createAgentReleaseStore({ dir, fsImpl = fs, logger = console } = {}) {
     } catch {
       return null; // sidecar present but tarball gone
     }
+    const actual = crypto.createHash('sha256').update(buffer).digest('hex');
+    if (meta.sha256 && actual !== meta.sha256) {
+      if (logger && typeof logger.error === 'function') {
+        logger.error(`releases: agent ${version} on disk does not match its signed manifest `
+          + `(manifest ${String(meta.sha256).slice(0, 12)}…, file ${actual.slice(0, 12)}…). `
+          + 'Refusing to serve it — no agent could install it. Restart the server to re-sign '
+          + `the release from source, or re-upload it.`);
+      }
+      return null;
+    }
     return { ...meta, buffer };
   }
 
-  return { reload: load, add, has, list, latest, get, hasStorage };
+  // Every stored release, checked against its sidecar. Returns the versions that
+  // do NOT match, so the boot path can say so once rather than leaving it to
+  // whichever agent tries to update first.
+  function verify() {
+    const bad = [];
+    for (const version of index.keys()) {
+      const meta = index.get(version);
+      let buffer;
+      try {
+        buffer = fsImpl.readFileSync(tgzPath(version));
+      } catch {
+        bad.push({ version, reason: 'tarball missing' });
+        continue;
+      }
+      const actual = crypto.createHash('sha256').update(buffer).digest('hex');
+      if (meta.sha256 && actual !== meta.sha256) bad.push({ version, reason: 'sha256 does not match the signed manifest' });
+    }
+    return bad;
+  }
+
+  return { reload: load, add, has, list, latest, get, verify, hasStorage };
 }
 
 module.exports = { createAgentReleaseStore };

@@ -1441,6 +1441,19 @@ function start() {
   // missing key just means unsigned source installs until one is generated.
   releaseKeyService.load()
     .then(() => publishSignedReleaseFromSource({ sourceStore: agentSourceStore, releaseStore: agentReleaseStore, releaseKeyService, logger }))
+    .then(() => {
+      // Say once, here, whether every stored release still matches the manifest
+      // it was signed with. An agent checks the same thing after downloading and
+      // refuses to install on a mismatch, so a release that drifted from its
+      // sidecar shows up only as "checksum mismatch — refusing to install" on
+      // every host, with nothing on the server to explain it. The re-sign above
+      // repairs the current version; anything still listed here needs a re-upload.
+      const bad = typeof agentReleaseStore.verify === 'function' ? agentReleaseStore.verify() : [];
+      for (const b of bad) {
+        logger.error(`releases: agent ${b.version} cannot be served — ${b.reason}. `
+          + 'Agents would reject it as a checksum mismatch; re-upload that release (POST /agents/releases).');
+      }
+    })
     .catch((err) => logger.warn(`agent release key: startup load/publish failed: ${err.message}`));
 
   // Reconcile stale 'online' rows on boot. A restart drops all live sockets

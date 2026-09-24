@@ -108,6 +108,77 @@ test('GET /enroll/agent-source.tgz 500s when the store throws', async () => {
   assert.equal(res.status, 500);
 });
 
+test('GET /enroll/agent-source.tgz serves the matching bundle for ?sha= (200)', async () => {
+  const buf = Buffer.from('a-fake-agent-source-tarball');
+  const store = makeSourceStore({ sha256: 'd'.repeat(64), buf });
+  const res = await request(makeApp({ agentSourceStore: store }))
+    .get(`/enroll/agent-source.tgz?sha=${'D'.repeat(64)}`) // case-insensitive
+    .buffer(true).parse((r, cb) => { const chunks = []; r.on('data', (c) => chunks.push(c)); r.on('end', () => cb(null, Buffer.concat(chunks))); });
+  assert.equal(res.status, 200);
+  assert.equal(res.headers.etag, `"${'d'.repeat(64)}"`);
+  assert.equal(Buffer.compare(res.body, buf), 0);
+});
+
+// The failure this replaces: the script embeds the checksum of the bundle that
+// was current when it was GENERATED, and the tarball is fetched afterwards. When
+// the server repackaged in between, the host used to download the new tarball and
+// report "checksum mismatch - refusing to update". Now it is told what happened.
+test('GET /enroll/agent-source.tgz 409s when ?sha= is not what this server now serves', async () => {
+  const store = makeSourceStore({ sha256: 'd'.repeat(64) });
+  const res = await request(makeApp({ agentSourceStore: store })).get(`/enroll/agent-source.tgz?sha=${'e'.repeat(64)}`);
+  assert.equal(res.status, 409);
+  assert.equal(res.body.current, 'd'.repeat(64));
+  assert.equal(res.body.requested, 'e'.repeat(64));
+  assert.match(res.body.hint, /Re-run the one-liner/);
+});
+
+test('GET /enroll/agent-source.tgz 404s for ?sha= when no source is published', async () => {
+  const res = await request(makeApp({ agentSourceStore: makeSourceStore({ present: false }) }))
+    .get(`/enroll/agent-source.tgz?sha=${'e'.repeat(64)}`);
+  assert.equal(res.status, 404);
+});
+
+// Anything that caches either the script or the tarball puts the two out of step,
+// which the host sees as a checksum mismatch it cannot act on.
+test('GET /enroll/agent-source.tgz forbids caching', async () => {
+  const res = await request(makeApp()).get('/enroll/agent-source.tgz')
+    .buffer(true).parse((r, cb) => { r.on('data', () => {}); r.on('end', () => cb(null, null)); });
+  assert.match(res.headers['cache-control'], /no-store/);
+});
+
+test('GET /enroll/update.ps1 and install.sh forbid caching', async () => {
+  const app = makeApp({ enrollmentCodesRepo: activeCode() });
+  const ps1 = await request(app).get('/enroll/update.ps1');
+  assert.equal(ps1.status, 200);
+  assert.match(ps1.headers['cache-control'], /no-store/);
+  const sh = await request(app).get('/enroll/GOOD/install.sh');
+  assert.equal(sh.status, 200);
+  assert.match(sh.headers['cache-control'], /no-store/);
+});
+
+// ---- GET /enroll/agent-source.sha256 ---------------------------------------
+test('GET /enroll/agent-source.sha256 returns the current checksum as plain text (200)', async () => {
+  const store = makeSourceStore({ sha256: 'd'.repeat(64) });
+  const res = await request(makeApp({ agentSourceStore: store })).get('/enroll/agent-source.sha256');
+  assert.equal(res.status, 200);
+  assert.match(res.headers['content-type'], /text\/plain/);
+  assert.equal(res.text.trim(), 'd'.repeat(64));
+  assert.equal(res.headers['x-agent-version'], '0.1.0');
+  assert.match(res.headers['cache-control'], /no-store/);
+});
+
+test('GET /enroll/agent-source.sha256 404s when no source is published', async () => {
+  const res = await request(makeApp({ agentSourceStore: makeSourceStore({ present: false }) })).get('/enroll/agent-source.sha256');
+  assert.equal(res.status, 404);
+  assert.match(res.text, /No agent source/);
+});
+
+test('GET /enroll/agent-source.sha256 500s when the store throws', async () => {
+  const store = makeSourceStore({ meta: () => { throw new Error('disk gone'); } });
+  const res = await request(makeApp({ agentSourceStore: store })).get('/enroll/agent-source.sha256');
+  assert.equal(res.status, 500);
+});
+
 // ---- GET /enroll/uninstall.sh ----------------------------------------------
 test('GET /enroll/uninstall.sh serves the uninstall script (200)', async () => {
   const store = makeSourceStore({ uninstallScript: () => '#!/bin/sh\necho remove-me\n' });

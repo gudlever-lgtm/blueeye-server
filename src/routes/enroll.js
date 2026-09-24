@@ -23,10 +23,26 @@ function resolveServerUrl(req, enrollConfig) {
   return `${proto}://${host}`;
 }
 
+// Nothing under /enroll may be cached by anything in between. The install and
+// update scripts carry the SHA-256 of the source bundle EMBEDDED in them, and the
+// bundle is fetched in a separate request afterwards, so a cache that keeps
+// either one for a while hands the host a script and a tarball from two
+// different server builds — which surfaces on the target as
+// "checksum mismatch - refusing to update" on a host that updated fine an hour
+// earlier, and stays that way until the cache expires. A CDN or reverse proxy in
+// front will happily cache a .tgz (a static-looking extension) by heuristic when
+// the response says nothing, so the response has to say something.
+function noStore(res) {
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
+}
+
 // PUBLIC (unauthenticated) enrollment helpers, mounted at /enroll. A new agent
 // has no token yet, so these must be reachable without auth:
 //   GET /enroll/config                 -> { serverUrl, certFingerprint, releasePublicKey }
 //   GET /enroll/agent-source.tgz       -> the agent source bundle (built + run on the target)
+//   GET /enroll/agent-source.sha256    -> the SHA-256 of that bundle, as it is RIGHT NOW
 //   GET /enroll/agent-release-key      -> the release trust anchor (PEM) the agent pins
 //   GET /enroll/agent-binary/:arch     -> auto-built self-contained binary (linux-x64|linux-arm64)
 //   GET /enroll/agent-binary-status    -> build status for operator inspection
@@ -87,6 +103,7 @@ function createEnrollRouter({ artifactStore, sourceStore, binaryStore, releaseSt
       serverUrl: resolveServerUrl(req, enrollConfig),
       serviceName: (enrollConfig && enrollConfig.serviceName) || 'blueeye-agent',
     });
+    noStore(res);
     res.status(200).type('text/x-shellscript; charset=utf-8').send(script);
   });
 
@@ -94,18 +111,51 @@ function createEnrollRouter({ artifactStore, sourceStore, binaryStore, releaseSt
   // startup. This is what the one-line installer downloads and then builds + runs
   // with Docker/Node — so no pre-built binaries are needed. 404 when no source is
   // configured (AGENT_SOURCE_DIR). The cached SHA-256 is exposed as a header.
+  //
+  // `?sha=<hex>` is how the install/update scripts ask for the exact bundle their
+  // embedded checksum belongs to. Two things come out of it: the URL differs per
+  // build, so no cache in front can serve a stale tarball under it, and when the
+  // server HAS repackaged since the script was generated the answer is a 409 that
+  // says so, instead of a tarball the script then rejects as corrupt.
   router.get('/agent-source.tgz', asyncHandler(async (req, res) => {
     const meta = sourceStore && sourceStore.meta();
     const buffer = sourceStore && sourceStore.buffer();
+    noStore(res);
     if (!meta || !buffer) {
       return res.status(404).json({ error: 'No agent source published on this server' });
+    }
+    const want = typeof req.query.sha === 'string' ? req.query.sha.trim().toLowerCase() : '';
+    if (want && want !== meta.sha256) {
+      return res.status(409).json({
+        error: 'Agent source has been repackaged since that script was generated',
+        requested: want,
+        current: meta.sha256,
+        hint: 'Re-run the one-liner to get a script carrying the current checksum.',
+      });
     }
     res.setHeader('Content-Type', meta.contentType);
     res.setHeader('Content-Length', meta.size);
     res.setHeader('X-Content-SHA256', meta.sha256);
+    res.setHeader('ETag', `"${meta.sha256}"`);
     res.setHeader('Content-Disposition', `attachment; filename="${meta.filename}"`);
     res.status(200).send(buffer);
   }));
+
+  // The checksum of the bundle this server is serving right now, as plain text
+  // (one lowercase hex line). The scripts read it when their own verification
+  // fails, so they can tell the operator WHICH side is stale — the script or the
+  // download — rather than only that the two disagree.
+  router.get('/agent-source.sha256', (req, res) => {
+    const meta = sourceStore && sourceStore.meta();
+    noStore(res);
+    res.type('text/plain; charset=utf-8');
+    if (!meta) {
+      return res.status(404).send('# No agent source is published on this server.\n');
+    }
+    res.setHeader('X-Agent-Version', sourceStore.sourceVersion() || '');
+    res.setHeader('X-Content-SHA256', meta.sha256);
+    return res.status(200).send(`${meta.sha256}\n`);
+  });
 
   // Latest SIGNED agent release — metadata only (JSON), so an agent can learn the
   // version/sha256/signature to verify against. 404 when no release is published.
@@ -147,6 +197,7 @@ function createEnrollRouter({ artifactStore, sourceStore, binaryStore, releaseSt
       res.status(404).type('text/plain; charset=utf-8');
       return res.send('# No uninstall script available on this server.\n');
     }
+    noStore(res);
     res.status(200).type('text/x-shellscript; charset=utf-8').send(script);
   }));
 
@@ -230,6 +281,7 @@ function createEnrollRouter({ artifactStore, sourceStore, binaryStore, releaseSt
       binaryChecksums: binaryStore ? binaryStore.checksums() : {},
       agentVersion: sourceStore ? sourceStore.sourceVersion() : '',
     });
+    noStore(res);
     res.status(200).type('text/x-shellscript; charset=utf-8').send(script);
   }));
 
@@ -303,6 +355,7 @@ function createEnrollRouter({ artifactStore, sourceStore, binaryStore, releaseSt
 // is a second line of defence for injected values such as an IDN server URL.
 const UTF8_BOM = '\ufeff';
 function sendPs1(req, res, script, fileName) {
+  noStore(res);
   res.status(200).type('text/plain; charset=utf-8');
   if (req.query.download) {
     res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);

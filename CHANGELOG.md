@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.193.0 — A checksum mismatch now says which side is stale
+
+**"checksum mismatch - refusing to update", on every retry.** The install and
+update scripts carry the SHA-256 of the agent source bundle embedded at the
+moment the script was generated, and the bundle is fetched in a separate request
+afterwards. Reproducible packaging (0.1x) removed the drift the *server* caused;
+it cannot remove the drift something *between* server and host causes. A CDN or
+reverse proxy that caches the `.tgz` by heuristic — a static-looking extension on
+a response that said nothing about caching — hands out an older build, and the
+mismatch then survives every retry instead of clearing.
+
+* Every `/enroll` response is now `Cache-Control: no-store`.
+* The scripts ask for the bundle **by checksum**:
+  `GET /enroll/agent-source.tgz?sha=<embedded>`. The URL differs per server
+  build, so nothing in the path can answer it with older bytes, and a server that
+  has repackaged since answers **409** rather than serving bytes the script would
+  then reject.
+* New `GET /enroll/agent-source.sha256` — the checksum the server serves right
+  now, one line of plain text. When verification fails anyway, the script reads
+  it and names the stale side: an out-of-date script (re-run the one-liner) or a
+  stale/altered download (a cache or proxy in the path).
+
+No agent change; older scripts keep working. See `docs/enrollment.md`.
+
 ## 0.192.0 — Mute this rule does something
 
 **"Mute this rule" on a Changes row only showed a toast.** It now mutes the

@@ -157,10 +157,42 @@ function Fetch-Or-Explain([string]$url, [string]$outFile) {
       Fail ("could not verify the server's TLS certificate for $url. On-prem servers usually use a self-signed cert - set its SHA-256 fingerprint on the server (AGENT_CERT_FINGERPRINT) and regenerate the command so this script can pin it. Details: $m")
     } elseif ($m -match 'Unable to connect|could not be resolved|actively refused|timed out|remote name') {
       Fail ("cannot reach $url from this host - check DNS/firewall, or set BLUEEYE_PUBLIC_URL on the server to an address this machine can actually reach (a bare hostname often will not resolve). Details: $m")
+    } elseif ($m -match '\(409\)') {
+      Fail ("the server has repackaged the agent source since this script was generated, so the checksum baked into this script is stale. Re-run the one-liner - it downloads a fresh script carrying the current checksum.")
     } else {
       Fail "download failed for $url : $m"
     }
   }
+}
+
+# Downloads the agent source bundle and verifies it against $SourceSha256 - the
+# checksum baked into THIS script when the server generated it. The script and
+# the tarball arrive in two separate requests, so they can only disagree when
+# something changed or was cached in between. The ?sha= query handles both: the
+# URL is unique per server build, so nothing in the path can answer with an older
+# tarball under it, and a server that HAS repackaged refuses with 409 instead of
+# handing over bytes this script would then call corrupt.
+#
+# When they still disagree, ask the server what it serves right now and name the
+# side that is stale. "checksum mismatch" on its own sends operators hunting for a
+# broken download, which is almost never what happened.
+function Get-AgentSource([string]$outFile, [string]$verb) {
+  $want = $SourceSha256.ToLower()
+  Info "downloading agent source from $ServerUrl/enroll/agent-source.tgz"
+  Fetch-Or-Explain "$ServerUrl/enroll/agent-source.tgz?sha=$want" $outFile
+  $actual = (Get-FileHash -Algorithm SHA256 -Path $outFile).Hash.ToLower()
+  if ($actual -eq $want) { Info "checksum OK ($want)"; return }
+  $live = ''
+  try { $live = (Invoke-WebRequest -UseBasicParsing -Uri "$ServerUrl/enroll/agent-source.sha256").Content.Trim().ToLower() } catch {}
+  $retry = 'Re-run the one-liner - it downloads a fresh script carrying the current checksum.'
+  if ($live -and $live -eq $actual) {
+    Fail ("this script is out of date: it expects agent source $want, but the server now serves $live - which is what was just downloaded." + [Environment]::NewLine + "  $retry")
+  }
+  if ($live -and $live -eq $want) {
+    Fail ("the agent source that arrived is not what the server says it serves (expected $want, got $actual) - something between this host and the server returned a stale or altered copy. Check any proxy or cache in the path, then retry.")
+  }
+  $serving = if ($live) { $live } else { 'unknown (the server could not be asked)' }
+  Fail ("checksum mismatch (expected $want, got $actual) - refusing to $verb." + [Environment]::NewLine + "  the server currently serves: $serving" + [Environment]::NewLine + "  $retry")
 }`;
 
 // Stops a running agent before its code is replaced. On an upgrade the old process
@@ -320,14 +352,7 @@ try {
   Info ('to remove the agent at any time, run (elevated):  ${psSq(uninstallCmd)}')
 
   $Tarball = Join-Path $Tmp 'agent-source.tgz'
-  Info "downloading agent source from $ServerUrl/enroll/agent-source.tgz"
-  Fetch-Or-Explain "$ServerUrl/enroll/agent-source.tgz" $Tarball
-
-  $actual = (Get-FileHash -Algorithm SHA256 -Path $Tarball).Hash.ToLower()
-  if ($actual -ne $SourceSha256.ToLower()) {
-    Fail "checksum mismatch (expected $SourceSha256, got $actual) - refusing to install"
-  }
-  Info "checksum OK ($SourceSha256)"
+  Get-AgentSource $Tarball 'install'
 
   # Inspection/test mode: verified, nothing written to the system yet.
   if ($env:BLUEEYE_DRY_RUN) { Info 'dry-run: verified, stopping before install'; exit 0 }
@@ -567,14 +592,7 @@ $Tmp = Join-Path ([System.IO.Path]::GetTempPath()) ('blueeye-update-' + [System.
 New-Item -ItemType Directory -Force -Path $Tmp | Out-Null
 try {
   $Tarball = Join-Path $Tmp 'agent-source.tgz'
-  Info "downloading agent source from $ServerUrl/enroll/agent-source.tgz"
-  Fetch-Or-Explain "$ServerUrl/enroll/agent-source.tgz" $Tarball
-
-  $actual = (Get-FileHash -Algorithm SHA256 -Path $Tarball).Hash.ToLower()
-  if ($actual -ne $SourceSha256.ToLower()) {
-    Fail "checksum mismatch (expected $SourceSha256, got $actual) - refusing to update"
-  }
-  Info "checksum OK ($SourceSha256)"
+  Get-AgentSource $Tarball 'update'
 
   # Inspection/test mode: verified, nothing on the host has been touched yet.
   if ($env:BLUEEYE_DRY_RUN) { Info 'dry-run: verified, stopping before the update'; exit 0 }

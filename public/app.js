@@ -1650,6 +1650,7 @@ function getAgentsPage() {
     update: updateAgent,
     windowsUpdate: showWindowsUpdateCommand,
     bulkUpdate: bulkUpdateAgents,
+    editSnmp: editAgentSnmp,
     showResults,
     showFlows: showAgentFlows,
     showConnection,
@@ -11470,6 +11471,72 @@ async function loadSnmpProfiles() {
   }
 }
 
+// SNMP settings for one agent, on their own.
+//
+// WHY THIS IS A SEPARATE DIALOG. These five fields apply to ONE traffic source
+// out of four, and they sat in the middle of the main Edit form — pushing the
+// sFlow sampling rate and exporter toggle below the fold for every agent that
+// has nothing to do with SNMP. The common case was paying for the rare one.
+//
+// It edits ONLY the snmp block: the source, the collector ports and the
+// exporter settings stay exactly as they were, so opening this on a netflow
+// agent and saving cannot move it onto SNMP by accident. Setting a host here
+// does not switch the source either — that is a separate, deliberate choice in
+// Edit agent.
+async function editAgentSnmp(a) {
+  const mc = a.monitor_config || {};
+  const snmp = mc.snmp || {};
+  const profiles = await loadSnmpProfiles();
+  const grantsThis = (p) => !Array.isArray(p.agentIds) || p.agentIds.includes(Number(a.id));
+  const profileOptions = profiles.length ? [
+    { value: '', label: t('ag.snmp.profile.none') },
+    ...profiles.map((p) => ({
+      value: String(p.id),
+      label: grantsThis(p) ? p.name : `${p.name} ${t('ag.snmp.profile.ungranted')}`,
+    })),
+  ] : null;
+
+  openModal(t('ag.snmp.title', { agent: a.display_name || a.hostname || `#${a.id}` }), [
+    { name: 'snmp_host', label: t('ag.snmp.host'), value: snmp.host || '', hint: t('ag.snmp.host.hint') },
+    ...(profileOptions ? [{
+      name: 'snmp_profile_id', label: t('ag.snmp.profile'), type: 'select',
+      value: snmp.profileId ? String(snmp.profileId) : '',
+      options: profileOptions, hint: t('ag.snmp.profile.hint'),
+    }] : []),
+    { name: 'snmp_community', label: 'SNMP community',
+      value: snmp.community || (snmp.profileId ? '' : 'public'),
+      hint: profileOptions ? t('ag.snmp.community.hint') : undefined },
+    { name: 'snmp_version', label: 'SNMP version', type: 'select', value: snmp.version || '2c',
+      options: ['1', '2c'].map((x) => ({ value: x, label: x })) },
+    { name: 'snmp_port', label: 'SNMP port', type: 'number', value: String(snmp.port || 161) },
+  ], async (v) => {
+    const host = String(v.snmp_host || '').trim();
+    // Clearing the host clears the block. An agent whose source is SNMP cannot
+    // have it cleared from under it, though — that would leave a source with
+    // nothing to poll, which the server would refuse anyway.
+    if (!host) {
+      if (mc.source === 'snmp') throw new Error(t('ag.snmp.cantClear'));
+      await api(`/agents/${a.id}`, { method: 'PUT', body: { monitor_config: { ...mc, snmp: undefined } } });
+      closeModal(); toast(t('ag.snmp.cleared')); render();
+      return;
+    }
+    // A named credential wins, and the literal field is then not stored at all
+    // — the secret lives in the profile and is resolved for the one hop that
+    // needs it. An operator who cannot see the picker keeps whatever credential
+    // the agent was already given.
+    const picked = profileOptions ? v.snmp_profile_id : (snmp.profileId ? String(snmp.profileId) : '');
+    const snmpCfg = { host, version: v.snmp_version, port: Number(v.snmp_port) || 161 };
+    if (picked) snmpCfg.profileId = Number(picked);
+    else snmpCfg.community = v.snmp_community || 'public';
+
+    // Keep the rest of monitor_config byte for byte. This dialog is about the
+    // credential, not about which source the agent runs.
+    const body = { monitor_config: { ...mc, source: mc.source || 'sflow', snmp: snmpCfg } };
+    await api(`/agents/${a.id}`, { method: 'PUT', body });
+    closeModal(); toast(mc.source === 'snmp' ? t('ag.snmp.saved') : t('ag.snmp.savedUnused')); render();
+  });
+}
+
 async function editAgent(a) {
   const mc = a.monitor_config || {};
   const snmp = mc.snmp || {};
@@ -11488,26 +11555,38 @@ async function editAgent(a) {
   const sflowHs = (mc.sflow && mc.sflow.hsflowd) || null;
   const hsObj = sflowHs && typeof sflowHs === 'object' ? sflowHs : {};
   const caps = a.capabilities && Array.isArray(a.capabilities.sources) ? a.capabilities.sources : [];
-  // Only offer sources the agent says it supports (fall back to both if unknown).
-  const sourceOptions = (caps.length ? caps : ['proc', 'snmp']).map((s) => ({ value: s, label: s }));
+  // Only offer sources the agent says it supports. The fallback used to be
+  // ['proc','snmp'], which hid netflow and sflow from every agent whose
+  // capabilities had not landed yet — including brand-new ones, which is
+  // exactly when the source gets chosen.
+  // One literal key per source, never a key built by joining a prefix to a
+  // variable: the UI gate sweeps this file's source text for the keys it must
+  // find in both catalogues, and a concatenated key is invisible to it — the
+  // sweep would pass while a locale was missing an option label. (Writing the
+  // concatenated form even inside a comment is enough to confuse the sweep,
+  // which is why this note describes it instead of showing it.)
+  const SOURCE_LABEL = {
+    sflow: () => t('ag.source.sflow'),
+    netflow: () => t('ag.source.netflow'),
+    proc: () => t('ag.source.proc'),
+    snmp: () => t('ag.source.snmp'),
+  };
+  const sourceOptions = (caps.length ? caps : ['sflow', 'netflow', 'proc', 'snmp'])
+    .map((src) => ({ value: src, label: SOURCE_LABEL[src] ? SOURCE_LABEL[src]() : src }));
+  // THE SNMP FIELDS ARE NOT HERE. They are five of the fifteen this form used
+  // to carry, they apply to one source out of four, and they pushed the
+  // sampling and exporter settings below the fold — so the common case paid
+  // for the rare one. They live behind "SNMP settings" in the row menu now
+  // (editAgentSnmp), and this form carries the existing snmp block forward
+  // untouched so switching source here can never silently discard a
+  // credential somebody configured there.
   openModal(`Edit agent ${a.id}`, [
     { name: 'display_name', label: 'Display name', value: a.display_name || '' },
     { name: 'location_id', label: 'Location', type: 'select', value: a.location_id ? String(a.location_id) : '',
       options: [{ value: '', label: '(none)' }, ...locationCache.map((l) => ({ value: String(l.id), label: l.name }))] },
     { name: 'notes', label: 'Notes', type: 'textarea', value: a.notes || '' },
-    { name: 'source', label: 'Traffic source', type: 'select', value: mc.source || 'proc', options: sourceOptions },
-    { name: 'snmp_host', label: 'SNMP host (only for snmp)', value: snmp.host || '' },
-    ...(profileOptions ? [{
-      name: 'snmp_profile_id', label: t('ag.snmp.profile'), type: 'select',
-      value: snmp.profileId ? String(snmp.profileId) : '',
-      options: profileOptions, hint: t('ag.snmp.profile.hint'),
-    }] : []),
-    { name: 'snmp_community', label: 'SNMP community',
-      value: snmp.community || (snmp.profileId ? '' : 'public'),
-      hint: profileOptions ? t('ag.snmp.community.hint') : undefined },
-    { name: 'snmp_version', label: 'SNMP version', type: 'select', value: snmp.version || '2c',
-      options: ['1', '2c'].map((s) => ({ value: s, label: s })) },
-    { name: 'snmp_port', label: 'SNMP port', type: 'number', value: String(snmp.port || 161) },
+    { name: 'source', label: t('ag.source.label'), type: 'select', value: mc.source || 'sflow', options: sourceOptions,
+      hint: t('ag.source.hint') },
     { name: 'netflow_port', label: 'NetFlow UDP port (only for netflow)', type: 'number',
       value: String((mc.netflow && mc.netflow.port) || 2055) },
     { name: 'sflow_port', label: 'sFlow UDP port (only for sflow)', type: 'number',
@@ -11522,20 +11601,15 @@ async function editAgent(a) {
   ], async (v) => {
     let monitor_config = null;
     if (v.source === 'snmp') {
-      if (!v.snmp_host.trim()) throw new Error('SNMP host is required for source "snmp"');
-      // A named credential wins, and the literal field is then not stored at
-      // all — the secret lives in the profile and is resolved for the one hop
-      // that needs it. An operator who cannot see the picker keeps whatever
-      // credential the agent was already given.
-      const picked = profileOptions ? v.snmp_profile_id : (snmp.profileId ? String(snmp.profileId) : '');
-      const snmpCfg = {
-        host: v.snmp_host.trim(),
-        version: v.snmp_version,
-        port: Number(v.snmp_port) || 161,
-      };
-      if (picked) snmpCfg.profileId = Number(picked);
-      else snmpCfg.community = v.snmp_community || 'public';
-      monitor_config = { source: 'snmp', snmp: snmpCfg };
+      // The SNMP block is whatever the SNMP popup last stored. Selecting the
+      // source here never edits it, and never invents one: an agent pointed at
+      // SNMP with nothing configured is told where to configure it, rather than
+      // being refused by a validation message about a field this form no longer
+      // shows.
+      if (!snmp.host) {
+        throw new Error(t('ag.snmp.needed'));
+      }
+      monitor_config = { source: 'snmp', snmp: { ...snmp } };
     } else if (v.source === 'netflow') {
       const netflow = { port: Number(v.netflow_port) || 2055 };
       if (v.collector_bind && v.collector_bind.trim()) netflow.bindAddress = v.collector_bind.trim();
@@ -18266,21 +18340,89 @@ async function txDetailView(id, host) {
   daysSel.addEventListener('change', drawTrend);
   root.append(el('div', { class: 'section-head' }, el('h4', {}, 'Trend per step'), agentSel, daysSel), trendHost);
 
-  // Recent results + diagnosis.
+  // Run it NOW. The whole point: a customer is on the phone about this system,
+  // and the next scheduled run is up to an interval away. Operator+ only, and
+  // the capture box is what turns "it failed" into "here is what the wire did".
+  const runHost = el('div', {});
+  if (canWrite()) {
+    const runAgentSel = el('select', {}, ...(test.agent_ids || []).map((aid) => el('option', { value: aid }, txAgentName(agents, aid))));
+    const capBox = el('input', { type: 'checkbox', id: 'tx-run-capture' });
+    const capLabel = el('label', { for: 'tx-run-capture', title: t('tx.run.captureHint') }, capBox, ' ', t('tx.run.capture'));
+    const runBtn = el('button', { class: 'primary small' }, t('tx.run.button'));
+    runBtn.addEventListener('click', async () => {
+      if (!runAgentSel.value) return;
+      runBtn.disabled = true;
+      const was = runBtn.textContent;
+      runBtn.textContent = t('tx.run.running');
+      runHost.replaceChildren(el('div', { class: 'muted' }, t('tx.run.running')));
+      try {
+        const out = await api(`/api/transactions/${id}/run`, {
+          method: 'POST',
+          body: JSON.stringify({ agent_id: Number(runAgentSel.value), capture: capBox.checked }),
+        });
+        runHost.replaceChildren(txRunResult(out, agents));
+        // The run also lands in the normal history, so refresh both lists
+        // rather than leaving the screen disagreeing with itself.
+        drawResults();
+        drawCaptures();
+      } catch (e) {
+        runHost.replaceChildren(el('div', { class: 'error' }, errText(e)));
+      } finally {
+        runBtn.disabled = false;
+        runBtn.textContent = was;
+      }
+    });
+    root.append(
+      el('div', { class: 'section-head' }, el('h4', {}, t('tx.run.title')), runAgentSel, capLabel, runBtn),
+      (test.agent_ids || []).length ? runHost : el('div', { class: 'muted' }, t('tx.run.noAgents')),
+    );
+  }
+
+  // Recent results + diagnosis. `Where the time went` is the phase verdict the
+  // server derives from step_phases — the column that answers "network or
+  // application" without anybody having to read a waterfall.
   const resHost = el('div', {});
-  try {
-    const { results } = await api(`/api/transactions/${id}/results`);
-    const recent = results.slice(0, 15);
-    resHost.replaceChildren(recent.length ? el('table', { class: 'data-table' },
-      el('thead', {}, el('tr', {}, ...['Time', 'Agent', 'Status', 'Latency', 'Diagnosis'].map((h) => el('th', {}, h)))),
-      el('tbody', {}, ...recent.map((r) => el('tr', {},
-        el('td', {}, new Date(r.time).toLocaleString('en-GB')),
-        el('td', {}, txAgentName(agents, r.agent_id)),
-        el('td', {}, el('span', { style: `color:${TX_STATUS_COLOR[r.status] || '#777'};font-weight:600` }, r.status), txDeviationArrow(r.deviation)),
-        el('td', {}, r.latency_ms != null ? `${r.latency_ms} ms` : '—'),
-        el('td', { class: r.status === 'ok' ? 'muted' : '' }, txDiagnose(r.detail, r.status)))))) : el('div', { class: 'empty' }, 'No results yet.'));
-  } catch (e) { resHost.replaceChildren(el('div', { class: 'error' }, errText(e))); }
+  async function drawResults() {
+    try {
+      const { results } = await api(`/api/transactions/${id}/results`);
+      const recent = results.slice(0, 15);
+      resHost.replaceChildren(recent.length ? el('table', { class: 'data-table' },
+        el('thead', {}, el('tr', {}, ...['Time', 'Agent', 'Status', 'Latency', t('tx.timing.where'), 'Diagnosis'].map((h) => el('th', {}, h)))),
+        el('tbody', {}, ...recent.map((r) => el('tr', {},
+          el('td', {}, new Date(r.time).toLocaleString('en-GB'),
+            r.has_capture ? el('span', { class: 'muted', title: t('tx.capture.has') }, ' \u25cf') : null),
+          el('td', {}, txAgentName(agents, r.agent_id)),
+          el('td', {}, el('span', { style: `color:${TX_STATUS_COLOR[r.status] || '#777'};font-weight:600` }, r.status), txDeviationArrow(r.deviation)),
+          el('td', {}, r.latency_ms != null ? `${r.latency_ms} ms` : '—'),
+          el('td', {}, txPhaseCell(r)),
+          el('td', { class: r.status === 'ok' ? 'muted' : '' }, txDiagnose(r.detail, r.status)))))) : el('div', { class: 'empty' }, 'No results yet.'));
+    } catch (e) { resHost.replaceChildren(el('div', { class: 'error' }, errText(e))); }
+  }
   root.append(el('h4', {}, 'Latest results'), resHost);
+
+  // Captures. Summaries here; the packet list is one click and a separate
+  // request, because it is by far the largest thing stored for a test.
+  const capHost = el('div', {});
+  async function drawCaptures() {
+    try {
+      const { captures } = await api(`/api/transactions/${id}/captures`);
+      capHost.replaceChildren(captures.length
+        ? el('table', { class: 'data-table' },
+          el('thead', {}, el('tr', {}, ...[t('tx.capture.col.time'), t('tx.capture.col.agent'), t('tx.capture.col.pattern'), t('tx.capture.col.packets'), t('tx.capture.col.reason'), ''].map((h) => el('th', {}, h)))),
+          el('tbody', {}, ...captures.map((c) => el('tr', {},
+            el('td', {}, new Date(c.time).toLocaleString('en-GB')),
+            el('td', {}, txAgentName(agents, c.agent_id)),
+            el('td', { title: c.explanation || '' }, c.pattern || '—'),
+            el('td', {}, String(c.packet_count ?? 0), c.truncated ? el('span', { title: t('tx.capture.truncated') }, '+') : null),
+            el('td', { class: 'muted' }, c.reason || '—'),
+            el('td', {}, el('button', {
+              class: 'ghost small',
+              onclick: () => txOpenCapture(id, c, capHost, drawCaptures),
+            }, t('tx.capture.open')))))))
+        : el('div', { class: 'empty' }, t('tx.capture.none')));
+    } catch (e) { capHost.replaceChildren(el('div', { class: 'error' }, errText(e))); }
+  }
+  root.append(el('h4', {}, t('tx.capture.title')), capHost);
 
   // Network path for this test run: the shared Path Visualization, sourced from
   // the first assigned agent to the test's target. Shows the path graph +
@@ -18295,8 +18437,120 @@ async function txDetailView(id, host) {
     })();
   }
 
-  drawHeat(); drawTrend();
+  drawHeat(); drawTrend(); drawResults(); drawCaptures();
   return root;
+}
+
+// ---- phases: where the time went ------------------------------------------
+
+// The phases, in the order they happen, with the colours the waterfall uses.
+// One list so the bar, the legend and the cell can never disagree about order.
+const TX_PHASES = [
+  ['dns', 'var(--chart-4, #b58900)'],
+  ['tcp', 'var(--chart-1, #268bd2)'],
+  ['tls', 'var(--chart-3, #6c71c4)'],
+  ['ttfb', 'var(--chart-2, #2aa198)'],
+  ['transfer', 'var(--chart-5, #859900)'],
+];
+
+// A one-line verdict plus the waterfall, for a results row. The verdict is the
+// server's (src/analysis/transactionPhases.js) — the UI does not form a second
+// opinion about the same numbers.
+function txPhaseCell(result) {
+  const v = result && result.phase_verdict;
+  if (!v || !v.split) return el('span', { class: 'muted', title: t('tx.timing.none') }, '—');
+  const label = t(`tx.verdict.${v.verdict}`) || v.verdict;
+  return el('div', { class: 'tx-phase-cell', title: v.explanation || '' },
+    el('span', { class: 'chip' }, label),
+    txPhaseBar(result.step_phases, v.step));
+}
+
+// The waterfall itself: one flex row of segments, widths proportional to time.
+// A phase that never happened has NO segment — rendering a zero-width sliver
+// for a handshake that did not occur is exactly the lie the null guards against.
+function txPhaseBar(stepPhases, stepIndex) {
+  const phases = Array.isArray(stepPhases) ? stepPhases : [];
+  const p = phases[Number.isInteger(stepIndex) ? stepIndex : 0];
+  if (!p) return el('span', {});
+  const total = TX_PHASES.reduce((sum, [key]) => sum + (Number.isFinite(p[key]) ? p[key] : 0), 0);
+  if (!total) return el('span', {});
+  const bar = el('div', { class: 'tx-phase-bar', style: 'display:flex;height:6px;border-radius:3px;overflow:hidden;min-width:90px;margin-top:3px' });
+  for (const [key, colour] of TX_PHASES) {
+    const ms = p[key];
+    if (!Number.isFinite(ms) || ms <= 0) continue;
+    const seg = el('div', { style: `width:${(ms / total) * 100}%;background:${colour}` });
+    seg.title = `${t(`tx.timing.${key}`)}: ${ms} ms`;
+    bar.append(seg);
+  }
+  return bar;
+}
+
+// The echo from a run-now: the sentence first, then the waterfall, then the
+// numbers. The sentence is the output — the figures are there to check it.
+function txRunResult(out, agents) {
+  const r = out && out.result;
+  if (!r) return el('div', { class: 'empty' }, t('tx.run.noResult'));
+  const v = out.phases;
+  const wrap = el('div', { class: 'tx-run-result' });
+  wrap.append(el('p', {},
+    el('span', { style: `color:${TX_STATUS_COLOR[r.status] || '#777'};font-weight:600` }, r.status),
+    ' · ',
+    t('tx.run.done', { agent: txAgentName(agents, out.agent_id), ms: r.latency_ms ?? '?' })));
+  if (v && v.explanation) wrap.append(el('p', {}, v.explanation));
+  if (r.step_phases) {
+    wrap.append(txPhaseBar(r.step_phases, v && v.step));
+    const totals = out.totals || {};
+    wrap.append(el('div', { class: 'muted small' }, TX_PHASES
+      .filter(([key]) => Number.isFinite(totals[key]))
+      .map(([key]) => `${t(`tx.timing.${key}`)} ${totals[key]} ms`)
+      .join(' · ') || t('tx.timing.none')));
+  } else {
+    wrap.append(el('div', { class: 'muted small' }, t('tx.timing.none')));
+  }
+  return wrap;
+}
+
+// ---- captures ---------------------------------------------------------------
+
+// Fetches one capture WITH its packets and renders it in place of the list.
+// The packets are only ever requested here, on an explicit click.
+async function txOpenCapture(testId, summary, host, back) {
+  host.replaceChildren(el('div', { class: 'muted' }, '…'));
+  let cap;
+  try {
+    cap = await api(`/api/transactions/${testId}/captures/one?agent_id=${encodeURIComponent(summary.agent_id)}&time=${encodeURIComponent(summary.time)}`);
+  } catch (e) {
+    host.replaceChildren(el('div', { class: 'error' }, errText(e)));
+    return;
+  }
+  const packets = Array.isArray(cap.packets) ? cap.packets : [];
+  const rows = packets.slice(0, 500);
+  host.replaceChildren(
+    el('div', { class: 'section-head' },
+      el('h5', {}, cap.pattern || '—'),
+      el('button', { class: 'ghost small', onclick: () => back() }, t('tx.capture.close'))),
+    el('p', {}, cap.explanation || ''),
+    // The scope is shown, not asserted: the exact expression tcpdump ran is
+    // what says how narrow this capture actually was.
+    el('div', { class: 'muted small' }, `${t('tx.capture.scope')}: `, el('code', {}, cap.filter || '—'),
+      cap.iface ? ` · ${cap.iface}` : '', cap.snaplen ? ` · snaplen ${cap.snaplen}` : ''),
+    el('div', { class: 'muted small' }, t('tx.capture.headersOnly')),
+    cap.truncated ? el('div', { class: 'warn small' }, t('tx.capture.truncated')) : null,
+    rows.length ? el('table', { class: 'data-table' },
+      el('thead', {}, el('tr', {}, ...['ms', 'Source', 'Destination', 'Flags', 'Seq', 'Ack', 'Win', 'TTL', 'Bytes'].map((h) => el('th', {}, h)))),
+      el('tbody', {}, ...rows.map((pk) => el('tr', {},
+        el('td', {}, String(pk.t ?? '')),
+        el('td', {}, `${pk.src || '?'}:${pk.sport ?? ''}`),
+        el('td', {}, `${pk.dst || '?'}:${pk.dport ?? ''}`),
+        el('td', {}, pk.flags || '—'),
+        el('td', { class: 'muted' }, pk.seq != null ? String(pk.seq) : '—'),
+        el('td', { class: 'muted' }, pk.ack != null ? String(pk.ack) : '—'),
+        el('td', {}, pk.win != null ? String(pk.win) : '—'),
+        el('td', { class: 'muted' }, pk.ttl != null ? String(pk.ttl) : '—'),
+        el('td', {}, pk.len != null ? String(pk.len) : '—')))))
+      : el('div', { class: 'empty' }, t('tx.capture.none')),
+    packets.length > rows.length ? el('div', { class: 'muted small' }, `+${packets.length - rows.length}`) : null,
+  );
 }
 
 // Pure SVG heatmap: X = time buckets, Y = agents. Colour by avg latency; dark on fails.

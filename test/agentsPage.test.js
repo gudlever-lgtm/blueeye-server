@@ -149,9 +149,12 @@ test('nine row buttons become one action and a grouped menu', async (t) => {
 
   act.querySelector('[aria-haspopup="menu"]').dispatchEvent(new window.Event('click', { bubbles: true }));
   // The checks that only look, then the ones that change something, then Delete.
+  // SNMP sits next to Edit rather than inside it: it applies to one traffic
+  // source out of four, and in the Edit form its five fields pushed the
+  // settings most agents DO use below the fold.
   assert.deepEqual(menu(doc), [
     'Traffic', 'Flows', 'Why online / offline', 'Ping', 'Flow-pipeline self-check', 'Speed test',
-    'Edit', 'Rebuild from the server source', 'Delete agent',
+    'Edit', 'SNMP settings…', 'Rebuild from the server source', 'Delete agent',
   ]);
   const items = [...doc.querySelectorAll('.ui-rowmenu button')];
   assert.ok(items[items.length - 1].classList.contains('danger'), 'Delete is not marked destructive');

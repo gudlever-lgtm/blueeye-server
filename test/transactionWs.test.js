@@ -334,3 +334,134 @@ test('Mistral diagnosis is appended when the assistant is enabled (the template 
     } finally { client.close(); }
   });
 });
+
+// ---------------------------------------------------------------- captures
+
+const CAPTURE_TIME = '2026-03-01T10:00:00.000Z';
+
+function captureFrame(overrides = {}) {
+  return {
+    type: 'transaction_capture',
+    test_id: 1,
+    time: CAPTURE_TIME,
+    capture: {
+      reason: 'status:timeout',
+      iface: 'eth0',
+      filter: '(host 10.0.0.2 and tcp port 443)',
+      snaplen: 96,
+      duration_ms: 1200,
+      observed: 3,
+      foreign: 0,
+      truncated: false,
+      packets: [
+        { t: 0, src: '10.0.0.1', dst: '10.0.0.2', proto: 6, sport: 51234, dport: 443, flags: 'S', seq: 1, ack: 0, win: 64240, len: 74, ttl: 64, payload: 0 },
+        { t: 1000, src: '10.0.0.1', dst: '10.0.0.2', proto: 6, sport: 51234, dport: 443, flags: 'S', seq: 1, ack: 0, win: 64240, len: 74, ttl: 64, payload: 0 },
+        { t: 3000, src: '10.0.0.1', dst: '10.0.0.2', proto: 6, sport: 51234, dport: 443, flags: 'S', seq: 1, ack: 0, win: 64240, len: 74, ttl: 64, payload: 0 },
+      ],
+    },
+    ...overrides,
+  };
+}
+
+async function repoWithAssignedTest() {
+  const repo = makeTransactionsRepo();
+  const created = await repo.create({ name: 'Login', type: 'tcp', target: 'db', config: { port: 443 }, capture: 'on_fault' });
+  await repo.setAgents(created.id, [AGENT_ID]);
+  return repo;
+}
+
+test('a capture is stored with the verdict computed once, at ingest', async () => {
+  const transactionsRepo = await repoWithAssignedTest();
+  await withWs({ transactionsRepo }, async ({ port }) => {
+    const client = connect(port);
+    await waitOpen(client);
+    client.send(JSON.stringify(captureFrame()));
+    await poll(() => transactionsRepo.captureRows.length === 1);
+    const row = transactionsRepo.captureRows[0];
+    assert.equal(row.test_id, 1);
+    assert.equal(row.agent_id, AGENT_ID);
+    assert.equal(row.packets.length, 3);
+    // Three SYNs, no answer: the verdict is stored, not derived again on read.
+    assert.equal(row.analysis.pattern, 'blackhole');
+    assert.equal(row.analysis.syn_unanswered, 3);
+    assert.match(row.analysis.explanation, /dropping silently/);
+    client.close();
+  });
+});
+
+test('a capture for a test this agent is NOT assigned is dropped', async () => {
+  const transactionsRepo = await repoWithAssignedTest();
+  await withWs({ transactionsRepo }, async ({ port }) => {
+    const client = connect(port);
+    await waitOpen(client);
+    client.send(JSON.stringify(captureFrame({ test_id: 77 })));
+    await new Promise((r) => setTimeout(r, 120));
+    assert.equal(transactionsRepo.captureRows.length, 0, 'an agent may only store evidence for a test it was given');
+    client.close();
+  });
+});
+
+test('a malformed capture frame is rejected without breaking the socket', async () => {
+  const transactionsRepo = await repoWithAssignedTest();
+  await withWs({ transactionsRepo }, async ({ port }) => {
+    const client = connect(port);
+    await waitOpen(client);
+    client.send(JSON.stringify({ type: 'transaction_capture', test_id: 'nope', capture: {} }));
+    client.send(JSON.stringify({ type: 'transaction_capture', test_id: 1, capture: { packets: 'lots' } }));
+    client.send(JSON.stringify({ type: 'transaction_capture', test_id: 1, time: CAPTURE_TIME, capture: { packets: [] } }));
+    await poll(() => transactionsRepo.captureRows.length === 1);
+    assert.equal(transactionsRepo.captureRows[0].packets.length, 0, 'only the well-formed frame landed');
+    // And the socket still works afterwards.
+    client.send(JSON.stringify({ type: 'heartbeat', ts: Date.now() }));
+    assert.equal(client.readyState, client.OPEN);
+    client.close();
+  });
+});
+
+test('a redelivered capture replaces its own row rather than duplicating it', async () => {
+  const transactionsRepo = await repoWithAssignedTest();
+  await withWs({ transactionsRepo }, async ({ port }) => {
+    const client = connect(port);
+    await waitOpen(client);
+    client.send(JSON.stringify(captureFrame()));
+    await poll(() => transactionsRepo.captureRows.length === 1);
+    client.send(JSON.stringify(captureFrame()));
+    await new Promise((r) => setTimeout(r, 150));
+    assert.equal(transactionsRepo.captureRows.length, 1, 'the key is (test, agent, time) — the same capture twice is one row');
+    client.close();
+  });
+});
+
+test('nothing but header fields reaches the stored packets, whatever the agent sent', async () => {
+  const transactionsRepo = await repoWithAssignedTest();
+  await withWs({ transactionsRepo }, async ({ port }) => {
+    const client = connect(port);
+    await waitOpen(client);
+    const frame = captureFrame();
+    frame.capture.packets[0].body = 'POST /login password=hunter2';
+    frame.capture.packets[0].sni = 'internal.customer.dk';
+    client.send(JSON.stringify(frame));
+    await poll(() => transactionsRepo.captureRows.length === 1);
+    const stored = JSON.stringify(transactionsRepo.captureRows[0]);
+    assert.ok(!stored.includes('hunter2'), 'no payload reaches the column');
+    assert.ok(!stored.includes('internal.customer.dk'), 'and no SNI either');
+    client.close();
+  });
+});
+
+test('phases on a result survive the whole ingest path', async () => {
+  const transactionsRepo = await repoWithAssignedTest();
+  await withWs({ transactionsRepo }, async ({ port }) => {
+    const client = connect(port);
+    await waitOpen(client);
+    client.send(JSON.stringify({
+      type: 'transaction_result',
+      results: [{ test_id: 1, time: CAPTURE_TIME, status: 'ok', latency_ms: 4200, step_phases: [{ dns: 12, tcp: 31, tls: 78, ttfb: 4050, transfer: 29 }] }],
+    }));
+    await poll(() => transactionsRepo.resultRows.length === 1);
+    const row = transactionsRepo.resultRows[0];
+    assert.equal(row.step_phases[0].ttfb, 4050);
+    assert.equal(row.step_phases[0].tcp, 31);
+    client.close();
+  });
+});

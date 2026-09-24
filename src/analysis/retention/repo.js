@@ -221,6 +221,11 @@ function createRetentionRepo(db) {
   async function purgeTransactionResultsBefore(ts) {
     return deleteInBatches('DELETE FROM transaction_results WHERE `time` < ? ORDER BY `time` LIMIT ?', [ts]);
   }
+  // Packet captures age out far sooner than the results they belong to — see
+  // the note on transactionCaptureRetentionDays in config.js.
+  async function purgeTransactionCapturesBefore(ts) {
+    return deleteInBatches('DELETE FROM transaction_captures WHERE `time` < ? ORDER BY `time` LIMIT ?', [ts]);
+  }
   // Only CLOSED outages. An outage that is still open is a current condition —
   // the probe-outage service resolves it by finding that row, so deleting it
   // would make the next recovery look like it never went down.
@@ -286,6 +291,7 @@ function createRetentionRepo(db) {
     purgeDeviceVlansBefore,
     purgeFdbMovesBefore,
     purgeBurstRunsBefore,
+    purgeTransactionCapturesBefore,
     purgeDeviceInterfacesBefore,
     purgeDeviceCountersBefore,
     purgeInterfaceTransitionsBefore,

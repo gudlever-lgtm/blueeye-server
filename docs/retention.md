@@ -108,6 +108,7 @@ and the re-entrancy guard still skips a run while one is in progress.
 | `RETENTION_PROBE_OUTAGE_DAYS` | `400` | Closed `probe_outages`. |
 | `RETENTION_SPEEDTEST_DAYS` | `365` | `speedtest_results`. |
 | `RETENTION_TRANSACTION_RESULT_DAYS` | `90` | `transaction_results`. |
+| `RETENTION_TRANSACTION_CAPTURE_DAYS` | `7` | `transaction_captures` — **the shortest window here, deliberately.** A capture is the most detailed thing the product stores (packet headers of one test run), and it stops being evidence long before it stops being detailed. A week covers the fault somebody is still investigating; after that the result row keeps the verdict, which is what gets quoted anyway. See [transaction-capture.md](transaction-capture.md). |
 | `RETENTION_TOPOLOGY_CHANGE_DAYS` | `180` | `topology_changes`. |
 | `RETENTION_DISCOVERED_DEVICE_DAYS` | `90` | Unpromoted `discovered_devices`. |
 | `RETENTION_HOST_CONNECTION_DAYS` | `30` | `host_connections`. |

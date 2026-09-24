@@ -735,9 +735,22 @@ function createApiRouter({
   if (transactionsRepo) {
     router.use('/api/transactions', createTransactionsRouter({
       repo: transactionsRepo,
+      logger,
       // Config-push hook: notify affected agents over WS when tests/assignments
       // change. Late-bound via agentCommander (the WS server starts after the app).
       pushConfig: agentCommander ? agentCommander.pushTransactionConfig : null,
+      // On-demand run: push `run-transaction` and wait for the agent's reply.
+      // The timeout is generous because the agent runs the WHOLE test before it
+      // answers — a multi-step http journey with a 15 s per-step timeout is
+      // legitimately slow, and a caller who gave up would be told "no answer"
+      // about a run that was working.
+      runNow: agentCommander
+        ? (agentId, { testId, capture }) => agentCommander.sendCommandAndWait(
+          agentId,
+          { name: 'run-transaction', testId, capture: capture === true },
+          { timeoutMs: 90000 },
+        )
+        : null,
     }));
   }
   if (logRing) router.use('/api/logs', createLogsRouter({ logRing }));

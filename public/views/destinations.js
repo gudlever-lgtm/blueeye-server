@@ -52,25 +52,64 @@
       }
       return nodes.length ? (nodes[0].country || null) : null;
     }
-    // How the place was found (router name / city GeoIP / country only).
+    // How the place was found (router name / city GeoIP / country only), and —
+    // when the pin is a guess the reply time does not quite support — that it is
+    // one. An approximate hop is still DRAWN: dropping it leaves a hole in the
+    // path, and a path with a hole in it reads as a broken trace. It just has to
+    // say so wherever it is shown.
     function placeSource(p) {
       if (!p) return null;
-      if (p.source === 'rdns') return t('pathmap.place.rdns', { code: p.code || '' });
-      if (p.source === 'geoip-city') return t('pathmap.place.geoipCity');
-      return t('pathmap.place.country');
+      var how = p.source === 'rdns' ? t('pathmap.place.rdns', { code: p.code || '' })
+        : p.source === 'geoip-city' ? t('pathmap.place.geoipCity')
+          : t('pathmap.place.country');
+      if (p.certainty !== 'approximate') return how;
+      return how + ' · ' + (Number.isFinite(p.offByKm) && p.offByKm > 0
+        ? t('pathmap.place.approxBy', { km: p.offByKm })
+        : t('pathmap.place.approx'));
+    }
+    // True when any hop behind a stop is only approximately placed, so the stop
+    // row can carry the same warning the drawer does.
+    function stopIsApprox(nodes) {
+      return (nodes || []).some(function (n) { return n.place && n.place.certainty === 'approximate'; });
     }
     // Hops the server left off the map because their reply was too fast for
     // any place it had for them (anycast, mostly).
+    //
+    // THE DESTINATION IS A SEPARATE CASE, and the one that matters. When a
+    // transit hop is left off, the line on the map still ends where the path
+    // ends. When the DESTINATION is left off, the line ends at the last transit
+    // hop that could be placed — and a reader takes that hop for the endpoint.
+    // "us.cnn.com" drawn as ending at a Danish transit router reads as a broken
+    // trace, when in fact the trace completed and the answer is the interesting
+    // one: the content came off a CDN edge close enough that the traffic never
+    // left the region. The note has to say that, not just why the dot is absent.
     function rejectedNotes(nodes) {
       return (nodes || []).filter(function (n) {
         return n.lat == null && Array.isArray(n.geoRejected) && n.geoRejected.length;
       }).map(function (n) {
         var r = n.geoRejected[n.geoRejected.length - 1];
-        return ui.inlineNote(t('pathmap.rejected', {
-          hop: n.hop, ip: n.ip || '*', where: [r.city, r.country].filter(Boolean).join(', ') || '?',
-          km: r.distanceKm, max: r.maxKm,
+        var where = [r.city, r.country].filter(Boolean).join(', ') || '?';
+        if (n.kind === 'dest') {
+          return ui.inlineNote(t('pathmap.rejectedDest', {
+            hop: n.hop, ip: n.ip || '*', where: where, km: r.distanceKm, max: r.maxKm,
+          }), 'info');
+        }
+        return ui.inlineNote(t(Number.isFinite(n.withinKm) ? 'pathmap.rejectedWithin' : 'pathmap.rejected', {
+          hop: n.hop, ip: n.ip || '*', where: where, km: r.distanceKm, max: r.maxKm,
+          within: n.withinKm,
         }), 'info');
       });
+    }
+
+    // The destination has no coordinates for a reason OTHER than the
+    // speed-of-light check (a private address, or no GeoIP at all). Same
+    // consequence — the drawn line stops short of the endpoint — but no
+    // rejection to explain it, so it would otherwise pass in silence.
+    function destShortNote(nodes) {
+      var dest = (nodes || []).filter(function (n) { return n.kind === 'dest'; })[0];
+      if (!dest || dest.lat != null) return null;
+      if (Array.isArray(dest.geoRejected) && dest.geoRejected.length) return null;
+      return ui.inlineNote(t('pathmap.destUnplaced', { hop: dest.hop, ip: dest.ip || '*' }), 'info');
     }
 
     function destTitle(d) {
@@ -289,7 +328,21 @@
         if (pathHost.scrollIntoView) pathHost.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
       }
 
-      var RANK = { bad: 3, warn: 2, muted: 1, ok: 0 };
+      // SAME ORDER AS THE SERVER (src/analysis/pathGraph.js sevRank), and it has
+      // to be: this table used to rank `muted` ABOVE `ok`, so on a healthy path
+      // whose only non-ok hop was a silent router — which is most paths, routers
+      // commonly don't emit ICMP "TTL exceeded" — the router was picked as the
+      // worst hop and drawn in the warning colour, under a sentence that ends
+      // "(silent router — normal)". A verdict must not contradict the sentence
+      // printed beside it, and the server's own graph agrees: it leaves
+      // worstHopIndex null on exactly that path.
+      //
+      // `muted` is not a degree of badness at all. It means NOT MEASURED, and
+      // below `ok` is the only place it can sit without inventing a fault.
+      var RANK = { bad: 3, warn: 2, ok: 1, muted: 0 };
+      // The floor for calling something the worst hop, matching the server's
+      // `r >= sevRank.warn`. Below it there is no worst hop, not a quiet one.
+      var WORST_MIN_RANK = RANK.warn;
       function worstOf(nodes) {
         return (nodes || []).filter(function (n) { return n.kind !== 'source'; }).reduce(function (w, n) {
           return (RANK[n.severity] || 0) > (RANK[w && w.severity] || 0) ? n : w;
@@ -445,10 +498,14 @@
           if (nets.length) bits.push(nets.slice(0, 2).join(', ') + (nets.length > 2 ? ' +' + (nets.length - 2) : ''));
           if (rtt !== null) bits.push(Math.round(rtt) + ' ms');
 
+          var approx = !isSrc && stopIsApprox(s.nodes);
           var li = el('li', { class: isSrc ? null : 'is-clickable', tabindex: isSrc ? null : '0',
             role: isSrc ? null : 'button' },
           el('span', { class: 'ui-legend-dot sev-' + (s.severity || 'ok') }),
           el('span', {}, String(place)),
+          // A pin the reply time does not quite support is still shown — it just
+          // never passes for a measured one.
+          approx ? ui.metaXs(t('pathmap.place.approxTag')) : null,
           bits.length ? ui.metaXs(bits.join(' · ')) : null,
           ui.metaXs(hopLabel));
           if (!isSrc) {
@@ -500,7 +557,7 @@
           : ui.emptyState({ icon: '↯', title: t('dest.path.noStops'), body: t('dest.path.noStopsHint') });
 
         return [
-          worst && (RANK[worst.severity] || 0) > 0
+          worst && (RANK[worst.severity] || 0) >= WORST_MIN_RANK
             ? ui.inlineNote(t('dest.path.worst', { hop: worst.hop, why: worst.explain || '' }),
               worst.severity === 'bad' ? 'crit' : 'warn')
             : null,
@@ -514,7 +571,7 @@
                 : t('dest.path.noHops')), 'warn')
             : null,
           body,
-        ].concat(rejectedNotes(graph.nodes)).filter(Boolean);
+        ].concat(rejectedNotes(graph.nodes)).concat([destShortNote(graph.nodes)]).filter(Boolean);
       }
 
       // Mounted ONCE. A period change redraws the markers and retitles the

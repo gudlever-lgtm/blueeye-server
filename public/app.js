@@ -16942,21 +16942,89 @@ async function txDetailView(id, host) {
   daysSel.addEventListener('change', drawTrend);
   root.append(el('div', { class: 'section-head' }, el('h4', {}, 'Trend per step'), agentSel, daysSel), trendHost);
 
-  // Recent results + diagnosis.
+  // Run it NOW. The whole point: a customer is on the phone about this system,
+  // and the next scheduled run is up to an interval away. Operator+ only, and
+  // the capture box is what turns "it failed" into "here is what the wire did".
+  const runHost = el('div', {});
+  if (canWrite()) {
+    const runAgentSel = el('select', {}, ...(test.agent_ids || []).map((aid) => el('option', { value: aid }, txAgentName(agents, aid))));
+    const capBox = el('input', { type: 'checkbox', id: 'tx-run-capture' });
+    const capLabel = el('label', { for: 'tx-run-capture', title: t('tx.run.captureHint') }, capBox, ' ', t('tx.run.capture'));
+    const runBtn = el('button', { class: 'primary small' }, t('tx.run.button'));
+    runBtn.addEventListener('click', async () => {
+      if (!runAgentSel.value) return;
+      runBtn.disabled = true;
+      const was = runBtn.textContent;
+      runBtn.textContent = t('tx.run.running');
+      runHost.replaceChildren(el('div', { class: 'muted' }, t('tx.run.running')));
+      try {
+        const out = await api(`/api/transactions/${id}/run`, {
+          method: 'POST',
+          body: JSON.stringify({ agent_id: Number(runAgentSel.value), capture: capBox.checked }),
+        });
+        runHost.replaceChildren(txRunResult(out, agents));
+        // The run also lands in the normal history, so refresh both lists
+        // rather than leaving the screen disagreeing with itself.
+        drawResults();
+        drawCaptures();
+      } catch (e) {
+        runHost.replaceChildren(el('div', { class: 'error' }, errText(e)));
+      } finally {
+        runBtn.disabled = false;
+        runBtn.textContent = was;
+      }
+    });
+    root.append(
+      el('div', { class: 'section-head' }, el('h4', {}, t('tx.run.title')), runAgentSel, capLabel, runBtn),
+      (test.agent_ids || []).length ? runHost : el('div', { class: 'muted' }, t('tx.run.noAgents')),
+    );
+  }
+
+  // Recent results + diagnosis. `Where the time went` is the phase verdict the
+  // server derives from step_phases — the column that answers "network or
+  // application" without anybody having to read a waterfall.
   const resHost = el('div', {});
-  try {
-    const { results } = await api(`/api/transactions/${id}/results`);
-    const recent = results.slice(0, 15);
-    resHost.replaceChildren(recent.length ? el('table', { class: 'data-table' },
-      el('thead', {}, el('tr', {}, ...['Time', 'Agent', 'Status', 'Latency', 'Diagnosis'].map((h) => el('th', {}, h)))),
-      el('tbody', {}, ...recent.map((r) => el('tr', {},
-        el('td', {}, new Date(r.time).toLocaleString('en-GB')),
-        el('td', {}, txAgentName(agents, r.agent_id)),
-        el('td', {}, el('span', { style: `color:${TX_STATUS_COLOR[r.status] || '#777'};font-weight:600` }, r.status), txDeviationArrow(r.deviation)),
-        el('td', {}, r.latency_ms != null ? `${r.latency_ms} ms` : '—'),
-        el('td', { class: r.status === 'ok' ? 'muted' : '' }, txDiagnose(r.detail, r.status)))))) : el('div', { class: 'empty' }, 'No results yet.'));
-  } catch (e) { resHost.replaceChildren(el('div', { class: 'error' }, errText(e))); }
+  async function drawResults() {
+    try {
+      const { results } = await api(`/api/transactions/${id}/results`);
+      const recent = results.slice(0, 15);
+      resHost.replaceChildren(recent.length ? el('table', { class: 'data-table' },
+        el('thead', {}, el('tr', {}, ...['Time', 'Agent', 'Status', 'Latency', t('tx.phase.where'), 'Diagnosis'].map((h) => el('th', {}, h)))),
+        el('tbody', {}, ...recent.map((r) => el('tr', {},
+          el('td', {}, new Date(r.time).toLocaleString('en-GB'),
+            r.has_capture ? el('span', { class: 'muted', title: t('tx.capture.has') }, ' \u25cf') : null),
+          el('td', {}, txAgentName(agents, r.agent_id)),
+          el('td', {}, el('span', { style: `color:${TX_STATUS_COLOR[r.status] || '#777'};font-weight:600` }, r.status), txDeviationArrow(r.deviation)),
+          el('td', {}, r.latency_ms != null ? `${r.latency_ms} ms` : '—'),
+          el('td', {}, txPhaseCell(r)),
+          el('td', { class: r.status === 'ok' ? 'muted' : '' }, txDiagnose(r.detail, r.status)))))) : el('div', { class: 'empty' }, 'No results yet.'));
+    } catch (e) { resHost.replaceChildren(el('div', { class: 'error' }, errText(e))); }
+  }
   root.append(el('h4', {}, 'Latest results'), resHost);
+
+  // Captures. Summaries here; the packet list is one click and a separate
+  // request, because it is by far the largest thing stored for a test.
+  const capHost = el('div', {});
+  async function drawCaptures() {
+    try {
+      const { captures } = await api(`/api/transactions/${id}/captures`);
+      capHost.replaceChildren(captures.length
+        ? el('table', { class: 'data-table' },
+          el('thead', {}, el('tr', {}, ...[t('tx.capture.col.time'), t('tx.capture.col.agent'), t('tx.capture.col.pattern'), t('tx.capture.col.packets'), t('tx.capture.col.reason'), ''].map((h) => el('th', {}, h)))),
+          el('tbody', {}, ...captures.map((c) => el('tr', {},
+            el('td', {}, new Date(c.time).toLocaleString('en-GB')),
+            el('td', {}, txAgentName(agents, c.agent_id)),
+            el('td', { title: c.explanation || '' }, c.pattern || '—'),
+            el('td', {}, String(c.packet_count ?? 0), c.truncated ? el('span', { title: t('tx.capture.truncated') }, '+') : null),
+            el('td', { class: 'muted' }, c.reason || '—'),
+            el('td', {}, el('button', {
+              class: 'ghost small',
+              onclick: () => txOpenCapture(id, c, capHost, drawCaptures),
+            }, t('tx.capture.open')))))))
+        : el('div', { class: 'empty' }, t('tx.capture.none')));
+    } catch (e) { capHost.replaceChildren(el('div', { class: 'error' }, errText(e))); }
+  }
+  root.append(el('h4', {}, t('tx.capture.title')), capHost);
 
   // Network path for this test run: the shared Path Visualization, sourced from
   // the first assigned agent to the test's target. Shows the path graph +
@@ -16971,8 +17039,120 @@ async function txDetailView(id, host) {
     })();
   }
 
-  drawHeat(); drawTrend();
+  drawHeat(); drawTrend(); drawResults(); drawCaptures();
   return root;
+}
+
+// ---- phases: where the time went ------------------------------------------
+
+// The phases, in the order they happen, with the colours the waterfall uses.
+// One list so the bar, the legend and the cell can never disagree about order.
+const TX_PHASES = [
+  ['dns', 'var(--chart-4, #b58900)'],
+  ['tcp', 'var(--chart-1, #268bd2)'],
+  ['tls', 'var(--chart-3, #6c71c4)'],
+  ['ttfb', 'var(--chart-2, #2aa198)'],
+  ['transfer', 'var(--chart-5, #859900)'],
+];
+
+// A one-line verdict plus the waterfall, for a results row. The verdict is the
+// server's (src/analysis/transactionPhases.js) — the UI does not form a second
+// opinion about the same numbers.
+function txPhaseCell(result) {
+  const v = result && result.phase_verdict;
+  if (!v || !v.split) return el('span', { class: 'muted', title: t('tx.phase.none') }, '—');
+  const label = t(`tx.verdict.${v.verdict}`) || v.verdict;
+  return el('div', { class: 'tx-phase-cell', title: v.explanation || '' },
+    el('span', { class: 'chip' }, label),
+    txPhaseBar(result.step_phases, v.step));
+}
+
+// The waterfall itself: one flex row of segments, widths proportional to time.
+// A phase that never happened has NO segment — rendering a zero-width sliver
+// for a handshake that did not occur is exactly the lie the null guards against.
+function txPhaseBar(stepPhases, stepIndex) {
+  const phases = Array.isArray(stepPhases) ? stepPhases : [];
+  const p = phases[Number.isInteger(stepIndex) ? stepIndex : 0];
+  if (!p) return el('span', {});
+  const total = TX_PHASES.reduce((sum, [key]) => sum + (Number.isFinite(p[key]) ? p[key] : 0), 0);
+  if (!total) return el('span', {});
+  const bar = el('div', { class: 'tx-phase-bar', style: 'display:flex;height:6px;border-radius:3px;overflow:hidden;min-width:90px;margin-top:3px' });
+  for (const [key, colour] of TX_PHASES) {
+    const ms = p[key];
+    if (!Number.isFinite(ms) || ms <= 0) continue;
+    const seg = el('div', { style: `width:${(ms / total) * 100}%;background:${colour}` });
+    seg.title = `${t(`tx.phase.${key}`)}: ${ms} ms`;
+    bar.append(seg);
+  }
+  return bar;
+}
+
+// The echo from a run-now: the sentence first, then the waterfall, then the
+// numbers. The sentence is the output — the figures are there to check it.
+function txRunResult(out, agents) {
+  const r = out && out.result;
+  if (!r) return el('div', { class: 'empty' }, t('tx.run.noResult'));
+  const v = out.phases;
+  const wrap = el('div', { class: 'tx-run-result' });
+  wrap.append(el('p', {},
+    el('span', { style: `color:${TX_STATUS_COLOR[r.status] || '#777'};font-weight:600` }, r.status),
+    ' · ',
+    t('tx.run.done', { agent: txAgentName(agents, out.agent_id), ms: r.latency_ms ?? '?' })));
+  if (v && v.explanation) wrap.append(el('p', {}, v.explanation));
+  if (r.step_phases) {
+    wrap.append(txPhaseBar(r.step_phases, v && v.step));
+    const totals = out.totals || {};
+    wrap.append(el('div', { class: 'muted small' }, TX_PHASES
+      .filter(([key]) => Number.isFinite(totals[key]))
+      .map(([key]) => `${t(`tx.phase.${key}`)} ${totals[key]} ms`)
+      .join(' · ') || t('tx.phase.none')));
+  } else {
+    wrap.append(el('div', { class: 'muted small' }, t('tx.phase.none')));
+  }
+  return wrap;
+}
+
+// ---- captures ---------------------------------------------------------------
+
+// Fetches one capture WITH its packets and renders it in place of the list.
+// The packets are only ever requested here, on an explicit click.
+async function txOpenCapture(testId, summary, host, back) {
+  host.replaceChildren(el('div', { class: 'muted' }, '…'));
+  let cap;
+  try {
+    cap = await api(`/api/transactions/${testId}/captures/one?agent_id=${encodeURIComponent(summary.agent_id)}&time=${encodeURIComponent(summary.time)}`);
+  } catch (e) {
+    host.replaceChildren(el('div', { class: 'error' }, errText(e)));
+    return;
+  }
+  const packets = Array.isArray(cap.packets) ? cap.packets : [];
+  const rows = packets.slice(0, 500);
+  host.replaceChildren(
+    el('div', { class: 'section-head' },
+      el('h5', {}, cap.pattern || '—'),
+      el('button', { class: 'ghost small', onclick: () => back() }, t('tx.capture.close'))),
+    el('p', {}, cap.explanation || ''),
+    // The scope is shown, not asserted: the exact expression tcpdump ran is
+    // what says how narrow this capture actually was.
+    el('div', { class: 'muted small' }, `${t('tx.capture.scope')}: `, el('code', {}, cap.filter || '—'),
+      cap.iface ? ` · ${cap.iface}` : '', cap.snaplen ? ` · snaplen ${cap.snaplen}` : ''),
+    el('div', { class: 'muted small' }, t('tx.capture.headersOnly')),
+    cap.truncated ? el('div', { class: 'warn small' }, t('tx.capture.truncated')) : null,
+    rows.length ? el('table', { class: 'data-table' },
+      el('thead', {}, el('tr', {}, ...['ms', 'Source', 'Destination', 'Flags', 'Seq', 'Ack', 'Win', 'TTL', 'Bytes'].map((h) => el('th', {}, h)))),
+      el('tbody', {}, ...rows.map((pk) => el('tr', {},
+        el('td', {}, String(pk.t ?? '')),
+        el('td', {}, `${pk.src || '?'}:${pk.sport ?? ''}`),
+        el('td', {}, `${pk.dst || '?'}:${pk.dport ?? ''}`),
+        el('td', {}, pk.flags || '—'),
+        el('td', { class: 'muted' }, pk.seq != null ? String(pk.seq) : '—'),
+        el('td', { class: 'muted' }, pk.ack != null ? String(pk.ack) : '—'),
+        el('td', {}, pk.win != null ? String(pk.win) : '—'),
+        el('td', { class: 'muted' }, pk.ttl != null ? String(pk.ttl) : '—'),
+        el('td', {}, pk.len != null ? String(pk.len) : '—')))))
+      : el('div', { class: 'empty' }, t('tx.capture.none')),
+    packets.length > rows.length ? el('div', { class: 'muted small' }, `+${packets.length - rows.length}`) : null,
+  );
 }
 
 // Pure SVG heatmap: X = time buckets, Y = agents. Colour by avg latency; dark on fails.

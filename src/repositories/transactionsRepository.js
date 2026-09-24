@@ -40,6 +40,9 @@ function createTransactionsRepository({ db, secretBox = null }) {
       config: parseJson(row.config, {}),
       secret_names: secretNamesOf(row.config_secrets),
       interval_sec: row.interval_sec,
+      // 'off' | 'on_fault' | 'always'. Sent to the agent with the rest of the
+      // config, because the agent is what decides whether to spawn tcpdump.
+      capture: row.capture || 'off',
       enabled: !!row.enabled,
       agent_ids: agentIds,
       created_by: row.created_by,
@@ -57,7 +60,7 @@ function createTransactionsRepository({ db, secretBox = null }) {
     return map;
   }
 
-  const TEST_COLS = 'id,name,type,target,config,config_secrets,interval_sec,enabled,created_by,created_at';
+  const TEST_COLS = 'id,name,type,target,config,config_secrets,interval_sec,capture,enabled,created_by,created_at';
 
   async function list() {
     const [rows] = await pool.query(`SELECT ${TEST_COLS} FROM transaction_tests ORDER BY name`);
@@ -87,23 +90,23 @@ function createTransactionsRepository({ db, secretBox = null }) {
     return secretBox.encryptJson(secrets);
   }
 
-  async function create({ name, type, target = null, config, secrets, interval_sec = 60, enabled = true, created_by = null }) {
+  async function create({ name, type, target = null, config, secrets, interval_sec = 60, capture = 'off', enabled = true, created_by = null }) {
     const blob = encryptSecrets(secrets);
     const [res] = await pool.query(
-      'INSERT INTO transaction_tests (name,type,target,config,config_secrets,interval_sec,enabled,created_by) VALUES (?,?,?,?,?,?,?,?)',
-      [name, type, target, JSON.stringify(config || {}), blob ?? null, interval_sec, enabled ? 1 : 0, created_by]
+      'INSERT INTO transaction_tests (name,type,target,config,config_secrets,interval_sec,capture,enabled,created_by) VALUES (?,?,?,?,?,?,?,?,?)',
+      [name, type, target, JSON.stringify(config || {}), blob ?? null, interval_sec, capture, enabled ? 1 : 0, created_by]
     );
     return findById(res.insertId);
   }
 
-  async function update(id, { name, type, target, config, secrets, interval_sec, enabled }) {
+  async function update(id, { name, type, target, config, secrets, interval_sec, capture = 'off', enabled }) {
     const [rows] = await pool.query('SELECT config_secrets FROM transaction_tests WHERE id=?', [id]);
     if (!rows[0]) return null;
     const blob = encryptSecrets(secrets); // undefined = keep
     const existingBlob = rows[0].config_secrets;
     await pool.query(
-      'UPDATE transaction_tests SET name=?,type=?,target=?,config=?,config_secrets=?,interval_sec=?,enabled=? WHERE id=?',
-      [name, type, target, JSON.stringify(config || {}), blob === undefined ? existingBlob : blob, interval_sec, enabled ? 1 : 0, id]
+      'UPDATE transaction_tests SET name=?,type=?,target=?,config=?,config_secrets=?,interval_sec=?,capture=?,enabled=? WHERE id=?',
+      [name, type, target, JSON.stringify(config || {}), blob === undefined ? existingBlob : blob, interval_sec, capture, enabled ? 1 : 0, id]
     );
     return findById(id);
   }
@@ -115,6 +118,7 @@ function createTransactionsRepository({ db, secretBox = null }) {
     await pool.query('DELETE FROM transaction_test_agents WHERE test_id=?', [id]);
     await pool.query('DELETE FROM transaction_baselines WHERE test_id=?', [id]);
     await pool.query('DELETE FROM transaction_results WHERE test_id=?', [id]);
+    await pool.query('DELETE FROM transaction_captures WHERE test_id=?', [id]);
     return true;
   }
 
@@ -142,7 +146,7 @@ function createTransactionsRepository({ db, secretBox = null }) {
   // Enabled tests assigned to an agent, WITH decrypted secrets — for the WS push.
   async function testsForAgent(agentId) {
     const [rows] = await pool.query(
-      `SELECT t.id,t.name,t.type,t.target,t.config,t.config_secrets,t.interval_sec,t.enabled,t.created_by,t.created_at
+      `SELECT t.id,t.name,t.type,t.target,t.config,t.config_secrets,t.interval_sec,t.capture,t.enabled,t.created_by,t.created_at
          FROM transaction_tests t JOIN transaction_test_agents ta ON ta.test_id=t.id
         WHERE ta.agent_id=? AND t.enabled=1 ORDER BY t.id`,
       [agentId]
@@ -156,7 +160,7 @@ function createTransactionsRepository({ db, secretBox = null }) {
   }
 
   // Batch-insert results. rows: [{ test_id, agent_id, time, status, latency_ms,
-  // step_timings, step_failed, deviation, detail }].
+  // step_timings, step_phases, step_failed, deviation, detail }].
   async function insertResults(rows) {
     if (!Array.isArray(rows) || rows.length === 0) return 0;
     const values = rows.map((r) => [
@@ -164,14 +168,117 @@ function createTransactionsRepository({ db, secretBox = null }) {
       r.test_id, r.agent_id, String(r.status),
       r.latency_ms ?? null,
       r.step_timings != null ? JSON.stringify(r.step_timings) : null,
+      r.step_phases != null ? JSON.stringify(r.step_phases) : null,
       r.step_failed ?? null,
       r.deviation ?? null,
       r.detail != null ? (typeof r.detail === 'string' ? r.detail : JSON.stringify(r.detail)).slice(0, 255) : null,
     ]);
     const [res] = await pool.query(
-      'INSERT INTO transaction_results (time,test_id,agent_id,status,latency_ms,step_timings,step_failed,deviation,detail) VALUES ?',
+      'INSERT INTO transaction_results (time,test_id,agent_id,status,latency_ms,step_timings,step_phases,step_failed,deviation,detail) VALUES ?',
       [values]
     );
+    return res.affectedRows;
+  }
+
+  // Stores one capture. REPLACE rather than INSERT: the key is
+  // (test_id, agent_id, time) and a re-delivered frame is the same capture, not
+  // a second one. `packets` is written whole — it is a bounded field, not a
+  // series (see migration 124).
+  async function insertCapture(row) {
+    const a = row.analysis || {};
+    const [res] = await pool.query(
+      `REPLACE INTO transaction_captures
+         (time,test_id,agent_id,reason,iface,filter,snaplen,duration_ms,observed,packet_count,foreign_count,truncated,packets,
+          pattern,explanation,retransmits,dup_acks,resets,zero_windows,syn_unanswered,handshake_rtt_ms,mss)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      [
+        row.time instanceof Date ? row.time : new Date(row.time),
+        row.test_id, row.agent_id,
+        row.reason ?? null, row.iface ?? null, row.filter ?? null, row.snaplen ?? null,
+        row.duration_ms ?? null, row.observed ?? null,
+        Array.isArray(row.packets) ? row.packets.length : 0,
+        row.foreign_count ?? null,
+        row.truncated ? 1 : 0,
+        row.packets != null ? JSON.stringify(row.packets) : null,
+        a.pattern ?? null,
+        a.explanation != null ? String(a.explanation).slice(0, 512) : null,
+        a.retransmits ?? null, a.dup_acks ?? null, a.resets ?? null, a.zero_windows ?? null,
+        a.syn_unanswered ?? null, a.handshake_rtt_ms ?? null, a.mss ?? null,
+      ]
+    );
+    return res.affectedRows;
+  }
+
+  function parseCapture(row, { withPackets = false } = {}) {
+    const out = {
+      time: row.time instanceof Date ? row.time.toISOString() : row.time,
+      test_id: row.test_id, agent_id: row.agent_id,
+      reason: row.reason, iface: row.iface, filter: row.filter, snaplen: row.snaplen,
+      duration_ms: row.duration_ms, observed: row.observed,
+      packet_count: row.packet_count, foreign_count: row.foreign_count,
+      truncated: !!row.truncated,
+      pattern: row.pattern, explanation: row.explanation,
+      retransmits: row.retransmits, dup_acks: row.dup_acks, resets: row.resets,
+      zero_windows: row.zero_windows, syn_unanswered: row.syn_unanswered,
+      handshake_rtt_ms: row.handshake_rtt_ms != null ? Number(row.handshake_rtt_ms) : null,
+      mss: row.mss,
+    };
+    // The packet list is opt-in on every read. It is by far the largest column
+    // in this schema and a list view has no use for it, so a caller has to ask.
+    if (withPackets) out.packets = parseJson(row.packets, []);
+    return out;
+  }
+
+  const CAPTURE_COLS = 'time,test_id,agent_id,reason,iface,filter,snaplen,duration_ms,observed,packet_count,foreign_count,truncated,pattern,explanation,retransmits,dup_acks,resets,zero_windows,syn_unanswered,handshake_rtt_ms,mss';
+
+  // Captures for a test, newest first. Summary only.
+  async function captures({ testId, agentId = null, from = null, to = null, limit = 100 }) {
+    const where = ['test_id = ?'];
+    const params = [testId];
+    if (agentId != null) { where.push('agent_id = ?'); params.push(agentId); }
+    if (from) { where.push('time >= ?'); params.push(from); }
+    if (to) { where.push('time <= ?'); params.push(to); }
+    const lim = Number.isInteger(limit) && limit > 0 && limit <= 500 ? limit : 100;
+    params.push(lim);
+    const [rows] = await pool.query(
+      `SELECT ${CAPTURE_COLS} FROM transaction_captures WHERE ${where.join(' AND ')} ORDER BY time DESC LIMIT ?`,
+      params
+    );
+    return rows.map((r) => parseCapture(r));
+  }
+
+  // One capture, with its packets. This is the only read that returns them.
+  async function findCapture({ testId, agentId, time }) {
+    const [rows] = await pool.query(
+      `SELECT ${CAPTURE_COLS},packets FROM transaction_captures WHERE test_id=? AND agent_id=? AND time=?`,
+      [testId, agentId, time instanceof Date ? time : new Date(time)]
+    );
+    return rows.length ? parseCapture(rows[0], { withPackets: true }) : null;
+  }
+
+  // Which of these results have a capture, so a list can show the marker without
+  // fetching any of them. Returns a Set of `${agent_id}|${ISO time}`.
+  async function captureKeysFor(testId, times) {
+    // A time that will not parse is dropped rather than passed on. This is a
+    // MARKER on a list — "this row has packets behind it" — and a single
+    // unreadable timestamp must not be able to fail the whole results request
+    // that it decorates.
+    const wanted = (Array.isArray(times) ? times : [])
+      .map((t) => (t instanceof Date ? t : new Date(t)))
+      .filter((d) => !Number.isNaN(d.getTime()));
+    if (!wanted.length) return new Set();
+    const [rows] = await pool.query(
+      'SELECT agent_id, time FROM transaction_captures WHERE test_id=? AND time IN (?)',
+      [testId, wanted]
+    );
+    return new Set(rows.map((r) => `${r.agent_id}|${r.time instanceof Date ? r.time.toISOString() : r.time}`));
+  }
+
+  // Drops captures older than `before`. Retention for this table is far shorter
+  // than for results: a capture is the most detailed thing this product stores,
+  // and it stops being evidence long before it stops being detailed.
+  async function purgeCaptures(before) {
+    const [res] = await pool.query('DELETE FROM transaction_captures WHERE time < ?', [before instanceof Date ? before : new Date(before)]);
     return res.affectedRows;
   }
 
@@ -180,6 +287,7 @@ function createTransactionsRepository({ db, secretBox = null }) {
       time: row.time instanceof Date ? row.time.toISOString() : row.time,
       test_id: row.test_id, agent_id: row.agent_id, status: row.status,
       latency_ms: row.latency_ms, step_timings: parseJson(row.step_timings, null),
+      step_phases: parseJson(row.step_phases, null),
       step_failed: row.step_failed, deviation: row.deviation,
       detail: parseJson(row.detail, row.detail),
     };
@@ -194,7 +302,7 @@ function createTransactionsRepository({ db, secretBox = null }) {
     const lim = Number.isInteger(limit) && limit > 0 && limit <= 5000 ? limit : 500;
     params.push(lim);
     const [rows] = await pool.query(
-      `SELECT time,test_id,agent_id,status,latency_ms,step_timings,step_failed,deviation,detail
+      `SELECT time,test_id,agent_id,status,latency_ms,step_timings,step_phases,step_failed,deviation,detail
          FROM transaction_results WHERE ${where.join(' AND ')} ORDER BY time DESC LIMIT ?`,
       params
     );
@@ -309,6 +417,7 @@ function createTransactionsRepository({ db, secretBox = null }) {
     list, findById, findByIdWithSecrets, create, update, remove,
     agentsFor, setAgents, testsForAgent, assignedTestIds,
     insertResults, results, heatmap, trend, recentStatuses, latestStatusPerAgent,
+    insertCapture, captures, findCapture, captureKeysFor, purgeCaptures,
     getBaseline, upsertBaseline, assignedPairs, okResultsSince,
     // exposed for the baseline job (no duplication of stats)
     _median: median, _mad: mad,

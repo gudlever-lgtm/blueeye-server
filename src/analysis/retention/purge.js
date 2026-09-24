@@ -102,6 +102,7 @@ function createPurge({ repo, config, now = () => new Date() }) {
     const probeOutages = await byAge(config.probeOutageRetentionDays, 'purgeResolvedProbeOutagesBefore');
     const speedtestResults = await byAge(config.speedtestRetentionDays, 'purgeSpeedtestResultsBefore');
     const transactionResults = await byAge(config.transactionResultRetentionDays, 'purgeTransactionResultsBefore');
+    const transactionCaptures = await byAge(config.transactionCaptureRetentionDays, 'purgeTransactionCapturesBefore');
     const topologyChanges = await byAge(config.topologyChangeRetentionDays, 'purgeTopologyChangesBefore');
     const discoveredDevices = await byAge(config.discoveredDeviceRetentionDays, 'purgeStaleDiscoveredDevicesBefore');
     const hostConnections = await byAge(config.hostConnectionRetentionDays, 'purgeHostConnectionsBefore');
@@ -109,7 +110,7 @@ function createPurge({ repo, config, now = () => new Date() }) {
     return {
       flowRollups, metricRollups, internalFlowRollups, findings, configSnapshots, arpEntries, deviceEvents,
       fdbEntries, snmpNeighbors, deviceVlans, fdbMoves, burstRuns, deviceCounters, deviceInterfaces, interfaceTransitions, interfaceStates,
-      probeResults, probeOutages, speedtestResults, transactionResults, topologyChanges, discoveredDevices,
+      probeResults, probeOutages, speedtestResults, transactionResults, transactionCaptures, topologyChanges, discoveredDevices,
       hostConnections, auditEvents,
     };
   }

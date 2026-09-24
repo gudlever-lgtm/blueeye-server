@@ -70,6 +70,15 @@ function loadRetentionConfig(env = process.env) {
     // Transaction-test results. The trend endpoint reads up to 90 days
     // (src/routes/transactions.js) and the baselines far less, so 90.
     transactionResultRetentionDays: toInt(env.RETENTION_TRANSACTION_RESULT_DAYS, 90),
+    // Transaction packet captures. THE SHORTEST WINDOW IN THIS FILE, and on
+    // purpose: a capture is the most detailed thing the product stores, and it
+    // stops being evidence long before it stops being detailed. A week covers
+    // the fault somebody is still investigating and the report they are writing
+    // about it; beyond that the result row keeps the verdict, which is what
+    // gets quoted anyway. Shortening it costs nothing; lengthening it is a
+    // decision about how long header-level detail about a customer's own
+    // traffic sits on disk, so it is a deliberate one.
+    transactionCaptureRetentionDays: toInt(env.RETENTION_TRANSACTION_CAPTURE_DAYS, 7),
     // LLDP topology changes. Same as the config snapshots: a change is quoted in
     // an investigation long after it happened.
     topologyChangeRetentionDays: toInt(env.RETENTION_TOPOLOGY_CHANGE_DAYS, 180),

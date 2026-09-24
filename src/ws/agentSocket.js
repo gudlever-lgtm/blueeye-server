@@ -4,7 +4,8 @@ const { WebSocketServer } = require('ws');
 const { createAgentAuthenticator } = require('../auth/agentAuth');
 const { extractToken, pathnameOf, safeSend, startHeartbeat } = require('./wsCommon');
 const { PROTOCOL_VERSION } = require('../protocol');
-const { validateResultIngest } = require('../validation/transactionValidation');
+const { validateResultIngest, validateCaptureIngest } = require('../validation/transactionValidation');
+const { analyseCapture } = require('../analysis/captureAnalysis');
 const { stepsOf, classifyDeviation, diagnoseText, evaluateThresholds } = require('../analysis/transactionAlerts');
 const { describeLiveHop } = require('../analysis/pathGraph');
 
@@ -360,6 +361,13 @@ function attachAgentWebSocket({
       if (msg.type === 'transaction_result' && transactionsRepo && typeof transactionsRepo.insertResults === 'function') {
         handleTransactionResult(ws.agentId, msg).catch((err) => logger.error('transaction_result handling failed:', err));
       }
+      // agent -> server: the packet headers of one transaction run. Its own
+      // frame rather than a field on the result, because results are buffered
+      // across a reconnect and captures are not — see the agent's
+      // transactions/manager.js. Analysed once and stored with its verdict.
+      if (msg.type === 'transaction_capture' && transactionsRepo && typeof transactionsRepo.insertCapture === 'function') {
+        handleTransactionCapture(ws.agentId, msg).catch((err) => logger.error('transaction_capture handling failed:', err));
+      }
     });
 
     ws.on('close', (code) => {
@@ -477,6 +485,7 @@ function attachAgentWebSocket({
       accepted.push({
         test_id: r.test_id, agent_id: agentId, time: r.time || new Date(),
         status: r.status, latency_ms: r.latency_ms, step_timings: r.step_timings,
+        step_phases: r.step_phases,
         step_failed: r.step_failed, deviation, detail: r.detail, _deviationStep: deviationStep,
       });
     }
@@ -484,6 +493,38 @@ function attachAgentWebSocket({
     // Strip the transient _deviationStep before persisting.
     await transactionsRepo.insertResults(accepted.map(({ _deviationStep, ...row }) => row));
     await maybeAlertTransaction(agentId, accepted);
+  }
+
+  // agent -> server: one capture. Authorised against the agent's assignments
+  // exactly like a result — an agent may only ever store evidence for a test it
+  // was actually given — then analysed and written with its verdict.
+  async function handleTransactionCapture(agentId, msg) {
+    const { value, errors } = validateCaptureIngest(msg);
+    if (errors) {
+      logger.warn(`transaction_capture from agent ${agentId} rejected: ${JSON.stringify(errors)}`);
+      return;
+    }
+    const assigned = await transactionsRepo.assignedTestIds(agentId);
+    if (!assigned.has(value.test_id)) {
+      logger.warn(`agent ${agentId} sent a capture for unassigned test ${value.test_id}; dropping`);
+      return;
+    }
+    // The verdict is computed HERE, once, and stored — so the row reads the same
+    // in a report six weeks later as it did on the screen, and nobody
+    // re-derives a conclusion from data that has since aged.
+    const analysis = analyseCapture({ packets: value.packets, truncated: value.truncated });
+    await transactionsRepo.insertCapture({ ...value, agent_id: agentId, analysis });
+    if (typeof notifyDashboard === 'function') {
+      try {
+        notifyDashboard({
+          type: 'transaction-capture',
+          payload: {
+            testId: value.test_id, agentId, time: value.time.toISOString(),
+            pattern: analysis.pattern, explanation: analysis.explanation, packetCount: analysis.packet_count,
+          },
+        });
+      } catch { /* best-effort */ }
+    }
   }
 
   // Cross-check: are OTHER agents assigned to this test also failing within the

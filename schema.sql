@@ -881,6 +881,7 @@ CREATE TABLE IF NOT EXISTS `transaction_tests` (
   `config` JSON         NOT NULL,
   `config_secrets` JSON             DEFAULT NULL,
   `interval_sec` INT          NOT NULL DEFAULT 60,
+  `capture` ENUM('off','on_fault','always') NOT NULL DEFAULT 'off',
   `enabled` TINYINT(1)   NOT NULL DEFAULT 1,
   `created_by` INT              DEFAULT NULL,
   `created_at` DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -906,6 +907,7 @@ CREATE TABLE IF NOT EXISTS `transaction_results` (
   `status` ENUM('ok','fail','timeout','error') NOT NULL,
   `latency_ms` INT             DEFAULT NULL,
   `step_timings` JSON           DEFAULT NULL,
+  `step_phases` JSON DEFAULT NULL,
   `step_failed` TINYINT         DEFAULT NULL,
   `deviation` ENUM('normal','slower','faster') DEFAULT NULL,
   `detail` VARCHAR(255)    DEFAULT NULL,
@@ -3328,5 +3330,33 @@ CREATE TABLE IF NOT EXISTS `flow_internal_rollup` (
   KEY idx_flow_internal_rollup_bucket (bucket),
   KEY idx_flow_internal_rollup_pair (src_ip, dst_ip, bucket)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS `transaction_captures` (
+  `time` DATETIME(3) NOT NULL,
+  `test_id` INT         NOT NULL,
+  `agent_id` INT         NOT NULL,
+  `reason` VARCHAR(64)     DEFAULT NULL,
+  `iface` VARCHAR(32)     DEFAULT NULL,
+  `filter` VARCHAR(512)    DEFAULT NULL,
+  `snaplen` SMALLINT UNSIGNED DEFAULT NULL,
+  `duration_ms` INT             DEFAULT NULL,
+  `observed` INT UNSIGNED  DEFAULT NULL,
+  `packet_count` INT UNSIGNED  NOT NULL DEFAULT 0,
+  `foreign_count` INT UNSIGNED  DEFAULT NULL,
+  `truncated` TINYINT(1)  NOT NULL DEFAULT 0,
+  `packets` JSON            DEFAULT NULL,
+  `pattern` VARCHAR(32)  DEFAULT NULL,
+  `explanation` VARCHAR(512) DEFAULT NULL,
+  `retransmits` INT UNSIGNED DEFAULT NULL,
+  `dup_acks` INT UNSIGNED DEFAULT NULL,
+  `resets` INT UNSIGNED DEFAULT NULL,
+  `zero_windows` INT UNSIGNED DEFAULT NULL,
+  `syn_unanswered` INT UNSIGNED DEFAULT NULL,
+  `handshake_rtt_ms` DECIMAL(10, 3) DEFAULT NULL,
+  `mss` SMALLINT UNSIGNED DEFAULT NULL,
+  `created_at` TIMESTAMP   NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (test_id, agent_id, time),
+  INDEX idx_txc_created (created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 SET FOREIGN_KEY_CHECKS = 1;

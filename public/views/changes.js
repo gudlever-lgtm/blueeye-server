@@ -40,14 +40,18 @@
       // The window and the reference marker live in app.js: they outlive this
       // view, because a window the user chose must survive leaving the page and
       // the marker moves only on an explicit "Mark as seen".
-      var state = {
+      // The filters live in app.js too (deps.filterState): created here they
+      // were reset by every rebuild, so a refresh threw away what the reader
+      // had narrowed the list to.
+      var state = deps.filterState ? deps.filterState() : {};
+      if (state.status == null) {
         // Acknowledged rows are hidden by default: acknowledging is how a
         // reader says "I have dealt with this one", so it leaves the list.
-        status: 'open',
-        severity: '',
-        host: '',
-        sort: { key: 'time', dir: 'desc' },
-      };
+        state.status = 'open';
+        state.severity = '';
+        state.host = '';
+        state.sort = { key: 'time', dir: 'desc' };
+      }
       var names = {};
       var body = el('div', {});
       var stripHost = el('div', {});
@@ -155,6 +159,21 @@
 
       function hostName(id) { return names[id] || (t('changes.agentN', { id: id })); }
 
+      // The record a row is about, when it has a page of its own: an event
+      // opens the event, a situation the situation. Without this the row only
+      // led to the host, and the event had to be found again in its own list.
+      function recordAction(ev) {
+        var id = ev.refId != null ? ev.refId : ev.ref_id;
+        if (id == null) return null;
+        if (ev.kind === 'event' && deps.openEvent) {
+          return { label: t('changes.act.event'), onclick: function () { ui.closeDrawer(); deps.openEvent(Number(id)); } };
+        }
+        if (ev.kind === 'cluster' && deps.openCluster) {
+          return { label: t('changes.act.situation'), onclick: function () { ui.closeDrawer(); deps.openCluster(Number(id)); } };
+        }
+        return null;
+      }
+
       function openRowDrawer(ev, tr) {
         var tone = SEV_TONE[ev.severity] || 'info';
         var indicationKey = 'changes.indicates.' + ev.family;
@@ -175,6 +194,12 @@
             [null, t('changes.drawer.seen', { count: Number(ev.count) || 1 })],
           ].concat(ev.acknowledgedAt ? [[ui.fmt.short(ev.acknowledgedAt), t('changes.drawer.acked')]] : [])
             .concat(ev.mutedUntil ? [[ui.fmt.short(ev.mutedUntil), t('changes.drawer.mutedUntil')]] : []))),
+          // The same host and moment, opened on the screens that take it
+          // further (Probes, Diagnose, Investigate, Device log).
+          deps.contextActions && ev.agentId != null ? deps.contextActions({
+            agentId: Number(ev.agentId), target: ev.target || null,
+            sinceMs: Date.parse(ev.firstAt || ev.timestamp),
+          }) : null,
         ];
         ui.openDrawer({
           title: ev.summary,
@@ -186,11 +211,12 @@
             ev.ackKey ? ui.button('secondary', ev.acknowledgedAt ? t('changes.act.unack') : t('changes.act.ack'), {
               onclick: function () { setAck(ev, !ev.acknowledgedAt); },
             }) : null,
-          ].filter(Boolean), ev.agentId == null ? [] : [
-            ui.button('primary', t('changes.drawer.openHost'), {
+          ].filter(Boolean), [
+            recordAction(ev) ? ui.button('primary', recordAction(ev).label, { onclick: recordAction(ev).onclick }) : null,
+            ev.agentId == null ? null : ui.button(recordAction(ev) ? 'secondary' : 'primary', t('changes.drawer.openHost'), {
               onclick: function () { ui.closeDrawer(); openAgent(Number(ev.agentId)); },
             }),
-          ]),
+          ].filter(Boolean)),
         });
       }
 
@@ -220,6 +246,7 @@
                 } : null,
                 [
                   { label: t('changes.act.open'), onclick: function () { openRowDrawer(ev, null); } },
+                  recordAction(ev),
                   ev.agentId == null ? null : { label: t('changes.act.host'), onclick: function () { openAgent(Number(ev.agentId)); } },
                   '-',
                   !ev.muteKey ? null : ev.mutedUntil

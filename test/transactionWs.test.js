@@ -8,8 +8,10 @@ const assert = require('node:assert/strict');
 const http = require('node:http');
 const WebSocket = require('ws');
 
-const { makeApp, makeAgentTokensRepo, makeAgentsRepo, makeTransactionsRepo } = require('../test-support/fakes');
+const { makeApp, makeAgentTokensRepo, makeAgentsRepo, makeTransactionsRepo, makeFindingStore, makeEventCasesRepo } = require('../test-support/fakes');
 const { attachAgentWebSocket } = require('../src/ws/agentSocket');
+const { createDeviceFindingSink } = require('../src/devices/findingSink');
+const { createEventCaseService } = require('../src/eventCases/eventCaseService');
 
 // The connected agent's id (encoded in the fake token).
 const AGENT_ID = 9;
@@ -21,16 +23,31 @@ function withTimeout(promise, ms, message) {
   return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
 }
 
-async function withWs({ transactionsRepo, alertDispatcher = null, alertingEnabled = false, assistant = null }, fn) {
+// DELIBERATE CHANGE (audit §8): a crossed threshold used to be handed straight
+// to the alert dispatcher — no finding, no event case, no integrations. It is
+// now a finding raised through the finding sink (the same one the switch rules
+// use), which is what alerts. So the socket gets a SINK, and these tests wire
+// a real one over fakes: `dispatched` is what the sink sent, `findingStore`
+// what it stored, `eventCasesRepo` where it was grouped.
+async function withWs({ transactionsRepo, alertDispatcher = null, alertingEnabled = false, assistant = null, transactionRefireMs }, fn) {
   const agentsRepo = makeAgentsRepo({ setStatus: async () => {} });
   const app = makeApp({ agentTokensRepo: validTokens(), agentsRepo, transactionsRepo });
   const server = http.createServer(app);
+  const findingStore = makeFindingStore();
+  const eventCasesRepo = makeEventCasesRepo();
+  const transactionFindingSink = createDeviceFindingSink({
+    findingStore,
+    eventCaseService: createEventCaseService({ eventCasesRepo, findingStore }),
+    dispatcher: alertDispatcher,
+    alertingEnabled,
+  });
   const handle = attachAgentWebSocket({
-    server, agentTokensRepo: validTokens(), agentsRepo, transactionsRepo, alertDispatcher, alertingEnabled, assistant,
+    server, agentTokensRepo: validTokens(), agentsRepo, transactionsRepo, transactionFindingSink, assistant,
+    ...(transactionRefireMs !== undefined ? { transactionRefireMs } : {}),
   });
   await new Promise((resolve) => server.listen(0, resolve));
   const port = server.address().port;
-  try { return await fn({ port, handle }); }
+  try { return await fn({ port, handle, findingStore, eventCasesRepo }); }
   finally { handle.close(); await new Promise((resolve) => server.close(resolve)); }
 }
 
@@ -126,39 +143,81 @@ test('rejects an invalid ingest payload (bad status) with no insert', async () =
   });
 });
 
-test('dispatches an alert when consecutive_fails threshold is crossed', async () => {
+test('a crossed consecutive_fails threshold is a stored FINDING in an event case, alerted once', async () => {
   const repo = await seedRepo(); // consecutive_fails: 2
   const dispatched = [];
   const alertDispatcher = { dispatch: async (f) => { dispatched.push(f); } };
-  await withWs({ transactionsRepo: repo, alertDispatcher, alertingEnabled: true }, async ({ port }) => {
+  await withWs({ transactionsRepo: repo, alertDispatcher, alertingEnabled: true }, async ({ port, findingStore, eventCasesRepo }) => {
     const client = connect(port);
     try {
       await withTimeout(waitOpen(client), 4000, 'no open');
       // Two fails in one flush → streak of 2 → CRIT finding.
       client.send(JSON.stringify({ type: 'transaction_result', results: [
         { test_id: 1, status: 'fail' },
-        { test_id: 1, status: 'fail' },
+        { test_id: 1, status: 'fail', detail: { phase: 'connect', errno: 'ECONNREFUSED' } },
       ] }));
       const f = await poll(() => dispatched[0]);
       assert.equal(f.metric, 'transaction.fail');
       assert.equal(f.severity, 'CRIT');
+      assert.equal(f.kind, 'THRESHOLD'); // the findings ENUM
       assert.equal(f.hostId, String(AGENT_ID));
+      assert.match(f.explanation, /phase connect, errno ECONNREFUSED/);
+      assert.equal(f.evidence[0].testId, 1);
+      assert.equal(f.evidence[0].errno, 'ECONNREFUSED');
+      // Stored and grouped — the same object the sink alerted on.
+      assert.equal(findingStore.rows.length, 1);
+      assert.equal(findingStore.rows[0].id, f.id);
+      assert.equal(eventCasesRepo.rows.length, 1);
+      assert.equal(eventCasesRepo.rows[0].host_id, String(AGENT_ID));
+      await new Promise((r) => setTimeout(r, 60));
+      assert.equal(dispatched.length, 1, 'alerted twice');
     } finally { client.close(); }
   });
 });
 
-test('does not dispatch when alerting is disabled', async () => {
+test('alerting disabled: the finding is still stored and grouped, but nothing is dispatched', async () => {
   const repo = await seedRepo();
   const dispatched = [];
   const alertDispatcher = { dispatch: async (f) => { dispatched.push(f); } };
-  await withWs({ transactionsRepo: repo, alertDispatcher, alertingEnabled: false }, async ({ port }) => {
+  await withWs({ transactionsRepo: repo, alertDispatcher, alertingEnabled: false }, async ({ port, findingStore }) => {
     const client = connect(port);
     try {
       await withTimeout(waitOpen(client), 4000, 'no open');
       client.send(JSON.stringify({ type: 'transaction_result', results: [{ test_id: 1, status: 'fail' }, { test_id: 1, status: 'fail' }] }));
-      await poll(() => repo.resultRows.length === 2);
+      await poll(() => findingStore.rows.length === 1);
       await new Promise((r) => setTimeout(r, 60));
       assert.equal(dispatched.length, 0);
+    } finally { client.close(); }
+  });
+});
+
+test('a persisting failure is raised again only after the refire cooldown (≤ the event-case window)', async () => {
+  const { TRANSACTION_REFIRE_MS } = require('../src/analysis/transactionAlerts');
+  const { EVENT_ACTIVITY_WINDOW_MS } = require('../src/eventCases/activityWindow');
+  assert.ok(TRANSACTION_REFIRE_MS < EVENT_ACTIVITY_WINDOW_MS, 'a recurring failure would open a new event case each time');
+  const repo = await seedRepo();
+  await withWs({ transactionsRepo: repo }, async ({ port, findingStore }) => {
+    const client = connect(port);
+    try {
+      await withTimeout(waitOpen(client), 4000, 'no open');
+      client.send(JSON.stringify({ type: 'transaction_result', results: [{ test_id: 1, status: 'fail' }, { test_id: 1, status: 'fail' }] }));
+      await poll(() => findingStore.rows.length === 1);
+      client.send(JSON.stringify({ type: 'transaction_result', results: [{ test_id: 1, status: 'fail' }] }));
+      await poll(() => repo.resultRows.length === 3);
+      await new Promise((r) => setTimeout(r, 60));
+      assert.equal(findingStore.rows.length, 1, 'the same ongoing failure was raised twice inside the cooldown');
+    } finally { client.close(); }
+  });
+  // With no hold, the next failing result is a new finding.
+  const repo2 = await seedRepo();
+  await withWs({ transactionsRepo: repo2, transactionRefireMs: 0 }, async ({ port, findingStore }) => {
+    const client = connect(port);
+    try {
+      await withTimeout(waitOpen(client), 4000, 'no open');
+      client.send(JSON.stringify({ type: 'transaction_result', results: [{ test_id: 1, status: 'fail' }, { test_id: 1, status: 'fail' }] }));
+      await poll(() => findingStore.rows.length === 1);
+      client.send(JSON.stringify({ type: 'transaction_result', results: [{ test_id: 1, status: 'fail' }] }));
+      await poll(() => findingStore.rows.length === 2);
     } finally { client.close(); }
   });
 });
@@ -257,7 +316,7 @@ test('cross-check: only this agent failing → site scope', async () => {
   });
 });
 
-test('Mistral diagnosis is used when the assistant is enabled (falls back on error)', async () => {
+test('Mistral diagnosis is appended when the assistant is enabled (the template always stands)', async () => {
   const repo = await seedCrossCheck('fail');
   const dispatched = [];
   const assistant = { isEnabled: () => true, diagnoseTransaction: async () => 'AI: hele systemet er utilgængeligt.' };
@@ -267,7 +326,11 @@ test('Mistral diagnosis is used when the assistant is enabled (falls back on err
       await withTimeout(waitOpen(client), 4000, 'no open');
       client.send(JSON.stringify({ type: 'transaction_result', results: [{ test_id: 1, status: 'fail', detail: { phase: 'connect' } }] }));
       const f = await poll(() => dispatched[0]);
-      assert.equal(f.explanation, 'AI: hele systemet er utilgængeligt.');
+      // DELIBERATE CHANGE: the assistant text is APPENDED to the deterministic
+      // diagnosis (phase + verdict are always there), no longer a replacement.
+      assert.match(f.explanation, /TCP connection failed .*\(phase connect\)/);
+      assert.match(f.explanation, /the system is down/);
+      assert.match(f.explanation, /\nAssistant: AI: hele systemet er utilgængeligt\.$/);
     } finally { client.close(); }
   });
 });

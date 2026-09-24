@@ -2,7 +2,9 @@
 
 // Per-interface health derived from a traffic payload (proc or snmp). Pure +
 // shared by the /api/interfaces route and the fleet-health rollup. status:
-// down | bad (errors / >=90% util) | warn (drops / >=75% util) | ok.
+// down | bad (errors / >=90% util / duplex mismatch / CRC / carrier) |
+// warn (drops / >=75% util / half duplex / NIC fifo overrun) | ok.
+// `reasons` names WHICH fault it is (see reasonsOf).
 //
 // Virtual/software interfaces (Docker/K8s/VM/VPN/loopback) are routinely "down"
 // simply because they are idle — e.g. the docker0 bridge has no carrier until a
@@ -54,6 +56,53 @@ function isVirtual(name) {
   return typeof name === 'string' && VIRTUAL_IFACE_RE.test(name);
 }
 
+// A counter that may legitimately be ABSENT (a source that cannot read it) and
+// whose absence must never be read as zero — zero is the answer that rules a
+// fault out. Same strictness as `lateCollisions` below: a finite non-negative
+// number, or null.
+function optCount(v) {
+  return typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : null;
+}
+const perSec = (n, elapsed) => (n === null ? null : round2(n / elapsed));
+
+// The negotiated duplex, from the agent's /sys/class/net/<if>/duplex (proc
+// source, agent 0.40+). Anything but the kernel's three words is null.
+function duplexOf(v) {
+  const s = typeof v === 'string' ? v.trim().toLowerCase() : '';
+  return s === 'full' || s === 'half' || s === 'unknown' ? s : null;
+}
+
+// WHY an interface is unhealthy, as codes the dashboard translates
+// (iface.reason.* in public/i18n.js) and the diagnose rules read as facts.
+// Each one is a different fix, which is the point of naming them apart:
+//
+//   duplex_mismatch — half duplex AND collisions / frame errors / late
+//                     collisions moving. A switched port has no business
+//                     colliding; the partner is almost certainly at full. The
+//                     fix is the port configuration, not the cable.
+//   half_duplex     — half duplex with nothing moving yet. Worth knowing on a
+//                     switched network: it becomes the fault above the moment
+//                     both ends transmit at once.
+//   crc_errors      — frame (CRC/alignment) errors on a link that is NOT half
+//                     duplex: the cable, the patch lead, the SFP, the port —
+//                     or the full-duplex end of a mismatch.
+//   carrier_errors  — the transmitter lost carrier: a flapping link or bad
+//                     cabling.
+//   fifo_overrun    — the NIC's own ring overran: the HOST is too slow to
+//                     drain it (CPU, interrupt moderation, driver), not the wire.
+function reasonsOf({ duplex, collPerSec, frameErrPerSec, carrierErrPerSec, fifoErrPerSec, lateCollPerSec }) {
+  const reasons = [];
+  const moving = (v) => v !== null && v > 0;
+  if (duplex === 'half') {
+    reasons.push(moving(collPerSec) || moving(frameErrPerSec) || moving(lateCollPerSec) ? 'duplex_mismatch' : 'half_duplex');
+  } else if (moving(frameErrPerSec)) {
+    reasons.push('crc_errors');
+  }
+  if (moving(carrierErrPerSec)) reasons.push('carrier_errors');
+  if (moving(fifoErrPerSec)) reasons.push('fifo_overrun');
+  return reasons;
+}
+
 function computeInterfaceHealth(traffic) {
   // Defensive: a result payload is only shallow-validated at ingest (object +
   // size), so `traffic.interfaces` may carry a null/non-object element from a
@@ -88,19 +137,33 @@ function computeInterfaceHealth(traffic) {
     const lateCollPerSec = lateCollisions === null ? null : round2(lateCollisions / elapsed);
     const errPerSec = round2((rxErrors + txErrors) / elapsed);
     const dropPerSec = round2((rxDrop + txDrop) / elapsed);
+    // The error detail the proc source reads from /proc/net/dev (agent 0.40+):
+    // per-interval deltas of rx frame, rx fifo, tx colls and tx carrier. Null —
+    // not 0 — from every other source and every older agent.
+    const duplex = duplexOf(i.duplex);
+    const collPerSec = perSec(optCount(i.txCollisions), elapsed);
+    const frameErrPerSec = perSec(optCount(i.rxFrameErrors), elapsed);
+    const fifoErrPerSec = perSec(optCount(i.rxFifoErrors), elapsed);
+    const carrierErrPerSec = perSec(optCount(i.txCarrierErrors), elapsed);
     const operStatus = normalizeOperStatus(i.operStatus);
     const virtual = isVirtual(i.iface);
     const linkDown = !!operStatus && !['up', 'unknown', 'dormant'].includes(operStatus);
+    // A link that is down has no duplex worth judging (the kernel reports the
+    // last negotiated value, or none), so reasons are only read on a live link.
+    const reasons = linkDown ? [] : reasonsOf({ duplex, collPerSec, frameErrPerSec, carrierErrPerSec, fifoErrPerSec, lateCollPerSec });
     let status = 'ok';
     // A down virtual/idle interface (docker0, veth…, tun…) is expected, not a
     // fault — don't escalate it. A real link down still reads 'down'.
     if (linkDown && !virtual) status = 'down';
-    else if (errPerSec > 0 || (utilPct != null && utilPct >= 90)) status = 'bad';
-    else if (dropPerSec > 0 || (utilPct != null && utilPct >= 75)) status = 'warn';
+    else if (errPerSec > 0 || (utilPct != null && utilPct >= 90)
+      || reasons.includes('duplex_mismatch') || reasons.includes('crc_errors') || reasons.includes('carrier_errors')) status = 'bad';
+    else if (dropPerSec > 0 || (utilPct != null && utilPct >= 75)
+      || reasons.includes('half_duplex') || reasons.includes('fifo_overrun')) status = 'warn';
     return {
       iface: i.iface, operStatus, speedMbps, virtual, linkDown,
       rxBytesPerSec, txBytesPerSec, utilPct,
-      errPerSec, dropPerSec, rxErrors, txErrors, rxDrop, txDrop, lateCollPerSec, status,
+      errPerSec, dropPerSec, rxErrors, txErrors, rxDrop, txDrop, lateCollPerSec,
+      duplex, collPerSec, frameErrPerSec, fifoErrPerSec, carrierErrPerSec, reasons, status,
     };
   });
 }
@@ -118,4 +181,4 @@ function interfaceHealthSummary(traffic) {
   return { status: worst.status, worst, count: ifs.length, issues };
 }
 
-module.exports = { computeInterfaceHealth, interfaceHealthSummary, IFACE_RANK, isVirtual };
+module.exports = { computeInterfaceHealth, interfaceHealthSummary, IFACE_RANK, isVirtual, reasonsOf };

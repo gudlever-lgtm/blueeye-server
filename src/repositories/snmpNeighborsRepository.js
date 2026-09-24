@@ -1,14 +1,19 @@
 'use strict';
 
-// Data-access for `snmp_neighbors` (migration 106) — LLDP as seen BY a switch.
+// Data-access for `snmp_neighbors` (migration 106) — LLDP and CDP as seen BY a
+// switch. `protocol` (migration 124) says which; it is part of the unique key,
+// so a Cisco neighbour speaking both is two rows that never overwrite each
+// other.
 //
 // Deliberately NOT `lldp_neighbors` (063): that table keys on an `agents` id and
 // these rows belong to an `snmp_devices` id. See the migration for why the two
 // are kept apart rather than merged by reusing a nearby column.
 
-const BASE_COLUMNS = `id, device_id, local_port, local_if_index, local_if_name,
+const PROTOCOLS = ['lldp', 'cdp'];
+
+const BASE_COLUMNS = `id, device_id, protocol, local_port, local_if_index, local_if_name,
   remote_chassis_id, remote_port_id, remote_port_desc, remote_sys_name,
-  first_seen, last_seen`;
+  remote_address, remote_platform, first_seen, last_seen`;
 
 function toIso(v) {
   if (v == null) return null;
@@ -20,6 +25,9 @@ function mapRow(row) {
   return {
     id: Number(row.id),
     deviceId: Number(row.device_id),
+    // Every row stored before migration 124 was LLDP, and the column default
+    // says so; a row read without the column (an older SELECT) is LLDP too.
+    protocol: row.protocol || 'lldp',
     localPort: row.local_port == null ? null : Number(row.local_port),
     localIfIndex: row.local_if_index == null ? null : Number(row.local_if_index),
     localIfName: row.local_if_name ?? null,
@@ -27,6 +35,9 @@ function mapRow(row) {
     remotePortId: row.remote_port_id ?? null,
     remotePortDesc: row.remote_port_desc ?? null,
     remoteSysName: row.remote_sys_name ?? null,
+    // CDP only: the neighbour's management address and its platform string.
+    remoteAddress: row.remote_address ?? null,
+    remotePlatform: row.remote_platform ?? null,
     firstSeen: toIso(row.first_seen),
     lastSeen: toIso(row.last_seen),
   };
@@ -46,17 +57,19 @@ function createSnmpNeighborsRepository(db) {
     const placeholders = [];
     const params = [];
     for (const n of rows) {
-      placeholders.push('(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
+      placeholders.push('(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
       params.push(
-        deviceId, n.localPort ?? null, n.localIfIndex ?? null, n.localIfName ?? null,
+        deviceId, PROTOCOLS.includes(n.protocol) ? n.protocol : 'lldp',
+        n.localPort ?? null, n.localIfIndex ?? null, n.localIfName ?? null,
         n.remoteChassisId, n.remotePortId ?? '', n.remotePortDesc ?? null,
-        n.remoteSysName ?? null, at, at,
+        n.remoteSysName ?? null, n.remoteAddress ?? null, n.remotePlatform ?? null, at, at,
       );
     }
     const [res] = await pool.query(
       `INSERT INTO snmp_neighbors
-         (device_id, local_port, local_if_index, local_if_name, remote_chassis_id,
-          remote_port_id, remote_port_desc, remote_sys_name, first_seen, last_seen)
+         (device_id, protocol, local_port, local_if_index, local_if_name, remote_chassis_id,
+          remote_port_id, remote_port_desc, remote_sys_name, remote_address, remote_platform,
+          first_seen, last_seen)
        VALUES ${placeholders.join(', ')}
        ON DUPLICATE KEY UPDATE
          local_port       = VALUES(local_port),
@@ -64,6 +77,8 @@ function createSnmpNeighborsRepository(db) {
          local_if_name    = VALUES(local_if_name),
          remote_port_desc = VALUES(remote_port_desc),
          remote_sys_name  = VALUES(remote_sys_name),
+         remote_address   = VALUES(remote_address),
+         remote_platform  = VALUES(remote_platform),
          last_seen        = VALUES(last_seen)`,
       params,
     );
@@ -73,7 +88,7 @@ function createSnmpNeighborsRepository(db) {
   async function listForDevice(deviceId, { limit = 500 } = {}) {
     const [rows] = await pool.query(
       `SELECT ${BASE_COLUMNS} FROM snmp_neighbors
-        WHERE device_id = ? ORDER BY local_if_name ASC, remote_sys_name ASC LIMIT ?`,
+        WHERE device_id = ? ORDER BY local_if_name ASC, remote_sys_name ASC, protocol ASC LIMIT ?`,
       [deviceId, limit],
     );
     return rows.map(mapRow);
@@ -110,4 +125,4 @@ function createSnmpNeighborsRepository(db) {
   return { upsertMany, listForDevice, listAll, purgeBefore };
 }
 
-module.exports = { createSnmpNeighborsRepository, mapRow };
+module.exports = { createSnmpNeighborsRepository, mapRow, PROTOCOLS };

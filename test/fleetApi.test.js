@@ -396,7 +396,10 @@ test('probeResultsRepository.fleetHealth selects a recent window, newest-first, 
 // network change can fix.
 test('fleet health and uptime exclude the on-demand diagnostic probes', async () => {
   const { createProbeResultsRepository, DIAGNOSTIC_TYPES: types } = require('../src/repositories/probeResultsRepository');
-  assert.deepEqual(types, ['path_mtu', 'tls', 'rdns']);
+  // Updated deliberately (migration 132): the DHCP test joined the diagnostic
+  // types — it broadcasts on the segment, and a silent DHCP server must not read
+  // as an outage of the agent that noticed it.
+  assert.deepEqual(types, ['path_mtu', 'tls', 'rdns', 'dhcp']);
   const seen = [];
   const pool = { async query(sql, params) { seen.push({ sql, params }); return [[]]; } };
   const repo = createProbeResultsRepository({ pool });

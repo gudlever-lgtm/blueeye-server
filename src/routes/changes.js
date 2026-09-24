@@ -16,7 +16,7 @@ const { ROLES } = require('../auth/roles');
 //
 // viewer+. Read-only aggregation over existing sources; owns no tables beyond
 // the per-user marker column (migration 074) and the per-user acknowledgements
-// (migration 115) and mutes (migration 124).
+// (migration 115) and mutes (migration 134).
 //
 // MUTE RULE: a mute covers every row with the same muteKey (source + type, on
 // any host) until `mutedUntil`. It is always time-boxed and never touches

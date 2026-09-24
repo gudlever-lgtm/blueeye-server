@@ -1,5 +1,7 @@
 'use strict';
 
+const { hostLabel } = require('../alertContext');
+
 const silentLogger = { info() {}, warn() {}, error() {} };
 
 // Whether the optional `nodemailer` dependency is installed. The email channel
@@ -63,11 +65,14 @@ function createEmailChannel({ config = {}, transport = null, createTransport = n
     }
     if (!config.to) return { ok: false, detail: 'no recipient configured' };
 
-    const subject = `[BlueEyes ${finding.severity || 'INFO'}] ${finding.metric || 'finding'} on host ${finding.hostId}`;
+    const subject = `[BlueEyes ${finding.severity || 'INFO'}] ${finding.metric || 'finding'} on ${hostLabel(finding)}`;
     const text = [
       finding.explanation || '',
+      // The link first after the sentence: on a phone it is the one line that
+      // matters, and a mail client may fold the rest.
+      finding.link ? `\nOpen in BlueEyes: ${finding.link}` : null,
       '',
-      `Host: ${finding.hostId}`,
+      `Host: ${hostLabel(finding)}`,
       `Metric: ${finding.metric}`,
       `Severity: ${finding.severity}`,
       `Kind: ${finding.kind}`,

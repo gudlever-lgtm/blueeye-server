@@ -39,7 +39,7 @@ function attachDashboardWebSocket({
 
     let user = null;
     try {
-      user = verifyToken(extractToken(req));
+      user = verifyToken(extractToken(req), req);
     } catch {
       user = null;
     }

@@ -1,9 +1,26 @@
 'use strict';
 
+const crypto = require('crypto');
+const { MAX_REFIRE_COOLDOWN_MS } = require('../eventCases/activityWindow');
+
 // Pure helpers for transaction alerting: phase → human-readable diagnosis, baseline
-// deviation classification, and threshold evaluation. All I/O (baseline lookups,
-// cross-check, Mistral) lives in the caller (src/ws/agentSocket.js); everything
-// here is pure and unit-testable.
+// deviation classification, threshold evaluation, and the FINDING a crossed
+// threshold becomes. All I/O (baseline lookups, cross-check, Mistral, the
+// finding sink) lives in the caller (src/ws/agentSocket.js); everything here is
+// pure and unit-testable.
+//
+// A crossed threshold is a finding, not a bare alert. It used to be handed
+// straight to the alert dispatcher: no finding was stored, no event case
+// opened, nothing reached the integrations, and the cross-agent correlator
+// never saw it. It now leaves through the same sink as every rule-based
+// finding (src/devices/findingSink.js: store → publish → event case → alert →
+// integrations), so it is alerted exactly once, by that path.
+
+// How long the same (agent, test, condition) is held back before it is raised
+// again while it persists. Inside the event-case activity window with slack,
+// so a transaction that keeps failing stays ONE event case instead of opening
+// a new one after every quiet stretch (see ../eventCases/activityWindow.js).
+const TRANSACTION_REFIRE_MS = MAX_REFIRE_COOLDOWN_MS;
 
 // Failure-phase → human-readable diagnosis. Mirrored in the dashboard
 // (public/app.js) so alert text and UI diagnosis read identically.
@@ -58,15 +75,80 @@ function diagnoseText({ test, agentId, result, deviation, deviationStep, crossch
     head = deviation ? `Latency significantly ${deviation === 'slower' ? 'above' : 'below'} baseline` : 'OK';
   } else {
     head = PHASE_LABELS[detail.phase] || `Failed (${result.status})`;
-    if (detail.errno) head += ` [${detail.errno}]`;
+    // The raw facts behind the sentence, always: which phase failed and the
+    // errno the agent saw. A label without them cannot be checked.
+    const facts = [];
+    if (detail.phase) facts.push(`phase ${detail.phase}`);
+    if (detail.errno) facts.push(`errno ${detail.errno}`);
+    if (facts.length) head += ` (${facts.join(', ')})`;
   }
   let scope = '';
   if (crosscheck) {
-    scope = crosscheck.scope === 'system'
-      ? ' — all assigned agents fail: the system is down'
-      : ` — only agent ${agentId} fails: problem from this agent's site/network`;
+    const of = Number.isInteger(crosscheck.total) && crosscheck.total > 0
+      ? ` (${crosscheck.failing} of ${crosscheck.total} assigned agents failing)` : '';
+    if (crosscheck.scope === 'system') {
+      scope = ` — all assigned agents fail: the system is down${of}`;
+    } else if (Number(crosscheck.failing) > 1) {
+      scope = ` — agent ${agentId} and others fail while the rest succeed: problem from the failing agents' sites/networks${of}`;
+    } else {
+      scope = ` — only agent ${agentId} fails: problem from this agent's site/network${of}`;
+    }
   }
   return `Transaction test "${test.name}"${stepPart}: ${head}${scope}`;
+}
+
+// The finding a crossed threshold becomes. `explanation` is the deterministic
+// diagnosis (phase, errno and the site-vs-system verdict are always in it);
+// an optional assistant text is appended after it, never instead of it.
+// The evidence carries the same facts structured, with `testId` — which is
+// what the cross-agent correlator keys a transaction finding's SUBJECT on, so
+// one test failing from several agents becomes one situation.
+function buildTransactionFinding({ test, agentId, result, verdict, crosscheck = null, explanation, assistantText = null, at = new Date() }) {
+  const detail = result && result.detail && typeof result.detail === 'object' ? result.detail : {};
+  const hostId = String(agentId);
+  const observed = result.latency_ms != null ? Number(result.latency_ms) : null;
+  const thr = (test && test.config && test.config.thresholds) || {};
+  const baseline = verdict.metric === 'transaction.latency' && Number.isFinite(thr.latency_ms) ? thr.latency_ms : null;
+  return {
+    id: crypto.randomUUID(),
+    hostId,
+    deviceId: null,
+    interfaceId: null,
+    metric: verdict.metric,
+    severity: verdict.severity,
+    // Crossed a configured threshold (fails in a row / a latency limit / a
+    // deviation rule). The store's ENUM has no transaction kinds.
+    kind: 'THRESHOLD',
+    observed,
+    baseline,
+    deviation: null,
+    window: [at, at],
+    explanation: assistantText ? `${explanation}\nAssistant: ${assistantText}` : explanation,
+    evidence: [{
+      hostId,
+      metric: verdict.metric,
+      value: observed != null ? observed : (result.status === 'ok' ? 0 : 1),
+      ts: at,
+      testId: test.id,
+      testName: test.name,
+      testType: test.type || null,
+      agentId: Number(agentId),
+      status: result.status,
+      phase: detail.phase || null,
+      errno: detail.errno || null,
+      step: detail.step != null ? detail.step : (result._deviationStep ?? null),
+      latencyMs: result.latency_ms ?? null,
+      deviation: result.deviation || null,
+      // 'system' | 'site' as before, with the counts it was decided on.
+      crosscheck: crosscheck ? crosscheck.scope : null,
+      crosscheckFailing: crosscheck ? crosscheck.failing : null,
+      crosscheckTotal: crosscheck ? crosscheck.total : null,
+      thresholds: thr,
+    }],
+    correlatedWith: [],
+    createdAt: at,
+    acked: false,
+  };
 }
 
 // Evaluates the test's thresholds. Returns { metric, kind, severity } to alert,
@@ -91,6 +173,6 @@ function evaluateThresholds({ test, result, recentStatuses = [], deviation }) {
 }
 
 module.exports = {
-  PHASE_LABELS, stepsOf, classifyDeviation, diagnoseText, evaluateThresholds,
-  MIN_BASELINE_SAMPLES, DEVIATION_K,
+  PHASE_LABELS, stepsOf, classifyDeviation, diagnoseText, evaluateThresholds, buildTransactionFinding,
+  MIN_BASELINE_SAMPLES, DEVIATION_K, TRANSACTION_REFIRE_MS,
 };

@@ -1,6 +1,8 @@
 'use strict';
 
-const { normalizeMac, isUsableMac } = require('../identity/arpTable');
+const {
+  normalizeMac, isUsableMac, isIpv4, isIpv6,
+} = require('../identity/arpTable');
 const { MAX_DELTA_SEC } = require('../devices/counterDelta');
 
 // Validation for the SNMP device inventory an admin manages, and for the
@@ -22,7 +24,23 @@ const { MAX_DELTA_SEC } = require('../devices/counterDelta');
 // 'if': the port inventory is a handful of rows that change when somebody
 // rewires something, and the counters are ~1.4 million rows a day for twenty
 // switches. Opting into one must not opt into the other.
-const COLLECT_KINDS = ['if', 'fdb', 'lldp', 'vlan', 'ifcounters'];
+//
+// 'cdp' (CISCO-CDP-MIB neighbours), 'arp' (the IP-MIB ARP table of a router or
+// L3 switch) and 'entity' (the ENTITY-MIB inventory) are read by agents from
+// 0.40 on; an older agent ignores a kind it does not know, so listing one for
+// it costs nothing.
+const COLLECT_KINDS = ['if', 'fdb', 'lldp', 'vlan', 'ifcounters', 'cdp', 'arp', 'entity'];
+// What a NEW device is polled for when the admin does not say. 'ifcounters' is
+// still opt-in (it is the volume). A device that does not implement one of
+// these MIBs answers with an empty walk, which is "not supported", never an
+// error — so the wide default is safe on anything.
+const DEFAULT_COLLECT = ['if', 'fdb', 'lldp', 'vlan', 'cdp', 'arp', 'entity'];
+// What a device row with NO stored collect has always meant. Rows created
+// before the default widened keep meaning exactly this: nothing silently
+// starts walking a router's ARP table because the server was upgraded.
+const LEGACY_DEFAULT_COLLECT = ['if', 'fdb', 'lldp', 'vlan'];
+const NEIGHBOUR_PROTOCOLS = ['lldp', 'cdp'];
+const INVENTORY_CLASSES = ['chassis', 'module'];
 // Which OID the interface NAME came from. Not every switch implements ifName;
 // some only have ifDescr, which is less stable, and a row built from the weaker
 // one should say so rather than leaving it to be assumed.
@@ -49,6 +67,12 @@ const MAX_INTERVAL_SEC = 86400;
 // truncates; this is the boundary refusing to be told otherwise.
 const MAX_FDB_PER_DEVICE = 5000;
 const MAX_NEIGHBOURS_PER_DEVICE = 512;
+// Matches the agent's own cap (snmpTopology.MAX_ARP_ENTRIES).
+const MAX_ARP_PER_DEVICE = 8192;
+// Every chassis (16) plus the bounded modules (32), as the agent caps them.
+const MAX_INVENTORY_PER_DEVICE = 48;
+// sysObjectID is an OID: dotted decimal and nothing else.
+const OID_RE = /^\d+(\.\d+){1,127}$/;
 const MAX_VLANS_PER_DEVICE = 4096;
 const MAX_INTERFACES_PER_DEVICE = 4096;
 const MAX_DEVICES_PER_BATCH = 200;
@@ -266,11 +290,21 @@ function validateFdbEntry(raw) {
   };
 }
 
+// An address that is one. The agent already renders it; the boundary does not
+// store a string that merely looks like one.
+function ipOrNull(v) {
+  const s = str(v, 45);
+  return s && (isIpv4(s) || isIpv6(s)) ? s.toLowerCase() : null;
+}
+
 function validateNeighbour(raw) {
   if (!raw || typeof raw !== 'object') return null;
   const remoteChassisId = str(raw.remoteChassisId, 255);
   if (!remoteChassisId) return null;
   return {
+    // Absent on every agent older than CDP support — all of whose neighbours
+    // are LLDP, which is what the default says.
+    protocol: NEIGHBOUR_PROTOCOLS.includes(raw.protocol) ? raw.protocol : 'lldp',
     localPort: Number.isInteger(raw.localPort) ? raw.localPort : null,
     localIfIndex: Number.isInteger(raw.localIfIndex) ? raw.localIfIndex : null,
     localIfName: str(raw.localIfName, IFNAME_MAX),
@@ -278,6 +312,41 @@ function validateNeighbour(raw) {
     remotePortId: str(raw.remotePortId, 255),
     remotePortDesc: str(raw.remotePortDesc, 255),
     remoteSysName: str(raw.remoteSysName, 255),
+    remoteAddress: ipOrNull(raw.remoteAddress),
+    remotePlatform: str(raw.remotePlatform, 255),
+  };
+}
+
+// One row of a router's ARP table. Null when unusable — counted, not an error.
+function validateArpEntry(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const ip = ipOrNull(raw.ip);
+  if (!ip) return null;
+  // The SAME normaliser the agent-ARP and FDB ingests use, so a MAC found here
+  // matches the one found there however either device spelled it.
+  const mac = normalizeMac(raw.mac);
+  if (!mac || !isUsableMac(mac)) return null;
+  const ifIndex = Number.isInteger(raw.ifIndex) && raw.ifIndex > 0 ? raw.ifIndex : null;
+  return { ip, mac, ifIndex, ifName: str(raw.ifName, IFNAME_MAX) };
+}
+
+// One ENTITY-MIB row.
+function validateInventoryEntry(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const entIndex = Number(raw.entIndex);
+  if (!Number.isInteger(entIndex) || entIndex < 1 || entIndex > 2147483647) return null;
+  if (!INVENTORY_CLASSES.includes(raw.class)) return null;
+  return {
+    entIndex,
+    class: raw.class,
+    name: str(raw.name, 64),
+    descr: str(raw.descr, 255),
+    model: str(raw.model, 128),
+    serial: str(raw.serial, 64),
+    vendor: str(raw.vendor, 128),
+    hardwareRev: str(raw.hardwareRev, 64),
+    firmwareRev: str(raw.firmwareRev, 64),
+    softwareRev: str(raw.softwareRev, 64),
   };
 }
 
@@ -337,10 +406,32 @@ function validateDeviceTopology(raw) {
     }
   }
 
+  // The router's ARP table (IP-MIB), one row per address. Deduplicated here
+  // too: the upsert keys on (device, ip), and two rows for one address in one
+  // statement would make the stored MAC whichever came last.
+  const arp = [];
+  let arpSkipped = 0;
+  const arpSeen = new Set();
+  for (const row of Array.isArray(raw.arp) ? raw.arp.slice(0, MAX_ARP_PER_DEVICE) : []) {
+    const e = validateArpEntry(row);
+    if (!e) { arpSkipped += 1; continue; }
+    if (arpSeen.has(e.ip)) continue;
+    arpSeen.add(e.ip);
+    arp.push(e);
+  }
+
+  const inventory = [];
+  const entSeen = new Set();
+  for (const row of Array.isArray(raw.inventory) ? raw.inventory.slice(0, MAX_INVENTORY_PER_DEVICE) : []) {
+    const e = validateInventoryEntry(row);
+    if (e && !entSeen.has(e.entIndex)) { entSeen.add(e.entIndex); inventory.push(e); }
+  }
+
   const supported = [];
   for (const kind of Array.isArray(raw.supported) ? raw.supported : []) {
     if (COLLECT_KINDS.includes(kind) && !supported.includes(kind)) supported.push(kind);
   }
+  const sysObjectId = str(raw.sysObjectId, 128);
 
   return {
     deviceId,
@@ -348,6 +439,15 @@ function validateDeviceTopology(raw) {
     // Optional: an agent older than migration 116 does not send it, and null
     // is what makes the ingest keep the one it already has rather than erase it.
     sysDescr: str(raw.sysDescr, SYSDESCR_MAX),
+    // SNMPv2-MIB sysName — what the device calls itself, and the name its
+    // LLDP/CDP neighbours report it by (migration 133). Optional; null keeps
+    // what is stored.
+    sysName: str(raw.sysName, SYSDESCR_MAX),
+    // The rest of the system group, optional like sysDescr and for the same
+    // reason: null keeps what is stored.
+    sysLocation: str(raw.sysLocation, SYSDESCR_MAX),
+    sysContact: str(raw.sysContact, SYSDESCR_MAX),
+    sysObjectId: sysObjectId && OID_RE.test(sysObjectId) ? sysObjectId : null,
     fdb,
     fdbSkipped,
     fdbTruncated: !!raw.fdbTruncated,
@@ -355,6 +455,11 @@ function validateDeviceTopology(raw) {
     neighbours,
     vlans,
     interfaces,
+    arp,
+    arpSkipped,
+    arpTruncated: !!raw.arpTruncated,
+    arpTotal: Number.isInteger(raw.arpTotal) && raw.arpTotal >= 0 ? raw.arpTotal : arp.length,
+    inventory,
     // NULL, not []. A device that reported nothing has not said it supports
     // nothing — absent is not zero, the same rule the agent applies to an
     // absent SNMP counter.
@@ -509,8 +614,15 @@ module.exports = {
   validateDeviceCounters,
   validateFdbEntry,
   validateNeighbour,
+  validateArpEntry,
+  validateInventoryEntry,
   validateCollect,
   COLLECT_KINDS,
+  DEFAULT_COLLECT,
+  LEGACY_DEFAULT_COLLECT,
+  NEIGHBOUR_PROTOCOLS,
+  MAX_ARP_PER_DEVICE,
+  MAX_INVENTORY_PER_DEVICE,
   VERSIONS,
   DEVICE_VERSIONS,
   MIN_INTERVAL_SEC,

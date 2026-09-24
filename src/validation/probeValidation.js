@@ -1,8 +1,20 @@
 'use strict';
 
 const net = require('net');
+const { cleanHostname } = require('../geo/hostnameHints');
 
-const PROBE_TYPES = ['ping', 'tcp', 'dns', 'rdns', 'traceroute', 'tcptraceroute', 'http', 'curl', 'pageload', 'transaction', 'path_mtu', 'tls'];
+const PROBE_TYPES = ['ping', 'tcp', 'dns', 'rdns', 'traceroute', 'tcptraceroute', 'http', 'curl', 'pageload', 'transaction', 'path_mtu', 'tls', 'dhcp'];
+// How many DHCPOFFERs one DHCP test may report (the agent caps at the same
+// number). More servers than this answering one DISCOVER is already the
+// finding; the rest would only be stored.
+const MAX_DHCP_OFFERS = 8;
+const MAX_DHCP_DNS = 4;
+// The DHCP test's collection window, in ms. The agent clamps to the same range.
+const DHCP_TIMEOUT_MS = { min: 1000, max: 10000 };
+// An interface name as `ip link` / Get-NetAdapter print it. It is only ever a
+// key into the agent's own interface table — no shell sees it — but a name that
+// cannot exist is a typo worth a 400, not a probe that reports "not found".
+const IFACE_RE = /^[A-Za-z0-9][A-Za-z0-9 _.:@()-]{0,63}$/;
 // How many payload sizes one ping sweep may carry, and how large each may be.
 // Each size is its own `ping` invocation on the agent, so the first bounds the
 // RUN, not just the packet.
@@ -116,15 +128,32 @@ function mtuBlock(r) {
 // mismatch is usually the wrong virtual host, and the protocol/cipher is what
 // an audit asks for. Collapsing them into one "invalid" flag would throw away
 // which one it was.
+// node checks the chain BEFORE the name, so this code on an unauthorized
+// handshake means the chain validated and only the name failed.
+const TLS_NAME_ERROR_RE = /ERR_TLS_CERT_ALTNAME_INVALID|does not match certificate's altnames/i;
+
 function tlsBlock(r) {
   const names = Array.isArray(r.altNames) ? r.altNames : [];
+  const authorizationError = str(r.authorizationError, 120);
+  const sni = r.servername != null ? String(r.servername).trim() : '';
   return {
     protocol: str(r.protocol, 32),
     cipher: str(r.cipher, 64),
     authorized: r.authorized === true,
     // node's own code (CERT_HAS_EXPIRED, SELF_SIGNED_CERT_IN_CHAIN, …) — kept
     // verbatim because it names the fault precisely and a paraphrase would not.
-    authorizationError: str(r.authorizationError, 120),
+    authorizationError,
+    // Did the CHAIN validate, apart from the name (agent 0.40+ sends it).
+    // `authorized` is one flag for both checks, and read alone it reported a
+    // certificate for the wrong virtual host as an untrusted chain. An older
+    // agent's row is read the same way: authorized, or refused only for the
+    // name (ERR_TLS_CERT_ALTNAME_INVALID), is a chain that validated.
+    chainTrusted: typeof r.chainTrusted === 'boolean'
+      ? r.chainTrusted
+      : (r.authorized === true || (authorizationError != null && TLS_NAME_ERROR_RE.test(authorizationError))),
+    // The SNI name the agent asked for (agent 0.40+) — what a name-mismatch
+    // finding names. Held to the hostname rule; anything else is dropped.
+    servername: sni && isSafeHost(sni) ? sni.slice(0, 253) : null,
     // Tri-state ON PURPOSE: true/false is a verdict, null is "there was no name
     // to check" (an IP with no SNI). Coercing null to false would report every
     // IP target as serving the wrong certificate.
@@ -144,6 +173,28 @@ function tlsBlock(r) {
   };
 }
 
+// WHERE the certificate is in a tls row, or null when there is none.
+//
+// The agent (src/probes/tls.js) nests the verdict under `tls`; the flat shape
+// (fields on the row itself) is accepted too. Reading ONLY the flat fields —
+// as this did — turned every nested verdict into `authorized: false`.
+//
+// NO CERTIFICATE, NO BLOCK. A handshake that failed (a plain-HTTP port answers
+// ERR_SSL_WRONG_VERSION_NUMBER, a refused port ECONNREFUSED) or completed
+// without a certificate carries none of these fields, only `error`. Building a
+// block from nothing coerced the absent `authorized` into false, and the
+// analysis then reported an untrusted certificate "for an unknown reason" for
+// a port that never presented one. The failure is the error; the certificate
+// verdict is null.
+const TLS_CERT_FIELDS = [
+  'authorized', 'authorizationError', 'chainTrusted', 'hostnameMatches', 'expiryDays', 'expired', 'notYetValid',
+  'validFrom', 'validTo', 'subject', 'issuer', 'altNames', 'serialNumber', 'fingerprint256',
+];
+function tlsSource(r) {
+  if (r.tls && typeof r.tls === 'object' && !Array.isArray(r.tls)) return r.tls;
+  return TLS_CERT_FIELDS.some((k) => r[k] !== undefined) ? r : null;
+}
+
 // The reverse-DNS answer. `forwardConfirmed` is the field worth having: a PTR
 // that does not resolve back to the address it came from looks fine until
 // somebody checks it, and the services that care (mail, most of all) do check.
@@ -157,6 +208,41 @@ function rdnsBlock(r) {
 }
 
 const str = (v, max) => (v == null || v === '' ? null : String(v).slice(0, max));
+
+// A dotted-quad IPv4 address, or null. Every address in a DHCP offer is IPv4
+// (RFC 2131 is an IPv4 protocol), so anything else is junk, not data.
+const ipv4OrNull = (v) => (typeof v === 'string' && net.isIPv4(v.trim()) ? v.trim() : null);
+
+// The DHCP test's result: which interface asked, how long it listened, and
+// every offer that came back. Field by field, like the blocks above. Returns
+// null when the agent sent no `offers` array at all — a probe that could not
+// RUN (no permission, no interface) measured nothing, and storing an empty
+// list for it would read as "nobody answered", which is a finding.
+function dhcpBlock(r) {
+  if (!Array.isArray(r.offers)) return null;
+  const offers = r.offers.slice(0, MAX_DHCP_OFFERS).map((o) => ({
+    serverId: ipv4OrNull(o && o.serverId),
+    offeredIp: ipv4OrNull(o && o.offeredIp),
+    leaseSec: (() => { const n = intOrNull(o && o.leaseSec); return n != null && n >= 0 && n <= 0xffffffff ? n : null; })(),
+    router: ipv4OrNull(o && o.router),
+    dns: (o && Array.isArray(o.dns) ? o.dns : []).map(ipv4OrNull).filter(Boolean).slice(0, MAX_DHCP_DNS),
+    subnetMask: ipv4OrNull(o && o.subnetMask),
+    relay: ipv4OrNull(o && o.relay),
+  }));
+  // Recomputed from the offers that survived validation rather than taken on
+  // trust: it is the number the rogue-server finding is decided on, and it has
+  // to agree with the list stored beside it. An offer without a server
+  // identifier still counts once, exactly as the agent counts it.
+  const ids = new Set(offers.map((o) => o.serverId).filter(Boolean));
+  const serverCount = ids.size + (offers.some((o) => !o.serverId) ? 1 : 0);
+  const timeout = intOrNull(r.timeoutMs ?? r.timeout_ms);
+  return {
+    iface: typeof r.iface === 'string' && IFACE_RE.test(r.iface.trim()) ? r.iface.trim() : null,
+    timeoutMs: timeout != null && timeout >= DHCP_TIMEOUT_MS.min && timeout <= DHCP_TIMEOUT_MS.max ? timeout : null,
+    offers,
+    serverCount,
+  };
+}
 
 // How a failed TCP connect ended, as the agent classifies it. Anything else is
 // dropped rather than stored: the finding text switches on this value, and a
@@ -236,6 +322,12 @@ function validateProbeResults(body) {
       if (Number.isNaN(d.getTime())) return { errors: { [`results[${i}].ts`]: 'ts must be a valid date' } };
       ts = d;
     }
+    if (type === 'dhcp' && r.offers != null) {
+      if (!Array.isArray(r.offers) || r.offers.length > MAX_DHCP_OFFERS) return { errors: { [`results[${i}].offers`]: `offers must be an array (<=${MAX_DHCP_OFFERS})` } };
+      if (r.serverCount != null && !(Number.isInteger(r.serverCount) && r.serverCount >= 0 && r.serverCount <= MAX_DHCP_OFFERS)) {
+        return { errors: { [`results[${i}].serverCount`]: `serverCount must be an integer between 0 and ${MAX_DHCP_OFFERS}` } };
+      }
+    }
     let elements = null;
     if (r.elements != null) {
       if (!Array.isArray(r.elements) || r.elements.length > 64) return { errors: { [`results[${i}].elements`]: 'elements must be an array (<=64)' } };
@@ -270,6 +362,10 @@ function validateProbeResults(body) {
           // reported" and "one address answered" are different claims, and
           // only the second may rule ECMP out.
           ips: h && Array.isArray(h.ips) ? hopIpsOf(h, ip0) : null,
+          // The router's PTR name (agent 0.40+, public hops only). The path map
+          // reads its city out of it (src/geo/hostnameHints.js). Anything that is
+          // not a plain DNS name is dropped, never stored.
+          hostname: cleanHostname(h && h.hostname),
           rttMs: numOrNull(h && h.rttMs),
           minMs: numOrNull(h && h.minMs),
           maxMs: numOrNull(h && h.maxMs),
@@ -325,8 +421,10 @@ function validateProbeResults(body) {
       // The certificate the port presented, and what the address says it is
       // called. Same treatment as the MTU verdict: only the probe that produces
       // one carries it, and it is copied field by field rather than spread.
-      tls: type === 'tls' ? tlsBlock(r) : null,
+      tls: type === 'tls' && tlsSource(r) ? tlsBlock(tlsSource(r)) : null,
       rdns: type === 'rdns' ? rdnsBlock(r) : null,
+      // The DHCP offers (migration 132). Only a dhcp row carries them.
+      dhcp: type === 'dhcp' ? dhcpBlock(r) : null,
       sizes,
       // A sweep also says whether don't-fragment was set; without it the sizes
       // mean nothing, because the path would simply have fragmented them.
@@ -507,6 +605,24 @@ function validateProbeSpec(body) {
       if (!Number.isInteger(port) || port < 1 || port > 65535) return { errors: { tcp_port: 'tcp_port must be an integer between 1 and 65535' } };
       spec.tcp_port = port;
     }
+  } else if (type === 'dhcp') {
+    // A DHCP test is not aimed at a host: it broadcasts a DISCOVER and listens.
+    // The only thing it can be told is which interface to speak for (default:
+    // the agent's default-route interface) and how long to listen.
+    const iface = b.iface === undefined || b.iface === null ? '' : String(b.iface).trim();
+    if (iface) {
+      if (!IFACE_RE.test(iface)) return { errors: { iface: 'iface must be an interface name (letters, digits, . _ : @ - space; <=64 chars)' } };
+      spec.iface = iface;
+    }
+    if (b.timeout_ms !== undefined || b.timeoutMs !== undefined) {
+      const n = Number(b.timeout_ms ?? b.timeoutMs);
+      if (!Number.isInteger(n) || n < DHCP_TIMEOUT_MS.min || n > DHCP_TIMEOUT_MS.max) {
+        return { errors: { timeout_ms: `timeout_ms must be an integer between ${DHCP_TIMEOUT_MS.min} and ${DHCP_TIMEOUT_MS.max}` } };
+      }
+      spec.timeoutMs = n;
+    }
+    // A count means nothing to a broadcast that collects every answer.
+    return { value: spec };
   } else if (type === 'tls') {
     // A certificate lives on a port, not only on a URL: 465 (SMTP), 993 (IMAP),
     // 636 (LDAPS), a database, a management interface. The port is therefore
@@ -592,4 +708,4 @@ function validateProbeSpec(body) {
   return { value: spec };
 }
 
-module.exports = { validateProbeResults, validateProbeSpec, PROBE_TYPES, MAX_PING_SIZES, MAX_PAYLOAD_BYTES, MTU_HOP_STATUSES, MAX_PACKET_SIZE, TCP_FAILURES, MAX_HOP_IPS };
+module.exports = { validateProbeResults, validateProbeSpec, PROBE_TYPES, MAX_DHCP_OFFERS, MAX_PING_SIZES, MAX_PAYLOAD_BYTES, MTU_HOP_STATUSES, MAX_PACKET_SIZE, TCP_FAILURES, MAX_HOP_IPS };

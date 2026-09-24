@@ -120,7 +120,9 @@ test('the sections are the shared tab strip, under the header', async (t) => {
   assert.ok(!head.contains(bar), 'the strip is inside the header');
   // Findings leads: it is the only section that answers something on a fresh
   // install, where NIS2 and the generator both need to be set up first.
-  assert.deepEqual(tabs(doc).map((b) => b.dataset.tab), ['findings', 'nis2', 'generator', 'schedules', 'audit']);
+  // `sla` (Availability & outages) follows it: the two reports the schedules
+  // send, run on demand — they had seven endpoints and no screen.
+  assert.deepEqual(tabs(doc).map((b) => b.dataset.tab), ['findings', 'sla', 'nis2', 'generator', 'schedules', 'audit']);
   assert.equal(active(doc).tab, 'findings');
   // One stop in the tab order; the arrows move within.
   assert.equal(tabs(doc).filter((b) => b.tabIndex === 0).length, 1);
@@ -129,7 +131,7 @@ test('the sections are the shared tab strip, under the header', async (t) => {
 test('audit is admin-only and a viewer is not offered it', async (t) => {
   const { doc } = boot({ t, role: 'viewer', routes: SESSION({ 'GET /me': { id: 2, email: 'v@y.dk', role: 'viewer', preferences: {} } }) });
   await settle();
-  assert.deepEqual(tabs(doc).map((b) => b.dataset.tab), ['findings', 'nis2', 'generator', 'schedules']);
+  assert.deepEqual(tabs(doc).map((b) => b.dataset.tab), ['findings', 'sla', 'nis2', 'generator', 'schedules']);
 });
 
 test('a viewer deep-linking to /reporting/audit lands on a section they can read', async (t) => {

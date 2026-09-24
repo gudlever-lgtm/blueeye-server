@@ -186,3 +186,46 @@ test('a counter that did not move is a real zero, and says so', () => {
   assert.equal(s.inUtilPct, 0);
   assert.equal(s.discontinuity, null);
 });
+
+// ============================================================ the reset
+// Found in a real end-to-end run: a 64-bit counter went DOWN while sysUpTime
+// kept rising (no reboot) — `clear counters` on the switch. The rate was
+// dropped, but `discontinuity` stayed NULL, so the row read "the delta is
+// real" with no rate in it. A NULL rate always carries its reason now.
+test('a 64-bit counter going backwards with no reboot is a counter_reset, and voids the row', () => {
+  const s = computeSample({
+    current: { inOctets: 4_000, outOctets: 2_000, inErrors: 0 },
+    previous: { inOctets: 5_000_000_000, outOctets: 3_000_000_000, inErrors: 12 },
+    elapsedSec: 60, rebooted: false, hc: true, speedMbps: 1000,
+  });
+  assert.equal(s.discontinuity, 'counter_reset');
+  for (const k of ['inBps', 'outBps', 'inErrPps', 'inUtilPct']) assert.equal(s[k], null, k);
+  assert.equal(s.inOctets, 4_000, 'the raw counter is still stored');
+});
+
+test('ONE counter reset (an error counter) is enough: no rate is left without a reason', () => {
+  const s = computeSample({
+    current: { ...NEXT, inErrors: 0 },
+    previous: PREV,
+    elapsedSec: 60, hc: true,
+  });
+  assert.equal(s.discontinuity, 'counter_reset');
+  assert.equal(s.inBps, null, 'half a row invites reading the other half as fine');
+});
+
+test('a reboot still wins over a reset, and a counter the device did not answer for is not a reset', () => {
+  const back = { current: { inOctets: 4_000 }, previous: { inOctets: 5_000_000_000 }, elapsedSec: 60 };
+  assert.equal(computeSample({ ...back, rebooted: true }).discontinuity, 'reboot');
+  const silent = computeSample({ current: { ...NEXT, fcsErrors: null }, previous: PREV, elapsedSec: 60 });
+  assert.equal(silent.discontinuity, null);
+  assert.equal(silent.fcsPps, null, 'no answer is no rate — and not a reset');
+});
+
+test('a 32-bit ERROR counter that wrapped voids the row as a wrap, not silently', () => {
+  const s = computeSample({
+    current: { inOctets: 2_000_000, inErrors: 5 },
+    previous: { inOctets: 1_000_000, inErrors: 4_000_000_000 },
+    elapsedSec: 60, hc: false,
+  });
+  assert.equal(s.discontinuity, 'wrap');
+});

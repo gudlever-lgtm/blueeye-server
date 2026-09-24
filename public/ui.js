@@ -846,6 +846,11 @@
       var plotW = W - PAD.l - PAD.r;
       var plotH = H - PAD.t - PAD.b;
       var yOf = function (v) { return PAD.t + plotH - (Number(v) / top) * plotH; };
+      // `format` turns a value into what a person reads (units included). The
+      // axis and the hover use the same one, so a tick and a point never
+      // disagree about what 150000000 means.
+      var fmtY = typeof opts.format === 'function' ? opts.format : function (v) { return String(v); };
+      var nameOf = function (s) { return s.label != null ? s.label : (s.name != null ? s.name : ''); };
 
       var svg = svgEl('svg', {
         class: 'ui-chart-svg', viewBox: '0 0 ' + W + ' ' + H,
@@ -856,7 +861,7 @@
         var y = yOf(v);
         svg.appendChild(svgEl('line', { class: 'ui-chart-grid', x1: PAD.l, y1: y, x2: W - PAD.r, y2: y }));
         var label = svgEl('text', { class: 'ui-chart-axis', x: PAD.l - 8, y: y + 4, 'text-anchor': 'end' });
-        label.textContent = String(v);
+        label.textContent = fmtY(v);
         svg.appendChild(label);
       });
 
@@ -889,6 +894,27 @@
         });
       }
 
+      // Hover: one invisible column per x position whose tooltip lists every
+      // series' value at that point. A chart you cannot read a number off is a
+      // picture; the axis alone gives the order of magnitude, not the value.
+      var colW = asBars ? plotW / Math.max(1, count) : (count > 1 ? plotW / (count - 1) : plotW);
+      for (var hi = 0; hi < count; hi++) {
+        var cx = asBars ? PAD.l + hi * colW : (count === 1 ? PAD.l : PAD.l + hi * colW - colW / 2);
+        var hit = svgEl('rect', {
+          class: 'ui-chart-hit',
+          x: Math.max(PAD.l, cx).toFixed(1), y: PAD.t,
+          width: Math.max(1, Math.min(colW, W - PAD.r - Math.max(PAD.l, cx))).toFixed(1), height: plotH,
+          fill: 'transparent',
+        });
+        var tip = svgEl('title', {});
+        tip.textContent = [labels[hi] != null ? String(labels[hi]) : ''].concat(series.map(function (s) {
+          var p = s.points[hi];
+          return p ? nameOf(s) + ': ' + fmtY(Number(p.y) || 0) : null;
+        }).filter(Boolean)).filter(Boolean).join('\n');
+        hit.appendChild(tip);
+        svg.appendChild(hit);
+      }
+
       // x labels: a chart with 31 of them has none, so only as many as fit.
       var every = Math.ceil(count / 8);
       labels.forEach(function (text, i) {
@@ -906,7 +932,7 @@
       var legend = el('div', { class: 'ui-chart-legend' }, series.map(function (s, si) {
         return el('span', { class: 'ui-legend-item' },
           el('span', { class: 'ui-legend-dot ui-series-' + (si % 6) }),
-          s.label);
+          nameOf(s));
       }));
 
       return el('div', { class: 'ui-chart' }, el('div', { class: 'ui-chart-plot' }, svg), legend);
@@ -915,8 +941,12 @@
     // Everything a screen has to tear down when it is left: these are appended
     // to <body>, so leaving the view does not remove them.
     function closeOverlays() { closeDrawer(); closePopover(); closeRowMenu(); }
+    // Whether a drawer, popover or row menu is open — the auto-refresh waits
+    // while one is, instead of closing it under the reader every five seconds.
+    function overlayOpen() { return !!(drawerEls || openPopover || rowMenu); }
 
     return {
+      overlayOpen: overlayOpen,
       fmt: fmt,
       token: token,
       healthColor: healthColor,

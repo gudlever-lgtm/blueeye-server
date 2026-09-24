@@ -383,6 +383,13 @@ somebody to notice.
 | `primary-count` | more than one primary in a PageHeader's actions |
 | `template` | a migrated view that uses none of the four templates |
 
+**Section bodies are swept too.** A body built from `ui.js` that sits INSIDE a
+migrated page rather than being one — a Settings tab (Outage thresholds), a
+Reporting section (Availability & outages), a drawer a register opens (NIS2
+evidence) — is listed in `SECTIONS`. Every rule applies to it except
+`template`: the page it sits on owns the PageHeader, and a second one inside it
+would be the bug.
+
 **The `MIGRATED` list only grows.** Phase 3 adds a screen to it in the same
 commit that migrates the screen, so the sweep tightens one screen at a time
 rather than being switched off while the work is in flight. A finding is either
@@ -496,6 +503,7 @@ Administration → login and error screens.
 | Transaction tests | `/transaction-tests/:tab` | A · ListPage (shell) | [`public/views/transactions.js`](../public/views/transactions.js) |
 | Service Assurance | `/service-assurance/:tab` | A · ListPage (shell) | [`public/views/serviceAssurance.js`](../public/views/serviceAssurance.js) |
 | Events | `/events` | A · ListPage | [`public/views/events.js`](../public/views/events.js) |
+| Audit log integrity | `/audit-log` | A · ListPage | [`public/views/auditLog.js`](../public/views/auditLog.js) |
 
 **What Changes kept:** the window vocabulary the server accepts (`30m`, `6h`,
 `24h`, `7d` — not the preview's three), the marker rule (it moves only on an

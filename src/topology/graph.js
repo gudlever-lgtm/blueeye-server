@@ -171,6 +171,10 @@ function buildTopologyGraph({
     if (!d || d.id == null || !deviceIds.has(Number(d.id))) continue;
     claimName(d.displayName, deviceNode(d.id));
     claimName(d.host, deviceNode(d.id));
+    // What the switch calls ITSELF (sysName, migration 133) — the name every
+    // neighbour's LLDP/CDP row carries for it, and rarely the one it was
+    // registered under.
+    claimName(d.sysName, deviceNode(d.id));
   }
   for (const a of Array.isArray(agents) ? agents : []) {
     if (!a || a.id == null) continue;
@@ -188,6 +192,11 @@ function buildTopologyGraph({
       // A chassis id is sometimes the system name rather than a MAC — that is
       // what chassisIdSubtype 7 (locally assigned) usually carries.
       target = byName.get(nameKey(r.remoteSysName)) ?? byName.get(nameKey(r.remoteChassisId)) ?? null;
+    }
+    if (target == null && r.remoteAddress) {
+      // CDP (migration 124) names the neighbour's management ADDRESS — which
+      // is what a polled switch's `host` usually is.
+      target = byName.get(nameKey(r.remoteAddress)) ?? null;
     }
     if (target == null) continue; // a neighbour this product does not monitor
     // An AGENT the switch can see becomes a node here if it was not one

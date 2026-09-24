@@ -73,10 +73,29 @@ test('401 without a token', async () => {
   assert.equal((await request(app).get(PATH)).status, 401);
 });
 
-test('403 for a viewer — aggregating must not widen access', async () => {
+test('a viewer gets the root causes and topology, and none of the operator domains', async () => {
   const app = await fullApp();
   const res = await request(app).get(PATH).set('Authorization', authHeader('viewer'));
-  assert.equal(res.status, 403);
+  assert.equal(res.status, 200);
+  // What a viewer may read on its own: the situations behind the root causes.
+  assert.ok(res.body.rootCauses.length >= 1, 'the root causes are missing');
+  // Aggregating must not widen access: flow baselines, topology changes and
+  // blast radius are operator+ on their own endpoints, so they are empty here
+  // and the response says why.
+  assert.deepEqual(res.body.anomalies, []);
+  assert.ok(res.body.timeline.every((e) => e.source !== 'topology'), 'topology changes leaked');
+  for (const rc of res.body.rootCauses) {
+    assert.equal(rc.blastRadiusCount, 0, 'blast radius leaked');
+  }
+  assert.deepEqual(res.body.restricted, ['anomalies', 'topologyChanges', 'blastRadius']);
+  assert.deepEqual(res.body.topology.discovered, []);
+});
+
+test('an operator gets the operator domains and nothing is marked restricted', async () => {
+  const app = await fullApp();
+  const res = await request(app).get(PATH).set('Authorization', authHeader('operator'));
+  assert.equal(res.status, 200);
+  assert.deepEqual(res.body.restricted, []);
 });
 
 test('200 for operator and admin', async () => {
@@ -183,7 +202,7 @@ test('the payload carries every block the view needs', async () => {
   assert.equal(res.status, 200);
   const b = res.body;
   assert.deepEqual(Object.keys(b.summary).sort(), [
-    'activeFaults', 'affectedDevices', 'anomalies', 'devicesDown', 'devicesUnreachable', 'rootCauses',
+    'activeFaults', 'affectedDevices', 'anomalies', 'devicesDegraded', 'devicesDown', 'devicesUnreachable', 'rootCauses',
   ]);
   assert.ok(Array.isArray(b.topology.nodes));
   assert.ok(Array.isArray(b.topology.links));
@@ -229,8 +248,13 @@ test('an offline agent is down and does NOT grey out neighbours that are online'
   const res = await request(app).get(PATH).set('Authorization', authHeader('operator'));
   const byId = Object.fromEntries(res.body.topology.nodes.map((n) => [n.id, n]));
   assert.equal(byId[1].state, 'down'); // sw-core is offline
-  assert.equal(byId[2].state, 'ok'); // online and reporting — reachable
-  assert.equal(byId[3].state, 'ok');
+  // Online and reporting — reachable, so never unreachable_downstream. Both
+  // carry an open member of the cluster (link.errors CRIT/WARN), which makes
+  // them `degraded`: reachable, with a fault on them. (This used to assert
+  // `ok`, which is the screen calling a node with an open CRIT healthy.)
+  assert.equal(byId[2].state, 'degraded');
+  assert.equal(byId[3].state, 'degraded');
+  assert.equal(byId[4].state, 'ok'); // online, no open fault
   assert.equal(res.body.summary.devicesDown, 1);
   assert.equal(res.body.summary.devicesUnreachable, 0);
 });
@@ -242,7 +266,7 @@ test('an offline neighbour of an offline agent stays down, not unreachable', asy
   const byId = Object.fromEntries(res.body.topology.nodes.map((n) => [n.id, n]));
   assert.equal(byId[1].state, 'down');
   assert.equal(byId[2].state, 'down');
-  assert.equal(byId[3].state, 'ok');
+  assert.equal(byId[3].state, 'degraded'); // online, with an open cluster member on it
   assert.equal(res.body.summary.devicesDown, 2);
 });
 
@@ -253,7 +277,7 @@ test('both layers are present and tagged', async () => {
   assert.ok(res.body.topology.layers.l3 > 0, 'expected L3 links');
   for (const link of res.body.topology.links) {
     assert.ok(['l2', 'l3'].includes(link.layer));
-    assert.ok(['ok', 'down', 'unreachable_downstream'].includes(link.state));
+    assert.ok(['ok', 'degraded', 'down', 'unreachable_downstream'].includes(link.state));
   }
 });
 

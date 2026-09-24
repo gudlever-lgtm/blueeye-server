@@ -63,6 +63,36 @@ test('a CRIT escalation is not throttled by a prior WARN (severity is in the key
   assert.equal(syslog.calls.length, 2);
 });
 
+// The key used to be host|metric|kind|severity: a second target going down on
+// the same agent inside the cooldown was throttled and never alerted.
+test('the subject is in the throttle key: a different target / test / port alerts, the same one is throttled', async () => {
+  const syslog = chan();
+  let t = 0;
+  const d = createDispatcher({ config: baseConfig(), channels: { syslog }, now: () => t });
+  const outage = (target, kind = 'THRESHOLD') => finding({ metric: 'probe_outage.reachability', kind, severity: 'CRIT', evidence: [{ target }] });
+  await d.dispatch(outage('erp.example.com'));
+  t = 500; // within the 1000 ms cooldown
+  assert.notEqual((await d.dispatch(outage('mail.example.com'))).reason, 'throttled', 'a second target');
+  assert.equal((await d.dispatch(outage('erp.example.com'))).reason, 'throttled', 'the same target again');
+  // Recovery of a different target (kind RECOVERED) is not swallowed by the first's.
+  await d.dispatch(outage('erp.example.com', 'RECOVERED'));
+  assert.notEqual((await d.dispatch(outage('mail.example.com', 'RECOVERED'))).reason, 'throttled');
+  // DHCP per interface (the interface is the evidence target).
+  await d.dispatch(finding({ metric: 'probe.dhcp.no_offer', severity: 'WARN', evidence: [{ target: 'eth0' }] }));
+  assert.notEqual((await d.dispatch(finding({ metric: 'probe.dhcp.no_offer', severity: 'WARN', evidence: [{ target: 'eth1' }] }))).reason, 'throttled');
+  // Transactions per test.
+  await d.dispatch(finding({ metric: 'transaction.fail', severity: 'WARN', evidence: [{ testId: 1 }] }));
+  assert.notEqual((await d.dispatch(finding({ metric: 'transaction.fail', severity: 'WARN', evidence: [{ testId: 2 }] }))).reason, 'throttled');
+  assert.equal((await d.dispatch(finding({ metric: 'transaction.fail', severity: 'WARN', evidence: [{ testId: 2 }] }))).reason, 'throttled');
+  // Switch findings per device/port.
+  await d.dispatch(finding({ metric: 'if.flap', severity: 'WARN', deviceId: 3, interfaceId: 10, evidence: [{}] }));
+  assert.notEqual((await d.dispatch(finding({ metric: 'if.flap', severity: 'WARN', deviceId: 3, interfaceId: 11, evidence: [{}] }))).reason, 'throttled');
+  // A host-level finding (no subject) is still throttled per host as before.
+  await d.dispatch(finding({ metric: 'cpu', severity: 'WARN' }));
+  assert.equal((await d.dispatch(finding({ metric: 'cpu', severity: 'WARN' }))).reason, 'throttled');
+  assert.equal(syslog.calls.length, 11);
+});
+
 test('one failing channel does not stop the others', async () => {
   const bad = { send: async () => { throw new Error('boom'); } };
   const good = chan();

@@ -65,6 +65,29 @@ licence-gated admin API, mirroring OIDC:
 Every login attempt is recorded in `sso_login_audit` (shared with OIDC). **No
 assertions or secrets are ever stored.**
 
+## Dashboard UI (**Settings → Authentication**, admin only)
+
+The SAML section of the Authentication tab (`ssoSection(SSO_KINDS.saml)` in
+`public/app.js`) mirrors the OIDC one:
+
+- **Connection** — live / not live, which condition is missing (server flag
+  `SAML_AUTH_ENABLED`, licence, connection configured), the non-secret IdP
+  sign-in URL, entity IDs, audience, ACS URL and role attribute, whether an IdP
+  certificate is set, and a link to the SP metadata (`/auth/saml/metadata`) to
+  hand the IdP admin. There is no test button: the reachability probe lives in
+  **Test Settings**, and what a test could not know without a real assertion —
+  a signature or audience mismatch — is in the sign-in audit below.
+- **Attribute → role mapping** — add, change and delete mappings. Hidden, with a
+  "Licence: no" badge, when the licence lacks `sso_saml`.
+- **Recent sign-ins** — the last 25 SAML rows of `sso_login_audit`, with reasons.
+
+## IP allowlist
+
+A verified assertion is still subject to the role-based IP allowlist
+(**Settings → Authentication → Security**, [security-hardening.md](security-hardening.md)):
+outside it, the ACS redirects with `sso_error=ip-not-allowed` and the refusal is
+audited. Password history and max age never apply to SAML users.
+
 ## Security notes / limitations
 
 - The verifier requires a **signed assertion** (or a signed response wrapping the

@@ -10,7 +10,11 @@
 // uses, and for the same reason. `listForAgentWithSecret` is the single
 // exception and is named so nobody reaches for it absent-mindedly.
 
-const SAFE_COLUMNS = `id, agent_id, host, port, version, display_name, sys_descr, location_id,
+const { DEFAULT_COLLECT, LEGACY_DEFAULT_COLLECT } = require('../validation/snmpDeviceValidation');
+
+const SAFE_COLUMNS = `id, agent_id, host, port, version, display_name, sys_descr, sys_name,
+  sys_location, sys_contact, sys_object_id,
+  hw_vendor, hw_model, hw_serial, hw_rev, fw_rev, sw_rev, location_id,
   credential_profile_id, collect, interval_sec, counter_interval_sec, enabled,
   last_polled_at, last_ok_at, last_error, last_uptime_ticks, last_uptime_at,
   supported, created_at, updated_at`;
@@ -38,6 +42,28 @@ function mapRow(row) {
     // What the device says it IS — SNMPv2-MIB sysDescr, as of its last good
     // topology poll (migration 116). NULL until an agent that sends it polls.
     sysDescr: row.sys_descr ?? null,
+    // What the device CALLS itself — SNMPv2-MIB sysName (migration 133). The
+    // name its LLDP/CDP neighbours report it by, which is why the topology
+    // matches neighbour names against it. NULL until an agent that sends it
+    // has polled.
+    sysName: row.sys_name ?? null,
+    // The rest of the system group (migration 126). sysLocation is the text an
+    // admin typed into the device — the room or the rack — and is shown beside
+    // the site wherever devices are listed: the site says which building, this
+    // says where in it. NULL until an agent that reads it has polled.
+    sysLocation: row.sys_location ?? null,
+    sysContact: row.sys_contact ?? null,
+    sysObjectId: row.sys_object_id ?? null,
+    // The first chassis's ENTITY-MIB identity (migration 126). Every chassis
+    // and module is in device_inventory; this is the one a list shows.
+    hardware: {
+      vendor: row.hw_vendor ?? null,
+      model: row.hw_model ?? null,
+      serial: row.hw_serial ?? null,
+      hardwareRev: row.hw_rev ?? null,
+      firmwareRev: row.fw_rev ?? null,
+      softwareRev: row.sw_rev ?? null,
+    },
     locationId: row.location_id == null ? null : Number(row.location_id),
     // NULL means "resolve it" — by site, then globally (migration 112). A
     // device with its own community still wins over both, so every row that
@@ -51,7 +77,11 @@ function mapRow(row) {
     // `undefined` on the shapes that do not select it, so absent is never
     // read as false.
     hasCommunity: row.has_community === undefined ? undefined : !!Number(row.has_community),
-    collect: parseJson(row.collect, ['if', 'fdb', 'lldp', 'vlan']),
+    // A NULL collect is a device created before collect was stored per row,
+    // and it keeps meaning what it always meant — the LEGACY list. New devices
+    // get DEFAULT_COLLECT written explicitly at create, so widening the
+    // default never silently changes what an existing switch is walked for.
+    collect: parseJson(row.collect, LEGACY_DEFAULT_COLLECT),
     intervalSec: Number(row.interval_sec),
     // NULL means this device is not polled for counters. The volume is opt-in
     // per device, and `collect` saying 'ifcounters' is the other half of it.
@@ -222,6 +252,11 @@ function createSnmpDevicesRepository(db, { secretBox = null, credentialProfilesR
     counterIntervalSec = null, credentialProfileId = null, enabled = true,
   }) {
     const encrypted = community && secretBox ? secretBox.encrypt(community) : null;
+    // Written explicitly rather than left NULL: NULL reads as the legacy list
+    // (see mapRow), and a NEW device gets everything the agent can read —
+    // CDP, the router ARP table and the ENTITY inventory included. A device
+    // that does not implement one of those MIBs answers with an empty walk.
+    const storedCollect = collect == null ? DEFAULT_COLLECT : collect;
     const [res] = await pool.query(
       `INSERT INTO snmp_devices
          (agent_id, host, port, version, community_encrypted, credential_profile_id,
@@ -230,7 +265,7 @@ function createSnmpDevicesRepository(db, { secretBox = null, credentialProfilesR
       [
         agentId, host, port, version, encrypted, credentialProfileId,
         displayName, locationId,
-        collect == null ? null : JSON.stringify(collect), intervalSec,
+        JSON.stringify(storedCollect), intervalSec,
         counterIntervalSec, enabled ? 1 : 0,
       ],
     );
@@ -277,21 +312,41 @@ function createSnmpDevicesRepository(db, { secretBox = null, credentialProfilesR
   // answered 41 minutes ago" rather than just "failing", which is the
   // difference between a switch that just blipped and one that is gone.
   //
-  // `sysDescr` is COALESCEd like `supported`: an agent too old to send it must
-  // not erase the one a newer agent read.
+  // `sysDescr` (and `sysName`, migration 133) is COALESCEd like `supported`: an
+  // agent too old to send it must not erase the one a newer agent read.
+  //
+  // The system group and the hardware identity (migration 126) follow the same
+  // rule, field by field: what the poll did not carry keeps what is stored.
   async function recordPoll(id, {
-    ok, error = null, supported = null, sysDescr = null, at = new Date(),
+    ok, error = null, supported = null, sysDescr = null, sysName = null,
+    sysLocation = null, sysContact = null, sysObjectId = null, hardware = null,
+    at = new Date(),
   } = {}) {
     if (ok) {
+      const cut = (v, n) => (v == null ? null : String(v).slice(0, n));
+      const hw = hardware && typeof hardware === 'object' ? hardware : {};
       await pool.query(
         `UPDATE snmp_devices
             SET last_polled_at = ?, last_ok_at = ?, last_error = NULL,
                 supported = COALESCE(?, supported),
-                sys_descr = COALESCE(?, sys_descr)
+                sys_descr = COALESCE(?, sys_descr),
+                sys_name = COALESCE(?, sys_name),
+                sys_location = COALESCE(?, sys_location),
+                sys_contact = COALESCE(?, sys_contact),
+                sys_object_id = COALESCE(?, sys_object_id),
+                hw_vendor = COALESCE(?, hw_vendor),
+                hw_model = COALESCE(?, hw_model),
+                hw_serial = COALESCE(?, hw_serial),
+                hw_rev = COALESCE(?, hw_rev),
+                fw_rev = COALESCE(?, fw_rev),
+                sw_rev = COALESCE(?, sw_rev)
           WHERE id = ?`,
         [
           at, at, supported == null ? null : JSON.stringify(supported),
-          sysDescr == null ? null : String(sysDescr).slice(0, 255), id,
+          cut(sysDescr, 255), cut(sysName, 255), cut(sysLocation, 255), cut(sysContact, 255), cut(sysObjectId, 128),
+          cut(hw.vendor, 128), cut(hw.model, 128), cut(hw.serial, 64),
+          cut(hw.hardwareRev, 64), cut(hw.firmwareRev, 64), cut(hw.softwareRev, 64),
+          id,
         ],
       );
       return;
@@ -313,6 +368,76 @@ function createSnmpDevicesRepository(db, { secretBox = null, credentialProfilesR
     );
   }
 
+  // ---- ENTITY-MIB inventory (device_inventory, migration 126) --------------
+
+  // Replaces one device's inventory with what this poll reported: every row is
+  // upserted, then whatever the poll did NOT report is deleted. It is the
+  // current state of the box, not history — a module pulled out is gone. An
+  // EMPTY report is not a replace (the caller never calls this with one): a
+  // device whose ENTITY walk timed out has not lost its chassis.
+  async function replaceInventory(deviceId, rows, { at = new Date() } = {}) {
+    const list = Array.isArray(rows) ? rows : [];
+    if (!list.length) return 0;
+    // Whole seconds, for BOTH statements: last_seen is a DATETIME, and a
+    // fractional `at` compared against the rounded value just written would
+    // make the delete below take rows this very poll reported.
+    const when = new Date(Math.floor(new Date(at).getTime() / 1000) * 1000);
+    const values = [];
+    const params = [];
+    for (const e of list) {
+      values.push('(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
+      params.push(
+        deviceId, e.entIndex, e.class, e.name ?? null, e.descr ?? null, e.model ?? null,
+        e.serial ?? null, e.vendor ?? null, e.hardwareRev ?? null, e.firmwareRev ?? null,
+        e.softwareRev ?? null, when, when,
+      );
+    }
+    const [res] = await pool.query(
+      `INSERT INTO device_inventory
+         (device_id, ent_index, ent_class, name, descr, model, serial, vendor,
+          hardware_rev, firmware_rev, software_rev, first_seen, last_seen)
+       VALUES ${values.join(', ')}
+       ON DUPLICATE KEY UPDATE
+         ent_class = VALUES(ent_class), name = VALUES(name), descr = VALUES(descr),
+         model = VALUES(model), serial = VALUES(serial), vendor = VALUES(vendor),
+         hardware_rev = VALUES(hardware_rev), firmware_rev = VALUES(firmware_rev),
+         software_rev = VALUES(software_rev), last_seen = VALUES(last_seen)`,
+      params,
+    );
+    await pool.query(
+      'DELETE FROM device_inventory WHERE device_id = ? AND last_seen < ?', [deviceId, when],
+    );
+    return Number(res.affectedRows || 0);
+  }
+
+  async function listInventory(deviceId) {
+    const [rows] = await pool.query(
+      `SELECT ent_index, ent_class, name, descr, model, serial, vendor,
+              hardware_rev, firmware_rev, software_rev, first_seen, last_seen
+         FROM device_inventory WHERE device_id = ? ORDER BY ent_index ASC LIMIT 200`,
+      [deviceId],
+    );
+    return rows.map(mapInventoryRow);
+  }
+
+  // Serial → the device(s) it is in. Exact or prefix, case-insensitive under
+  // the table's collation; served by idx_device_inventory_serial. A serial is
+  // what is printed on the box and on the RMA, so it is what gets typed.
+  async function findBySerial(serial, { limit = 10 } = {}) {
+    const q = String(serial || '').trim();
+    if (!q) return [];
+    const like = `${q.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
+    const [rows] = await pool.query(
+      `SELECT i.device_id, i.ent_index, i.ent_class, i.name, i.descr, i.model, i.serial, i.vendor,
+              i.hardware_rev, i.firmware_rev, i.software_rev, i.first_seen, i.last_seen
+         FROM device_inventory i
+        WHERE i.serial LIKE ?
+        ORDER BY i.serial ASC, i.device_id ASC LIMIT ?`,
+      [like, limit],
+    );
+    return rows.map((r) => ({ deviceId: Number(r.device_id), ...mapInventoryRow(r) }));
+  }
+
   return {
     list,
     findById,
@@ -323,7 +448,27 @@ function createSnmpDevicesRepository(db, { secretBox = null, credentialProfilesR
     remove,
     recordPoll,
     recordCounterPoll,
+    replaceInventory,
+    listInventory,
+    findBySerial,
   };
 }
 
-module.exports = { createSnmpDevicesRepository, mapRow, SAFE_COLUMNS };
+function mapInventoryRow(r) {
+  return {
+    entIndex: Number(r.ent_index),
+    class: r.ent_class,
+    name: r.name ?? null,
+    descr: r.descr ?? null,
+    model: r.model ?? null,
+    serial: r.serial ?? null,
+    vendor: r.vendor ?? null,
+    hardwareRev: r.hardware_rev ?? null,
+    firmwareRev: r.firmware_rev ?? null,
+    softwareRev: r.software_rev ?? null,
+    firstSeen: toIso(r.first_seen),
+    lastSeen: toIso(r.last_seen),
+  };
+}
+
+module.exports = { createSnmpDevicesRepository, mapRow, mapInventoryRow, SAFE_COLUMNS };

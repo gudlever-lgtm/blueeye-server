@@ -8,7 +8,7 @@
 // shape, so callers never learn which store they are talking to — the dual
 // pattern `results` / `resultsTsdbRepo` already uses (docs/storage-split-audit.md).
 
-const BASE_COLUMNS = `id, agent_id, device_id, source_ip, received_at, device_time,
+const BASE_COLUMNS = `id, agent_id, device_id, snmp_device_id, source_ip, received_at, device_time,
   clock_skew_ms, transport, facility, severity, event_type, device_hostname,
   tag, ifname, summary, raw, detail, dedup_key, occurrences`;
 
@@ -29,6 +29,9 @@ function mapRow(row) {
     id: Number(row.id),
     agentId: Number(row.agent_id),
     deviceId: row.device_id == null ? null : Number(row.device_id),
+    // The polled SWITCH that sent it (migration 133) — an snmp_devices id,
+    // never an agent id. NULL for a sender that is not a polled device.
+    snmpDeviceId: row.snmp_device_id == null ? null : Number(row.snmp_device_id),
     sourceIp: row.source_ip,
     receivedAt: toIso(row.received_at),
     deviceTime: toIso(row.device_time),
@@ -71,10 +74,11 @@ function createDeviceEventsRepository(db) {
     const placeholders = [];
     const params = [];
     for (const e of rows) {
-      placeholders.push('(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
+      placeholders.push('(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
       params.push(
         agentId,
         e.deviceId ?? null,
+        e.snmpDeviceId ?? null,
         e.sourceIp,
         e.receivedAt,
         e.deviceTime ?? null,
@@ -96,7 +100,7 @@ function createDeviceEventsRepository(db) {
 
     const [res] = await pool.query(
       `INSERT INTO device_events
-         (agent_id, device_id, source_ip, received_at, device_time, clock_skew_ms,
+         (agent_id, device_id, snmp_device_id, source_ip, received_at, device_time, clock_skew_ms,
           transport, facility, severity, event_type, device_hostname, tag, ifname,
           summary, raw, detail, dedup_key, occurrences)
        VALUES ${placeholders.join(', ')}
@@ -127,8 +131,11 @@ function createDeviceEventsRepository(db) {
     maxSeverity = null,
     deviceId = null,
     agentId = null,
-    // The address the event was SENT FROM. What ties an event to a polled
-    // switch (snmp_devices.host): `device_id` here is an agent id, not a switch.
+    // The polled switch that sent it (migration 133). `device_id` is an agent
+    // id; this is the snmp_devices id the ingest resolved the sender to.
+    snmpDeviceId = null,
+    // The address the event was SENT FROM — what the ingest resolves a switch
+    // by, and still the filter for rows stored before migration 133.
     sourceIp = null,
     transport = null,
     eventType = null,
@@ -140,6 +147,7 @@ function createDeviceEventsRepository(db) {
     if (maxSeverity != null) { where.push('severity <= ?'); params.push(maxSeverity); }
     if (deviceId != null) { where.push('device_id = ?'); params.push(deviceId); }
     if (agentId != null) { where.push('agent_id = ?'); params.push(agentId); }
+    if (snmpDeviceId != null) { where.push('snmp_device_id = ?'); params.push(snmpDeviceId); }
     if (sourceIp) { where.push('source_ip = ?'); params.push(sourceIp); }
     if (transport) { where.push('transport = ?'); params.push(transport); }
     if (eventType) { where.push('event_type = ?'); params.push(eventType); }
@@ -167,11 +175,12 @@ function createDeviceEventsRepository(db) {
   // Counts per severity in the window, for the filter chips. Same WHERE as
   // list() minus the severity filter itself — a chip that says how many rows it
   // would reveal is only useful while it counts the rows it is hiding.
-  async function severityCounts({ minutes = 120, deviceId = null, agentId = null } = {}) {
+  async function severityCounts({ minutes = 120, deviceId = null, agentId = null, snmpDeviceId = null } = {}) {
     const where = ['received_at >= (NOW(3) - INTERVAL ? MINUTE)'];
     const params = [minutes];
     if (deviceId != null) { where.push('device_id = ?'); params.push(deviceId); }
     if (agentId != null) { where.push('agent_id = ?'); params.push(agentId); }
+    if (snmpDeviceId != null) { where.push('snmp_device_id = ?'); params.push(snmpDeviceId); }
 
     const [rows] = await pool.query(
       `SELECT severity, COUNT(*) AS n, SUM(occurrences) AS occurrences

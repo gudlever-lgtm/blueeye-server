@@ -114,10 +114,11 @@
             <button data-view="transactions" data-i18n="nav.view.transactions">Transaction tests</button>
             <button data-view="flows" data-i18n="nav.view.flows">Flows</button>
             <button data-view="topology" data-i18n="nav.view.topology">Topology</button>
+            <button data-view="pathLocation" data-i18n="nav.view.pathLocation">Path &amp; location</button>
             <button data-view="delta" data-min-role="operator" data-i18n="nav.view.delta">Topology delta</button>
             <button data-view="diagnose" data-i18n="nav.view.diagnose">Diagnose</button>
             <button data-view="deviceLog" data-i18n="nav.view.deviceLog">Device log</button>
-            <button data-view="troubleshooting" data-min-role="operator" data-i18n="nav.view.troubleshooting">Troubleshooting</button>
+            <button data-view="troubleshooting" data-i18n="nav.view.troubleshooting">Troubleshooting</button>
             <button data-view="investigation" data-min-role="operator" data-i18n="nav.view.investigation">Investigate</button>
           </div>
           <!-- Service Assurance is its own section rather than one entry under
@@ -164,6 +165,7 @@
             <button data-view="coverage" data-min-role="admin" data-i18n="nav.view.coverage">Coverage gaps</button>
             <button data-view="logs" data-min-role="admin" data-i18n="nav.view.logs">System Logs</button>
             <button data-view="userLogs" data-min-role="admin" data-i18n="nav.view.userLogs">User Logs</button>
+            <button data-view="auditLog" data-min-role="admin" data-feature="audit_log" data-i18n="nav.view.auditLog">Audit log integrity</button>
             <button data-view="settings" data-i18n="nav.view.settings">Settings</button>
           </div>
         </nav>
@@ -255,6 +257,9 @@
     <script src="/routes.js"></script>
     <script src="/i18n.js"></script>
     <script src="/baselineMetric.js"></script>
+    <script src="/thresholdsPanel.js"></script>
+    <script src="/slaReports.js"></script>
+    <script src="/nis2Evidence.js"></script>
     <script src="/timelineView.js"></script>
     <script src="/eventTitle.js"></script>
     <script src="/clusterView.js"></script>
@@ -306,6 +311,8 @@
     <script src="/views/screening.js"></script>
     <script src="/views/license.js"></script>
     <script src="/views/coverage.js"></script>
+    <script src="/views/pathLocation.js"></script>
+    <script src="/views/auditLog.js"></script>
     <script src="/kitchenSink.js"></script>
     <script src="/app.js"></script>
   </body>

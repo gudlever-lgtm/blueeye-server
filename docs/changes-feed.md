@@ -75,7 +75,7 @@ to mute the type. Where an ack is "I have dealt with this one row", a mute is
   page quietly stops showing what matters.
 - **Per user**, like acks. It changes only the caller's Changes page and never
   touches alerting (severity rules and alert rules are separate).
-- Stored in `change_mutes` (migration 124). Only live mutes are read; expired
+- Stored in `change_mutes` (migration 134). Only live mutes are read; expired
   ones are pruned on the next mute. `DELETE` is a 404 when nothing live is
   muted, including a malformed key.
 - A failing lookup on `GET` marks the feed `partial` with `mutes` in
@@ -256,7 +256,7 @@ and every mapper labels from it): that is a 500.
 
 ## Files
 
-- Migrations `migrations/074_add_user_last_seen_changes.sql`, `migrations/115_change_acks.sql`, `migrations/124_change_mutes.sql`
+- Migrations `migrations/074_add_user_last_seen_changes.sql`, `migrations/115_change_acks.sql`, `migrations/134_change_mutes.sql`
 - Pure read-model `src/changes/changeFeed.js` (mappers, window, correlation, ordering, grouping)
 - Condition families `src/changes/indications.js`
 - Fan-out `src/changes/changesService.js`

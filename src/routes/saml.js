@@ -50,7 +50,7 @@ function failureRedirect(reason) {
 //   POST /auth/saml/callback → verify the signed assertion → JIT user → JWT (ACS)
 //   GET  /auth/saml/metadata → SP metadata XML for the IdP admin
 // Local login (POST /auth/login) is untouched and remains the fallback.
-function createSamlAuthRouter({ usersRepo, samlAuth, ssoLoginAuditRepo = null, auditLogger = null }) {
+function createSamlAuthRouter({ usersRepo, samlAuth, ssoLoginAuditRepo = null, auditLogger = null, securityPolicy = null }) {
   const router = express.Router();
   const provisioner = createUserProvisioner({ usersRepo });
 
@@ -95,6 +95,18 @@ function createSamlAuthRouter({ usersRepo, samlAuth, ssoLoginAuditRepo = null, a
     }
 
     const user = await provisioner.provision({ email: result.email, role: result.role });
+    // Role-based IP allowlist (baseline security, migration 041): the IdP
+    // vouched for the person, not for where they are signing in from.
+    if (securityPolicy) {
+      await securityPolicy.get();
+      const verdict = securityPolicy.checkIp(user.role, req.ip);
+      if (!verdict.allowed) {
+        // Audited twice over by auditSso: the SSO login audit (Settings →
+        // Authentication) and the unified audit log, reason ip-not-allowed.
+        await auditSso(req, { ok: false, reason: 'ip-not-allowed', subject: result.subject || user.email, role: user.role, matched: result.matched });
+        return res.redirect(failureRedirect('ip-not-allowed'));
+      }
+    }
     const token = issueToken(user);
     await auditSso(req, { ok: true, reason: 'ok', subject: result.subject || user.email, role: user.role, matched: result.matched });
     return res.redirect(successRedirect(user, token));

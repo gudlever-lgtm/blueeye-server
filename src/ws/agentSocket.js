@@ -5,7 +5,9 @@ const { createAgentAuthenticator } = require('../auth/agentAuth');
 const { extractToken, pathnameOf, safeSend, startHeartbeat } = require('./wsCommon');
 const { PROTOCOL_VERSION } = require('../protocol');
 const { validateResultIngest } = require('../validation/transactionValidation');
-const { stepsOf, classifyDeviation, diagnoseText, evaluateThresholds } = require('../analysis/transactionAlerts');
+const {
+  stepsOf, classifyDeviation, diagnoseText, evaluateThresholds, buildTransactionFinding, TRANSACTION_REFIRE_MS,
+} = require('../analysis/transactionAlerts');
 const { describeLiveHop } = require('../analysis/pathGraph');
 
 const silentLogger = { info() {}, warn() {}, error() {} };
@@ -36,12 +38,15 @@ function traceHopPayload(agentId, msg, describe) {
   if (!target || target.length > 255) return null;
   const probeType = TRACE_TYPES.includes(msg.probeType) ? msg.probeType : null;
   if (!probeType || !msg.hop || typeof msg.hop !== 'object') return null;
+  const wrap = (node) => (node ? { agentId, probeType, target, node } : null);
   let node = null;
   try {
-    node = typeof describe === 'function' ? describe(msg.hop) : describeLiveHop(msg.hop);
+    node = typeof describe === 'function' ? describe(msg.hop, agentId) : describeLiveHop(msg.hop);
   } catch { node = null; }
-  if (!node) return null;
-  return { agentId, probeType, target, node };
+  // `describe` may look the agent's site up first (the map's speed-of-light
+  // check needs it), in which case the payload is a promise.
+  if (node && typeof node.then === 'function') return node.then(wrap, () => null);
+  return wrap(node);
 }
 
 function attachAgentWebSocket({
@@ -71,13 +76,17 @@ function attachAgentWebSocket({
   // are still forwarded, just without coordinates.
   describeTraceHop = null,
   // Optional transaction-test channel: the repo (config push + result ingest),
-  // the alerting dispatcher, whether alerting is on (bool or live getter), and the
-  // AI assistant for an optional Danish diagnosis (falls back to a template).
+  // the finding sink a crossed threshold is raised through (store → publish →
+  // event case → alert → integrations, src/devices/findingSink.js — the ONE
+  // path, so the alert is sent once and by it), and the AI assistant for an
+  // optional Danish diagnosis appended to the deterministic one.
   // All null/off by default so the socket works unchanged without them.
   transactionsRepo = null,
-  alertDispatcher = null,
-  alertingEnabled = false,
+  transactionFindingSink = null,
   assistant = null,
+  // How long the same (agent, test, condition) is held back while it persists
+  // (≤ the event-case activity window — ../eventCases/activityWindow.js).
+  transactionRefireMs = TRANSACTION_REFIRE_MS,
 }) {
   const authenticator = createAgentAuthenticator({ agentTokensRepo });
   // Cap inbound frames at 1 MB (aligns with the Express body limit). ws defaults
@@ -280,10 +289,10 @@ function attachAgentWebSocket({
       // the trace runs. Not stored: the finished run arrives on
       // POST /agents/probe-results and is the record.
       if (msg.type === 'trace_hop' && typeof notifyDashboard === 'function') {
-        const payload = traceHopPayload(ws.agentId, msg, describeTraceHop);
-        if (payload) {
+        Promise.resolve(traceHopPayload(ws.agentId, msg, describeTraceHop)).then((payload) => {
+          if (!payload) return;
           try { notifyDashboard({ type: 'trace-hop', payload }); } catch { /* live view is a courtesy */ }
-        }
+        }, () => { /* live view is a courtesy */ });
       }
       // agent -> server: a finished burst. The whole series, analysed once and
       // stored with its verdict.
@@ -483,7 +492,7 @@ function attachAgentWebSocket({
     if (!accepted.length) return;
     // Strip the transient _deviationStep before persisting.
     await transactionsRepo.insertResults(accepted.map(({ _deviationStep, ...row }) => row));
-    await maybeAlertTransaction(agentId, accepted);
+    await maybeRaiseTransaction(agentId, accepted);
   }
 
   // Cross-check: are OTHER agents assigned to this test also failing within the
@@ -502,9 +511,11 @@ function attachAgentWebSocket({
     return { scope: allFail ? 'system' : 'site', failing: failing.length, total: assignedAgents.length };
   }
 
-  // Danish diagnosis: Mistral when licensed+configured, else the template.
-  async function buildDiagnosis(facts) {
-    const template = diagnoseText(facts);
+  // Optional Danish assistant text (Mistral when licensed+configured), or null.
+  // It is appended to the deterministic diagnosis, never a replacement for it:
+  // the phase, the errno and the site-vs-system verdict must be in every
+  // explanation whatever a model answers.
+  async function assistantDiagnosis(facts) {
     if (assistant && typeof assistant.diagnoseTransaction === 'function'
         && (typeof assistant.isEnabled !== 'function' || assistant.isEnabled())) {
       try {
@@ -516,17 +527,24 @@ function attachAgentWebSocket({
           crosscheck: facts.crosscheck ? facts.crosscheck.scope : null,
         });
         if (answer && typeof answer === 'string') return answer;
-      } catch { /* fall back to the template */ }
+      } catch { /* the deterministic diagnosis stands alone */ }
     }
-    return template;
+    return null;
   }
 
-  // Threshold alert-hook: after insert, evaluate the latest result per test and
-  // dispatch a finding with a Danish diagnosis + cross-check. The dispatcher's
-  // cooldown (hostId|metric|kind|severity) debounces per (agent, test).
-  async function maybeAlertTransaction(agentId, accepted) {
-    const alertOn = typeof alertingEnabled === 'function' ? alertingEnabled() : alertingEnabled;
-    if (!alertDispatcher || typeof alertDispatcher.dispatch !== 'function' || !alertOn) return;
+  // `${agentId}|${testId}|${metric}` -> ms the finding was last raised. In
+  // memory, like the switch-port refractory: an agent's socket lives on one
+  // server, and a restart costs at most one early re-raise.
+  const lastRaised = new Map();
+
+  // Threshold hook: after insert, evaluate the latest result per test and
+  // raise a FINDING (with the diagnosis + cross-check) through the finding
+  // sink — which stores it, groups it into an event case, alerts on it (behind
+  // the alerting switch, maintenance silencer and dispatcher cooldown) and
+  // hands it to the integrations. The same (agent, test, condition) is raised
+  // again only after `transactionRefireMs` while it persists.
+  async function maybeRaiseTransaction(agentId, accepted) {
+    if (!transactionFindingSink || typeof transactionFindingSink.emit !== 'function') return;
     const latestPerTest = new Map();
     for (const r of accepted) latestPerTest.set(r.test_id, r);
     for (const [testId, result] of latestPerTest) {
@@ -538,18 +556,25 @@ function attachAgentWebSocket({
         const recentStatuses = await transactionsRepo.recentStatuses(testId, agentId, need);
         const verdict = evaluateThresholds({ test, result, recentStatuses, deviation: result.deviation });
         if (!verdict) continue;
+        const key = `${agentId}|${testId}|${verdict.metric}`;
+        const nowMs = Date.now();
+        const last = lastRaised.get(key);
+        if (last !== undefined && nowMs - last < transactionRefireMs) continue;
+        lastRaised.set(key, nowMs);
+
         const crosscheck = result.status !== 'ok' ? await crossCheck(testId, agentId, test.interval_sec) : null;
-        const explanation = await buildDiagnosis({ test, agentId, result, deviation: result.deviation, deviationStep: result._deviationStep, crosscheck });
-        await alertDispatcher.dispatch({
-          id: `tx-${verdict.metric}-${testId}-${agentId}`,
-          hostId: String(agentId),
-          metric: verdict.metric, kind: verdict.kind, severity: verdict.severity,
-          explanation,
-          evidence: [{ testId, testName: test.name, agentId, status: result.status, latencyMs: result.latency_ms ?? null, deviation: result.deviation || null, crosscheck: crosscheck ? crosscheck.scope : null }],
-          deviation: 0, createdAt: new Date(),
-        }, null);
+        const facts = { test, agentId, result, deviation: result.deviation, deviationStep: result._deviationStep, crosscheck };
+        const finding = buildTransactionFinding({
+          test: { ...test, id: test.id ?? testId }, agentId, result, verdict, crosscheck,
+          explanation: diagnoseText(facts),
+          assistantText: await assistantDiagnosis(facts),
+          at: new Date(nowMs),
+        });
+        const raised = await transactionFindingSink.emit(finding);
+        // Not stored means not raised: release the hold so the next result can try.
+        if (!raised) lastRaised.delete(key);
       } catch (err) {
-        logger.warn(`transaction alert evaluation failed for test ${testId}: ${err.message}`);
+        logger.warn(`transaction finding evaluation failed for test ${testId}: ${err.message}`);
       }
     }
   }

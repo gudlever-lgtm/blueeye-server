@@ -11,9 +11,16 @@ const { ROLES } = require('./auth/roles');
 const { createDb } = require('./db');
 const { createTsdb } = require('./tsdb');
 const { createResultsTsdbRepository } = require('./repositories/resultsTsdbRepository');
+const { createFlowsTsdbRepository } = require('./repositories/flowsTsdbRepository');
+const { createProbeResultsTsdbRepository } = require('./repositories/probeResultsTsdbRepository');
+const { createSpeedtestResultsTsdbRepository } = require('./repositories/speedtestResultsTsdbRepository');
+const { createKnownDevicesRepository } = require('./repositories/knownDevicesRepository');
 const { createApp } = require('./app');
 const { createLocationsRepository } = require('./repositories/locationsRepository');
 const { createUsersRepository } = require('./repositories/usersRepository');
+const { createPasswordHistoryRepository } = require('./repositories/passwordHistoryRepository');
+const { createSecurityPolicy } = require('./auth/securityPolicy');
+const { upgradeClientIp, upgradeAllowed } = require('./auth/securityGate');
 const { createAgentsRepository } = require('./repositories/agentsRepository');
 const { createAgentActionAuditRepository } = require('./repositories/agentActionAuditRepository');
 const { createAuditEventsRepository } = require('./repositories/auditEventsRepository');
@@ -76,11 +83,14 @@ const { createDeviceEventIngest } = require('./devices/deviceEventIngest');
 const { createSnmpDevicesRepository } = require('./repositories/snmpDevicesRepository');
 const { createFdbEntriesRepository } = require('./repositories/fdbEntriesRepository');
 const { createSnmpNeighborsRepository } = require('./repositories/snmpNeighborsRepository');
+const { createDeviceArpEntriesRepository } = require('./repositories/deviceArpEntriesRepository');
 const { createDeviceInterfacesRepository } = require('./repositories/deviceInterfacesRepository');
 const { createSnmpCredentialProfilesRepository } = require('./repositories/snmpCredentialProfilesRepository');
 const { createDeviceCounterSamplesRepository } = require('./repositories/deviceCounterSamplesRepository');
 const { createDeviceCounterSamplesTsdbRepository } = require('./repositories/deviceCounterSamplesTsdbRepository');
 const { createSnmpCounterIngest } = require('./devices/snmpCounterIngest');
+const { createSflowCounterIngest } = require('./devices/sflowCounterIngest');
+const { createSflowExportersRepository } = require('./repositories/sflowExportersRepository');
 const { createL2LoopService } = require('./analysis/l2LoopService');
 const { createSnmpTopologyIngest } = require('./devices/snmpTopologyIngest');
 const { createDeviceFindingSink } = require('./devices/findingSink');
@@ -98,7 +108,7 @@ const { createFlowPairBaselineJob } = require('./analysis/flowPairBaselineJob');
 const { createDiscoveredDevicesRepository } = require('./repositories/discoveredDevicesRepository');
 const { createDiscoverySweepJob } = require('./discovery/discoverySweepJob');
 const {
-  createNewDeviceDetector, withArpDetection, withDiscoveryDetection, loadNewDeviceConfig,
+  createNewDeviceDetector, withArpDetection, withDeviceArpDetection, withDiscoveryDetection, loadNewDeviceConfig,
 } = require('./discovery/newDeviceDetector');
 const { createClusterNotifier } = require('./analysis/clusterNotifier');
 const { createClusterNis2Service } = require('./analysis/clusterNis2');
@@ -118,11 +128,13 @@ const { createFlowsRepository } = require('./repositories/flowsRepository');
 const { createGeoProvider } = require('./geo/provider');
 const { createGeoipUpdater } = require('./geo/geoipUpdater');
 const { createCentroids } = require('./geo/centroids');
+const { createCityProvider } = require('./geo/cityProvider');
 const { describeLiveHop } = require('./analysis/pathGraph');
 const { createGeoEnricher } = require('./geo/enricher');
 const { createFlowPipeline } = require('./geo/flowPipeline');
 const { loadAlertingConfig } = require('./analysis/alerting/config');
 const { createDispatcher } = require('./analysis/alerting/dispatcher');
+const { createAlertContext } = require('./analysis/alerting/alertContext');
 const { createSilencer } = require('./analysis/alerting/maintenance');
 const { createEmailChannel, createSmtpTransport } = require('./analysis/alerting/channels/email');
 const { createUserMailer } = require('./services/userMailer');
@@ -281,15 +293,17 @@ function start() {
   const resultsTsdbRepo = tsdb
     ? createResultsTsdbRepository(tsdb, { latestWindowMinutes: config.tsdb.latestWindowMinutes })
     : null;
+  // The other telemetry mirrors: flows, probe results and speed tests are
+  // dual-written the same way (MySQL first and authoritative, TSDB best-effort).
+  const flowsTsdbRepo = tsdb ? createFlowsTsdbRepository(tsdb, { logger }) : null;
+  const probeResultsTsdbRepo = tsdb ? createProbeResultsTsdbRepository(tsdb, { logger }) : null;
+  const speedtestResultsTsdbRepo = tsdb ? createSpeedtestResultsTsdbRepository(tsdb) : null;
   const probeResultsRepo = createProbeResultsRepository(db);
   const diagnoseSessionsRepo = createDiagnoseSessionsRepository(db);
   const probeOutagesRepo = createProbeOutagesRepository(db);
   const thresholdsRepo = createProbeThresholdsRepository(db);
-  // Derives events from active-probe results on ingest (open/resolve), using
-  // per-location thresholds with a global fallback. Best-effort + resilient.
-  const probeOutageService = createProbeOutageService({
-    probeOutagesRepo, thresholdsRepo, agentsRepo, probeResultsRepo, logger,
-  });
+  // (The probe-outage service is built further down, once the finding sink it
+  // notifies through exists.)
 
   // Agent binaries served from a local dir for frictionless enrollment. SHA-256
   // is computed + cached now (at startup), so nothing is hashed per request.
@@ -629,10 +643,17 @@ function start() {
   // NEW_DEVICE_ALERTS_ENABLED; `dispatcher` and `alertingConfig` are read at
   // call time because they are built further down.
   const arpEntriesStore = createArpEntriesRepository(db);
+  // A polled router's ARP table (migration 125) — the third place a new
+  // address first shows up, watched the same way (withDeviceArpDetection).
+  const deviceArpStore = createDeviceArpEntriesRepository(db);
   const discoveredDevicesStore = createDiscoveredDevicesRepository(db);
   const newDeviceDetector = createNewDeviceDetector({
     arpEntriesRepo: arpEntriesStore,
+    deviceArpRepo: deviceArpStore,
     discoveredDevicesRepo: discoveredDevicesStore,
+    // The long memory of every MAC a site has had (migration 131), so a
+    // device back after the 30-day ARP window is not "new" again.
+    knownDevicesRepo: createKnownDevicesRepository(db),
     agentsRepo,
     locationsRepo,
     findingStore,
@@ -646,6 +667,7 @@ function start() {
     logger,
   });
   const arpEntriesRepo = withArpDetection(arpEntriesStore, newDeviceDetector, { logger });
+  const deviceArpRepo = withDeviceArpDetection(deviceArpStore, newDeviceDetector, { logger });
   // Device events (syslog now, SNMP traps from stage 03). HIGH-volume telemetry
   // by the classification in docs/storage-split-audit.md, so it follows the
   // same dual-store rule as `results`: TimescaleDB when TSDB is configured,
@@ -707,6 +729,37 @@ function start() {
     enabled: () => !!analysisConfig.analysisEnabled && featureGate.isFeatureEnabled('analysis'),
     logger,
   });
+  // Findings that are not an analysis product — a transaction test crossing
+  // its threshold, a probe outage opening — take the SAME sink (store,
+  // publish, event case, alert, integrations), but are not behind the analysis
+  // licence/flag: until they became findings they were alerted (transactions)
+  // or recorded (outages) without it, and a plan without analysis must not
+  // lose them.
+  const serviceFindingSink = createDeviceFindingSink({
+    findingStore,
+    eventCaseService,
+    publishFinding: (hostId, message) => (dashboardWs ? dashboardWs.broadcast(message) : 0),
+    dispatcher: lateBound(() => dispatcher),
+    alertingEnabled: lateBound(() => alertingConfig.enabled),
+    integrationTrigger: integrationsDispatcher,
+    clusterAlertGate: {
+      suppressedCluster: (f) => { const g = lateBound(() => clusterAlertGate)(); return g ? g.suppressedCluster(f) : null; },
+      ensureFresh: async () => { const g = lateBound(() => clusterAlertGate)(); if (g && g.ensureFresh) await g.ensureFresh(); },
+    },
+    logger,
+  });
+  // Derives events from active-probe results on ingest (open/resolve), using
+  // per-location thresholds with a global fallback. Best-effort + resilient.
+  // An outage opening (or escalating) raises a finding through the sink above;
+  // closing dispatches one recovery alert and notes it on the event case.
+  const probeOutageService = createProbeOutageService({
+    probeOutagesRepo, thresholdsRepo, agentsRepo, probeResultsRepo,
+    findingSink: serviceFindingSink,
+    findingStore,
+    dispatcher: lateBound(() => dispatcher),
+    eventNotesRepo,
+    logger,
+  });
   const l2LoopService = createL2LoopService({
     fdbEntriesRepo,
     counterSamplesRepo,
@@ -740,6 +793,7 @@ function start() {
     l2LoopService,
     switchPortStateService,
     topologyChangeService,
+    deviceArpRepo,
     logger,
   });
   const deviceEventIngest = createDeviceEventIngest({
@@ -829,6 +883,9 @@ function start() {
       return featureGate.isFeatureEnabled('alerting');
     },
     alertLog: alertDispatchLogRepo,
+    // Every alert names its agent and carries a link into the dashboard
+    // (BLUEEYE_PUBLIC_URL). Without the URL the alert still goes, unlinked.
+    enrich: createAlertContext({ publicUrl: config.publicUrl || null, agentsRepo, logger }).enrich,
     logger,
   });
   // One-time-password email for local user creation. It reuses the SAME live
@@ -882,7 +939,7 @@ function start() {
   // Fase 5: dispatch-time cluster suppression gate — suppresses a finding's
   // individual alert + ITSM emit when its host is already covered by an open
   // medium/high cluster (rolled into the ONE cluster notification).
-  const clusterAlertGate = createClusterAlertGate({ clustersRepo: eventClustersRepo, findingStore, logger });
+  const clusterAlertGate = createClusterAlertGate({ clustersRepo: eventClustersRepo, findingStore, agentsRepo, logger });
 
   const analysisPipeline = createAnalysisPipeline({
     detector,
@@ -916,11 +973,29 @@ function start() {
     findingSink: deviceFindingSink,
     logger,
   });
+  // The same counter series, fed by the interface counters an sFlow exporter
+  // pushes on its own — for switches that export sFlow and are not polled for
+  // SNMP counters. Exporters matching no device are recorded for the coverage
+  // report (migration 128).
+  const sflowExportersRepo = createSflowExportersRepository(db);
+  const sflowCounterIngest = createSflowCounterIngest({
+    snmpDevicesRepo,
+    deviceInterfacesRepo,
+    counterSamplesRepo,
+    sflowExportersRepo,
+    analysisPipeline,
+    findingSink: deviceFindingSink,
+    logger,
+  });
   // Offline GeoIP/ASN provider (EU-sourced range DB; config.geo.dbPath). Created
   // here so the probe pipeline can resolve traceroute hop IPs → ASNs for AS-path
   // change detection; reused below for flow enrichment and the path/destination
   // maps. Without a DB it simply no-ops (no country/ASN).
   const geoProvider = createGeoProvider({ dbPath: config.geo.dbPath, logger });
+  // City-level GeoIP (config.geo.cityDbPath / Settings → Map). Only the
+  // traceroute maps use it, as the fallback when a router's name does not say
+  // where it stands. Streams in the background; lookups answer null meanwhile.
+  const cityProvider = createCityProvider({ dbPath: config.geo.cityDbPath, logger });
 
   // Active-probe analysis: derive findings (reachability/loss/latency/jitter/cert/
   // AS-path change) from probe-results on ingest, alongside the traffic detector
@@ -1001,6 +1076,11 @@ function start() {
     alertDispatcher: dispatcher,
     alertLog: alertDispatchLogRepo,
     topologyGraph: lldpGraphService,
+    // A finding about a switch relates to findings from the agents downstream
+    // of it (blast radius), and each cluster is stamped on its members' event
+    // cases (migration 129).
+    blastRadiusService,
+    eventCasesRepo,
     notifier: clusterNotifier,
     snapshotService,
     publishCluster: (cluster) => (dashboardWs ? dashboardWs.broadcast({ type: 'event_cluster', payload: cluster }) : 0),
@@ -1030,6 +1110,7 @@ function start() {
     enricher: geoEnricher,
     config: { geoEnabled: config.geo.enabled },
     logger,
+    flowsTsdbRepo,
   });
 
   // Retention: nightly rollup (down-sample raw -> rollup tables) + purge of
@@ -1042,11 +1123,19 @@ function start() {
   const settingsService = createSettingsService({
     settingsRepo: createSettingsRepository(db), config,
     liveAnalysis: analysisConfig, liveRetention: retentionConfig, liveAlerting: alertingConfig,
-    liveGeo: geoProvider, secretBox,
+    liveGeo: geoProvider, liveGeoCity: cityProvider, secretBox,
   });
   // Re-apply persisted analysis/retention edits onto the live config so they
   // survive restarts. Best-effort + fire-and-forget (consumers read lazily).
   settingsService.applyStoredOverrides().catch((err) => logger.warn(`settings: could not apply stored overrides (${err.message})`));
+  // Baseline security policy (migration 041): one cached copy shared by the
+  // HTTP request gate, the sign-in/password paths and the dashboard WebSocket
+  // upgrade below. Warmed now so the first requests see the stored allowlist.
+  const securityPolicy = createSecurityPolicy({ load: () => settingsService.getSecurity({ strict: true }), logger });
+  securityPolicy.get().catch(() => {});
+  // The dashboard WebSocket upgrade bypasses Express, so it re-derives req.ip
+  // from the same TRUST_PROXY switch src/app.js reads.
+  const trustProxyOn = /^(1|true|yes|on)$/i.test(String(process.env.TRUST_PROXY || '').trim());
   // In-app GeoIP updater: powers Settings → Map "Update now" and the opt-in
   // monthly auto-refresh (writes the built CSV into the /data volume, reloads the
   // provider). Egress is admin-initiated / opt-in, so air-gapped installs are fine.
@@ -1084,7 +1173,8 @@ function start() {
     // GeoIP exposes startSchedule/stopSchedule; adapt it to the uniform { start, stop }.
     { start: () => geoipUpdater.startSchedule(), stop: () => geoipUpdater.stopSchedule() },
     createTransactionBaselineJob({ repo: transactionsRepo, logger }),
-    createEventAutoResolveJob({ eventCasesRepo, auditLogRepo, logger }),
+    // Holds a case open while its situation (cluster, migration 129) is live.
+    createEventAutoResolveJob({ eventCasesRepo, auditLogRepo, clustersRepo: eventClustersRepo, logger }),
     // Agent offline: the periodic stale-status sweep (a missed WS close no
     // longer leaves a green badge on a dead agent) + ONE finding per offline
     // episode past the grace period, with a dead-agent vs network-down verdict,
@@ -1172,6 +1262,8 @@ function start() {
     db,
     tsdb,
     resultsTsdbRepo,
+    probeResultsTsdbRepo,
+    speedtestResultsTsdbRepo,
     locationsRepo,
     usersRepo,
     agentsRepo,
@@ -1207,8 +1299,11 @@ function start() {
     snmpDevicesRepo,
     fdbEntriesRepo,
     snmpNeighborsRepo,
+    deviceArpRepo,
     snmpTopologyIngest,
     snmpCounterIngest,
+    sflowCounterIngest,
+    sflowExportersRepo,
     snmpProfilesRepo,
     deviceInterfacesRepo,
     counterSamplesRepo,
@@ -1242,6 +1337,7 @@ function start() {
     flowsRepo,
     geoTileConfig: config.geo,
     geoProvider,
+    cityProvider,
     geoipUpdater,
     centroids,
     assistant,
@@ -1250,6 +1346,8 @@ function start() {
     planService,
     usageService,
     settingsService,
+    securityPolicy,
+    passwordHistoryRepo: createPasswordHistoryRepository(db),
     analysisConfig,
     retentionConfig,
     artifactStore,
@@ -1314,6 +1412,24 @@ function start() {
     logRing,
   });
 
+  // The agent's site for a LIVE trace, so its hops get the same speed-of-light
+  // check as the finished path. Cached a minute per agent: a trace streams up
+  // to 40 hops, and they should not each cost a query. Every hop of one trace
+  // waits on the same promise, so they reach the dashboard in order.
+  const liveOrigins = new Map();
+  function liveTraceOrigin(agentId) {
+    const hit = liveOrigins.get(agentId);
+    if (hit && Date.now() - hit.at < 60000) return hit.promise;
+    const promise = Promise.resolve()
+      .then(() => agentsRepo.findById(agentId))
+      .then((a) => (a && Number.isFinite(a.location_lat) && Number.isFinite(a.location_lng)
+        ? { lat: a.location_lat, lng: a.location_lng } : null))
+      .catch(() => null);
+    liveOrigins.set(agentId, { at: Date.now(), promise });
+    if (liveOrigins.size > 1000) liveOrigins.delete(liveOrigins.keys().next().value);
+    return promise;
+  }
+
   const server = app.listen(config.port, () => {
     logger.info(
       `blueeye-server listening on port ${config.port} (env: ${config.env})`
@@ -1356,13 +1472,17 @@ function start() {
     // Push live online/offline transitions to the dashboard.
     notifyDashboard,
     // Live traceroute hops, geolocated the same way as the finished path.
-    describeTraceHop: (hop) => describeLiveHop(hop, { geoProvider, centroids }),
+    // The agent's site anchors the speed-of-light check (src/geo/hopLocation.js).
+    describeTraceHop: async (hop, agentId) => describeLiveHop(hop, {
+      geoProvider, cityProvider, centroids, origin: await liveTraceOrigin(agentId),
+    }),
     // Transaction-test channel: config push on connect/change + result ingest +
-    // threshold alerting (reuses the same dispatcher as probe/analysis findings).
-    // The assistant supplies an optional Danish diagnosis (falls back to a template).
+    // threshold findings. The assistant supplies an optional Danish diagnosis,
+    // appended to the deterministic one.
     transactionsRepo,
-    alertDispatcher: dispatcher,
-    alertingEnabled: () => alertingConfig.enabled,
+    // A crossed threshold is a finding (event case, alert, integrations) —
+    // raised through the one sink, so it is alerted once, by it.
+    transactionFindingSink: serviceFindingSink,
     assistant,
   });
 
@@ -1372,9 +1492,11 @@ function start() {
   // naturally expires.
   dashboardWs = attachDashboardWebSocket({
     server,
-    verifyToken: (token) => {
+    verifyToken: (token, req) => {
       const decoded = verifyToken(token);
       if (revocationRegistry.isRevoked(Number(decoded.sub), decoded.iat)) return null;
+      // Same role-based IP allowlist + password max age as every HTTP request.
+      if (!upgradeAllowed(securityPolicy, decoded, upgradeClientIp(req, trustProxyOn))) return null;
       return decoded;
     },
     logger,

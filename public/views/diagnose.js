@@ -66,7 +66,9 @@
           id: 'diag-description', rows: '3', maxlength: String(MAX_DESC),
           placeholder: t('diag.field.placeholder'),
           'aria-label': t('diag.field.label'),
-          oninput: function () { askError.replaceChildren(); },
+          // Kept on state as it is typed: a rebuild (a refresh, a trip to
+          // another screen and back) must not lose a half-written description.
+          oninput: function () { st.description = descInput.value; askError.replaceChildren(); },
           // Enter is a newline in a textarea, so the shortcut is the modified one.
           onkeydown: function (e) {
             if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); ask(); }
@@ -80,14 +82,21 @@
         agentSel = ui.select({
           id: 'diag-agent', label: t('diag.agent'), value: st.agentId == null ? '' : String(st.agentId),
           options: agentOpts,
+          onchange: function (e) {
+            st.agentId = e.target.value ? Number(e.target.value) : null;
+            if (deps.onContext) deps.onContext({ agentId: st.agentId });
+          },
         });
         peerSel = ui.select({
           id: 'diag-peer', label: t('diag.peer'), value: st.peerAgentId == null ? '' : String(st.peerAgentId),
           options: [['', t('diag.peer.none')]].concat(agentOpts.slice(1)),
+          onchange: function (e) { st.peerAgentId = e.target.value ? Number(e.target.value) : null; },
         });
         targetIn = el('input', {
           id: 'diag-target', type: 'text', placeholder: t('diag.target.placeholder'),
           'aria-label': t('diag.target'),
+          oninput: function () { st.target = String(targetIn.value || '').trim() || null; },
+          onchange: function () { if (deps.onContext) deps.onContext({ target: st.target }); },
         });
         targetIn.value = st.target || '';
         askBtn = ui.button('primary', t('diag.submit'), { onclick: ask });

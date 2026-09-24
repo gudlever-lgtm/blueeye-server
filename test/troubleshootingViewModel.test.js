@@ -190,3 +190,36 @@ test('pathNodeIds flattens both blast-radius path shapes without duplicates', ()
   assert.deepEqual(TV.pathNodeIds(null), []);
   assert.deepEqual(TV.pathNodeIds([{ hostId: 1 }]), []);
 });
+
+// --- single-host causes and the degraded state -------------------------------
+
+test('degraded is a state of its own, and the label goes through the catalogue when given one', () => {
+  assert.equal(TV.normalizeState('degraded'), 'degraded');
+  assert.equal(TV.stateClass('degraded'), 'ts-degraded');
+  assert.equal(TV.stateLabel('degraded'), 'Degraded');
+  assert.equal(TV.stateLabel('degraded', (k) => `[${k}]`), '[tshoot.nodeState.degraded]');
+  assert.equal(TV.stateLabel('bogus', (k) => `[${k}]`), '[tshoot.nodeState.ok]');
+});
+
+test('rootCauseModel names the record to open: clusterId for a situation, caseId for an event case', () => {
+  const cl = TV.rootCauseModel({ id: 7, severity: 'CRIT', cause: 'x' });
+  assert.equal(cl.source, 'cluster');
+  assert.equal(cl.clusterId, 7, 'an older server sends no clusterId: the id is the cluster');
+  assert.equal(cl.caseId, null);
+  const cs = TV.rootCauseModel({ id: 'case:5', source: 'case', caseId: 5, severity: 'CRIT', primaryDeviceId: 'd:1' });
+  assert.equal(cs.source, 'case');
+  assert.equal(cs.caseId, 5);
+  assert.equal(cs.clusterId, null);
+  assert.equal(cs.pathAnchorId, 'd:1');
+});
+
+test('faultRowModel carries the source and the case id', () => {
+  const m = TV.faultRowModel({ findingId: 'f', source: 'case', caseId: 5, hostId: '1' }, { 1: 'vv-agent' });
+  assert.equal(m.source, 'case');
+  assert.equal(m.caseId, 5);
+  assert.equal(TV.faultRowModel({ findingId: 'g', clusterId: 3 }).source, 'cluster');
+});
+
+test('pathNodeIds keeps a switch as d:<id> rather than NaN', () => {
+  assert.deepEqual(TV.pathNodeIds([{ path: [1, 'd:2', { hostId: 3 }] }]), [1, 'd:2', 3]);
+});

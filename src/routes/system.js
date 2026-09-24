@@ -4,6 +4,31 @@ const express = require('express');
 const { asyncHandler } = require('../middleware/asyncHandler');
 const { requireAuth, requireRole } = require('../auth/middleware');
 const { ROLES } = require('../auth/roles');
+
+const isAdmin = (req) => Boolean(req.user && req.user.role === ROLES.ADMIN);
+
+// What a viewer/operator may see of the host. The database name, the disk and
+// log paths, the update command line and raw error texts describe the
+// installation (and an error can carry a host or a connection string); they
+// are an admin's to read. Found by scripts/verify-routes.
+function storageForRole(storage, admin) {
+  if (admin || !storage || typeof storage !== 'object') return storage;
+  const scrub = (part) => (part && typeof part === 'object'
+    ? { ...part, ...(('name' in part) ? { name: null } : {}), ...(('path' in part) ? { path: null } : {}), ...(part.error ? { error: 'unavailable' } : {}) }
+    : part);
+  return { ...storage, disk: scrub(storage.disk), database: scrub(storage.database), tsdb: scrub(storage.tsdb) };
+}
+
+function updateForRole(update, admin) {
+  if (admin || !update || typeof update !== 'object') return update;
+  // lastRun.requestedBy is the email of the admin who started the run — a
+  // person, not a property of the installation. A viewer still sees that a run
+  // happened, when, to which version and how it ended.
+  const lastRun = update.lastRun && typeof update.lastRun === 'object'
+    ? { ...update.lastRun, requestedBy: null }
+    : update.lastRun;
+  return { ...update, logPath: null, command: null, lastRun };
+}
 const pkg = require('../../package.json');
 const { isNewer } = require('../lib/version');
 const { silentLogger } = require('../logger');
@@ -147,7 +172,7 @@ function createSystemRouter({
         // Whether an admin can run the host's update script from here, and how
         // the last run went. `configured:false` = the panel shows the manual
         // command instead of a button.
-        update: serverUpdateService ? serverUpdateService.status() : { configured: false, command: null, running: false, lastRun: null },
+        update: updateForRole(serverUpdateService ? serverUpdateService.status() : { configured: false, command: null, running: false, lastRun: null }, isAdmin(req)),
       });
     })
   );
@@ -318,11 +343,11 @@ function createSystemRouter({
       if (!systemInfo) {
         return res.status(503).json({ error: 'System info not available' });
       }
-      res.json(await systemInfo.getStorage());
+      res.json(storageForRole(await systemInfo.getStorage(), isAdmin(req)));
     })
   );
 
   return router;
 }
 
-module.exports = { createSystemRouter };
+module.exports = { createSystemRouter, storageForRole, updateForRole };

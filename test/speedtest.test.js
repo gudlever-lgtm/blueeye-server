@@ -50,6 +50,19 @@ test('POST /speedtest/upload counts the uploaded bytes', async () => {
   assert.equal(res.body.bytes, 5000);
 });
 
+test('POST /speedtest/upload with a JSON body answers 415 instead of hanging', async () => {
+  // express.json consumes a JSON body before the handler runs, so the stream's
+  // 'end' never fired and the request hung until the client timed out (found by
+  // scripts/verify-routes).
+  const res = await request(makeApp({ agentTokensRepo: agentToken() }))
+    .post('/speedtest/upload')
+    .set('Authorization', 'Bearer good')
+    .timeout({ response: 3000 })
+    .send({});
+  assert.equal(res.status, 415);
+  assert.match(res.body.error, /octet-stream/);
+});
+
 // ---- result submit (agent token) -------------------------------------------
 
 test('POST /speedtest/results stores a measurement (201)', async () => {

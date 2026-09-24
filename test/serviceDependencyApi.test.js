@@ -97,6 +97,57 @@ test('GET /api/topology/graph returns a unified graph with both edge types', asy
   assert.equal(l2.directed, false);
 });
 
+// The Layers map used to be built without the switches (snmp_devices), while
+// blast radius — built from the same repositories — walked them. A polled
+// switch must be on the graph the map draws, with its resolved L2 link.
+test('GET /api/topology/graph includes the polled switches and their L2 links', async () => {
+  const fakes = require('../test-support/fakes');
+  const snmpDevicesRepo = fakes.makeSnmpDevicesRepo({
+    list: async () => [{ id: 7, host: '10.0.0.254', displayName: 'sw-core', enabled: true }],
+  });
+  const snmpNeighborsRepo = fakes.makeSnmpNeighborsRepo({
+    listAll: async () => [{ deviceId: 7, localIfName: 'Gi0/1', remoteChassisId: '00:1b:44:11:3a:b7' }],
+  });
+  const lldpNeighborsRepo = fakes.makeLldpNeighborsRepo();
+  await lldpNeighborsRepo.upsert({ localAgentId: 1, localChassisId: '00:1b:44:11:3a:b7', remoteChassisId: 'x' });
+  const app = makeApp({
+    serviceDependenciesRepo: await seededRepo(), lldpNeighborsRepo, agentsRepo: agentsRepo(),
+    snmpDevicesRepo, snmpNeighborsRepo,
+  });
+  const res = await request(app).get('/api/topology/graph').set('Authorization', authHeader('viewer'));
+  assert.equal(res.status, 200);
+  const sw = res.body.nodes.find((n) => n.id === 'd:7');
+  assert.ok(sw, 'the switch is a node');
+  assert.equal(sw.kind, 'device');
+  const link = res.body.edges.find((e) => e.type === 'l2_link' && [e.source, e.target].includes('d:7'));
+  assert.ok(link, 'the switch-to-agent link is drawn');
+  assert.deepEqual([link.source, link.target], ['d:7', 1]);
+});
+
+test('GET /api/topology/graph without the blast-radius service still reads the switches', async () => {
+  const fakes = require('../test-support/fakes');
+  const snmpDevicesRepo = fakes.makeSnmpDevicesRepo({
+    list: async () => [{ id: 3, host: '10.0.0.253', displayName: 'sw-edge', enabled: true }],
+  });
+  const app = makeApp({ serviceDependenciesRepo: await seededRepo(), agentsRepo: agentsRepo(), snmpDevicesRepo, blastRadiusService: null });
+  const res = await request(app).get('/api/topology/graph').set('Authorization', authHeader('viewer'));
+  assert.equal(res.status, 200);
+  assert.ok(res.body.nodes.some((n) => n.id === 'd:3'));
+});
+
+test('GET /api/topology/graph → 500 when the switch inventory read fails', async () => {
+  const fakes = require('../test-support/fakes');
+  const snmpDevicesRepo = fakes.makeSnmpDevicesRepo({ list: async () => { throw new Error('DB down'); } });
+  const app = makeApp({ serviceDependenciesRepo: await seededRepo(), agentsRepo: agentsRepo(), snmpDevicesRepo });
+  const res = await request(app).get('/api/topology/graph').set('Authorization', authHeader('viewer'));
+  assert.equal(res.status, 500);
+});
+
+test('GET /api/topology/graph requires auth → 401', async () => {
+  const app = makeApp({ serviceDependenciesRepo: await seededRepo(), agentsRepo: agentsRepo() });
+  assert.equal((await request(app).get('/api/topology/graph')).status, 401);
+});
+
 test('recompute job (operator+) aggregates flows→edges end to end', async () => {
   const serviceDependenciesRepo = makeServiceDependenciesRepo();
   const flowsRepo = makeFlowsRepo({

@@ -36,6 +36,7 @@
 
 const { normaliseMac, nameKey } = require('../topology/graph');
 const { FLOW_SOURCES } = require('../services/setupChecklist');
+const { canonicalIp } = require('../devices/sflowCounterIngest');
 
 // An online agent with no measurement for this long is connected but not
 // reporting. Agents report every minute; half an hour is thirty missed
@@ -49,6 +50,14 @@ const FLOW_WINDOW_HOURS = 24;
 const MULTI_MAC_PORT = 4;
 // How many examples a gap carries (ports on a switch, who saw a neighbour).
 const SAMPLE = 5;
+// A switch whose counters are configured but whose last counter poll is older
+// than this has stopped delivering them: three missed cycles, and never less
+// than the half hour an agent's own reports are given (STALE_REPORT_MINUTES).
+const COUNTER_STALE_CYCLES = 3;
+function counterStaleMs(intervalSec) {
+  const cycle = Number(intervalSec) > 0 ? Number(intervalSec) * 1000 : 0;
+  return Math.max(COUNTER_STALE_CYCLES * cycle, STALE_REPORT_MINUTES * 60000);
+}
 // Rows per gap kind in one answer. The summary counts every gap; the list is
 // capped so one busy kind cannot bury the rest.
 const DEFAULT_LIMIT = 50;
@@ -86,6 +95,9 @@ const CHECKS = Object.freeze([
   },
   { key: 'subnets', needs: ['agents', 'arpSubnets'], kinds: ['subnetUncovered'] },
   { key: 'discovery', needs: ['discovered'], kinds: ['discoveredPending'] },
+  // sFlow exporters the agents hear whose address is no registered device:
+  // their interface counters (errors, discards, duplex) have nowhere to go.
+  { key: 'sflowExporters', needs: ['sflowExporters', 'snmpDevices'], optional: ['agents'], kinds: ['sflowExporterUnregistered'] },
 ]);
 
 // Every kind, with its scope — the order the dashboard groups them in.
@@ -109,6 +121,7 @@ const KINDS = Object.freeze({
   unmanagedNeighbour: 'device',
   subnetUncovered: 'subnet',
   discoveredPending: 'device',
+  sflowExporterUnregistered: 'device',
 });
 
 const asArray = (v) => (Array.isArray(v) ? v : []);
@@ -313,7 +326,9 @@ function buildCoverageReport(input) {
   }
 
   // ---- SNMP devices --------------------------------------------------------
-  const devSubject = (d) => ({ id: Number(d.id), label: deviceLabel(d) });
+  // `where` is the device's own sysLocation (migration 126) — the room or rack
+  // below the site — so a gap names a place somebody can walk to.
+  const devSubject = (d) => ({ id: Number(d.id), label: deviceLabel(d), where: d.sysLocation || null });
   const devLink = (d) => ({ view: 'snmpDevice', id: Number(d.id) });
   if (runs('snmpPolling')) {
     for (const d of devices) {
@@ -364,16 +379,34 @@ function buildCoverageReport(input) {
         const unsupported = !!supported && !supported.includes(what);
         return { inCollect, unsupported, missing: !inCollect || unsupported };
       };
-      const counters = gap('ifcounters');
-      const noInterval = counters.inCollect && d.counterIntervalSec == null;
-      if (counters.missing || noInterval) {
+      // COUNTERS ARE JUDGED ON WHAT HAPPENED, not on `supported`. `supported`
+      // is what the TOPOLOGY cycle found (if, fdb, lldp, …) and the agent never
+      // lists 'ifcounters' in it — the counters are a separate cycle — so
+      // reading it here reported every switch as unable to count, including
+      // ones sending samples every minute. What is true instead: counters are
+      // asked for (collect + an interval), and a counter poll has actually
+      // arrived recently (last_uptime_at, stamped by every counter cycle the
+      // server ingests — src/devices/snmpCounterIngest.js).
+      const inCollect = collect.includes('ifcounters');
+      const noInterval = inCollect && d.counterIntervalSec == null;
+      const lastCounterMs = toMs(d.lastUptimeAt);
+      const staleAfterMs = counterStaleMs(d.counterIntervalSec);
+      const noCounterPoll = inCollect && !noInterval
+        && (lastCounterMs == null || nowMs - lastCounterMs > staleAfterMs);
+      if (!inCollect || noInterval || noCounterPoll) {
         add('deviceNoCounters', 'info', devSubject(d),
-          { host: d.host, inCollect: counters.inCollect, unsupported: counters.unsupported, noInterval },
-          counters.inCollect && counters.unsupported ? 'deviceLacks' : 'enableCounters', devLink(d));
+          {
+            host: d.host, inCollect, unsupported: false, noInterval, noCounterPoll,
+            lastCounterPollAt: lastCounterMs == null ? null : new Date(lastCounterMs).toISOString(),
+          },
+          noCounterPoll ? 'checkCounterPolling' : 'enableCounters', devLink(d));
       }
       for (const [what, kind] of [['lldp', 'deviceNoLldp'], ['fdb', 'deviceNoFdb']]) {
         const g = gap(what);
         if (!g.missing) continue;
+        // A switch that answers CDP (migration 124) has its neighbours seen;
+        // "no LLDP" is not a coverage gap on a Cisco estate that runs CDP.
+        if (what === 'lldp' && !!supported && supported.includes('cdp')) continue;
         add(kind, 'info', devSubject(d),
           { host: d.host, inCollect: g.inCollect, unsupported: g.unsupported },
           g.inCollect ? 'deviceLacks' : 'enableCollect', devLink(d));
@@ -403,7 +436,9 @@ function buildCoverageReport(input) {
   }
   const knownNames = new Set();
   const claim = (v) => { const k = nameKey(v); if (k) knownNames.add(k); };
-  for (const d of devices) { claim(d.displayName); claim(d.host); }
+  // sysName (migration 133) is what a neighbour's LLDP/CDP row calls a polled
+  // switch; without it a managed switch reads as an unmanaged neighbour.
+  for (const d of devices) { claim(d.displayName); claim(d.host); claim(d.sysName); }
   for (const a of allAgents) {
     claim(a.hostname); claim(a.display_name);
     for (const ip of agentIps(a)) claim(ip);
@@ -478,9 +513,21 @@ function buildCoverageReport(input) {
   };
   if (runs('switchNeighbours')) {
     const byId = new Map(enabledDevices.map((d) => [Number(d.id), d]));
+    // A Cisco neighbour speaking LLDP AND CDP is two rows (migration 124) with
+    // two different identities — a MAC and a hostname — and would be counted
+    // as two unmanaged neighbours. Where a port already has an LLDP row, its
+    // CDP row adds nothing here.
+    const lldpOnPort = new Set();
+    for (const n of asArray(val('deviceNeighbours'))) {
+      if (n && (n.protocol || 'lldp') === 'lldp' && n.localIfName) lldpOnPort.add(`${Number(n.deviceId)}|${n.localIfName}`);
+    }
     for (const n of asArray(val('deviceNeighbours'))) {
       const d = n && byId.get(Number(n.deviceId));
       if (!d || !n.remoteChassisId || isKnown(n.remoteChassisId, n.remoteSysName)) continue;
+      if (n.protocol === 'cdp' && n.localIfName && lldpOnPort.has(`${Number(d.id)}|${n.localIfName}`)) continue;
+      // CDP names the neighbour's management address, which is how a polled
+      // switch (its `host`) or an agent (its IPs) is claimed.
+      if (n.remoteAddress && knownNames.has(nameKey(n.remoteAddress))) continue;
       note(n.remoteChassisId, n.remoteSysName,
         { type: 'device', id: Number(d.id), label: deviceLabel(d), port: n.localIfName || null });
     }
@@ -533,6 +580,50 @@ function buildCoverageReport(input) {
     }
     const total = Number(d.total);
     if (Number.isInteger(total) && total > rows.length) extraTotals.discoveredPending = total - rows.length;
+  }
+
+  // ---- sFlow exporters that are not a device --------------------------------
+  // The exporter's address against every registered device's host, as IP
+  // literals (IPv6 compressed). One gap per ADDRESS however many agents hear
+  // it; the agents are the evidence. A device registered by hostname does not
+  // match — the counter ingest does not resolve names either, so for it the
+  // exporter really is unregistered, and the fix is the same.
+  if (runs('sflowExporters')) {
+    const known = new Set(devices.map((d) => canonicalIp(d.host)).filter(Boolean));
+    // An agent's OWN address is not a switch to register: that is the host's
+    // own hsflowd exporting its NICs, which the agent already reports from the
+    // inside. Every agent's capabilities.ips, not only the one that heard it —
+    // a host's exporter can be heard by a collector on another host.
+    const ownAddresses = new Set();
+    for (const a of allAgents) for (const ip of agentIps(a)) { const c = canonicalIp(ip); if (c) ownAddresses.add(c); }
+    const agentById = new Map(allAgents.map((a) => [Number(a.id), a]));
+    const byAddress = new Map();
+    for (const x of asArray(val('sflowExporters'))) {
+      const address = x && canonicalIp(x.address);
+      if (!address || known.has(address) || ownAddresses.has(address)) continue;
+      const cur = byAddress.get(address);
+      const agent = agentById.get(Number(x.agentId));
+      const heardBy = agent ? agentLabel(agent) : `#${x.agentId}`;
+      if (!cur) {
+        byAddress.set(address, {
+          id: Number(x.id), heardBy: new Set([heardBy]), interfaces: Number(x.interfaces) || 0, lastSeen: toMs(x.lastSeen),
+        });
+      } else {
+        cur.heardBy.add(heardBy);
+        cur.interfaces = Math.max(cur.interfaces, Number(x.interfaces) || 0);
+        cur.lastSeen = Math.max(cur.lastSeen ?? 0, toMs(x.lastSeen) ?? 0) || null;
+      }
+    }
+    for (const [address, e] of byAddress) {
+      add('sflowExporterUnregistered', 'info', { id: e.id, label: address },
+        {
+          address,
+          interfaces: e.interfaces,
+          heardBy: [...e.heardBy].sort().slice(0, SAMPLE).join(', '),
+          lastSeen: e.lastSeen == null ? null : new Date(e.lastSeen).toISOString(),
+        },
+        'registerExporter', { view: 'settings', tab: 'snmp' });
+    }
   }
 
   // ---- order, count, cap ---------------------------------------------------

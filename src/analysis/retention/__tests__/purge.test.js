@@ -107,18 +107,19 @@ test('the tables that used to grow forever are purged, each on its own window', 
     purgeTopologyChangesBefore: record('topo', 5),
     purgeStaleDiscoveredDevicesBefore: record('disc', 6),
     purgeHostConnectionsBefore: record('conn', 7),
+    purgeKnownDevicesBefore: record('known', 9),
     purgeAuditEventsBefore: record('audit', 8),
   };
   const days = {
     probeResultRetentionDays: 400, probeOutageRetentionDays: 401, speedtestRetentionDays: 365,
     transactionResultRetentionDays: 90, topologyChangeRetentionDays: 180, discoveredDeviceRetentionDays: 91,
-    hostConnectionRetentionDays: 30, auditEventRetentionDays: 366,
+    hostConnectionRetentionDays: 30, knownDeviceRetentionDays: 400, auditEventRetentionDays: 366,
   };
   const res = await createPurge({ repo, config: { ...config, ...days }, now: () => NOW }).purgeExpired();
   assert.deepEqual(
     [res.internalFlowRollups, res.probeResults, res.probeOutages, res.speedtestResults, res.transactionResults,
-      res.topologyChanges, res.discoveredDevices, res.hostConnections, res.auditEvents],
-    [11, 1, 2, 3, 4, 5, 6, 7, 8],
+      res.topologyChanges, res.discoveredDevices, res.hostConnections, res.knownDevices, res.auditEvents],
+    [11, 1, 2, 3, 4, 5, 6, 7, 9, 8],
   );
   const ago = (d) => new Date(NOW.getTime() - d * 864e5).toISOString();
   assert.equal(cuts.internal.toISOString(), ago(90)); // shares the rollup window
@@ -129,6 +130,7 @@ test('the tables that used to grow forever are purged, each on its own window', 
   assert.equal(cuts.topo.toISOString(), ago(180));
   assert.equal(cuts.disc.toISOString(), ago(91));
   assert.equal(cuts.conn.toISOString(), ago(30));
+  assert.equal(cuts.known.toISOString(), ago(400));
   assert.equal(cuts.audit.toISOString(), ago(366));
 });
 

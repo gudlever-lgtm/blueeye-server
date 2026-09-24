@@ -68,7 +68,7 @@ test('unackChange deletes one row and reports whether there was one', async () =
   assert.equal(await repo.unackChange(4, KEY), false);
 });
 
-// ---------------------------------------------------------------- mutes (124)
+// ---------------------------------------------------------------- mutes (134)
 test('listChangeMutes reads only the caller\'s LIVE mutes', async () => {
   const until = new Date('2026-09-23T10:00:00.000Z');
   const pool = fakePool((sql, params) => {

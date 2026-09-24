@@ -10,6 +10,7 @@ const { validateProbeResults } = require('../validation/probeValidation');
 const { normalizeReportedArp } = require('../identity/arpTable');
 const { validateDeviceEventBatch } = require('../validation/deviceEventValidation');
 const { validateSnmpTopologyBatch, validateSnmpCounterBatch } = require('../validation/snmpDeviceValidation');
+const { withoutSflowDetail } = require('../devices/sflowCounterIngest');
 
 // Endpoints agents call themselves, authenticated with their opaque token
 // (NOT a user JWT). `agentAuth` is the agent-token middleware. The agent id is
@@ -18,7 +19,7 @@ const { validateSnmpTopologyBatch, validateSnmpCounterBatch } = require('../vali
 //
 // Paths use the `/me/...` prefix so they don't collide with the user-JWT agents
 // router's `/:id` routes mounted under the same /agents path.
-function createAgentReportsRouter({ agentAuth, resultsRepo, resultsTsdbRepo = null, agentsRepo, auditEventsRepo = null, analysisPipeline = null, flowPipeline = null, probeResultsRepo = null, probePipeline = null, probeOutageService = null, installToolService = null, lldpNeighborsRepo = null, topologyChangeService = null, hostConnectionsRepo = null, arpEntriesRepo = null, deviceEventIngest = null, snmpDevicesRepo = null, snmpTopologyIngest = null, snmpCounterIngest = null, interfaceStateService = null, discoveredDevicesRepo = null, snmpProfilesRepo = null, auditLogger = null, notifyDashboard = null, logger = null }) {
+function createAgentReportsRouter({ agentAuth, resultsRepo, resultsTsdbRepo = null, probeResultsTsdbRepo = null, agentsRepo, auditEventsRepo = null, analysisPipeline = null, flowPipeline = null, probeResultsRepo = null, probePipeline = null, probeOutageService = null, installToolService = null, lldpNeighborsRepo = null, topologyChangeService = null, hostConnectionsRepo = null, arpEntriesRepo = null, deviceEventIngest = null, snmpDevicesRepo = null, snmpTopologyIngest = null, snmpCounterIngest = null, sflowCounterIngest = null, interfaceStateService = null, discoveredDevicesRepo = null, snmpProfilesRepo = null, auditLogger = null, notifyDashboard = null, logger = null }) {
   const router = express.Router();
 
   // Each probe-results POST re-reads the agent's recent rows for probe-finding
@@ -72,6 +73,16 @@ function createAgentReportsRouter({ agentAuth, resultsRepo, resultsTsdbRepo = nu
         return res.status(400).json({ error: 'Validation failed', details: errors });
       }
       const inserted = await probeResultsRepo.createMany(req.agent.agentId, value.results);
+
+      // Storage split: mirror into the TSDB best-effort, exactly like the
+      // results mirror below — MySQL is the source of truth during rollout.
+      if (probeResultsTsdbRepo) {
+        try {
+          await probeResultsTsdbRepo.createMany(req.agent.agentId, value.results);
+        } catch (err) {
+          if (logger) logger.warn(`tsdb: probe_results mirror write failed (${err.message}); MySQL is source of truth`);
+        }
+      }
 
       // A finished trace tells the dashboard straight away, so a path the
       // operator is waiting on draws the moment it lands instead of on the
@@ -130,7 +141,9 @@ function createAgentReportsRouter({ agentAuth, resultsRepo, resultsTsdbRepo = nu
       // After persistence, derive probe-based findings (reachability/loss/latency/
       // jitter/cert) and alert, then derive events. Both re-scan recent rows,
       // so a rapid burst is collapsed (see shouldAnalyze). Resilient: must never
-      // break ingestion.
+      // break ingestion. The ORDER matters: the outage service holds back the
+      // alert of an outage whose target the pipeline has just raised (one
+      // fault, one alert — see probeOutageService), so the pipeline runs first.
       if ((probePipeline || probeOutageService) && shouldAnalyze(req.agent.agentId)) {
         if (probePipeline) {
           try {
@@ -162,14 +175,19 @@ function createAgentReportsRouter({ agentAuth, resultsRepo, resultsTsdbRepo = nu
       if (errors) {
         return res.status(400).json({ error: 'Validation failed', details: errors });
       }
-      const inserted = await resultsRepo.createMany(req.agent.agentId, value.results);
+      // What is stored omits the raw sFlow counters/exporter list: they land in
+      // their own tables (the sFlow ingest below reads them from value.results,
+      // which keeps them), and were ~24 KB per row here. Both stores get the
+      // same stripped payload.
+      const stored = withoutSflowDetail(value.results);
+      const inserted = await resultsRepo.createMany(req.agent.agentId, stored);
 
       // Storage split (docs/storage-split-audit.md): when TimescaleDB is
       // enabled, mirror results into the TSDB best-effort. MySQL is the source
       // of truth during rollout, so a TSDB failure must never break ingest.
       if (resultsTsdbRepo) {
         try {
-          await resultsTsdbRepo.createMany(req.agent.agentId, value.results);
+          await resultsTsdbRepo.createMany(req.agent.agentId, stored);
         } catch (err) {
           if (logger) logger.warn(`tsdb: results mirror write failed (${err.message}); MySQL is source of truth`);
         }
@@ -221,6 +239,18 @@ function createAgentReportsRouter({ agentAuth, resultsRepo, resultsTsdbRepo = nu
           await flowPipeline.processResults(req.agent.agentId, value.results);
         } catch {
           /* flow enrichment is best-effort; ingestion already succeeded */
+        }
+      }
+
+      // sFlow COUNTER samples (the exporter's own interface + Ethernet error
+      // counters) into the device counter series, for exporters that are
+      // registered devices (src/devices/sflowCounterIngest.js). Optional on
+      // the wire — an older agent sends none — and best-effort like the rest.
+      if (sflowCounterIngest) {
+        try {
+          await sflowCounterIngest.processResults(req.agent.agentId, value.results);
+        } catch (err) {
+          if (logger) logger.warn(`sflow-counters ingest failed for agent ${req.agent.agentId}: ${err && err.message}`);
         }
       }
 

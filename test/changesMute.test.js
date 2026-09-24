@@ -3,7 +3,7 @@
 process.env.NODE_ENV = 'test';
 process.env.JWT_SECRET = 'test-secret-do-not-use-in-prod';
 
-// "Mute this rule" on the Changes page (migration 124).
+// "Mute this rule" on the Changes page (migration 134).
 //
 //   GET    /api/changes                   — every row carries muteKey + mutedUntil
 //   POST   /api/changes/mute {key, hours} — viewer+, the caller's own view

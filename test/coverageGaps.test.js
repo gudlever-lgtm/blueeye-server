@@ -25,7 +25,10 @@ const AGENT = (over = {}) => ({
 const DEVICE = (over = {}) => ({
   id: 5, host: '10.0.0.2', displayName: 'core-sw', enabled: true, agentId: 1, locationId: 10,
   hasCommunity: true, collect: ['if', 'fdb', 'lldp', 'vlan', 'ifcounters'], counterIntervalSec: 300,
-  supported: ['if', 'fdb', 'lldp', 'vlan', 'ifcounters'], lastOkAt: minsAgo(2), lastPolledAt: minsAgo(2), lastError: null,
+  // What the agent really sends: the TOPOLOGY cycle's findings, which never
+  // include 'ifcounters' — counters are proven by the last counter poll.
+  supported: ['if', 'fdb', 'lldp', 'vlan'], lastOkAt: minsAgo(2), lastPolledAt: minsAgo(2), lastError: null,
+  lastUptimeAt: minsAgo(3),
   ...over,
 });
 
@@ -44,6 +47,7 @@ function sources(over = {}) {
     agentMacs: ok([]),
     arpSubnets: ok([]),
     discovered: ok({ rows: [], total: 0 }),
+    sflowExporters: ok([]),
     ...over,
   };
 }
@@ -321,4 +325,41 @@ test('every gap has the documented shape, and every kind has a known scope', () 
     assert.equal(typeof g.suggestion, 'string');
   }
   assert.equal(r.summary.total, r.summary.warn + r.summary.info);
+});
+
+// ============================================================ sFlow exporters
+const EXPORTER = (over = {}) => ({
+  id: 40, agentId: 1, address: '10.0.0.77', deviceId: null, interfaces: 52,
+  firstSeen: minsAgo(600), lastSeen: minsAgo(3), ...over,
+});
+
+test('an sFlow exporter that is no registered device is a gap, with who hears it', () => {
+  const r = build({
+    agents: ok([AGENT(), AGENT({ id: 2, hostname: 'h2' })]),
+    sflowExporters: ok([EXPORTER(), EXPORTER({ id: 41, agentId: 2, interfaces: 48, lastSeen: minsAgo(1) })]),
+  });
+  const g = r.gaps.filter((x) => x.kind === 'sflowExporterUnregistered');
+  assert.equal(g.length, 1, 'one gap per address, however many agents hear it');
+  assert.equal(g[0].scope, 'device');
+  assert.equal(g[0].severity, 'info');
+  assert.deepEqual(g[0].subject, { id: 40, label: '10.0.0.77' });
+  assert.deepEqual(g[0].evidence, { address: '10.0.0.77', interfaces: 52, heardBy: 'h1, h2', lastSeen: minsAgo(1) });
+  assert.equal(g[0].suggestion, 'registerExporter');
+  assert.deepEqual(g[0].link, { view: 'settings', tab: 'snmp' });
+  assert.equal(check(r, 'sflowExporters').status, 'ok');
+});
+
+test('an exporter whose address IS a device is not a gap (IPv6 compared compressed)', () => {
+  const r = build({
+    snmpDevices: ok([DEVICE(), DEVICE({ id: 6, host: '2001:db8::7' })]),
+    sflowExporters: ok([EXPORTER({ address: '10.0.0.2' }), EXPORTER({ id: 41, address: '2001:db8:0:0:0:0:0:7' })]),
+  });
+  assert.deepEqual(kinds(r).filter((k) => k === 'sflowExporterUnregistered'), []);
+});
+
+test('the exporter check is SKIPPED when the exporter store or the device list cannot be read', () => {
+  assert.equal(check(build({ sflowExporters: { status: 'unavailable' } }), 'sflowExporters').status, 'skipped');
+  const r = build({ snmpDevices: { status: 'failed' }, sflowExporters: ok([EXPORTER()]) });
+  assert.equal(check(r, 'sflowExporters').status, 'skipped');
+  assert.deepEqual(kinds(r).filter((k) => k === 'sflowExporterUnregistered'), [], 'never guessed without the device list');
 });

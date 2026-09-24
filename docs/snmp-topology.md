@@ -166,8 +166,14 @@ Two deliberate non-behaviours:
   is somewhere it has since left.
 
 `POST /api/snmp-devices/:id/poll` (operator+) asks an agent to run a cycle now.
-It answers **202**, not 200: the agent does the polling, so the table refreshes
-a moment later on its own ingest path.
+The command goes out correlated (`sendCommandAndWait`, as ping/diagnose do) and
+the server waits up to **20 s** for the agent's `command-result`: **200** with
+`result: { devices, polled, failed, configRefreshed, deviceAssigned, detail,
+error }` when it answers — the dashboard says "Polled 2 devices: 2 answered, 0
+did not", or that this device is not assigned to the agent — and **202**
+`{ pending: true }` when it has not answered yet (a slow cycle, or an agent
+older than the reply): the poll still runs and the table refreshes on the
+ingest path. Sent without an id, as it was, the reply was dropped by the socket.
 
 ---
 
@@ -259,6 +265,60 @@ own change with its own reasoning, not a column reused because it was nearby.
 The data is collected and stored now so nothing is lost while that waits, and
 `GET /api/snmp-devices/:id` serves it per device.
 
+### CDP, the router ARP table, the hardware and the system group (migrations 124–126)
+
+Three more collect kinds, read by agents from 0.40 on. **New devices get all
+three by default**
+(`DEFAULT_COLLECT` = `if, fdb, lldp, vlan, cdp, arp, entity`); a device created before keeps its stored list — a row whose `collect`
+is `NULL` still means the legacy `if, fdb, lldp, vlan`, so an upgrade never
+silently starts walking a router's ARP table. An admin opts an existing device
+in with `PATCH /api/snmp-devices/:id { collect: [...] }`. A device that does not
+implement one of these MIBs answers with an empty walk, which is "not
+supported" in `supported`, never an error. An older agent ignores a kind it does
+not know.
+
+* **`cdp`** — CISCO-CDP-MIB `cdpCacheTable`. Stored in `snmp_neighbors` beside
+  LLDP with `protocol = 'cdp'`, plus `remote_address` (cdpCacheAddress, decoded
+  from its BYTES by cdpCacheAddressType — four bytes of IPv4, sixteen of IPv6)
+  and `remote_platform`. `protocol` is part of the unique key, so a Cisco
+  neighbour speaking both protocols is two rows that never overwrite each other.
+  The consumers treat CDP like LLDP: the topology graph also resolves a
+  neighbour by its CDP management address against a polled device's `host`;
+  coverage counts an LLDP+CDP pair on one port once and does not flag "no LLDP"
+  on a device that answers CDP; the neighbour diff compares **per protocol** —
+  a poll whose CDP walk failed while LLDP answered does not announce the CDP
+  neighbours as removed (nor as re-added when CDP answers again).
+* **`arp`** — IP-MIB `ipNetToPhysicalTable` (IPv4 and IPv6), falling back to
+  `ipNetToMediaTable`; invalid/incomplete entries, link-local IPv6 and
+  multicast/broadcast addresses dropped. At most **8192 rows per device** (the
+  agent bounds the walk too). Stored in `device_arp_entries` — one row per
+  `(device, ip)`, a MAC change stamped in `mac_changed_at`, aged out on the
+  **same 30-day window as `arp_entries`** (`RETENTION_ARP_DAYS`). It is an
+  **identity source**: universal search answers IP↔MAC from it, and the
+  new-device detector watches it — "never seen" is scoped to the **device's
+  site** (`snmp_devices.location_id`), agents' and routers' tables at the same
+  site vouch for each other, and the same baseline guard applies (the router's
+  own oldest row must be `NEW_DEVICE_BASELINE_HOURS` old). In a flat OT network
+  the router's table is the one that sees every PLC.
+* **`entity`** — ENTITY-MIB `entPhysicalTable`: every chassis (≤ 16 — a stack of
+  eight is eight serials) and up to 32 modules that name a model or a serial.
+  Stored in `device_inventory`, **replaced per poll** (an empty report replaces
+  nothing), searchable by serial; the FIRST chassis's model, serial, vendor and
+  revisions are also kept on `snmp_devices.hw_*` for lists.
+
+**sysLocation, sysContact, sysObjectID** are read on every poll (a second GET,
+so an SNMPv1 device that lacks one never costs the uptime) and kept on
+`snmp_devices` with `COALESCE`, like `sys_descr`. **sysLocation is the sub-site
+location** — the room or rack the admin typed into the device — and it is shown
+beside the site wherever devices are listed: the switch list, every search hit
+that names a device (`Plant A · Hal 2, rack A3`), and the coverage report's
+device gaps (`subject.where`). The site says which building; sysLocation says
+where in it.
+
+A cycle bigger than the server's 1 MiB body limit (a full ARP table beside a
+full forwarding table can be) is sent by the agent as several POSTs, split by
+device.
+
 ---
 
 ## The payoff: searching a MAC
@@ -293,13 +353,13 @@ recently-seen port hit lands at the top on its own.
 | | |
 |---|---|
 | `GET /api/snmp-devices` | viewer+ — the inventory, with the polling agent's name |
-| `GET /api/snmp-devices/:id` | viewer+ — the device, its port table and its neighbours. A failing port table still lets the page open: the poll state and the error are worth seeing |
+| `GET /api/snmp-devices/:id` | viewer+ — the device (with `sysLocation`, `sysContact`, `sysObjectId`, `hardware`), `siteName`, its port table, its LLDP/CDP neighbours, its ARP table (`arp`, newest 500, `arpTotal`) and its `inventory`. Every part is best-effort: a failing port table still lets the page open, because the poll state and the error are worth seeing |
 | `GET /api/snmp-devices/:id/interfaces` | viewer+ — the PORTS on the device (migration 108), without the forwarding table beside them. 404 for an unknown device rather than an empty list: "this switch has no ports" and "there is no such switch" are different answers |
 | `POST /api/snmp-devices` | **admin** — 201, or **409** for a duplicate address+port, or **400** for an address the server must never poll |
 | `PATCH /api/snmp-devices/:id` | **admin** |
 | `DELETE /api/snmp-devices/:id` | **admin** — 204; the port table and neighbours cascade |
-| `POST /api/snmp-devices/:id/poll` | **operator+** — 202; **409** when the device has no agent or the agent is not connected |
-| `POST /agents/me/snmp-topology` | agent token — 202 with `{ stored, fdbRows, neighbourRows, refused, failuresRecorded, skipped }` |
+| `POST /api/snmp-devices/:id/poll` | **operator+** — 200 with the agent's result, 202 when it has not answered within 20 s; **409** when the device has no agent or the agent is not connected; 503 without an agent channel |
+| `POST /agents/me/snmp-topology` | agent token — 202 with `{ stored, fdbRows, neighbourRows, arpRows, inventoryRows, refused, failuresRecorded, skipped }` |
 
 Reading is viewer+ because a device list is inventory, the same class as the
 agent list. **Writing is admin**: adding a device points the server's polling at

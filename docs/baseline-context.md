@@ -96,9 +96,25 @@ Tuesday" under Danish; the parity test caught it.)
 
 ## API
 
-`GET /api/baselines/flow-pair?host=<agentId>&limit=` · **viewer+**
+`GET /api/baselines/flow-pair?host=<agentId>&limit=[&dst=<agentId>&port=<n>]` · **viewer+**
 
-Returns `{ host, baselines[], building }`.
+Returns `{ host, baselines[], building, current }`.
+
+`dst`/`port` narrow the answer to one flow pair. `current` is "now" for the
+comparison: the last hour the rollup recorded for these pairs (only complete
+hours are rolled up), as `{ bucket, dow, hour, pairs: [{dstHostId, dstPort,
+bytes}] }` with the UTC weekday/hour slot the baselines are keyed by — or `null`
+when nothing has been rolled up yet. The latest bucket is taken over the same
+filter, so a quiet pair reports its own last hour, not an hour it had no traffic
+in.
+
+## Where it is shown
+
+The agent page (**Dependencies**): each outbound pair gets an "Hour hh:00 UTC"
+column — the last hour's bytes with this component's line under it, and nothing
+under it when that slot has no baseline. The row's **Baseline** dialog (viewer+)
+says "normal for a Tuesday at 14:00 UTC: median ± MAD" and the last complete hour
+against it, above the hour-of-day band.
 
 `building: true` means this host has no baselines yet — normal for ~14 days after
 a fresh install, because history builds **forward** (raw flow records cannot be
@@ -118,5 +134,6 @@ a display one.
 
 - Component `public/baselineMetric.js` (+ `.bm-*` CSS)
 - Router `src/routes/baselines.js`
-- Data `flow_pair_baselines` (migration 068) via `flowPairBaselinesRepository.listForHost`
+- Data `flow_pair_baselines` + `flow_pair_hourly` (migration 068) via `flowPairBaselinesRepository.listForHost` / `latestHourlyForHost`
+- Call site `loadAgentDependencies` in `public/app.js` (test `test/agentBaselineContext.test.js`)
 - Tests `test/baselineMetric.test.js` (pure + jsdom), `test/baselinesApi.test.js`

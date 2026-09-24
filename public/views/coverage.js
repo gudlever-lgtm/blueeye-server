@@ -24,7 +24,7 @@
     var SCOPES = ['site', 'agent', 'device', 'subnet'];
     var CHECK_TONE = { ok: 'ok', partial: 'warn', skipped: 'neutral' };
     // Evidence fields that are timestamps, shown as "4 min ago".
-    var TIME_FIELDS = ['lastSeen', 'lastReportAt', 'lastFlowAt', 'lastOkAt', 'lastPolledAt'];
+    var TIME_FIELDS = ['lastSeen', 'lastReportAt', 'lastFlowAt', 'lastOkAt', 'lastPolledAt', 'lastCounterPollAt'];
 
     // A key this build has no string for falls back to the raw value rather
     // than rendering the key itself.
@@ -107,7 +107,10 @@
         }
         if (g.scope === 'agent') return ui.hostLink(label, function () { deps.go({ view: 'agent', id: id }); });
         if (g.scope === 'device' && g.link && g.link.view === 'snmpDevice') {
-          return ui.hostLink(label, function () { deps.go(g.link); });
+          var link = ui.hostLink(label, function () { deps.go(g.link); });
+          // The room/rack the device says it is in (sysLocation).
+          return g.subject && g.subject.where
+            ? el('div', {}, link, ui.metaXs(g.subject.where)) : link;
         }
         return el('span', {}, label);
       }

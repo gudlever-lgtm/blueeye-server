@@ -31,7 +31,7 @@ list, serial, fingerprint and the negotiated parameters.
 | Field | Fault | Fix |
 |---|---|---|
 | `expiryDays` / `expired` | Runs out, or has | Renew |
-| `authorized` + `authorizationError` | The chain does not validate | Usually install the intermediate |
+| `chainTrusted` (+ `authorized`, `authorizationError`) | The chain does not validate | Usually install the intermediate |
 | `hostnameMatches` | The certificate is for another name | Reissue, or point at the right vhost |
 | `protocol` / `cipher` | What was negotiated | The audit's question |
 
@@ -54,6 +54,24 @@ there is no SAN at all.
 **`servername`** is how you check the certificate one virtual host serves on a
 shared address: point the probe at the IP and name the host. It is validated by
 the same rule as any other target, because it reaches a network call.
+
+**`authorized` is one flag for two checks.** node verifies the chain *first*
+and the name *second*, so `authorized: false` with
+`ERR_TLS_CERT_ALTNAME_INVALID` means the chain validated and only the name
+failed. Agent 0.40+ reports `chainTrusted` beside it (and keeps `authorized` /
+`authorizationError` verbatim); for an older agent's row the server derives
+`chainTrusted` from that code at ingest, and the analysis does the same for rows
+stored before. The finding for a name mismatch on a good chain reads "TLS
+certificate on `<address>` is not valid for `<servername>`: the chain
+validates, but the certificate is not for that name (it is issued for …)" —
+never "the chain does not validate". The name it quotes is the SNI name the
+agent sends in `tls.servername`, else the host.
+
+**Two names on one address are two targets.** When `servername` is given and
+differs from `host`, agent 0.40+ reports the target as `servername@host:port`
+(otherwise `host:port`, as before), so a valid and a mismatched name on the same
+port are two series and two findings rather than one that flips between them.
+An older agent still sends `host:port` for both.
 
 ## The reverse-DNS probe
 

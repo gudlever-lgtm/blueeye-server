@@ -5,6 +5,11 @@ const { computeBlastRadius } = require('../topology/blastRadius');
 const { buildTargetTimeline } = require('../timeline/targetTimeline');
 const {
   buildRootCauses,
+  buildCaseRootCauses,
+  caseRoot,
+  compareRootCauses,
+  firstSentence,
+  openFaultNodes,
   buildTopologyView,
   buildAnomalies,
   buildSummary,
@@ -39,10 +44,25 @@ const { buildClusterDetail } = require('../analysis/clusterView');
 //    host/metric/severity to roll up — the full rows (explanation + evidence) are
 //    the *fault list*, which is a separate, on-demand read (getFaults below) and
 //    is deliberately NOT fetched when the screen loads.
+//
+// TWO SOURCES OF FAULTS. A live cross-agent cluster (situation) is one; an
+// OPEN EVENT CASE outside a live situation is the other. The correlator only
+// clusters findings from ≥2 agents, so a site with a single agent never forms
+// one — and before cases were read here, a water utility with its uplink down
+// on both switches, probe outages and a failed transaction saw "0 active
+// faults" on the screen meant for what is broken now. A case linked to a live
+// situation is left out (the situation counts it), and any finding a live
+// cluster already lists is stripped from a case before it is counted, so no
+// alarm is counted twice. Case members are read in ONE bulk
+// `event_case_id IN (...)` read, narrow projection, bounded like the cluster
+// hydration.
 
 const DEFAULT_WINDOW_MINUTES = 24 * 60;
 const MAX_WINDOW_MINUTES = 7 * 24 * 60;
 const DEFAULT_CLUSTER_LIMIT = 100;
+// How many open event cases the case path rolls up — newest activity first,
+// the same bound as the clusters.
+const DEFAULT_CASE_LIMIT = 100;
 const DEFAULT_ANOMALY_LIMIT = 200;
 const DEFAULT_TIMELINE_LIMIT = 200;
 const DEFAULT_DISCOVERY_LIMIT = 100;
@@ -51,6 +71,11 @@ const DEFAULT_DISCOVERY_LIMIT = 100;
 // dashboard read into an unbounded scan. Members past it are not counted in the
 // severity/affected-device rollup — `memberCount` (and therefore the Active
 // faults figure) comes from the cluster row itself and stays exact either way.
+//
+// The case path has the same ceiling on its one bulk read. There the member
+// count IS the rows read (an event case stores no member list), so a set of
+// open cases holding more than this many findings — a runaway, not a site —
+// counts the first MAX_HYDRATED_MEMBERS (oldest first) and says so in the log.
 const MAX_HYDRATED_MEMBERS = 20000;
 
 // Defaults for the on-demand fault list (getFaults). One page is small: this is
@@ -83,6 +108,9 @@ function createTroubleshootingOverviewService({
   // like every other source here: an inventory that cannot be read costs the
   // switch STATES on the picture, never the page.
   snmpDevicesRepo = null,
+  // Open event cases — the single-host half of the fault rollup (see above).
+  // Optional: unwired, the screen shows the cluster path only, as before.
+  eventCasesRepo = null,
   logger = console,
 } = {}) {
   // --- per-source fetchers (each rejects on its own backend failure) ---------
@@ -93,6 +121,12 @@ function createTroubleshootingOverviewService({
     if (!clustersRepo || typeof clustersRepo.listOpen !== 'function') return [];
     const clusters = await clustersRepo.listOpen(limit);
     return asArray(clusters).slice(0, limit);
+  }
+
+  // Open event cases that are not part of a live situation.
+  async function fetchCases({ limit }) {
+    if (!eventCasesRepo || typeof eventCasesRepo.listOpenOutsideSituations !== 'function') return [];
+    return asArray(await eventCasesRepo.listOpenOutsideSituations({ limit })).slice(0, limit);
   }
 
   async function fetchAgents() {
@@ -187,6 +221,60 @@ function createTroubleshootingOverviewService({
     return byId;
   }
 
+  // The findings of the open cases, in ONE bulk read (narrow projection),
+  // grouped per case, oldest first, with every finding a live cluster already
+  // counts (`excluded`, finding-id strings) taken out. Returns caseId -> rows.
+  //
+  // Falls back to one listByEventCase per case for a store without the bulk
+  // read — bounded by the case limit, a compatibility shim like the one above.
+  async function hydrateCaseMembers(cases, excluded = new Set()) {
+    const byCase = new Map();
+    const ids = asArray(cases).map((c) => c && Number(c.id)).filter((n) => Number.isInteger(n) && n > 0);
+    if (!ids.length || !findingStore) return byCase;
+
+    let rows = [];
+    if (typeof findingStore.listByEventCases === 'function') {
+      rows = asArray(await findingStore.listByEventCases(ids, { light: true, limit: MAX_HYDRATED_MEMBERS }));
+      if (rows.length >= MAX_HYDRATED_MEMBERS) {
+        logger.warn?.(`troubleshooting: open event cases hold ${MAX_HYDRATED_MEMBERS}+ findings; rolling up the first ${MAX_HYDRATED_MEMBERS}`);
+      }
+    } else if (typeof findingStore.listByEventCase === 'function') {
+      const perCase = await Promise.all(ids.map((id) => Promise.resolve(findingStore.listByEventCase(id))
+        .then((list) => asArray(list).map((f) => ({ ...f, eventCaseId: f.eventCaseId ?? id })))));
+      rows = perCase.flat();
+    }
+
+    for (const row of rows) {
+      if (!row || row.id == null || row.eventCaseId == null) continue;
+      if (excluded.has(String(row.id))) continue;
+      const key = Number(row.eventCaseId);
+      if (!byCase.has(key)) byCase.set(key, []);
+      byCase.get(key).push(row);
+    }
+    return byCase;
+  }
+
+  // The full rows of each case's ROOT finding, for the cause text. One bulk
+  // read of at most one finding per case. Returns findingId -> finding.
+  async function readCaseRoots(cases, membersByCase) {
+    const byId = new Map();
+    const rootIds = [];
+    for (const c of asArray(cases)) {
+      const root = caseRoot(c, membersByCase.get(Number(c && c.id)));
+      if (root && root.id != null) rootIds.push(root.id);
+    }
+    if (!rootIds.length || !findingStore) return byId;
+    if (typeof findingStore.listByIds === 'function') {
+      for (const row of asArray(await findingStore.listByIds(rootIds))) {
+        if (row && row.id != null) byId.set(String(row.id), row);
+      }
+    } else if (typeof findingStore.get === 'function') {
+      const rows = await Promise.all(rootIds.map((id) => Promise.resolve(findingStore.get(id)).catch(() => null)));
+      for (const row of rows) if (row && row.id != null) byId.set(String(row.id), row);
+    }
+    return byId;
+  }
+
   // Blast radius for every device named by a root cause, from the single graph.
   //
   // `isAlive` is what keeps the answer honest: an agent that is online and
@@ -212,9 +300,15 @@ function createTroubleshootingOverviewService({
   async function getOverview({
     windowMinutes = DEFAULT_WINDOW_MINUTES,
     clusterLimit = DEFAULT_CLUSTER_LIMIT,
+    caseLimit = DEFAULT_CASE_LIMIT,
     anomalyLimit = DEFAULT_ANOMALY_LIMIT,
     timelineLimit = DEFAULT_TIMELINE_LIMIT,
     includeDiscovery = false,
+    // Operator-level domains: flow-pair baseline deviations, topology changes
+    // and blast radius. A viewer's overview leaves them out (empty, never a
+    // 403 for the whole screen), so aggregating never widens what a role can
+    // read through the individual endpoints.
+    includeOperatorData = true,
     now = () => new Date(),
   } = {}) {
     // A non-positive or unparseable window falls back to the default rather
@@ -227,10 +321,12 @@ function createTroubleshootingOverviewService({
 
     const sources = [
       ['clusters', () => fetchClusters({ limit: clusterLimit })],
+      // Open event cases: faults no cross-agent cluster covers.
+      ['cases', () => fetchCases({ limit: caseLimit })],
       ['agents', () => fetchAgents()],
       ['graph', () => fetchGraph()],
-      ['anomalies', () => fetchAnomalies({ from, to, limit: anomalyLimit })],
-      ['topologyChanges', () => fetchTopologyChanges({ from, to, limit: timelineLimit })],
+      ['anomalies', () => (includeOperatorData ? fetchAnomalies({ from, to, limit: anomalyLimit }) : Promise.resolve([]))],
+      ['topologyChanges', () => (includeOperatorData ? fetchTopologyChanges({ from, to, limit: timelineLimit }) : Promise.resolve([]))],
       ['agentEvents', () => fetchAgentEvents({ from, to, limit: timelineLimit })],
       ['discovered', () => (includeDiscovery ? fetchDiscovered({ limit: DEFAULT_DISCOVERY_LIMIT }) : Promise.resolve([]))],
       // The device rows, for the poll state of each switch on the map. The
@@ -254,8 +350,10 @@ function createTroubleshootingOverviewService({
 
     // --- root causes: hydrate members, then reuse the correlator's read-model
     let clusterDetails = [];
+    let clusterMembers = [];
     try {
       const membersById = await hydrateMembersBulk(got.clusters);
+      clusterMembers = [...membersById.values()];
       clusterDetails = asArray(got.clusters).map((c) => {
         const members = asArray(c.memberFindingIds)
           .map((id) => membersById.get(String(id)))
@@ -268,6 +366,24 @@ function createTroubleshootingOverviewService({
       logger.warn?.(`troubleshooting: cluster hydration failed: ${err.message}`);
       if (!failedSources.includes('clusters')) failedSources.push('clusters');
       clusterDetails = [];
+      clusterMembers = [];
+    }
+
+    // --- open event cases: the faults no live cluster covers -----------------
+    // Every finding id a live cluster lists is excluded from the cases, so an
+    // alarm that is both a cluster member and in a case (the case not yet
+    // stamped with its situation) is counted once, on the cluster.
+    const clusterIds = new Set(memberIdsOf(got.clusters).map(String));
+    let caseMembers = new Map();
+    let caseRoots = new Map();
+    try {
+      caseMembers = await hydrateCaseMembers(got.cases, clusterIds);
+      caseRoots = await readCaseRoots(got.cases, caseMembers);
+    } catch (err) {
+      logger.warn?.(`troubleshooting: case hydration failed: ${err.message}`);
+      if (!failedSources.includes('cases')) failedSources.push('cases');
+      caseMembers = new Map();
+      caseRoots = new Map();
     }
 
     // Every device that could need a blast radius: named by a cause, or down.
@@ -278,21 +394,33 @@ function createTroubleshootingOverviewService({
         if (id !== null) nodesOfInterest.add(id);
       }
     }
+    for (const c of asArray(got.cases)) {
+      const id = toNodeId(c && c.hostId);
+      if (id !== null && caseMembers.has(Number(c.id))) nodesOfInterest.add(id);
+    }
     for (const a of asArray(got.agents)) {
       if (String(a && a.status || '').toLowerCase() === 'offline') {
         const id = toNodeId(a.id);
         if (id !== null) nodesOfInterest.add(id);
       }
     }
-    const blastByNode = blastRadiusFor(got.graph, nodesOfInterest, aliveFrom(got.agents, got.snmpDevices));
+    const blastByNode = includeOperatorData
+      ? blastRadiusFor(got.graph, nodesOfInterest, aliveFrom(got.agents, got.snmpDevices))
+      : new Map();
 
-    const rootCauses = buildRootCauses(clusterDetails, { blastByNode });
+    const rootCauses = [
+      ...buildRootCauses(clusterDetails, { blastByNode }),
+      ...buildCaseRootCauses(got.cases, { membersByCase: caseMembers, primaryById: caseRoots, blastByNode }),
+    ].sort(compareRootCauses);
+    // The nodes an open fault sits on, for `degraded` — from the members the
+    // two rollups above already hold, never a second read.
+    const faultNodes = openFaultNodes([...clusterMembers, ...[...caseMembers.values()].flat()]);
     // The switches are IN the graph now (src/topology/graph.js), so the view
     // draws them like anything else. It still needs the device rows: a
     // switch's state comes from its last poll, which is a fact the graph does
     // not carry.
     const topology = buildTopologyView({
-      graph: got.graph, agents: got.agents, devices: got.snmpDevices, blastByNode,
+      graph: got.graph, agents: got.agents, devices: got.snmpDevices, blastByNode, faultNodes,
     });
     const anomalies = buildAnomalies(got.anomalies);
 
@@ -333,6 +461,9 @@ function createTroubleshootingOverviewService({
       timeline,
       partial: failedSources.length > 0,
       failedSources,
+      // Says which panels were left out for this role, so the screen can say
+      // so instead of drawing them as empty.
+      restricted: includeOperatorData ? [] : ['anomalies', 'topologyChanges', 'blastRadius'],
     };
   }
 
@@ -345,37 +476,72 @@ function createTroubleshootingOverviewService({
   // and megabytes of JSON, so it is never part of painting the screen — the
   // Active faults figure links to it and the operator asks for it.
   //
-  // ORDER is the root-cause order the screen already shows (clusters newest
-  // activity first, members in the order the correlator grouped them), so page 2
-  // continues page 1 rather than reshuffling under a stable offset.
+  // TWO SOURCES, as on the overview: the live clusters' members, then the
+  // findings of the open event cases outside a live situation. Every row says
+  // which (`source: 'cluster'|'case'`, with `clusterId` or `caseId`).
   //
-  // `total` counts the DISTINCT member ids across the live clusters. Clusters do
-  // not share findings in practice, so it matches the Active faults figure the
-  // link carries; if one ever did, the list refuses to show the same alarm twice
-  // and the count says so honestly.
+  //   clusterId — one situation's members only (no case rows)
+  //   caseId    — one open case's findings only (no cluster rows). A case
+  //               that is part of a live situation has none here: its
+  //               situation counts them.
+  //   source    — 'cluster' or 'case', the whole of one half
+  //
+  // ORDER is stable, so page 2 continues page 1 rather than reshuffling under
+  // a stable offset: clusters newest activity first with members in the order
+  // the correlator grouped them, then cases newest activity first with their
+  // findings oldest first (the order the event page shows them).
+  //
+  // `total` counts DISTINCT finding ids across both. A finding a live cluster
+  // lists is not repeated under its case, so it matches the Active faults
+  // figure the link carries.
   //
   // A member whose finding is gone (retention purged it) is returned as a
   // placeholder row rather than silently dropped — otherwise a page would come
-  // back short and the "x of y" counter would never reach its total.
-  async function getFaults({ clusterLimit = DEFAULT_CLUSTER_LIMIT, limit = DEFAULT_FAULT_PAGE, offset = 0, clusterId = null } = {}) {
+  // back short and the "x of y" counter would never reach its total. (A case
+  // has no stored member list, so its purged findings are simply not members
+  // any more; the placeholder is a cluster-path thing.)
+  async function getFaults({
+    clusterLimit = DEFAULT_CLUSTER_LIMIT, caseLimit = DEFAULT_CASE_LIMIT,
+    limit = DEFAULT_FAULT_PAGE, offset = 0, clusterId = null, caseId = null, source = null,
+  } = {}) {
     const pageSize = Math.min(Math.max(Math.floor(Number(limit)) || DEFAULT_FAULT_PAGE, 1), MAX_FAULT_PAGE);
     const start = Math.max(Math.floor(Number(offset)) || 0, 0);
+    const wantClusters = caseId == null && source !== 'case';
+    const wantCases = clusterId == null && source !== 'cluster';
 
+    // The clusters are read even when only cases are wanted: their member
+    // ids are what keeps a case from repeating an alarm a situation counts.
     const clusters = await fetchClusters({ limit: clusterLimit });
-    const wanted = clusterId == null
+    const clusterRows = !wantClusters ? [] : (clusterId == null
       ? asArray(clusters)
-      : asArray(clusters).filter((c) => c && Number(c.id) === Number(clusterId));
+      : asArray(clusters).filter((c) => c && Number(c.id) === Number(clusterId)));
 
-    // Flatten to (findingId -> owning cluster) refs, deduped, in cluster order.
+    // Flatten to (findingId -> owning group) refs, deduped, in order.
     const refs = [];
     const seen = new Set();
-    for (const c of wanted) {
+    for (const c of clusterRows) {
       for (const id of asArray(c && c.memberFindingIds)) {
         if (id === null || id === undefined || id === '') continue;
         const key = String(id);
         if (seen.has(key)) continue;
         seen.add(key);
-        refs.push({ id, clusterId: c.id, cause: c.suspectedCommonCause ?? null });
+        refs.push({ id, source: 'cluster', clusterId: c.id, caseId: null, cause: c.suspectedCommonCause ?? null });
+      }
+    }
+
+    let cases = [];
+    let caseMembers = new Map();
+    if (wantCases) {
+      cases = asArray(await fetchCases({ limit: caseLimit }));
+      if (caseId != null) cases = cases.filter((c) => c && Number(c.id) === Number(caseId));
+      caseMembers = await hydrateCaseMembers(cases, new Set(memberIdsOf(clusters).map(String)));
+      for (const c of cases) {
+        for (const m of asArray(caseMembers.get(Number(c.id)))) {
+          const key = String(m.id);
+          if (seen.has(key)) continue;
+          seen.add(key);
+          refs.push({ id: m.id, source: 'case', clusterId: null, caseId: Number(c.id), cause: null });
+        }
       }
     }
 
@@ -389,17 +555,41 @@ function createTroubleshootingOverviewService({
       for (const row of rows) if (row && row.id != null) byId.set(String(row.id), row);
     }
 
+    // A case row's cause is the case's own, named exactly as the overview
+    // names it: the root finding's first sentence, else the case title. Read
+    // only for the cases on THIS page.
+    const causeByCase = new Map();
+    const pageCases = cases.filter((c) => page.some((r) => r.caseId === Number(c.id)));
+    if (pageCases.length) {
+      const missingRoots = pageCases.filter((c) => {
+        const root = caseRoot(c, caseMembers.get(Number(c.id)));
+        return root && !byId.has(String(root.id));
+      });
+      const roots = missingRoots.length ? await readCaseRoots(missingRoots, caseMembers) : new Map();
+      for (const c of pageCases) {
+        const root = caseRoot(c, caseMembers.get(Number(c.id)));
+        const full = root ? (byId.get(String(root.id)) || roots.get(String(root.id))) : null;
+        causeByCase.set(Number(c.id), firstSentence(full && full.explanation) || String(c.title || `Event #${c.id}`));
+      }
+    }
+
     const faults = page.map((ref) => {
       const f = byId.get(String(ref.id)) || null;
       return {
         findingId: ref.id,
+        source: ref.source,
         clusterId: ref.clusterId,
-        cause: ref.cause,
+        caseId: ref.caseId,
+        cause: ref.source === 'case' ? (causeByCase.get(ref.caseId) ?? null) : ref.cause,
         // `missing` is the honest marker for a member whose finding retention
         // has already purged: the cluster still counts it, we just cannot show
         // what it said.
         missing: !f,
         hostId: f ? (f.hostId ?? null) : null,
+        // A switch-port finding names the switch and the port as well as the
+        // polling agent (migration 110).
+        deviceId: f ? (f.deviceId ?? null) : null,
+        interfaceId: f ? (f.interfaceId ?? null) : null,
         metric: f ? (f.metric ?? null) : null,
         severity: f ? (f.severity ?? null) : null,
         kind: f ? (f.kind ?? null) : null,
@@ -430,6 +620,7 @@ module.exports = {
   DEFAULT_WINDOW_MINUTES,
   MAX_WINDOW_MINUTES,
   MAX_HYDRATED_MEMBERS,
+  DEFAULT_CASE_LIMIT,
   DEFAULT_FAULT_PAGE,
   MAX_FAULT_PAGE,
   AGENT_LIFECYCLE_ACTIONS,

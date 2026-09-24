@@ -184,3 +184,206 @@ test('unknown agent is a no-op', async () => {
   const res = await svc.processAgent(123);
   assert.deepEqual(res, { opened: 0, resolved: 0 });
 });
+
+// ---- notifying (audit §8: outages were recorded and never dispatched) --------
+
+const { createDeviceFindingSink } = require('../src/devices/findingSink');
+const { createEventCaseService } = require('../src/eventCases/eventCaseService');
+const { createDispatcher } = require('../src/analysis/alerting/dispatcher');
+const { loadAlertingConfig } = require('../src/analysis/alerting/config');
+const { makeFindingStore, makeEventCasesRepo, makeEventNotesRepo } = require('../test-support/fakes');
+
+// The real notification path over fakes: sink → store/event case → dispatcher
+// (automatic alerting with a configured syslog channel) → a recording channel.
+function buildNotifying({ env = { ALERT_SYSLOG_ENABLED: 'true', SYSLOG_HOST: 'log.example.eu' }, silenced = false } = {}) {
+  let rows = [];
+  const probeOutagesRepo = makeProbeOutagesRepo();
+  const findingStore = makeFindingStore();
+  const eventCasesRepo = makeEventCasesRepo();
+  const eventNotesRepo = makeEventNotesRepo();
+  const sent = [];
+  const config = loadAlertingConfig(env);
+  const dispatcher = createDispatcher({ config, channels: { syslog: { send: async (f) => { sent.push(f); return { ok: true }; } } } });
+  if (silenced) dispatcher.setSilencer(async () => ({ id: 'mw-1' }));
+  const clock = { now: at(3) };
+  const findingSink = createDeviceFindingSink({
+    findingStore,
+    eventCaseService: createEventCaseService({ eventCasesRepo, findingStore, now: () => clock.now }),
+    dispatcher,
+    alertingEnabled: () => config.enabled,
+  });
+  const svc = createProbeOutageService({
+    probeOutagesRepo,
+    thresholdsRepo: makeProbeThresholdsRepo(),
+    agentsRepo: makeAgentsRepo({ findById: async (id) => ({ id, hostname: 'h', location_id: 7 }) }),
+    probeResultsRepo: makeProbeResultsRepo({ findByAgent: async () => rows.slice() }),
+    findingSink, findingStore, dispatcher, eventNotesRepo,
+    now: () => clock.now,
+  });
+  return { svc, probeOutagesRepo, findingStore, eventCasesRepo, eventNotesRepo, sent, clock, setRows: (r) => { rows = r; } };
+}
+const failing = [0, 1, 2].map((m) => ({ ts: at(m), target: 'erp.example.com', ok: false }));
+
+test('an outage OPENING raises a finding (threshold + duration) in an event case, and alerts', async () => {
+  const n = buildNotifying();
+  n.setRows(failing);
+  await n.svc.processAgent(9);
+  assert.equal(n.findingStore.rows.length, 1);
+  const f = n.findingStore.rows[0];
+  assert.equal(f.metric, 'probe_outage.reachability');
+  assert.equal(f.severity, 'CRIT');
+  assert.equal(f.kind, 'THRESHOLD');
+  assert.match(f.explanation, /reachability to erp\.example\.com/);
+  assert.match(f.explanation, /threshold \(3 failed probes in a row\)/);
+  assert.match(f.explanation, /3 min so far/);
+  assert.equal(f.evidence[0].outageId, n.probeOutagesRepo.rows[0].id);
+  assert.equal(f.evidence[0].threshold.debounce, 3);
+  assert.equal(n.eventCasesRepo.rows.length, 1);
+  assert.equal(f.eventCaseId, n.eventCasesRepo.rows[0].id);
+  assert.equal(n.sent.length, 1);
+  assert.equal(n.sent[0].metric, 'probe_outage.reachability');
+  // Still failing on the next ingest: no second open, no second alert.
+  await n.svc.processAgent(9);
+  assert.equal(n.findingStore.rows.length, 1);
+  assert.equal(n.sent.length, 1);
+});
+
+test('an outage CLOSING dispatches one recovery alert with the duration and notes it on the event case', async () => {
+  const n = buildNotifying();
+  n.setRows(failing);
+  await n.svc.processAgent(9);
+  n.setRows([...failing, { ts: at(20), target: 'erp.example.com', ok: true }]);
+  n.clock.now = at(21);
+  const res = await n.svc.processAgent(9);
+  assert.equal(res.resolved, 1);
+  assert.equal(n.sent.length, 2);
+  const rec = n.sent[1];
+  assert.equal(rec.kind, 'RECOVERED');
+  assert.equal(rec.severity, 'CRIT'); // the outage's own, so it reaches the same channels
+  assert.match(rec.explanation, /recovered at .* after 20 min \(critical; threshold 3 failed probes in a row\)/);
+  assert.equal(rec.eventCaseId, n.eventCasesRepo.rows[0].id);
+  const notes = await n.eventNotesRepo.listForEvent({ eventCaseId: rec.eventCaseId });
+  assert.equal(notes.length, 1);
+  assert.match(notes[0].text, /Probe outage resolved/);
+  assert.equal(notes[0].authorRole, 'system');
+  // The recovery is not stored as a new fault.
+  assert.equal(n.findingStore.rows.length, 1);
+});
+
+test('an escalation warning → critical raises again, at the new severity', async () => {
+  const n = buildNotifying();
+  const lat = (m, rttMs) => ({ ts: at(m), target: 'erp.example.com', ok: true, rttMs });
+  n.setRows([lat(0, 200), lat(1, 200), lat(2, 200)]); // warning ≥150
+  await n.svc.processAgent(9);
+  n.setRows([lat(0, 200), lat(1, 200), lat(2, 200), lat(3, 400)]); // critical ≥300
+  await n.svc.processAgent(9);
+  const outageFindings = n.findingStore.rows.filter((f) => f.metric === 'probe_outage.latency');
+  assert.deepEqual(outageFindings.map((f) => f.severity), ['WARN', 'CRIT']);
+  assert.match(outageFindings[1].explanation, /escalated to critical/);
+  assert.match(outageFindings[0].explanation, /warning ≥ 150 ms, critical ≥ 300 ms, 3 results in a row/);
+});
+
+test('alerting switched off: the outage is still a finding in an event case, nothing is sent (open or close)', async () => {
+  const n = buildNotifying({ env: { ALERTING_ENABLED: 'false', ALERT_SYSLOG_ENABLED: 'true', SYSLOG_HOST: 'log.example.eu' } });
+  n.setRows(failing);
+  await n.svc.processAgent(9);
+  n.setRows([...failing, { ts: at(20), target: 'erp.example.com', ok: true }]);
+  await n.svc.processAgent(9);
+  assert.equal(n.findingStore.rows.length, 1);
+  assert.equal(n.eventCasesRepo.rows.length, 1);
+  assert.equal(n.sent.length, 0);
+});
+
+test('a maintenance window silences both the opening and the recovery alert', async () => {
+  const n = buildNotifying({ silenced: true });
+  n.setRows(failing);
+  await n.svc.processAgent(9);
+  n.setRows([...failing, { ts: at(20), target: 'erp.example.com', ok: true }]);
+  await n.svc.processAgent(9);
+  assert.equal(n.findingStore.rows.length, 1, 'the finding is still recorded');
+  assert.equal(n.sent.length, 0);
+});
+
+test('without a sink the service records outages exactly as before (no notification wired)', async () => {
+  const { svc, probeOutagesRepo } = build(failing);
+  const res = await svc.processAgent(9);
+  assert.equal(res.opened, 1);
+  assert.equal(probeOutagesRepo.rows.length, 1);
+});
+
+// ---- review round 2: diagnostics, one fault → one alert ----------------------
+
+test('diagnostic probes (dhcp/tls/rdns/path_mtu) never open an outage, even when failing', async () => {
+  const n = buildNotifying();
+  const diag = [];
+  for (const [type, target] of [['dhcp', 'eth0'], ['tls', 'erp.example.com:443'], ['rdns', '10.0.0.5'], ['path_mtu', 'erp.example.com']]) {
+    for (const m of [0, 1, 2, 3]) diag.push({ ts: at(m), type, target, ok: false, lossPct: 100, rttMs: 900 });
+  }
+  n.setRows(diag);
+  const res = await n.svc.processAgent(9);
+  assert.equal(res.opened, 0);
+  assert.equal(n.probeOutagesRepo.rows.length, 0);
+  assert.equal(n.findingStore.rows.length, 0);
+  assert.equal(n.sent.length, 0);
+  // A real probe to the same host alongside still counts.
+  n.setRows([...diag, ...[0, 1, 2].map((m) => ({ ts: at(m), type: 'ping', target: 'erp.example.com', ok: false }))]);
+  assert.equal((await n.svc.processAgent(9)).opened, 1);
+  assert.equal(n.probeOutagesRepo.rows[0].affected_target, 'erp.example.com');
+});
+
+test('an unreachable target opens ONE reachability outage, not a packet_loss outage on top', async () => {
+  const n = buildNotifying();
+  n.setRows([0, 1, 2].map((m) => ({ ts: at(m), type: 'ping', target: 'erp.example.com', ok: false, lossPct: 100 })));
+  const res = await n.svc.processAgent(9);
+  assert.equal(res.opened, 1);
+  assert.deepEqual(n.probeOutagesRepo.rows.map((r) => r.metric), ['reachability']);
+  assert.deepEqual(n.findingStore.rows.map((f) => f.metric), ['probe_outage.reachability']);
+  assert.equal(n.sent.length, 1);
+  // Lossy but reachable: packet_loss still opens on its own.
+  const lossy = buildNotifying();
+  lossy.setRows([0, 1, 2].map((m) => ({ ts: at(m), type: 'ping', target: 'erp.example.com', ok: true, lossPct: 40 })));
+  await lossy.svc.processAgent(9);
+  assert.deepEqual(lossy.probeOutagesRepo.rows.map((r) => r.metric), ['packet_loss']);
+  assert.equal(lossy.sent.length, 1);
+});
+
+test('the probe pipeline already raised this agent + target: the outage finding is stored + event-cased but not alerted again; recovery still alerts', async () => {
+  const n = buildNotifying();
+  // What probePipeline stores for the same fault a minute earlier.
+  await n.findingStore.save({
+    id: 'p1', hostId: '9', metric: 'probe.reachability', severity: 'CRIT', kind: 'THRESHOLD',
+    explanation: '1/1 probe target(s) not responding', evidence: [{ metric: 'reachability', target: 'erp.example.com' }],
+    createdAt: at(2),
+  });
+  n.setRows(failing);
+  await n.svc.processAgent(9);
+  const outageFinding = n.findingStore.rows.find((f) => f.metric === 'probe_outage.reachability');
+  assert.ok(outageFinding, 'the outage finding is still stored');
+  assert.equal(outageFinding.eventCaseId, n.eventCasesRepo.rows[0].id, 'and grouped into an event case');
+  assert.equal(n.sent.length, 0, 'no second alert for the same fault');
+  // A pipeline finding on ANOTHER target does not suppress this one.
+  const other = buildNotifying();
+  await other.findingStore.save({
+    id: 'p2', hostId: '9', metric: 'probe.reachability', severity: 'CRIT', kind: 'THRESHOLD',
+    explanation: 'x', evidence: [{ metric: 'reachability', target: 'mail.example.com' }], createdAt: at(2),
+  });
+  other.setRows(failing);
+  await other.svc.processAgent(9);
+  assert.equal(other.sent.length, 1);
+  // Nor does one older than the refire cooldown.
+  const old = buildNotifying();
+  old.clock.now = at(40);
+  await old.findingStore.save({
+    id: 'p3', hostId: '9', metric: 'probe.reachability', severity: 'CRIT', kind: 'THRESHOLD',
+    explanation: 'x', evidence: [{ metric: 'reachability', target: 'erp.example.com' }], createdAt: at(2),
+  });
+  old.setRows(failing);
+  await old.svc.processAgent(9);
+  assert.equal(old.sent.length, 1);
+  // The recovery alert on close is still sent.
+  n.setRows([...failing, { ts: at(20), target: 'erp.example.com', ok: true }]);
+  n.clock.now = at(21);
+  await n.svc.processAgent(9);
+  assert.equal(n.sent.length, 1);
+  assert.equal(n.sent[0].kind, 'RECOVERED');
+});

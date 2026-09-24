@@ -89,6 +89,19 @@ const MIGRATED = [
   'views/screening.js',
   'views/license.js',
   'views/coverage.js',
+  'views/pathLocation.js',
+  'views/auditLog.js',
+];
+
+// Section bodies built from the contract's components that sit INSIDE a
+// migrated page (a Settings tab, a Reporting section) rather than being a page
+// of their own. Every rule above applies to them except `template`: the page
+// they sit on owns the PageHeader, and a second one inside it would be the bug.
+// Like MIGRATED, this only grows.
+const SECTIONS = [
+  'thresholdsPanel.js',
+  'slaReports.js',
+  'nis2Evidence.js',
 ];
 
 // Classes the contract replaced. A migrated file may not use them.
@@ -192,7 +205,7 @@ function checkCss() {
 
 // ---------------------------------------------------------------- JS rules
 function checkJs() {
-  for (const rel of MIGRATED) {
+  for (const rel of [...MIGRATED, ...SECTIONS]) {
     const raw = read(rel);
     const src = stripComments(raw);
 
@@ -255,7 +268,7 @@ function checkJs() {
 
     // A migrated view is a composition. ui.js and the shared modules are the
     // components themselves, so the rule applies to the screens.
-    if (rel !== 'ui.js') {
+    if (rel !== 'ui.js' && !SECTIONS.includes(rel)) {
       if (!/ui\.page\(/.test(src)) {
         report(rel, 1, 'template',
           'no ui.page() — a migrated view builds itself from the contract components');
@@ -277,7 +290,7 @@ for (const f of findings) {
   process.stdout.write(`public/${f.file}:${f.line}:${f.rule}  ${f.message}\n`);
 }
 
-const scanned = MIGRATED.length;
+const scanned = MIGRATED.length + SECTIONS.length;
 if (findings.length) {
   process.stdout.write(`\nui:check — ${findings.length} finding(s)\n`);
   // NOT process.exit(): it tears the process down with writes still queued, so

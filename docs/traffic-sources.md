@@ -34,6 +34,73 @@ leaves it empty:
 The **Flows** tab is the better "is data arriving?" test: it shows raw
 conversations and needs only links 1–3 (no GeoIP, no `geo` feature).
 
+## VLAN and switch ports on a flow
+
+A flow record from a current agent also says **which VLAN** it was on and **which
+ports of the exporting switch** it entered and left by — `flow_records.vlan`,
+`in_if`, `out_if` (migration 127):
+
+| Exporter | VLAN | in / out port |
+|---|---|---|
+| sFlow v5 | the 802.1Q tag in the sampled frame (the outer tag of a QinQ pair); when the port stripped it, the switch's *extended switch* record (1001) | the flow sample header's input/output ifIndex (format 0 only — a discard reason or a "several ports" count is not a port) |
+| NetFlow v9 / IPFIX | IE 243 `dot1qVlanId`, else IE 58 `vlanId` | IE 10 / IE 14 (`ingressInterface` / `egressInterface`) |
+| NetFlow v5 | — | — |
+
+The agent aggregates per (src, dst, dst port, protocol, **VLAN**): the same
+pair on two VLANs is two conversations. The ports are not part of the key (a
+conversation can enter by two LAG members); the first one seen is kept. All
+three are NULL when the exporter did not say — never "VLAN 1" or "port 0".
+The sampled frame's MAC addresses are decoded on the agent too (metadata, like
+the 5-tuple) but not stored.
+
+## sFlow interface counters (errors and duplex without SNMP)
+
+An sFlow switch also pushes **counter samples** — its own generic interface
+counters and Ethernet error counters — every polling interval, unasked. The
+agent decodes them (generic format 1, Ethernet format 2) and sends the latest
+reading per (exporter, ifIndex) as `traffic.sflowCounters` (see the agent's
+`PROTOCOL.md` for the wire format). The server
+(`src/devices/sflowCounterIngest.js`) turns them into **the same
+`device_counter_samples` rows an SNMP counter poll writes**, through the same
+`counterDelta` arithmetic, the same analysis pipeline and the same
+duplex-mismatch finding (sFlow `ifDirection` 1/2 → full/half duplex; FCS,
+alignment, late-collision and carrier-sense counters from the Ethernet record).
+
+- **Only for registered devices.** The exporter's source address must be an
+  SNMP device's `host` (an IP literal; IPv6 is compared in its compressed
+  form). A device registered by **hostname** does not match. An exporter that
+  matches nothing is recorded in `sflow_exporters` (migration 128) and shown in
+  **Coverage gaps** as *sFlow exporter not registered as a device*. A newer
+  agent also sends `traffic.sflowExporters` — every exporter address heard
+  that interval, from flow OR counter samples, at most 256 — so a switch that
+  sends only flow samples is recorded too (with no port count; a flow-only
+  sighting never overwrites the count its counter samples recorded). Entries
+  that are not IP literals are dropped, never a reason to refuse the report.
+- **SNMP wins.** A device that is polled for SNMP counters (an assigned agent,
+  `ifcounters` in collect, a counter interval) is left to the poll — two
+  sources interleaving one series would compute every rate across two clocks.
+- **Ports the inventory lacks** get a minimal `device_interfaces` row named
+  `ifIndex N` (`name_source = 'ifIndex'`): an sFlow-only switch has no topology
+  poll to create them. Once SNMP inventories the port under its real name, the
+  real row wins the ifIndex lookup, and the topology upsert **retires** the
+  placeholder: its `if_index` is cleared (and `if_index_changed_at` stamped)
+  but the row is kept, because `device_counter_samples` has no foreign key and
+  deleting it would leave its samples attributable to nothing. Retention
+  removes it once it has not been seen for the window. At most 1 024 active
+  placeholders per device.
+- **Reboots** are detected from the exporter's uptime in the datagram header.
+  It is a 32-bit millisecond counter, so it wraps every 49.7 days, which reads
+  as one reboot (one row of null rates).
+- **The same reading twice** (an exporter sending to two agents, a resubmitted
+  report) is dropped, not stored as a second sample.
+- **Bounded.** A result is capped at 64 KB, so the agent sends at most 1 024
+  interfaces and ~24 KB of counters per report, less when the flow summary is
+  large; the rest are sent on the following reports, longest-unsent first.
+  `sflowCounters` and `sflowExporters` are **not** kept in the stored
+  `results` row (nor its TSDB mirror): they already live in
+  `device_counter_samples` and `sflow_exporters`, and every pipeline reads them
+  from the report as it arrives.
+
 ## sFlow on a host with no switch: hsflowd
 
 A plain Linux host emits no sFlow about its own traffic — the agent's collector
@@ -81,5 +148,7 @@ sudo tcpdump -ni any udp port 6343   # packets = inbound sFlow; silence = nothin
   (`validateMonitorConfig`), edit modal in `public/app.js` (`editAgent`).
 - The config the agent fetches: `GET /agents/me/config` (`src/routes/agentReports.js`).
 - Flow ingest/enrichment/storage: `src/geo/flowPipeline.js`, `src/geo/enricher.js`.
+- sFlow counter samples → device counter series: `src/devices/sflowCounterIngest.js`
+  (exporters heard: `src/repositories/sflowExportersRepository.js`).
 - Destinations aggregation: `src/repositories/flowsRepository.js`
   (`aggregateExternalDestinations`).

@@ -1,4 +1,4 @@
--- 124 — per-user "Mute this rule" on the Changes page.
+-- 134 — per-user "Mute this rule" on the Changes page.
 --
 -- An acknowledgement (115) hides ONE row until its condition happens again. A
 -- mute hides a whole KIND of row — every row of one source + type, on every

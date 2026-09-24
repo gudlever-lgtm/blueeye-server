@@ -311,17 +311,21 @@ function createAgentOfflineMonitor({
       logger.warn(`agent-offline: publish failed (${err.message})`);
     }
     let eventCaseId = null;
+    // The event the finding landed in — new or joined — so the alert can link
+    // straight to it (alertContext builds /events/:id from it).
+    let placedIn = null;
     if (eventCaseService && typeof eventCaseService.assignFinding === 'function') {
       try {
         const placed = await eventCaseService.assignFinding(stored);
         eventCaseId = placed && placed.created ? placed.eventCaseId : null;
+        placedIn = placed && placed.eventCaseId != null ? placed.eventCaseId : null;
       } catch (err) {
         logger.warn(`agent-offline: event assignment failed for ${stored.id} (${err.message})`);
       }
     }
     const alertOn = typeof alertingEnabled === 'function' ? alertingEnabled() : alertingEnabled;
     if (dispatcher && alertOn) {
-      try { await dispatcher.dispatch(stored, null); } catch (err) {
+      try { await dispatcher.dispatch(placedIn != null ? { ...stored, eventCaseId: placedIn } : stored, null); } catch (err) {
         logger.warn(`agent-offline: dispatch failed for ${stored.id} (${err.message})`);
       }
     }

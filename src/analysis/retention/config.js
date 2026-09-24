@@ -77,6 +77,12 @@ function loadRetentionConfig(env = process.env) {
     // 'ignored') and that no sweep has seen for this long. A promoted row is
     // NEVER purged — it records an operator decision about a monitored host.
     discoveredDeviceRetentionDays: toInt(env.RETENTION_DISCOVERED_DEVICE_DAYS, 90),
+    // The new-device detector's memory of every MAC a site has had
+    // (known_devices, migration 131), aged on last_seen. LONG, and deliberately
+    // unlike the ARP window: this answers "has this site EVER seen it", so a
+    // device used once a quarter — or once a year — is not "new" every time it
+    // comes back. 400 days, the same horizon as the probe history.
+    knownDeviceRetentionDays: toInt(env.RETENTION_KNOWN_DEVICE_DAYS, 400),
     // Connection-table edges of agents that stopped reporting (a live agent
     // replaces its own rows on every report). Same as the ARP window.
     hostConnectionRetentionDays: toInt(env.RETENTION_HOST_CONNECTION_DAYS, 30),

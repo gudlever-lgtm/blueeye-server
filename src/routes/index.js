@@ -50,6 +50,8 @@ const { createSnmpProfilesRouter } = require('./snmpProfiles');
 const { createSetupRouter } = require('./setup');
 const { createCoverageRouter } = require('./coverage');
 const { createCoverageService } = require('../coverage/coverageService');
+const { createL2PathRouter, createDeviceLocateRouter } = require('./l2Path');
+const { createDeviceLocator } = require('../topology/deviceLocator');
 const { createBurstRouter } = require('./burst');
 const { createFleetRouter } = require('./fleet');
 const { createDashboardRouter } = require('./dashboard');
@@ -85,6 +87,10 @@ const {
   createAgentTokenMiddleware,
 } = require('../auth/agentAuth');
 const { createApiTokenMiddleware } = require('../auth/apiTokenAuth');
+const { createSecurityPolicy } = require('../auth/securityPolicy');
+const { createSecurityGate } = require('../auth/securityGate');
+const { createPasswordHistory } = require('../auth/passwordHistory');
+const { createAuthSecurityRouter } = require('./authSecurity');
 const { verifyToken } = require('../auth/jwt');
 const { silentLogger } = require('../logger');
 
@@ -99,6 +105,9 @@ function createApiRouter({
   diagnoseCatalog = loadCatalog(),
   diagnoseSessionsRepo = null,
   resultsTsdbRepo = null,
+  // The other TSDB mirrors (docs/storage-split-audit.md); null unless TSDB_ENABLED.
+  probeResultsTsdbRepo = null,
+  speedtestResultsTsdbRepo = null,
   locationsRepo,
   usersRepo,
   agentsRepo,
@@ -149,6 +158,9 @@ function createApiRouter({
   lldpNeighborsRepo,
   hostConnectionsRepo,
   arpEntriesRepo = null,
+  // A router's own ARP table (IP-MIB) — optional. Every reader (search, the L2
+  // path in src/topology/deviceLocator.js, …) works without it.
+  deviceArpRepo = null,
   deviceEventsRepo = null,
   deviceEventIngest = null,
   snmpDevicesRepo = null,
@@ -157,6 +169,10 @@ function createApiRouter({
   snmpTopologyIngest = null,
   deviceInterfacesRepo = null,
   snmpCounterIngest = null,
+  // sFlow counter samples -> device counter series (src/devices/sflowCounterIngest.js),
+  // and the exporters it heard, for the coverage report. Both optional.
+  sflowCounterIngest = null,
+  sflowExportersRepo = null,
   snmpProfilesRepo = null,
   counterSamplesRepo = null,
   burstRunsRepo = null,
@@ -175,6 +191,7 @@ function createApiRouter({
   discoveryConfig,
   geoTileConfig,
   geoProvider,
+  cityProvider = null,
   geoipUpdater,
   centroids,
   assistant,
@@ -183,6 +200,12 @@ function createApiRouter({
   planService,
   usageService,
   settingsService,
+  // Baseline security (migration 041): the cached policy the request gate and
+  // the sign-in/password paths read, and the password-history table. Both
+  // optional — the policy is built over settingsService when not injected, and
+  // with no history repo only the current password is compared.
+  securityPolicy = null,
+  passwordHistoryRepo = null,
   analysisConfig,
   retentionConfig,
   artifactStore,
@@ -267,6 +290,14 @@ function createApiRouter({
   // requireAuth/requireRole work unchanged. Mounted once, ahead of every router.
   if (apiTokensRepo) router.use(createApiTokenMiddleware({ apiTokensRepo }));
 
+  // Baseline security policy: role-based IP allowlist + password max age on
+  // every authenticated request (src/auth/securityGate.js), and password
+  // history on every local password set. Never licence-gated.
+  const secPolicy = securityPolicy || (settingsService && typeof settingsService.getSecurity === 'function'
+    ? createSecurityPolicy({ load: () => settingsService.getSecurity({ strict: true }), logger })
+    : null);
+  const passwordHistory = createPasswordHistory({ passwordHistoryRepo, securityPolicy: secPolicy, logger });
+
   // Forced-password-change gate. A user holding a one-time password gets a JWT
   // flagged mustChangePassword; until they complete the change, EVERY route is
   // refused (403) except the ones needed to do it: the login/SSO/change-password
@@ -290,20 +321,23 @@ function createApiRouter({
     return next();
   });
 
+  // After the one-time-password gate, so a flagged token keeps its own answer.
+  if (secPolicy) router.use(createSecurityGate({ securityPolicy: secPolicy, auditLogger }));
+
   router.use('/health', createHealthRouter({ db, tsdb }));
-  router.use('/auth', createAuthRouter({ usersRepo, ldapAuth, ldapLoginAuditRepo, auditLogger, oidcAuth, samlAuth }));
+  router.use('/auth', createAuthRouter({ usersRepo, ldapAuth, ldapLoginAuditRepo, auditLogger, oidcAuth, samlAuth, securityPolicy: secPolicy, passwordHistory }));
   // SSO (OIDC) — public browser flow (login/callback) + admin config/role-map.
   // Licence-gated (sso_oidc) on the admin writes; the login flow itself is gated
   // by oidcAuth.isEnabled() (env flag + licence + configured). Local login stays.
   if (oidcAuth && oidcRoleMapRepo) {
-    router.use('/auth/oidc', createOidcAuthRouter({ usersRepo, oidcAuth, ssoLoginAuditRepo, auditLogger }));
+    router.use('/auth/oidc', createOidcAuthRouter({ usersRepo, oidcAuth, ssoLoginAuditRepo, auditLogger, securityPolicy: secPolicy }));
     router.use('/api/oidc', createOidcAdminRouter({ oidcAuth, oidcRoleMapRepo, ssoLoginAuditRepo, featureGate }));
   }
   // SSO (SAML 2.0) — public SP-initiated flow (login/ACS/metadata) + admin
   // attribute→role map. Licence-gated (sso_saml) on the admin writes; the login
   // flow is gated by samlAuth.isEnabled(). Local login stays as the fallback.
   if (samlAuth && samlRoleMapRepo) {
-    router.use('/auth/saml', createSamlAuthRouter({ usersRepo, samlAuth, ssoLoginAuditRepo, auditLogger }));
+    router.use('/auth/saml', createSamlAuthRouter({ usersRepo, samlAuth, ssoLoginAuditRepo, auditLogger, securityPolicy: secPolicy }));
     router.use('/api/saml', createSamlAdminRouter({ samlAuth, samlRoleMapRepo, ssoLoginAuditRepo, featureGate }));
   }
   router.use('/users', createUsersRouter({
@@ -312,6 +346,8 @@ function createApiRouter({
     // used to detect (and refuse under) an active SSO/LDAP setup.
     userMailer, ldapAuth, oidcAuth, samlAuth,
     publicUrl: (enrollConfig && enrollConfig.publicUrl) || '',
+    // An admin's password reset is subject to the same history rule.
+    passwordHistory,
     logger,
   }));
   router.use('/me', createMeRouter({ usersRepo }));
@@ -347,7 +383,7 @@ function createApiRouter({
   // Flow-derived dependency/topology map (who-talks-to-whom from the 5-tuples).
   if (discoveredDevicesRepo) router.use('/api/discovery', createDiscoveryRouter({ discoveredDevicesRepo, agentsRepo, discoverySweepJob, agentCommander, auditLogger, auditLogRepo, config: discoveryConfig, getConfig: settingsService ? () => settingsService.getDiscovery() : null, setConfig: settingsService ? (patch) => settingsService.setDiscovery(patch) : null }));
 
-  if (flowsRepo || lldpNeighborsRepo || serviceDependenciesRepo || topologyChangesRepo || flowPairBaselinesRepo) router.use('/api/topology', createTopologyRouter({ flowsRepo, agentsRepo, locationsRepo, centroids, lldpNeighborsRepo, serviceDependenciesRepo, serviceDependencyJob, blastRadiusService, topologyChangesRepo, flowPairBaselinesRepo, flowPairBaselineJob, snmpDevicesRepo, getCategories: settingsService ? () => settingsService.getFlowCategories() : undefined }));
+  if (flowsRepo || lldpNeighborsRepo || serviceDependenciesRepo || topologyChangesRepo || flowPairBaselinesRepo) router.use('/api/topology', createTopologyRouter({ flowsRepo, agentsRepo, locationsRepo, centroids, lldpNeighborsRepo, serviceDependenciesRepo, serviceDependencyJob, blastRadiusService, topologyChangesRepo, flowPairBaselinesRepo, flowPairBaselineJob, snmpDevicesRepo, snmpNeighborsRepo, deviceInterfacesRepo, getCategories: settingsService ? () => settingsService.getFlowCategories() : undefined }));
   // Consolidated Troubleshooting Dashboard — a pure READ aggregation over the
   // five capability domains above (topology rediscovery, dependency mapping,
   // blast radius, flow-pair baselining, active discovery). Owns no data of its
@@ -361,6 +397,9 @@ function createApiRouter({
         // The device rows, for the poll state of each switch on the map. The
         // switches themselves arrive with the graph (src/topology/graph.js).
         snmpDevicesRepo,
+        // Open event cases: the faults a single-agent site has, which never
+        // form a cross-agent cluster (docs/troubleshooting-dashboard.md).
+        eventCasesRepo,
         logger,
       }),
     }));
@@ -378,7 +417,7 @@ function createApiRouter({
     agentsRepo, resultsRepo, probeResultsRepo, agentCommander,
     assistant, auditLogger, logger,
   }));
-  if (probeResultsRepo) router.use('/api/probes', createProbesRouter({ probeResultsRepo, agentsRepo, geoProvider, centroids }));
+  if (probeResultsRepo) router.use('/api/probes', createProbesRouter({ probeResultsRepo, agentsRepo, geoProvider, cityProvider, centroids }));
   if (probeResultsRepo) router.use('/api/fleet', createFleetRouter({ agentsRepo, probeResultsRepo, resultsRepo, speedtestResultsRepo, settingsService, logger }));
   // Overview "open issues" rollup (license feature `dashboard_advanced`,
   // Professional+) — active events + recent findings, gated. Surfaced inline
@@ -412,7 +451,7 @@ function createApiRouter({
       clustersRepo: eventClustersRepo, findingStore, auditLogger, timelineService: clusterTimelineService,
       runbooksRepo, playbooksRepo: remediationPlaybooksRepo, verificationService, settingsService, assistant,
       alertLog: alertDispatchLogRepo, notifier: clusterNotifier,
-      evidenceRepo, snapshotService,
+      evidenceRepo, snapshotService, eventCasesRepo,
     }));
   }
   if (runbooksRepo) router.use('/api/runbooks', createRunbooksRouter({ runbooksRepo, playbooksRepo: remediationPlaybooksRepo }));
@@ -425,14 +464,14 @@ function createApiRouter({
   router.use('/api/interfaces', createInterfacesRouter({ resultsRepo, agentsRepo }));
   // The device log — what the network equipment itself said (syslog now, SNMP
   // traps from stage 03). viewer+; owns no analysis, reads `device_events`.
-  if (deviceEventsRepo) router.use('/api/device-events', createDeviceEventsRouter({ deviceEventsRepo, agentsRepo, logger }));
+  if (deviceEventsRepo) router.use('/api/device-events', createDeviceEventsRouter({ deviceEventsRepo, agentsRepo, snmpDevicesRepo, logger }));
   // The SNMP device inventory — which switches the server polls, through which
   // agent. Read viewer+, write admin (it stores a credential and points the
   // server's polling at an address); "poll now" is operator+.
   if (snmpDevicesRepo) {
     router.use('/api/snmp-devices', createSnmpDevicesRouter({
       snmpDevicesRepo, fdbEntriesRepo, snmpNeighborsRepo, deviceInterfacesRepo, counterSamplesRepo,
-      agentsRepo, agentCommander, auditLogger, logger,
+      deviceArpRepo, locationsRepo, agentsRepo, agentCommander, auditLogger, logger,
     }));
   }
   // Burst mode — one target, once a second, for up to two minutes. Read
@@ -449,6 +488,20 @@ function createApiRouter({
     agentsRepo, snmpDevicesRepo, snmpProfilesRepo, deviceEventsRepo,
     locationsRepo, settingsService, logger,
   }));
+  // "Which way does A reach B, switch by switch?" and "where is device X?" —
+  // the L2 path, locate and the device inventory (docs/l2-path.md). Always
+  // mounted, like coverage below: reads over existing repositories, and a
+  // store this install lacks turns into a 503 or an explicit `unavailable`
+  // source rather than a missing route.
+  {
+    const deviceLocator = createDeviceLocator({
+      agentsRepo, locationsRepo, snmpDevicesRepo, snmpNeighborsRepo, deviceInterfacesRepo,
+      fdbEntriesRepo, counterSamplesRepo, arpEntriesRepo, deviceArpRepo, lldpNeighborsRepo,
+      discoveredDevicesRepo, logger,
+    });
+    router.use('/api/topology/l2-path', createL2PathRouter({ deviceLocator }));
+    router.use('/api/devices', createDeviceLocateRouter({ deviceLocator }));
+  }
   // "Which parts of the network do I NOT see?" — the coverage-gap report.
   // Always mounted, like the checklist above: a READ over existing
   // repositories, every source best-effort, and a source that is not wired
@@ -457,7 +510,7 @@ function createApiRouter({
     coverageService: createCoverageService({
       agentsRepo, locationsRepo, snmpDevicesRepo, snmpProfilesRepo, flowsRepo,
       deviceInterfacesRepo, fdbEntriesRepo, snmpNeighborsRepo, lldpNeighborsRepo,
-      arpEntriesRepo, discoveredDevicesRepo, logger,
+      arpEntriesRepo, discoveredDevicesRepo, sflowExportersRepo, logger,
     }),
   }));
 
@@ -537,6 +590,11 @@ function createApiRouter({
       arpEntriesRepo,
       // The second identity source: which switch PORT a MAC is on.
       fdbEntriesRepo,
+      // The third: a polled ROUTER's ARP table (IP↔MAC on segments no agent
+      // sits on), and the polled devices themselves — by name, model, serial
+      // and sysLocation.
+      deviceArpRepo,
+      snmpDevicesRepo,
       lldpNeighborsRepo,
       discoveredDevicesRepo,
       cmdbSearch: makeCmdbSearch({ cmdbConfigRepo, registry: cmdbConnectorRegistry, secretBox }),
@@ -553,6 +611,11 @@ function createApiRouter({
     }),
     rateLimiter: searchRateLimiter,
   }));
+  // Settings → Authentication → Security. Ahead of the general settings router,
+  // which owns the rest of /api/settings.
+  if (settingsService && typeof settingsService.getSecurity === 'function') {
+    router.use('/api/settings/security', createAuthSecurityRouter({ settingsService, securityPolicy: secPolicy, auditLogger }));
+  }
   if (settingsService) router.use('/api/settings', createSettingsRouter({ settingsService, featureGate, dispatcher, analysisConfig, retentionConfig, releaseKeyService, geoipUpdater, publishRelease: () => publishSignedReleaseFromSource({ sourceStore: agentSourceStore, releaseStore, releaseKeyService }) }));
   // Outbound API integrations (ITSM/IPAM connectors) — admin CRUD + test-fire.
   if (integrationsRepo && connectorRegistry && secretBox) {
@@ -679,7 +742,7 @@ function createApiRouter({
   }
   if (logRing) router.use('/api/logs', createLogsRouter({ logRing }));
   if (speedtestResultsRepo) {
-    router.use('/speedtest', createSpeedtestRouter({ agentAuth, speedtestResultsRepo }));
+    router.use('/speedtest', createSpeedtestRouter({ agentAuth, speedtestResultsRepo, speedtestResultsTsdbRepo, logger }));
     router.use('/api/speedtest', createSpeedtestReadRouter({ speedtestResultsRepo, agentsRepo }));
   }
   router.use('/api/export', createExportRouter({ findingStore, flowsRepo, agentsRepo, locationsRepo, resultsRepo, probeResultsRepo, featureGate }));
@@ -704,7 +767,7 @@ function createApiRouter({
   // Unified audit log (license feature `audit_log`) + API tokens (`api_access`).
   if (auditLogRepo) router.use('/api/audit-log', createAuditLogRouter({ auditLogRepo, featureGate, planService }));
   if (apiTokensRepo) router.use('/api/api-tokens', createApiTokensRouter({ apiTokensRepo, featureGate, planService, auditLogger }));
-  router.use('/agents', createAgentReportsRouter({ agentAuth, resultsRepo, resultsTsdbRepo, agentsRepo, auditEventsRepo, analysisPipeline, flowPipeline, probeResultsRepo, probePipeline, probeOutageService, installToolService, lldpNeighborsRepo, topologyChangeService, hostConnectionsRepo, arpEntriesRepo, deviceEventIngest, snmpDevicesRepo, snmpTopologyIngest, snmpCounterIngest, interfaceStateService, discoveredDevicesRepo, snmpProfilesRepo, auditLogger, notifyDashboard, logger }));
+  router.use('/agents', createAgentReportsRouter({ agentAuth, resultsRepo, resultsTsdbRepo, probeResultsTsdbRepo, agentsRepo, auditEventsRepo, analysisPipeline, flowPipeline, probeResultsRepo, probePipeline, probeOutageService, installToolService, lldpNeighborsRepo, topologyChangeService, hostConnectionsRepo, arpEntriesRepo, deviceEventIngest, snmpDevicesRepo, snmpTopologyIngest, snmpCounterIngest, sflowCounterIngest, interfaceStateService, discoveredDevicesRepo, snmpProfilesRepo, auditLogger, notifyDashboard, logger }));
   router.use('/agents', createAgentEnrollRouter({ enrollmentStore, notifyDashboard, integrationTrigger: integrationsDispatcher, auditEventsRepo, settingsService, rateLimit: enrollRateLimiter }));
 
   return router;

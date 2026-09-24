@@ -611,3 +611,33 @@
 /* The tick keeps its width when empty, so rows do not shift as they are picked. */
 .ui .ms-tick { width: 1em; color: var(--accent); }
 .ui .ms-list .ms-none { padding: var(--s-3); }
+
+/* ---- Path & location (views/pathLocation.js) ---- */
+/* The L2 path as a vertical line of steps: endpoint, switch, …, endpoint. The
+   rule down the left edge is the "cable"; a GAP breaks it into a dashed
+   warning-coloured run, because an unknown stretch must not look like a
+   known one. Colour from tokens only. */
+.ui .l2p-result { display: grid; gap: var(--s-3); margin-top: var(--s-4); }
+.ui .l2p-result:empty { display: none; }
+.ui .l2p-notes { display: grid; gap: var(--s-2); }
+.ui .l2p-notes:empty { display: none; }
+.ui .l2p-path { list-style: none; margin: 0; padding: 0 0 0 var(--s-4); display: grid; gap: 0; }
+.ui .l2p-step { position: relative; padding: var(--s-2) 0 var(--s-3) var(--s-5);
+  border-left: 2px solid var(--border); display: grid; gap: var(--s-1); }
+.ui .l2p-step::before { content: ''; position: absolute; left: -7px; top: var(--s-3);
+  width: 12px; height: 12px; border-radius: 50%; background: var(--surface); border: 2px solid var(--accent); }
+.ui .l2p-end::before { background: var(--accent); }
+.ui .l2p-hop::before { border-radius: var(--r-badge); }
+.ui .l2p-gap { border-left: 2px dashed var(--sev-warn); }
+.ui .l2p-gap::before { border-color: var(--sev-warn); background: var(--warn-weak); }
+.ui .l2p-part { border-left-style: dotted; padding-bottom: var(--s-1); }
+.ui .l2p-part::before { display: none; }
+.ui .l2p-path > .l2p-step:last-child { border-left-color: transparent; }
+.ui .l2p-head { display: flex; align-items: center; flex-wrap: wrap; gap: var(--s-2); }
+.ui .l2p-portline { display: grid; gap: var(--s-1); padding: var(--s-1) var(--s-2);
+  border-radius: var(--r-badge); background: var(--surface-alt); }
+.ui .l2p-portline.is-warn { background: var(--warn-weak); }
+.ui .l2p-port { display: flex; align-items: center; flex-wrap: wrap; gap: var(--s-2); }
+.ui .l2p-dir { min-width: 3em; color: var(--text-muted); font-size: var(--fs-xs); text-transform: uppercase; }
+.ui .l2p-ifname { font-family: var(--mono); font-size: var(--fs-sm); }
+.ui .l2p-pager { display: flex; align-items: center; justify-content: flex-end; gap: var(--s-2); margin-top: var(--s-3); }

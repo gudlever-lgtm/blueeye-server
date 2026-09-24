@@ -137,7 +137,9 @@ test('a viewer is offered no Run test', async (t) => {
 test('each card title is written once, by the panel that owns it', async (t) => {
   const { doc } = boot({ t, routes: SESSION() });
   await settle();
-  assert.deepEqual(panelTitles(doc), ['Health', 'Config history', 'CMDB asset', 'Dependencies']);
+  // LLDP neighbours (GET /api/topology/neighbors?target=) joined the cards when
+  // that endpoint got its first caller.
+  assert.deepEqual(panelTitles(doc), ['Health', 'Config history', 'CMDB asset', 'Dependencies', 'LLDP neighbours']);
   // The loaders used to write their own <h3> inside a panel already headed the
   // same thing — "Config history" twice, two lines apart.
   for (const title of ['Config history', 'CMDB asset', 'Dependencies']) {

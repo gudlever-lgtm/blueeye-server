@@ -186,7 +186,21 @@ function createArpEntriesRepository(db) {
     return res.affectedRows || 0;
   }
 
-  return { upsertMany, findByMac, findByIp, listForAgent, subnetSummary, macsForIps, knownMacs, oldestFirstSeen, purgeBefore };
+  // The freshest bindings fleet-wide, newest first — the device inventory's
+  // "hosts only an ARP table has seen" (src/topology/deviceLocator.js). Bounded
+  // on both the window and the row count; a capped answer drops the OLDEST
+  // sightings, and the caller says it was capped.
+  async function listRecent({ since, limit = 5000 } = {}) {
+    const lim = Number.isInteger(limit) && limit > 0 && limit <= 50000 ? limit : 5000;
+    const [rows] = await pool.query(
+      `SELECT ${BASE_COLUMNS} FROM arp_entries
+        WHERE last_seen >= ? ORDER BY last_seen DESC, id DESC LIMIT ?`,
+      [since, lim],
+    );
+    return rows.map(mapRow);
+  }
+
+  return { upsertMany, findByMac, findByIp, listForAgent, subnetSummary, macsForIps, knownMacs, oldestFirstSeen, listRecent, purgeBefore };
 }
 
 module.exports = { createArpEntriesRepository };

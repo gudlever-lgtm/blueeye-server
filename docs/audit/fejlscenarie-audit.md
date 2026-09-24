@@ -418,3 +418,88 @@ Rettet efter auditten. Hver linje henviser til det fund, den lukker. Numrene i p
 - Setup-tjeklisten viser "todo" i stedet for "unknown", når et repository fejler.
 - Tests kører stadig mod syntetiske fixtures. Der er ingen optagne pcap-filer eller SNMP-walks.
 - Go-agenten er ikke i CI.
+
+---
+
+## 9. Afhjælpning, runde 2 (server 0.189.0 / agent 0.40.0)
+
+Alle punkter fra "Står tilbage" i afsnit 8 er lukket.
+
+| Punkt fra afsnit 8 | Nu |
+|---|---|
+| Aktiv DHCP-test | Proben `dhcp` sender DHCPDISCOVER og samler alle DHCPOFFER uden at tage en lease. Den giver findings for "ingen DHCP-server svarede" og ">1 DHCP-server svarede (rogue)". Findes i Run-a-probe og som planlagt mål (`dhcp`/`dhcp:<iface>`). Kræver root/CAP_NET_BIND_SERVICE, som systemd-enheden har. Diagnoseprober (dhcp, tls, rdns, path_mtu) åbner ikke outages og tæller ikke med i "N/M targets" |
+| L2-sti fra A til B | `GET /api/topology/l2-path`, `GET /api/devices/locate` og `GET /api/devices/inventory` samt skærmen "Path & location". Stien findes via ARP → FDB-accessport → switch-graf (LLDP/CDP). Usikkerheder navngives (manglende LLDP-link, forskellige VLAN'er → routet, ukendt gateway) |
+| CDP, IP-MIB-ARP og ENTITY-MIB | Alle tre polles (collect `cdp`/`arp`/`entity`, standard for nye enheder) og gemmes: `snmp_neighbors.protocol`, `device_arp_entries` og `device_inventory`. `sysLocation`, `sysContact`, `sysObjectID` og `sysName` gemmes og vises. Cisco får VLAN-navne fra CISCO-VTP-MIB og FDB pr. VLAN (`community@vlan`) |
+| sFlow counter-samples | Afkodes (generic + ethernet) og sendes som `sflowCounters`. Serveren skriver dem til `device_counter_samples` for registrerede eksportører, inklusive duplex. Uregistrerede eksportører er et dækningshul. Flow-samples bærer VLAN og in/out-ifIndex |
+| Lokal duplex og /proc frame/carrier | `/sys/class/net/*/duplex` samt rx frame/fifo og tx colls/carrier. Interface-health giver begrundelser: `duplex_mismatch`, `crc_errors`, `carrier_errors` og `fifo_overrun` |
+| Cluster-nøgle uden mål; event cases uden clusters | Korrelatoren grupperer på subject (mål, port, enhed, test) og topologi-relation og forklarer hvorfor. Event cases linkes til situationen (`event_cases.cluster_id`). Cluster-gaten undertrykker pr. subject |
+| Transaktionsalarmer og probe-outages uden finding/case | Begge bliver findings med event case og alarm. Outage-lukning sender recovery. Samme fejl alarmerer én gang: throttle pr. subject, ingen packet_loss oven på reachability, ingen dobbelt-alarm fra outage + probe |
+| `ALERTING_ENABLED=false` som standard | Tre tilstande. Når den ikke er sat: til, hvis en kanal er konfigureret. Eksplicit `false` i env vinder altid, også over gamle gemte indstillinger |
+| OIDC/SAML-UI, migration 041, Timescale | Settings → Authentication har OIDC, SAML og en sikkerhedspolitik: password-historik, maks. alder og IP-allowlist pr. rolle med lock-out-vagt. Timescale-spejl for flows, probes og speedtest inklusive nye kolonner |
+| Setup-tjeklisten | En kilde, der ikke kan læses, giver `unknown`, og banneret siger aldrig "complete" |
+| Syntetiske fixtures | Rigtige data: hsflowd-datagrammer, snmptrap-traps, logger/rsyslog-linjer og citerede leverandørlinjer, snmpsim-walks af Cisco 3750 og HPE 6120XG samt traceroute-optagelser med rate-limit |
+| Go-agenten i CI | `go vet` og `go test` kører i agentens gate-workflow |
+
+### Fejl fundet undervejs (ikke med i den første audit) og rettet
+
+- **SNMP-traps blev aldrig afkodet i drift.** Koden kaldte en `net-snmp`-klasse, der ikke eksporteres. Løst med en ren BER-dekoder, testet mod rigtige trap-bytes.
+- **Counter64 over 2^47 blev læst 256 gange for lavt** (SNMP-læser og trap-oversætter).
+- **hsflowd ignorerede den konfigurerede sampling** på NIC'er med linkhastighed: 1:10000 i stedet for 1:256.
+- **Dobbelte ifName på samme switch** (HPE "lo0" ×2) klappede sammen til én port.
+- **Syslog:**
+  - rsyslog ForwardFormat, IOS med år, IOS `origin-id hostname` og RFC 5424 med Cisco-kode blev forkert parset eller ikke klassificeret.
+  - Junos-hændelser og `%LINK-5-CHANGED` er nu klassificeret.
+  - Octet-counted syslog over UDP droppes ikke længere.
+- **`ss -Htan state established` har ingen State-kolonne.** Parseren kasserede alle linjer.
+- **Gyldige TLS-certifikater blev læst som ikke-betroede**, og et fejlet handshake blev kaldt et dårligt certifikat.
+- **Syslog og traps fra switches blev tilskrevet agenten, der modtog dem.** Nu også gemt pr. switch (`device_events.snmp_device_id`).
+- **Ændringer på SNMP-enheder og -profiler nåede aldrig audit-loggen** (manglende `category`).
+- **500 på cluster-tidslinjen** (`mapEvent` var omdøbt), og **SQL-syntaksfejl i søgningen** efter opdagede enheder.
+- **`/speedtest/upload` hang ved en JSON-body.**
+- **Databasenavn og serverstier vises ikke længere for viewer/operator.**
+- **Et resultat over 64 KB afvises ikke længere i sin helhed.** Agenten trimmer deterministisk og markerer, hvad der blev trimmet.
+- **En langsom SNMP-walk koster ikke længere enhedens kernedata.**
+- **Community-tjek på traps er slået fra som standard.** En separat trap-community er almindelig, og afvisning ville tabe switchens traps i stilhed. Uoverensstemmelser tælles.
+
+### Verifikation (runde 2)
+
+| Lag | Resultat |
+|---|---|
+| Server `scripts/gate.sh --force` (security, ui, validation, ui:check, fuld suite) | Grøn: 6387 bestået, 0 fejl |
+| Agent `npm test` + Go `vet`/`test` | 1098 bestået, 0 fejl; Go grøn |
+| `verify-schema` mod MySQL 8.4 | schema.sql = migrationskæden (116 tabeller, 1396 kolonner, 394 indeks, 121 FK) |
+| `verify-repositories` mod MySQL 8.4 | 38/38 tjek |
+| Genkørsel af migration 116–133 på migreret database | Ingen fejl |
+| `verify-routes` (nyt, kører i CI): rigtig server + MySQL, 469 routes × 5 roller, 10.027 kald | 0 × 500, 0 læk, 0 fejllinjer i serverlog. Alle 38 indsamlingsstier landede rækker |
+| End-to-end: rigtig agentproces mod rigtig server med snmpsim-switches (Cisco 3750, HPE 6120XG), rigtig hsflowd-sFlow, rigtige traps og syslog, netns-routing | Se afsnittet nedenfor |
+
+### End-to-end-kørsler
+
+Fire kørsler med en rigtig agentproces (`node src/index.js`, enrolled med engangskode) mod en rigtig server (`NODE_ENV=production`) og MySQL 8.4 i netværks-namespaces.
+
+- **Switches:** snmpsim med de fulde Cisco 3750- og HPE 6120XG-walks, inklusive `community@vlan`-filer.
+- **Trafik:** hsflowd på en veth samt en switch-sFlow-generator med 802.1Q og in/out-ifIndex.
+- **Hændelser:** rigtige snmptrap-traps og logger/rsyslog-syslog (RFC 3164, RFC 5424 og octet-count).
+- **Prober:** alle probetyper, transaktionstests og TLS mod egen CA, self-signed, forkert navn og plain HTTP.
+
+Kørsel 2 og 3 fandt 9 og derefter 4 fejl; alle er rettet (afsnittet ovenfor). Slutkørslen (agent 0.40.0 / server 0.189.0):
+
+- **Agentens POST'er:** 0 svar i 4xx/5xx-området.
+- **Serverlog:** 0 ERROR.
+- **Dashboard:** 49/49 read-API'er svarede 200.
+- **Data:** alle collector-tabeller har data. Alle sendte syslog-linjer og traps er gemt eller bevidst afvist (uafhørte afsendere, v3).
+- **Tilskrivning:** switch-hændelser tilskrives switchen (`snmp_device_id`).
+- **Cisco:** får 274 VLAN-navne og FDB pr. VLAN; L2-stien mellem to værter i VLAN 100 er komplet.
+- **TLS:** navnefejl, self-signed og handshake-fejl giver hver sin korrekte finding.
+- **"Poll now":** returnerer agentens resultat.
+- **Den sidste fejl** (kun de første 64 VLAN'er blev nogensinde walket) er rettet med rotation. VLAN 1 læses hvert poll, resten 63 ad gangen.
+
+### Kendte grænser
+
+- **DHCP-proben** sender altid via default-route-interfacet (Node kan ikke binde til en enhed). `iface` vælger kun MAC'en.
+- **sFlow-tællere på meget store sFlow-only switches:** ved fuld flow-last og over cirka 170 porte roterer tællerne langsommere end rate-vinduet på 10 min. Raten er så tom med årsag `gap`, og de rå tællere gemmes stadig.
+- **SNMPv3-traps** tælles og droppes.
+- **CDP-device-id** matches kun på eksakt navn.
+- **Per-VLAN FDB på Cisco med mange VLAN'er** dækkes over flere polls: ⌈(VLANs−1)/63⌉, f.eks. 5 polls for 274 VLAN'er.
+- **En nyligt tildelt eller genaktiveret switch** kendes af agenten ved "Poll now" eller ved næste config-refresh (standard 5 min). Indtil da afvises dens traps.
+- **`PUT /agents/:id`** er en fuld erstatning: felter, der udelades, nulstilles (dashboardet sender altid alle felter).

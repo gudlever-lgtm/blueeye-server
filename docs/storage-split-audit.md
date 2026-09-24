@@ -371,6 +371,33 @@ Fundamentet for repository-splittet er lagt, feature-flagget bag `TSDB_ENABLED`
   når aktiveret. MySQL er kilde til sandhed under udrulning — en TSDB-fejl
   brydes aldrig igennem til ingest (fanget + logget). Read-cutover (fleet →
   TSDB) afventer at dual-write er bekræftet i produktion.
+- **Flows, proberesultater og speedtests spejles nu også** (samme skabelon,
+  samme regler: kun når `TSDB_ENABLED`, MySQL skrives først og er kilde til
+  sandhed, en TSDB-fejl logges som `tsdb: … mirror write failed` og når aldrig
+  ingest):
+  - `src/repositories/flowsTsdbRepository.js` — `insertMany` som ÉN
+    `INSERT … SELECT * FROM unnest($1::int[], …, $16::text[])` pr. batch:
+    seksten parametre uanset antal rækker, så en flowrapport med tusinder af
+    rækker aldrig rammer Postgres' loft på 65 535 parametre, og uden en ny
+    afhængighed (COPY ville kræve `pg-copy-streams`). Kaldes fra
+    `geo/flowPipeline.js` efter MySQL-indsættelsen og kun med det MySQL
+    accepterede. Kolonnelisten er hypertablens egen: en kolonne MySQL får
+    senere spejles først, når hypertablen også har den.
+  - `src/repositories/probeResultsTsdbRepository.js` — multi-row INSERT fra
+    `POST /agents/probe-results`. Hver række normaliseres gennem MySQL-repo'ets
+    egen `toRow()` og vælges på kolonnenavn, så de to stores ikke kan være
+    uenige om, hvad et resultat sagde. `001_init.sql` har fået de kolonner
+    MySQL har fået siden (HTTP-profil, path-MTU, TLS, rDNS, fejlårsag) som
+    `ADD COLUMN IF NOT EXISTS`; en node der ikke er kørt igen svarer 42703, og
+    spejlet falder så tilbage til det oprindelige kolonnesæt og logger det
+    (samme mønster som `deviceCounterSamplesTsdbRepository`).
+  - `src/repositories/speedtestResultsTsdbRepository.js` — én INSERT fra
+    `POST /speedtest/results`; routen stempler `ts` én gang, så begge stores
+    har samme tidspunkt for samme måling.
+  - Tests: `test/telemetryTsdbMirrors.test.js` (fake pg-pool: statements og
+    parametre, fallback, route- og pipeline-wiring inkl. at en TSDB-fejl giver
+    201) og `test/telemetryTsdbRepositories.integration.test.js`, der springes
+    over uden `TSDB_TEST_URL` ligesom results-integrationstesten.
 - **`/health` er nu TSDB-backed** når `TSDB_ENABLED`: pinger både MySQL og TSDB,
   returnerer 503 `{tsdb:"down"}` hvis TSDB er nede — lukker hullet noteret i
   deploy-README (500-stien er nu ægte).
@@ -386,7 +413,7 @@ ekskluderes. **Median latency 23–27 ms** (mål < 50 ms). Reproducér med
 ### Næste skridt (implementeringsfase)
 
 1. ✅ Definér TSDB-skema: `CREATE TABLE` + `create_hypertable(...)` — `server/db/timescale/001_init.sql` (kørt mod real TSDB).
-2. ⏳ Opdel repositories i MySQL- og TSDB-varianter; injicér via DI i `server.js` — **påbegyndt**: `resultsTsdbRepository` + pg-pool + dual-write + `/health` (flagget). Resterende telemetri-repos (flows/probe/findings/events/speedtest/audit_events) følger samme skabelon.
+2. ⏳ Opdel repositories i MySQL- og TSDB-varianter; injicér via DI i `server.js` — **påbegyndt**: `resultsTsdbRepository` + pg-pool + dual-write + `/health` (flagget); dual-write af `flow_records`, `probe_results` og `speedtest_results` (flow/probe/speedtest-TSDB-repos) og `device_events`/`device_counter_samples` (TSDB som eneste store når aktiveret). Resterende: findings/events/audit_events.
 3. ⏳ Implementer applikationslagsjoin i de berørte forespørgsler (trin 3) — læse-shape bevaret; read-cutover afventer produktions-soak af dual-write.
 4. Migrér historiske data (mysqldump → `\COPY` eller ETL-script).
 5. ✅ Kør `EXPLAIN ANALYZE` på latestPerAgent for at bekræfte chunk-exclusion — 4 chunks, kun aktuel tids-chunk.

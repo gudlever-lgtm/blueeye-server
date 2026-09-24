@@ -12,7 +12,7 @@
 // cluster is still open work (an operator owns it) — only resolved/closed are done.
 const OPEN_STATUSES = ['open', 'acknowledged'];
 
-const BASE_COLUMNS = `id, confidence, member_finding_ids, suspected_common_cause, advisory,
+const BASE_COLUMNS = `id, confidence, member_finding_ids, suspected_common_cause, grouping_basis, advisory,
   alert_last_at, alert_last_severity, alert_member_count, itsm_ticket_ref, itsm_integration_id, nis2_draft_id,
   status, detected_at, acknowledged_at, acknowledged_by, resolved_at, resolved_by,
   resolution_note, created_at, updated_at`;
@@ -31,6 +31,22 @@ function parseIds(value) {
   return [];
 }
 
+// grouping_basis (migration 130): { subjects: [], reasons: [], why: [] } — WHY
+// the correlator put these findings together. NULL on clusters stored before
+// it existed; the read-model then explains the cluster from its tier.
+function parseGrouping(value) {
+  let v = value;
+  if (typeof v === 'string') {
+    try { v = JSON.parse(v); } catch { return null; }
+  }
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return null;
+  return {
+    subjects: Array.isArray(v.subjects) ? v.subjects : [],
+    reasons: Array.isArray(v.reasons) ? v.reasons : [],
+    why: Array.isArray(v.why) ? v.why : [],
+  };
+}
+
 function mapRow(row) {
   if (!row) return null;
   return {
@@ -38,6 +54,7 @@ function mapRow(row) {
     confidence: row.confidence,
     memberFindingIds: parseIds(row.member_finding_ids),
     suspectedCommonCause: row.suspected_common_cause ?? null,
+    groupingBasis: parseGrouping(row.grouping_basis),
     advisory: row.advisory ?? null,
     alertLastAt: toIso(row.alert_last_at),
     alertLastSeverity: row.alert_last_severity ?? null,
@@ -102,12 +119,13 @@ function createEventClustersRepository(db) {
   }
 
   // Opens a new cluster; returns its new id.
-  async function create({ confidence = 'low', memberFindingIds = [], suspectedCommonCause = null, status = 'open', detectedAt }) {
+  async function create({ confidence = 'low', memberFindingIds = [], suspectedCommonCause = null, groupingBasis = null, status = 'open', detectedAt }) {
     const [res] = await pool.query(
       `INSERT INTO event_clusters
-         (confidence, member_finding_ids, suspected_common_cause, status, detected_at)
-       VALUES (?, ?, ?, ?, ?)`,
-      [confidence, JSON.stringify(memberFindingIds || []), suspectedCommonCause, status, detectedAt],
+         (confidence, member_finding_ids, suspected_common_cause, grouping_basis, status, detected_at)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      [confidence, JSON.stringify(memberFindingIds || []), suspectedCommonCause,
+        groupingBasis ? JSON.stringify(groupingBasis) : null, status, detectedAt],
     );
     return Number(res.insertId);
   }
@@ -131,14 +149,18 @@ function createEventClustersRepository(db) {
   }
 
   // Re-evaluates a live cluster's membership: rewrites the member set, confidence
-  // and cause and advances detected_at (never backwards). Returns true if changed.
-  async function updateMembership(id, { confidence, memberFindingIds, suspectedCommonCause, detectedAt }) {
+  // and cause and advances detected_at (never backwards). A grouping basis, when
+  // given, replaces the stored one (the caller merges); omitted, it is kept.
+  // Returns true if changed.
+  async function updateMembership(id, { confidence, memberFindingIds, suspectedCommonCause, groupingBasis = null, detectedAt }) {
     const [res] = await pool.query(
       `UPDATE event_clusters
           SET confidence = ?, member_finding_ids = ?, suspected_common_cause = ?,
+              grouping_basis = COALESCE(?, grouping_basis),
               detected_at = GREATEST(detected_at, ?)
         WHERE id = ? AND status IN (${LIVE_PLACEHOLDERS})`,
-      [confidence, JSON.stringify(memberFindingIds || []), suspectedCommonCause, detectedAt, id, ...OPEN_STATUSES],
+      [confidence, JSON.stringify(memberFindingIds || []), suspectedCommonCause,
+        groupingBasis ? JSON.stringify(groupingBasis) : null, detectedAt, id, ...OPEN_STATUSES],
     );
     return res.affectedRows > 0;
   }
@@ -285,4 +307,4 @@ function createEventClustersRepository(db) {
   };
 }
 
-module.exports = { createEventClustersRepository, mapRow, OPEN_STATUSES };
+module.exports = { createEventClustersRepository, mapRow, parseGrouping, OPEN_STATUSES };

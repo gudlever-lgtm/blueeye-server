@@ -224,3 +224,18 @@ test('a 500 is an ErrorState with the shell and the header intact', async (t) =>
   assert.ok(doc.querySelector('#view .page-head h1'));
   assert.ok(doc.querySelector('.sidebar'));
 });
+
+test('a row that is part of a situation says so, and the link opens the situation (migration 129)', async (t) => {
+  const withCluster = EVENTS.map((e) => (e.id === 11 ? { ...e, clusterId: 5 } : e));
+  const { doc, window } = boot({ t, routes: SESSION({
+    'GET /api/events': { events: withCluster },
+    'GET /api/event-clusters/5': { cluster: { id: 5, status: 'open', confidence: 'high', suspectedRootCause: { classification: 'network-layer' }, affectedAgents: ['7', '8'], members: [], eventCases: [] } },
+  }) });
+  await settle();
+  const links = [...doc.querySelectorAll('#view table.dt tbody .hostlink')].filter((a) => /situation #5/.test(a.textContent));
+  assert.equal(links.length, 1, 'exactly the clustered row carries the situation link');
+  links[0].dispatchEvent(new window.Event('click', { bubbles: true }));
+  await settle();
+  assert.match(window.location.pathname, /5/);
+  assert.doesNotMatch(window.location.pathname, /^\/events$/);
+});

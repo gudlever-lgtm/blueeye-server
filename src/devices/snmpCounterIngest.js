@@ -1,6 +1,7 @@
 'use strict';
 
 const { computeSample, detectReboot } = require('./counterDelta');
+const { disambiguateIfNames } = require('./ifNames');
 const {
   detectDuplexMismatch, buildDuplexFinding, REFRACTORY_MINUTES: DUPLEX_REFRACTORY_MINUTES,
 } = require('./duplexMismatch');
@@ -126,7 +127,7 @@ function createSnmpCounterIngest({
         });
 
         const rows = [];
-        for (const iface of d.interfaces || []) {
+        for (const iface of disambiguateIfNames(d.interfaces || [])) {
           const interfaceId = (iface.ifName && byName.get(iface.ifName))
             || (iface.ifIndex != null && byIndex.get(Number(iface.ifIndex)))
             || null;

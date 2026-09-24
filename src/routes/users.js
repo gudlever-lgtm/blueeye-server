@@ -15,6 +15,7 @@ const {
 } = require('../validation/userValidation');
 const { parseId } = require('../validation/locationValidation');
 const { config } = require('../config');
+const { passwordReusedBody } = require('../auth/passwordHistory');
 
 // User administration. Every endpoint is admin-only; the *mutations* (creating,
 // editing roles, deleting users) are additionally licence-gated behind `rbac`
@@ -37,6 +38,10 @@ function createUsersRouter({
   oidcAuth = null,
   samlAuth = null,
   publicUrl = '',
+  // Password history (migration 041): an admin-typed password is remembered,
+  // and a reset may not reuse one of the user's last N. One-time passwords are
+  // neither checked nor remembered — they are random and replaced at first login.
+  passwordHistory = null,
   logger = silentLogger,
 }) {
   const router = express.Router();
@@ -120,6 +125,7 @@ function createUsersRouter({
         passwordHash,
         role: value.role,
       });
+      if (passwordHistory && created) await passwordHistory.remember(created.id, passwordHash);
       if (auditLogger) await auditLogger.record(req, { category: 'user', action: 'user_create', target: value.email, detail: `role=${value.role}` });
       res.status(201).json(created);
     })
@@ -324,12 +330,23 @@ function createUsersRouter({
       }
 
       if (value.password !== undefined) {
+        // An admin reset obeys the same history rule as the user's own change,
+        // or a reset would be the way around it.
+        if (passwordHistory) {
+          const withHash = typeof usersRepo.findByEmailWithHash === 'function'
+            ? await usersRepo.findByEmailWithHash(existing.email) : null;
+          const reuse = await passwordHistory.checkReuse(id, value.password, {
+            currentHash: withHash && !withHash.must_change_password ? withHash.password_hash : null,
+          });
+          if (!reuse.ok) return res.status(400).json(passwordReusedBody(reuse.depth, 'password'));
+        }
         patch.passwordHash = await hashPassword(value.password);
       }
       // Display name. `null` is an explicit clear, so only `undefined` (absent
       // from the body) leaves the stored name alone.
       if (value.name !== undefined) patch.name = value.name;
       const updated = await usersRepo.update(id, patch);
+      if (passwordHistory && patch.passwordHash && updated) await passwordHistory.remember(id, patch.passwordHash);
       if (auditLogger) await auditLogger.record(req, { category: 'user', action: 'user_update', target: existing.email, detail: `role=${patch.role}${patch.email ? `, email=${patch.email}` : ''}${patch.name !== undefined ? ', name changed' : ''}${patch.passwordHash ? ', password reset' : ''}` });
       res.json(updated);
     })

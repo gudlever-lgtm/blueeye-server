@@ -40,6 +40,7 @@
         return ui.emptyState({ title: t('nic.noneAgent'), body: t('nic.noneAgentHint') });
       }
       return ui.dataTable({
+        dense: true,
         columns: [
           { key: 'iface', label: t('nic.col.iface'), width: '130px' },
           { key: 'driver', label: t('nic.col.driver'), width: '150px' },

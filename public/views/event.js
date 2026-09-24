@@ -92,7 +92,13 @@
           lead: el('span', {},
             ui.badge(STATUS_TONE[inc.status] || 'neutral', statusLabel(inc.status)), ' ',
             deps.agentLink(inc), ui.meta(' · ' + deps.locationLabel(inc)
-              + ' · ' + t('ev.opened', { at: ui.fmt.abs(inc.firstEventAt) }))),
+              + ' · ' + t('ev.opened', { at: ui.fmt.abs(inc.firstEventAt) })),
+            // The situation (cross-agent cluster) this case is part of, when
+            // the same fault is being seen from other agents too.
+            inc.clusterId != null && typeof deps.openCluster === 'function'
+              ? el('span', {}, ui.meta(' · '), ui.hostLink(t('ev.partOfSituation', { id: inc.clusterId }),
+                function () { deps.openCluster(inc.clusterId); }))
+              : null),
           help: { title: t('ev.info.title'), body: function () { return deps.helpBody(); } },
           actions: actions,
         }));
@@ -112,7 +118,7 @@
 
         // Everything else is app.js's, wrapped rather than rebuilt: each panel
         // owns its title, and the loaders fill the body under it.
-        deps.panels(inc, anomalies, id).forEach(function (p) {
+        deps.panels(inc, anomalies, id, data).forEach(function (p) {
           if (!p) return;
           if (p.key === 'anomalies') { page.append(anomPanel); return; }
           // A body that already draws its own card (the work log, the guide,

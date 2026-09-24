@@ -159,8 +159,12 @@ test('GET /system/storage returns disk + database (viewer+)', async () => {
   const res = await request(makeApp()).get('/system/storage').set('Authorization', authHeader('viewer'));
   assert.equal(res.status, 200);
   assert.equal(res.body.disk.usedPercent, 40);
-  assert.equal(res.body.database.name, 'blueeye');
+  // Changed deliberately: the database name describes the installation and is
+  // an admin's to read (test/systemDisclosure.test.js); the sizes stay.
+  assert.equal(res.body.database.name, null);
   assert.equal(res.body.tsdb.configured, false);
+  const admin = await request(makeApp()).get('/system/storage').set('Authorization', authHeader('admin'));
+  assert.equal(admin.body.database.name, 'blueeye');
 });
 
 test('GET /system/storage without a token returns 401', async () => {

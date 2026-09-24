@@ -170,3 +170,41 @@ test('list with no filters selects with just the LIMIT bound', async () => {
   const repo = createEventCasesRepository({ pool });
   await repo.list();
 });
+
+// ---- situations (migration 129) ---------------------------------------------
+
+test('linkCluster stamps the situation on the given cases — first LIVE situation wins', async () => {
+  const pool = fakePool(() => [{ affectedRows: 2 }]);
+  const repo = createEventCasesRepository({ pool });
+  assert.equal(await repo.linkCluster([3, '4', 3, 'x', 0], 9), 2);
+  const { sql, params } = pool.calls[0];
+  assert.match(sql, /UPDATE event_cases SET cluster_id = \?/);
+  assert.match(sql, /WHERE id IN \(\?, \?\)/);
+  // Only a case with no situation, this one, or one whose situation is over.
+  assert.match(sql, /cluster_id IS NULL OR cluster_id = \?/);
+  assert.match(sql, /NOT EXISTS \(SELECT 1 FROM event_clusters c\s+WHERE c\.id = event_cases\.cluster_id AND c\.status IN \('open', 'acknowledged'\)\)/);
+  assert.deepEqual(params, [9, 3, 4, 9]);
+});
+
+test('linkCluster with nothing to link issues no statement', async () => {
+  const pool = fakePool(() => { throw new Error('should not query'); });
+  const repo = createEventCasesRepository({ pool });
+  assert.equal(await repo.linkCluster([], 9), 0);
+  assert.equal(await repo.linkCluster([1], null), 0);
+});
+
+test('listByCluster reads the cases of one situation with their device identity; clusterId is mapped', async () => {
+  const pool = fakePool(() => [[{
+    id: 5, host_id: '1', title: 't', status: 'open', severity: 'WARN', primary_finding_id: null,
+    config_change_id: null, cluster_id: 9, first_event_at: new Date('2026-06-01T08:00:00Z'),
+    last_event_at: new Date('2026-06-01T08:05:00Z'), resolved_at: null, created_by: 'system', closed_by: null,
+    created_at: new Date('2026-06-01T08:00:00Z'),
+    agent_display_name: 'core-sw', agent_hostname: 'core', location_id: 2, location_name: 'HQ',
+  }]]);
+  const repo = createEventCasesRepository({ pool });
+  const rows = await repo.listByCluster(9);
+  assert.match(pool.calls[0].sql, /WHERE ic\.cluster_id = \?/);
+  assert.deepEqual(pool.calls[0].params, [9, 200]);
+  assert.equal(rows[0].clusterId, 9);
+  assert.equal(rows[0].agentName, 'core-sw');
+});

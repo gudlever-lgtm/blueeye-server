@@ -289,10 +289,15 @@ const CLUSTER_BASIS = Object.freeze({
   high: 'within 5 min, same site, same metric',
 });
 
+// A cluster that stored its grouping basis (migration 130) says what actually
+// related its findings — a shared target, a switch, the site — instead of the
+// tier's generic reading, which since target-aware grouping no longer names
+// one relation.
 function clusterSummary(c) {
   if (c.title) return c.title;
   const n = (c.memberFindingIds || []).length;
-  const basis = CLUSTER_BASIS[c.confidence];
+  const stored = c.groupingBasis && Array.isArray(c.groupingBasis.why) ? c.groupingBasis.why.filter(Boolean) : [];
+  const basis = stored.length ? `within 5 min, ${stored.join('; ')}` : CLUSTER_BASIS[c.confidence];
   const head = `Situation across ${n} finding${n === 1 ? '' : 's'}`;
   const why = basis ? `${head} — ${basis}` : head;
   return c.suspectedCommonCause ? `${why}; suspected cause: ${c.suspectedCommonCause}` : why;
@@ -724,7 +729,7 @@ function ackKeyFor(e) {
 }
 
 // --- mute key ----------------------------------------------------------------
-// "Mute this rule" (change_mutes, migration 124) silences a KIND of row rather
+// "Mute this rule" (change_mutes, migration 134) silences a KIND of row rather
 // than one row: every row of this source + type, on every host, for a while.
 // That is the difference from acknowledging — an ack is "I have dealt with this
 // one", a mute is "stop showing me version skew until tomorrow".

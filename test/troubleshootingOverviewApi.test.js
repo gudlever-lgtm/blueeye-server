@@ -73,10 +73,29 @@ test('401 without a token', async () => {
   assert.equal((await request(app).get(PATH)).status, 401);
 });
 
-test('403 for a viewer — aggregating must not widen access', async () => {
+test('a viewer gets the root causes and topology, and none of the operator domains', async () => {
   const app = await fullApp();
   const res = await request(app).get(PATH).set('Authorization', authHeader('viewer'));
-  assert.equal(res.status, 403);
+  assert.equal(res.status, 200);
+  // What a viewer may read on its own: the situations behind the root causes.
+  assert.ok(res.body.rootCauses.length >= 1, 'the root causes are missing');
+  // Aggregating must not widen access: flow baselines, topology changes and
+  // blast radius are operator+ on their own endpoints, so they are empty here
+  // and the response says why.
+  assert.deepEqual(res.body.anomalies, []);
+  assert.ok(res.body.timeline.every((e) => e.source !== 'topology'), 'topology changes leaked');
+  for (const rc of res.body.rootCauses) {
+    assert.equal(rc.blastRadiusCount, 0, 'blast radius leaked');
+  }
+  assert.deepEqual(res.body.restricted, ['anomalies', 'topologyChanges', 'blastRadius']);
+  assert.deepEqual(res.body.topology.discovered, []);
+});
+
+test('an operator gets the operator domains and nothing is marked restricted', async () => {
+  const app = await fullApp();
+  const res = await request(app).get(PATH).set('Authorization', authHeader('operator'));
+  assert.equal(res.status, 200);
+  assert.deepEqual(res.body.restricted, []);
 });
 
 test('200 for operator and admin', async () => {

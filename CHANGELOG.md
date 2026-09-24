@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.189.1 — Traceroute hops placed by city, not just country
+## 0.190.0 — Traceroute hops placed by city, not just country
 
 Pair with agent 0.40.1, which sends each public hop's PTR name (`hostname`).
 Older agents keep working; their hops fall back to GeoIP.
@@ -23,6 +23,42 @@ why.
 
 The popup and the Destinations path list show the city, how it was found and
 the router's name. Country-only stops are drawn hollow.
+
+## 0.189.0 — Troubleshooting that follows the fault
+
+A technician chasing one fault had to carry the agent, the target and the time
+from screen to screen by hand. Now:
+
+- **One fault context.** Events, situations, Changes, Troubleshooting root
+  causes, the agent page, Investigate results and search open Probes, Diagnose,
+  Investigate and Device log with the agent, target and a covering window
+  already chosen — and the address carries it (`?agent=&target=&window=`), so
+  the link can be sent on. Per-record chart parameters no longer leak onto the
+  next screen.
+- **Alerts you can act on from a phone.** Every alert names the agent and links
+  to its situation, event or agent page (`BLUEEYE_PUBLIC_URL`) — the
+  agent-offline alert from 0.188.0 included.
+- **Evidence first on the event page:** what/where/why, the anomalies, the path
+  chart and the agent's traffic and interface errors on one time axis — with
+  the minutes before the event as baseline — then the work log. It names the
+  situation the event belongs to and the recommended next step, and says when
+  the blast radius could not be computed.
+- **Troubleshooting is open to viewers** (root causes, topology, agent events;
+  the operator-only domains are left out and named). Root causes list the
+  affected devices as links; every host and timeline row opens its device.
+- **Numbers you can trust.** One unit formatter: an RTT of 1500 ms read
+  "1.5 KB"; link rates are bit/s everywhere; charts show values under the
+  pointer; SNMP legends were blank and error charts ignored egress.
+- **Auto-refresh stops wiping work:** it skips a tick while a field has focus,
+  a drawer is open or text is selected, and screens keep their filters and
+  results across a rebuild.
+- **Field use:** the switch page shows its MAC table (filterable, loop moves
+  flagged); copy buttons on IPs and MACs; offline agents marked on the topology
+  with a way into the device; drag-to-zoom works on touch; Fleet sorts
+  worst-first; the Situations list has a severity column.
+- **Fixed:** Investigate's NIS2 link threw; Fleet's *Open issues* never
+  rendered; Changes rows lost their event/situation links; *Mute this rule*
+  (a placeholder) is gone; a deep link to a switch opened "No device".
 
 ## 0.188.0 — Audit fixes: switch ports, OT traffic, coverage gaps, agent offline
 

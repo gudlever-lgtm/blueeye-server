@@ -16,7 +16,11 @@ const silentLogger = { info() {}, warn() {}, error() {} };
 // individual channel (so e.g. a plan may include `alerts_email` but not
 // `alerts_webhook`). Both default to allow so callers that don't license per
 // channel are unaffected.
-function createDispatcher({ config, channels = {}, licensed = () => true, channelLicensed = () => true, logger = silentLogger, now = () => Date.now(), silencer = null, alertLog = null }) {
+// `enrich(subject)` (optional) adds what a reader needs to act on the alert —
+// `hostName` and a dashboard `link` (see alertContext.js). It is applied to a
+// COPY handed to the channels; the throttle, the log and the caller keep the
+// subject as it was. A failing enrich costs the extras, never the alert.
+function createDispatcher({ config, channels = {}, licensed = () => true, channelLicensed = () => true, logger = silentLogger, now = () => Date.now(), silencer = null, alertLog = null, enrich = null }) {
   const lastSent = new Map(); // `${hostId}|${metric}|${kind}|${severity}` -> timestamp
   let silencedBy = typeof silencer === 'function' ? silencer : null;
 
@@ -28,7 +32,19 @@ function createDispatcher({ config, channels = {}, licensed = () => true, channe
   // Sends a finding-shaped subject to every enabled + licensed + severity-eligible
   // channel. Shared by dispatch() (findings) and dispatchCluster() (clusters). One
   // channel's failure never aborts the rest. Returns { attempted, results }.
-  async function sendToChannels(subject, group) {
+  async function withContext(subject) {
+    if (typeof enrich !== 'function') return subject;
+    try {
+      const extra = await enrich(subject);
+      return extra ? { ...subject, ...extra } : subject;
+    } catch (err) {
+      logger.warn(`alerting: could not add alert context (${err && err.message})`);
+      return subject;
+    }
+  }
+
+  async function sendToChannels(rawSubject, group) {
+    const subject = await withContext(rawSubject);
     const subjectRank = rank(subject.severity);
     const results = [];
     let attempted = false;
@@ -162,6 +178,7 @@ function createDispatcher({ config, channels = {}, licensed = () => true, channe
     const subjectRank = rank(cluster.severity);
     const results = [];
     let attempted = false;
+    const subject = await withContext(cluster);
     for (const [name, channel] of Object.entries(channels)) {
       const rule = (config.channels && config.channels[name]) || null;
       if (!rule || !rule.enabled) continue;
@@ -174,7 +191,7 @@ function createDispatcher({ config, channels = {}, licensed = () => true, channe
       }
       attempted = true;
       try {
-        const r = await channel.send({ ...cluster, clusterEvent: kind }, group);
+        const r = await channel.send({ ...subject, clusterEvent: kind }, group);
         results.push({ channel: name, ok: Boolean(r && r.ok), detail: r && r.detail });
       } catch (err) {
         results.push({ channel: name, ok: false, detail: `threw: ${err.message}` });

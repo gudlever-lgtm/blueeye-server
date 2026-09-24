@@ -56,11 +56,13 @@
 
       var data = null;
       var graphEl = null;
-      var brush = null; // { fromMs, toMs } or null
+      // The time selection and the open fault list are kept on deps.state, so
+      // a rebuild (auto-refresh, leaving and coming back) restores them.
+      var brush = state.brush || null; // { fromMs, toMs } or null
       // A fleet can carry tens of thousands of raw alarms behind its root
       // causes, so this list is opt-in and paged; the overview read never
       // touches it.
-      var faults = { open: false, rows: [], total: 0, loading: false, error: null, loaded: false };
+      var faults = { open: !!state.faultsOpen, rows: [], total: 0, loading: false, error: null, loaded: false };
 
       var info = deps.help();
       page.append(ui.pageHeader({
@@ -89,7 +91,12 @@
               ['60', t('tshoot.window.1h')], ['360', t('tshoot.window.6h')],
               ['1440', t('tshoot.window.24h')], ['10080', t('tshoot.window.7d')],
             ],
-            onchange: function (e) { state.window = e.target.value; load(); },
+            onchange: function (e) {
+              state.window = e.target.value;
+              state.brush = null;
+              if (deps.onContext) deps.onContext({ windowMin: state.window });
+              load();
+            },
           }))],
           actions: [refreshBtn],
         }));
@@ -190,6 +197,9 @@
           .then(function (ids) {
             if (graphEl && graphEl.highlightPath) {
               graphEl.highlightPath([Number(model.pathAnchorId)].concat(ids));
+              // The graph sits below the causes; bring the highlight into view
+              // rather than lighting it up off screen.
+              if (ids.length && topoHost.scrollIntoView) topoHost.scrollIntoView({ behavior: 'smooth', block: 'start' });
             }
             // replaceChildren stringifies null, so the optional control is
             // filtered rather than passed through as a kid.
@@ -220,6 +230,36 @@
         host.replaceChildren(ui.metaXs(t('tshoot.changes.some', { n: changes.length })), ul);
       }
 
+      // WHICH devices a cause affects, by name and as links — the count alone
+      // left the reader to find them on the graph.
+      function nodeLabel(id) {
+        var nodes = (data.topology && data.topology.nodes) || [];
+        var n = nodes.filter(function (x) { return String(x.id) === String(id); })[0];
+        if (n && n.label) return n.label;
+        // Not on the graph (no LLDP yet): an agent id still has a name.
+        return deps.agentName && /^\d+$/.test(String(id)) ? deps.agentName(id) : String(id);
+      }
+      function affectedList(m) {
+        var ids = m.affectedDeviceIds || [];
+        if (!ids.length) return null;
+        var shown = ids.slice(0, 12);
+        return el('div', { class: 'ts-cause-hosts' },
+          shown.map(function (id, i) {
+            return el('span', {}, i ? ', ' : '', ui.hostLink(nodeLabel(id), function () { deps.openNode(id); }));
+          }),
+          ids.length > shown.length ? ui.metaXs(' ' + t('tshoot.moreHosts', { n: ids.length - shown.length })) : null);
+      }
+      // The agent a hand-off should start from: the cause's anchor when it is an
+      // agent, else the first affected agent (a polled switch is `d:<id>`).
+      function firstAgent(m) {
+        var cands = [m.pathAnchorId].concat(m.affectedDeviceIds || []);
+        for (var i = 0; i < cands.length; i++) {
+          var n = Number(cands[i]);
+          if (Number.isInteger(n) && n > 0) return n;
+        }
+        return null;
+      }
+
       function drawRootCauses() {
         var causes = (data.rootCauses || []).map(TV.rootCauseModel);
         var children = [];
@@ -230,8 +270,11 @@
             var slot = el('div', { class: 'ts-cause-slot' });
             // One action on the row, everything else behind the ⋯ menu — the
             // same fix Analysis got, for the same three stacked buttons.
+            // Show path walks the blast radius, which is operator+; a viewer's
+            // overview says it was left out, so the action is not offered.
+            var canPath = m.pathAnchorId != null && !(data.restricted && data.restricted.indexOf('blastRadius') >= 0);
             var actions = ui.rowActions(
-              m.pathAnchorId == null ? null : {
+              !canPath ? null : {
                 label: t('tshoot.showPath'), onclick: function () { showPath(m, slot); },
               },
               [
@@ -248,6 +291,10 @@
                 ui.metaXs(m.affectedText),
                 m.blastText ? ui.metaXs(m.blastText) : null,
                 m.firstSeen ? ui.metaXs(t('tshoot.since', { when: ui.fmt.abs(m.firstSeen) })) : null),
+              affectedList(m),
+              deps.contextActions ? deps.contextActions({
+                agentId: firstAgent(m), sinceMs: m.firstSeen ? Date.parse(m.firstSeen) : null,
+              }) : null,
               slot);
           })));
         }
@@ -341,7 +388,9 @@
                 dimmed: !!m.missing,
                 cells: {
                   sev: m.missing ? ui.meta('—') : ui.badge(sevTone(m.severity), m.severity),
-                  host: ui.meta(m.deviceLabel),
+                  host: m.hostId != null && deps.openNode
+                    ? ui.hostLink(m.deviceLabel, function () { deps.openNode(m.hostId); })
+                    : ui.meta(m.deviceLabel),
                   metric: el('code', {}, m.metric),
                   when: m.createdAt ? ui.fmt.abs(m.createdAt)
                     : (m.missing ? t('tshoot.faults.purged') : '—'),
@@ -389,12 +438,14 @@
       }
       function openFaults() {
         faults.open = true;
+        state.faultsOpen = true;
         drawStrip();
         drawFaults();
         if (!faults.loaded) loadFaultPage();
       }
       function closeFaults() {
         faults.open = false;
+        state.faultsOpen = false;
         drawFaults();
         drawStrip();
       }
@@ -412,7 +463,7 @@
         }
         var listHost = el('div', { class: 'ts-events' });
         var b = deps.brushSvg(all, bounds, {
-          onBrush: function (next) { brush = next; paint(); },
+          onBrush: function (next) { brush = next; state.brush = next; paint(); },
         });
 
         function paint() {
@@ -426,7 +477,7 @@
                 ? t('tshoot.timeline.selected', { shown: shown.length, total: all.length })
                 : t('tshoot.timeline.count', { n: all.length })),
               brush ? ui.button('ghost', t('tshoot.timeline.clear'), {
-                size: 'xs', onclick: function () { brush = null; paint(); },
+                size: 'xs', onclick: function () { brush = null; state.brush = null; paint(); },
               }) : null),
             shown.length ? ul : ui.emptyState({ kind: 'nodata', title: t('tshoot.timeline.noneInWindow') }));
         }
@@ -446,7 +497,7 @@
         return deps.fetchOverview(state.window)
           .then(function (d) {
             data = d;
-            brush = null;
+            brush = state.brush || null;
             // The fault set belongs to the rollup we just replaced, so the held
             // pages are stale. Drop them; if the list was open, page 1 of the
             // NEW set is fetched rather than silently showing the old one.
@@ -462,8 +513,13 @@
             if (faults.open) loadFaultPage();
             // A domain that is down costs its own panel, not the screen — say
             // which one, where the data is, not in a control bar.
+            // A viewer's overview leaves the operator domains out; say so,
+            // so an empty panel is not read as "no deviations".
+            if (d.restricted && d.restricted.length) {
+              noteHost.append(ui.inlineNote(t('tshoot.restricted'), 'info'));
+            }
             if (d.partial) {
-              noteHost.replaceChildren(ui.inlineNote(
+              noteHost.append(ui.inlineNote(
                 t('tshoot.partial', { sources: (d.failedSources || []).join(', ') }), 'warn'));
             }
           })

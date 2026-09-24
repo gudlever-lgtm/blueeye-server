@@ -124,6 +124,7 @@ const { createGeoEnricher } = require('./geo/enricher');
 const { createFlowPipeline } = require('./geo/flowPipeline');
 const { loadAlertingConfig } = require('./analysis/alerting/config');
 const { createDispatcher } = require('./analysis/alerting/dispatcher');
+const { createAlertContext } = require('./analysis/alerting/alertContext');
 const { createSilencer } = require('./analysis/alerting/maintenance');
 const { createEmailChannel, createSmtpTransport } = require('./analysis/alerting/channels/email');
 const { createUserMailer } = require('./services/userMailer');
@@ -830,6 +831,9 @@ function start() {
       return featureGate.isFeatureEnabled('alerting');
     },
     alertLog: alertDispatchLogRepo,
+    // Every alert names its agent and carries a link into the dashboard
+    // (BLUEEYE_PUBLIC_URL). Without the URL the alert still goes, unlinked.
+    enrich: createAlertContext({ publicUrl: config.publicUrl || null, agentsRepo, logger }).enrich,
     logger,
   });
   // One-time-password email for local user creation. It reuses the SAME live

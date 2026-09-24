@@ -93,4 +93,5 @@ test('buildClusterDetail assembles members, affected agents, root cause and evid
   assert.ok(detail.evidenceSummary.text.includes('same finding-type'));
   // members carry their evidence sample counts (evidence never travels without it).
   assert.equal(detail.members[0].evidenceSamples, 2);
+  assert.ok('eventCaseId' in detail.members[0], 'members carry the event they belong to');
 });

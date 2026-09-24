@@ -112,7 +112,7 @@
 
         // Everything else is app.js's, wrapped rather than rebuilt: each panel
         // owns its title, and the loaders fill the body under it.
-        deps.panels(inc, anomalies, id).forEach(function (p) {
+        deps.panels(inc, anomalies, id, data).forEach(function (p) {
           if (!p) return;
           if (p.key === 'anomalies') { page.append(anomPanel); return; }
           // A body that already draws its own card (the work log, the guide,

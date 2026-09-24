@@ -11,22 +11,24 @@ const { MAX_WINDOW_MINUTES, MAX_FAULT_PAGE } = require('../troubleshooting/overv
 // with per-node state, the correlated root causes with their blast radius, the
 // flow-pair baseline deviations and the change timeline.
 //
-// RBAC — operator+. The underlying domains sit at three different levels
-// (neighbors/graph/dependencies viewer+, changes/blast-radius/flow-baselines
-// operator+, discovery admin). Aggregating must never WIDEN access, so the
-// endpoint adopts the strictest non-admin level its data requires, and the
-// admin-only discovery candidates are included only for admins — as an empty
-// list for everyone else, not a 403 that would deny the whole screen.
+// RBAC — viewer+, filtered by role. The underlying domains sit at three
+// different levels (neighbors/graph/dependencies/clusters/findings viewer+,
+// changes/blast-radius/flow-baselines operator+, discovery admin). Aggregating
+// must never WIDEN access, so each domain is included only for the roles that
+// may read it on its own: a viewer gets the root causes, the topology and the
+// agent events, with the operator domains empty and named in `restricted`;
+// discovery candidates are admin-only. Empty, not a 403: the first-line person
+// on the phone needs "what is broken now" as much as the operator does.
 //
 // Read-only: nothing here pushes an agent command, so no signed command and no
 // audit write. Adding an action later means an Ed25519-signed command over
 // agentCommander plus a hash-chained audit entry, as the evidence path does.
 function createTroubleshootingRouter({ overviewService = null } = {}) {
   const router = express.Router();
-  const reader = requireRole(ROLES.OPERATOR, ROLES.ADMIN);
+  const reader = requireRole(ROLES.VIEWER, ROLES.OPERATOR, ROLES.ADMIN);
 
   // GET /api/troubleshooting/overview?minutes=&limit=
-  //   400 invalid query · 401 unauthenticated · 403 viewer
+  //   400 invalid query · 401 unauthenticated · 403 no recognised role
   //   503 when the aggregation service is not wired · 500 on an unexpected fault
   router.get('/overview', requireAuth, reader, asyncHandler(async (req, res) => {
     if (!overviewService || typeof overviewService.getOverview !== 'function') {
@@ -53,6 +55,7 @@ function createTroubleshootingRouter({ overviewService = null } = {}) {
       ...(windowMinutes !== undefined ? { windowMinutes } : {}),
       ...(limit !== undefined ? { clusterLimit: limit, anomalyLimit: limit, timelineLimit: limit } : {}),
       includeDiscovery: req.user && req.user.role === ROLES.ADMIN,
+      includeOperatorData: !!(req.user && (req.user.role === ROLES.OPERATOR || req.user.role === ROLES.ADMIN)),
     });
 
     return res.json(overview);
@@ -65,10 +68,11 @@ function createTroubleshootingRouter({ overviewService = null } = {}) {
   //   not tens of thousands of finding rows. The dashboard calls this only when
   //   the operator asks to list them, and pages through it.
   //
-  //   Same RBAC as the overview (operator+) over the same source, so this widens
-  //   nothing: it is the detail of a number the overview already shows.
+  //   Same RBAC as the overview (viewer+) over the same source — the finding
+  //   rows are viewer+ under /api/findings too — so this widens nothing: it is
+  //   the detail of a number the overview already shows.
   //
-  //   400 invalid query · 401 unauthenticated · 403 viewer
+  //   400 invalid query · 401 unauthenticated · 403 no recognised role
   //   503 when the aggregation service is not wired · 500 on an unexpected fault
   router.get('/faults', requireAuth, reader, asyncHandler(async (req, res) => {
     if (!overviewService || typeof overviewService.getFaults !== 'function') {

@@ -215,6 +215,11 @@ function createTroubleshootingOverviewService({
     anomalyLimit = DEFAULT_ANOMALY_LIMIT,
     timelineLimit = DEFAULT_TIMELINE_LIMIT,
     includeDiscovery = false,
+    // Operator-level domains: flow-pair baseline deviations, topology changes
+    // and blast radius. A viewer's overview leaves them out (empty, never a
+    // 403 for the whole screen), so aggregating never widens what a role can
+    // read through the individual endpoints.
+    includeOperatorData = true,
     now = () => new Date(),
   } = {}) {
     // A non-positive or unparseable window falls back to the default rather
@@ -229,8 +234,8 @@ function createTroubleshootingOverviewService({
       ['clusters', () => fetchClusters({ limit: clusterLimit })],
       ['agents', () => fetchAgents()],
       ['graph', () => fetchGraph()],
-      ['anomalies', () => fetchAnomalies({ from, to, limit: anomalyLimit })],
-      ['topologyChanges', () => fetchTopologyChanges({ from, to, limit: timelineLimit })],
+      ['anomalies', () => (includeOperatorData ? fetchAnomalies({ from, to, limit: anomalyLimit }) : Promise.resolve([]))],
+      ['topologyChanges', () => (includeOperatorData ? fetchTopologyChanges({ from, to, limit: timelineLimit }) : Promise.resolve([]))],
       ['agentEvents', () => fetchAgentEvents({ from, to, limit: timelineLimit })],
       ['discovered', () => (includeDiscovery ? fetchDiscovered({ limit: DEFAULT_DISCOVERY_LIMIT }) : Promise.resolve([]))],
       // The device rows, for the poll state of each switch on the map. The
@@ -284,7 +289,9 @@ function createTroubleshootingOverviewService({
         if (id !== null) nodesOfInterest.add(id);
       }
     }
-    const blastByNode = blastRadiusFor(got.graph, nodesOfInterest, aliveFrom(got.agents, got.snmpDevices));
+    const blastByNode = includeOperatorData
+      ? blastRadiusFor(got.graph, nodesOfInterest, aliveFrom(got.agents, got.snmpDevices))
+      : new Map();
 
     const rootCauses = buildRootCauses(clusterDetails, { blastByNode });
     // The switches are IN the graph now (src/topology/graph.js), so the view
@@ -333,6 +340,9 @@ function createTroubleshootingOverviewService({
       timeline,
       partial: failedSources.length > 0,
       failedSources,
+      // Says which panels were left out for this role, so the screen can say
+      // so instead of drawing them as empty.
+      restricted: includeOperatorData ? [] : ['anomalies', 'topologyChanges', 'blastRadius'],
     };
   }
 

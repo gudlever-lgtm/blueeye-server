@@ -3779,6 +3779,7 @@ function makeApp(overrides = {}) {
     discoveryConfig: overrides.discoveryConfig || { enabled: false, cidrs: [], ports: [22, 80, 161, 443, 3389], rateLimit: 50, addressCap: 65536, intervalMinutes: 360 },
     geoTileConfig: overrides.geoTileConfig || { tileUrl: 'https://tiles.example/{z}/{x}/{y}.png', tileAttribution: 'test', tileMaxZoom: 19 },
     geoProvider: overrides.geoProvider || null,
+    cityProvider: overrides.cityProvider || null,
     centroids: overrides.centroids || null,
     assistant: overrides.assistant || makeAssistant(),
     dispatcher,

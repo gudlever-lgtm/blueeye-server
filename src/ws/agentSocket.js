@@ -36,12 +36,15 @@ function traceHopPayload(agentId, msg, describe) {
   if (!target || target.length > 255) return null;
   const probeType = TRACE_TYPES.includes(msg.probeType) ? msg.probeType : null;
   if (!probeType || !msg.hop || typeof msg.hop !== 'object') return null;
+  const wrap = (node) => (node ? { agentId, probeType, target, node } : null);
   let node = null;
   try {
-    node = typeof describe === 'function' ? describe(msg.hop) : describeLiveHop(msg.hop);
+    node = typeof describe === 'function' ? describe(msg.hop, agentId) : describeLiveHop(msg.hop);
   } catch { node = null; }
-  if (!node) return null;
-  return { agentId, probeType, target, node };
+  // `describe` may look the agent's site up first (the map's speed-of-light
+  // check needs it), in which case the payload is a promise.
+  if (node && typeof node.then === 'function') return node.then(wrap, () => null);
+  return wrap(node);
 }
 
 function attachAgentWebSocket({
@@ -280,10 +283,10 @@ function attachAgentWebSocket({
       // the trace runs. Not stored: the finished run arrives on
       // POST /agents/probe-results and is the record.
       if (msg.type === 'trace_hop' && typeof notifyDashboard === 'function') {
-        const payload = traceHopPayload(ws.agentId, msg, describeTraceHop);
-        if (payload) {
+        Promise.resolve(traceHopPayload(ws.agentId, msg, describeTraceHop)).then((payload) => {
+          if (!payload) return;
           try { notifyDashboard({ type: 'trace-hop', payload }); } catch { /* live view is a courtesy */ }
-        }
+        }, () => { /* live view is a courtesy */ });
       }
       // agent -> server: a finished burst. The whole series, analysed once and
       // stored with its verdict.

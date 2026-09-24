@@ -55,7 +55,7 @@ function badRequest(message, details) {
 // the env defaults. The map tile source and the traffic-type categories are
 // editable from the UI; everything else stays env-driven. Validation lives here
 // so the route stays thin.
-function createSettingsService({ settingsRepo, config, liveAnalysis = null, liveRetention = null, liveAlerting = null, liveGeo = null, secretBox = null }) {
+function createSettingsService({ settingsRepo, config, liveAnalysis = null, liveRetention = null, liveAlerting = null, liveGeo = null, liveGeoCity = null, secretBox = null }) {
   // Encrypt/decrypt the assistant API key for storage at rest (AES-256-GCM via
   // secretBox, the same scheme integration credentials + the LDAP bind password
   // use). When no box is wired (some tests) values pass through as plaintext. A
@@ -143,6 +143,35 @@ function createSettingsService({ settingsRepo, config, liveAnalysis = null, live
   function geoEnvPath() {
     return (config.geo && config.geo.dbPath) || '';
   }
+  function geoCityEnvPath() {
+    return (config.geo && config.geo.cityDbPath) || '';
+  }
+
+  // The city-level table (traceroute hop placement only). Same override rules
+  // as the country table: a settings path wins over the env path. `include`
+  // decides whether "Update now" also builds it — on unless turned off.
+  function cityStatus(o) {
+    const hasPath = typeof o.cityDbPath === 'string';
+    const envPath = geoCityEnvPath();
+    const st = liveGeoCity && typeof liveGeoCity.status === 'function'
+      ? liveGeoCity.status()
+      : { configured: false, size: 0, error: null, loading: false };
+    return {
+      dbPath: hasPath ? o.cityDbPath : envPath,
+      source: hasPath ? 'settings' : (envPath ? 'env' : null),
+      configured: !!st.configured,
+      ranges: st.size || 0,
+      loading: !!st.loading,
+      error: st.error || null,
+      include: o.includeCity !== false,
+      lastBuild: o.cityBuild || null,
+    };
+  }
+  function reloadCity(dbPath) {
+    if (!liveGeoCity || typeof liveGeoCity.reload !== 'function') return;
+    // Streams in the background; status() reports `loading` meanwhile.
+    Promise.resolve(liveGeoCity.reload({ dbPath: dbPath || '' })).catch(() => { /* status carries the error */ });
+  }
 
   // Effective GeoIP status: the configured path (settings override or env), where
   // it came from, whether the live provider actually has ranges loaded, plus the
@@ -164,6 +193,7 @@ function createSettingsService({ settingsRepo, config, liveAnalysis = null, live
       error: st.error || null,
       autoUpdate: o.autoUpdate === true, // opt-in (egress only when an admin enables it)
       lastBuild: o.build || null,
+      city: cityStatus(o),
     };
   }
 
@@ -177,6 +207,12 @@ function createSettingsService({ settingsRepo, config, liveAnalysis = null, live
       else value.dbPath = s; // '' clears the override → fall back to env / disabled
     }
     if (p.autoUpdate !== undefined) value.autoUpdate = p.autoUpdate === true || p.autoUpdate === 'true';
+    if (p.cityDbPath !== undefined) {
+      const s = String(p.cityDbPath).trim();
+      if (s.length > 1024) errors.cityDbPath = 'cityDbPath must be at most 1024 characters';
+      else value.cityDbPath = s; // '' clears the override → fall back to env / none
+    }
+    if (p.includeCity !== undefined) value.includeCity = !(p.includeCity === false || p.includeCity === 'false');
     return { errors: Object.keys(errors).length ? errors : null, value };
   }
 
@@ -194,25 +230,42 @@ function createSettingsService({ settingsRepo, config, liveAnalysis = null, live
       else o.dbPath = value.dbPath;
     }
     if (value.autoUpdate !== undefined) o.autoUpdate = value.autoUpdate;
+    if (value.cityDbPath !== undefined) {
+      if (value.cityDbPath === '') { delete o.cityDbPath; delete o.cityBuild; }
+      else o.cityDbPath = value.cityDbPath;
+    }
+    if (value.includeCity !== undefined) {
+      if (value.includeCity) delete o.includeCity; else o.includeCity = false;
+    }
     await settingsRepo.set('geoip', Object.keys(o).length ? o : null);
     const eff = await getGeoip();
     if (liveGeo && typeof liveGeo.reload === 'function') {
       try { liveGeo.reload({ dbPath: eff.dbPath || '' }); } catch { /* status reflects configured:false */ }
     }
+    // Only a path change reloads the city table: it is large, and toggling
+    // `includeCity` must not throw away a table that is already loaded.
+    if (value.cityDbPath !== undefined) reloadCity(eff.city.dbPath);
     return await getGeoip();
   }
 
   // Records a freshly built database (path + month/ranges/time) from the in-app
   // updater, preserving the auto-update flag, and live-reloads the provider.
-  async function recordGeoipBuild({ dbPath, month = null, ranges = 0 }) {
+  // `city` ({ dbPath, ranges }) is present when the same run also built the
+  // city table.
+  async function recordGeoipBuild({ dbPath, month = null, ranges = 0, city = null }) {
     const cur = await loadOverride('geoip');
     const o = cur && typeof cur === 'object' ? { ...cur } : {};
     o.dbPath = String(dbPath);
     o.build = { builtAt: new Date().toISOString(), month, ranges };
+    if (city && city.dbPath) {
+      o.cityDbPath = String(city.dbPath);
+      o.cityBuild = { builtAt: o.build.builtAt, month, ranges: city.ranges || 0 };
+    }
     await settingsRepo.set('geoip', o);
     if (liveGeo && typeof liveGeo.reload === 'function') {
       try { liveGeo.reload({ dbPath: o.dbPath }); } catch { /* status reflects configured:false */ }
     }
+    if (city && city.dbPath) reloadCity(o.cityDbPath);
     return getGeoip();
   }
 
@@ -989,6 +1042,7 @@ function createSettingsService({ settingsRepo, config, liveAnalysis = null, live
       if (g && typeof g.dbPath === 'string' && liveGeo && typeof liveGeo.reload === 'function') {
         liveGeo.reload({ dbPath: g.dbPath });
       }
+      if (g && typeof g.cityDbPath === 'string') reloadCity(g.cityDbPath);
     } catch { /* ignore */ }
   }
 

@@ -253,6 +253,11 @@ const config = {
     // Defaults to the persistent /data volume so it works in Docker with no host
     // mount; override for bare-node installs.
     buildPath: process.env.GEOIP_BUILD_PATH || '/data/geoip.csv',
+    // City-level table (DB-IP City Lite) used ONLY to place traceroute hops on
+    // the map when a router's name does not say where it is. Optional; the
+    // in-app updater builds it into cityBuildPath unless an admin turns it off.
+    cityDbPath: process.env.GEOIP_CITY_DB_PATH || '',
+    cityBuildPath: process.env.GEOIP_CITY_BUILD_PATH || '/data/geoip-city.csv',
     // Base URL for the offline GeoIP source (DB-IP Lite, EU, CC-BY). Point at a
     // self-hosted/EU mirror if preferred; the constraint is EU/self-hosted data.
     sourceUrl: process.env.GEOIP_SOURCE_URL || 'https://download.db-ip.com/free',

@@ -5150,7 +5150,7 @@ function pathGraph(graph, pgOpts = {}) {
   mapSection.addEventListener('toggle', () => {
     if (!mapSection.open || mapBuilt) return;
     mapBuilt = true;
-    drawPathMap(mapHost, geoStops);
+    drawPathMap(mapHost, geoStops, nodes);
   });
 
   return el('div', { class: 'pathmap' },
@@ -5187,18 +5187,46 @@ function pathGeoStops(nodes) {
   return stops;
 }
 
-// Popup HTML for one map stop (esc-escaped — IPs/ASN come from GeoIP + traceroute).
+// How sure the map is about a stop, in words: the router's name said the city,
+// city GeoIP did, or only the country is known. See src/geo/hopLocation.js.
+function pathPlaceNote(place) {
+  if (!place) return '';
+  if (place.source === 'rdns') return t('pathmap.place.rdns', { code: place.code || '' });
+  if (place.source === 'geoip-city') return t('pathmap.place.geoipCity');
+  return t('pathmap.place.country');
+}
+
+// Popup HTML for one map stop (esc-escaped — IPs/ASN/hostnames come from GeoIP
+// + traceroute).
 function pathStopPopup(s, i, total) {
   const head = i === 0 ? 'Origin' : (i === total - 1 ? 'Destination' : 'Transit');
-  const place = s.nodes[0].country ? ` · ${esc(s.nodes[0].country)}` : '';
+  const pl = s.nodes.map((n) => n.place).find(Boolean) || null;
+  const where = pl ? [pl.city, pl.country].filter(Boolean).join(', ') : (s.nodes[0].country || '');
+  const place = where ? ` · ${esc(where)}` : '';
+  const note = pl && s.nodes.some((n) => n.kind !== 'source') ? `<div class="muted">${esc(pathPlaceNote(pl))}</div>` : '';
   const lines = s.nodes.map((n) => {
     const who = n.kind === 'source' ? esc(n.label || 'Agent') : `Hop ${n.hop}${n.ip ? ' · ' + esc(n.ip) : ''}`;
+    const name = n.hostname ? ` · ${esc(n.hostname)}` : '';
     const asn = n.asn != null ? ` · AS${n.asn}${n.asnName ? ' ' + esc(n.asnName) : ''}` : '';
     const met = n.rttMs != null ? ` · ${n.rttMs} ms` : '';
     const loss = n.lossPct ? ` · ${n.lossPct}% loss` : '';
-    return `<div>${who}${asn}${met}${loss}</div>`;
+    return `<div>${who}${name}${asn}${met}${loss}</div>`;
   }).join('');
-  return `<div class="pg-pop"><strong>${head}${place}</strong>${lines}</div>`;
+  return `<div class="pg-pop"><strong>${head}${place}</strong>${note}${lines}</div>`;
+}
+
+// The hops the map left out because their round-trip time rules out every place
+// GeoIP or the router name suggested (anycast, mostly). Listed under the map so
+// a path that "ends early" says why. null when there are none.
+function pathRejectedNote(nodes) {
+  const out = [];
+  for (const n of nodes || []) {
+    if (n.lat != null || !Array.isArray(n.geoRejected) || !n.geoRejected.length) continue;
+    const r = n.geoRejected[n.geoRejected.length - 1];
+    const where = [r.city, r.country].filter(Boolean).join(', ') || '?';
+    out.push(el('li', {}, t('pathmap.rejected', { hop: n.hop, ip: n.ip || '*', where, km: r.distanceKm, max: r.maxKm })));
+  }
+  return out.length ? el('ul', { class: 'muted small pg-rejected' }, ...out) : null;
 }
 
 // Draws a path's geolocated stops into a Leaflet layer group: a polyline (each
@@ -5212,9 +5240,12 @@ function renderPathStops(layer, stops) {
   }
   stops.forEach((s, i) => {
     const isSrc = s.nodes.some((n) => n.kind === 'source');
+    // A stop known only to the country is drawn hollow-ish with a dashed ring:
+    // it marks the country, not a place in it.
+    const rough = !isSrc && !s.nodes.some((n) => n.place && n.place.precision === 'city');
     L.circleMarker([s.lat, s.lng], {
-      radius: isSrc ? 9 : 7, weight: 2, color: '#fff',
-      fillColor: isSrc ? '#38bdf8' : pgColor(s.severity), fillOpacity: 0.95,
+      radius: isSrc ? 9 : 7, weight: 2, color: '#fff', dashArray: rough ? '3 3' : null,
+      fillColor: isSrc ? '#38bdf8' : pgColor(s.severity), fillOpacity: rough ? 0.45 : 0.95,
     }).addTo(layer).bindPopup(pathStopPopup(s, i, stops.length));
   });
   return latlngs;
@@ -5222,12 +5253,14 @@ function renderPathStops(layer, stops) {
 
 // Draws the path on its own Leaflet map (the Probes traceroute detail). Reuses the
 // Destinations tile config.
-async function drawPathMap(host, stops) {
+async function drawPathMap(host, stops, nodes = []) {
   if (typeof L === 'undefined') { host.replaceChildren(el('div', { class: 'error' }, 'Map library failed to load.')); return; }
+  const rejected = pathRejectedNote(nodes);
   if (!stops || stops.length < 2) {
-    host.replaceChildren(el('div', { class: 'empty' }, 'Not enough geolocated hops to map. Public hops are placed at country level, so this needs the GeoIP database plus the agent site and at least one public hop.'));
+    host.replaceChildren(el('div', { class: 'empty' }, t('pathmap.empty')), rejected || '');
     return;
   }
+  if (rejected) host.after(rejected);
   let cfg = {};
   try { cfg = await api('/api/map/config'); } catch { /* fall back to default tiles */ }
   const map = createLeafletMap(host, cfg, { center: [stops[0].lat, stops[0].lng], zoom: 3 });
@@ -15059,6 +15092,27 @@ function geoipSettingsCard(geoip) {
   const updateBtn = el('button', { class: 'small' }, 'Update now (download latest)');
   const autoChk = el('input', { type: 'checkbox' });
   if (geoip && geoip.autoUpdate) autoChk.checked = true;
+  // City-level table: the traceroute map's fallback when a router's name does
+  // not say where it is (docs/geo.md). Built by "Update now" unless unticked.
+  const city0 = (geoip && geoip.city) || {};
+  const cityPath = el('input', { type: 'text', value: city0.dbPath || '', placeholder: '/data/geoip-city.csv' });
+  const cityStatus = el('p', { class: 'muted small' });
+  const cityBtn = el('button', { class: 'small' }, t('geoip.city.save'));
+  const cityChk = el('input', { type: 'checkbox' });
+  cityChk.checked = city0.include !== false;
+
+  function renderCity(c) {
+    const x = c || {};
+    const line = x.loading ? t('geoip.city.loading')
+      : x.configured ? t('geoip.city.loaded', { ranges: x.ranges })
+        : t('geoip.city.none');
+    const b = x.lastBuild;
+    cityStatus.replaceChildren(
+      el('span', x.configured ? { style: 'color:var(--ok);font-weight:600' } : { class: 'muted' }, line),
+      x.error ? el('span', { class: 'warn-text' }, ` · ${x.error}`) : null,
+      b ? el('span', { class: 'muted' }, ` · ${t('geoip.city.lastBuild', { month: b.month || '?', ranges: b.ranges })}`) : null);
+    if (typeof x.dbPath === 'string' && x.dbPath !== cityPath.value) cityPath.value = x.dbPath;
+  }
 
   function renderStatus(s) {
     const ok = s && s.configured;
@@ -15070,6 +15124,7 @@ function geoipSettingsCard(geoip) {
     const b = s && s.lastBuild;
     built.textContent = b ? `Last downloaded: ${b.month || '?'} · ${b.ranges} ranges · ${fmtDate(b.builtAt)}` : '';
     if (s && typeof s.dbPath === 'string' && s.dbPath !== path.value) path.value = s.dbPath;
+    renderCity(s && s.city);
   }
   renderStatus(geoip);
 
@@ -15092,7 +15147,11 @@ function geoipSettingsCard(geoip) {
       const { update: u } = await api('/api/settings/geoip/update');
       if (u.state === 'running') return; // keep polling
       clearInterval(polling); polling = null; setUpdating(false);
-      if (u.state === 'ok') { await refreshGeoip(); toast(`GeoIP updated to ${u.month} — ${u.ranges} ranges`); }
+      if (u.state === 'ok') {
+        await refreshGeoip();
+        toast(`GeoIP updated to ${u.month} — ${u.ranges} ranges`);
+        if (u.cityError) err.textContent = t('geoip.city.failed', { error: u.cityError });
+      }
       else if (u.state === 'error') { err.textContent = `Update failed: ${u.error || 'unknown error'}`; toast('GeoIP update failed', true); }
     } catch (e2) { clearInterval(polling); polling = null; setUpdating(false); err.textContent = errText(e2); }
   }
@@ -15108,9 +15167,28 @@ function geoipSettingsCard(geoip) {
     catch (e2) { autoChk.checked = !autoChk.checked; toast(errText(e2), true); }
   }
 
+  async function saveCity() {
+    err.textContent = ''; cityBtn.disabled = true;
+    try {
+      const res = await api('/api/settings/geoip', { method: 'PUT', body: { cityDbPath: cityPath.value.trim() } });
+      renderStatus(res.geoip);
+      toast(t('geoip.city.saved'));
+      // The table streams in on the server; look again once it has had a moment.
+      setTimeout(refreshGeoip, 4000);
+    } catch (e2) { err.textContent = errText(e2); } finally { cityBtn.disabled = false; }
+  }
+  async function toggleCity() {
+    try {
+      await api('/api/settings/geoip', { method: 'PUT', body: { includeCity: cityChk.checked } });
+      toast(cityChk.checked ? t('geoip.city.includeOn') : t('geoip.city.includeOff'));
+    } catch (e2) { cityChk.checked = !cityChk.checked; toast(errText(e2), true); }
+  }
+
   btn.addEventListener('click', save);
   updateBtn.addEventListener('click', updateNow);
   autoChk.addEventListener('change', toggleAuto);
+  cityBtn.addEventListener('click', saveCity);
+  cityChk.addEventListener('change', toggleCity);
 
   return el('div', { class: 'settings-card' }, el('h3', {}, 'GeoIP database (country + ASN)'),
     el('p', { class: 'muted small' }, 'Offline, EU-sourced IP→country/ASN range CSV used to place external destinations and traceroute hops on the maps. Without it the maps show only your sites. ', el('strong', {}, '“Update now”'), ' downloads the latest DB-IP Lite release (db-ip.com, CC-BY) and builds it on the server — no host file needed. Or point the path at a file you built with scripts/build-geoip.js. Reloads live, no restart. See docs/geo.md.'),
@@ -15118,7 +15196,14 @@ function geoipSettingsCard(geoip) {
       el('label', {}, 'GeoIP CSV path (server-side file)', path),
       status, built, err,
       el('label', { class: 'inline' }, autoChk, ' Auto-update monthly (the server fetches a fresh DB-IP release; needs outbound internet)'),
-      el('div', { class: 'form-actions' }, btn, updateBtn)));
+      el('div', { class: 'form-actions' }, btn, updateBtn)),
+    el('h4', {}, t('geoip.city.title')),
+    el('p', { class: 'muted small' }, t('geoip.city.blurb')),
+    el('div', { class: 'form-grid' },
+      el('label', {}, t('geoip.city.path'), cityPath),
+      cityStatus,
+      el('label', { class: 'inline' }, cityChk, ' ', t('geoip.city.include')),
+      el('div', { class: 'form-actions' }, cityBtn)));
 }
 
 // ---- Users (MIGRATED — see public/views/users.js)

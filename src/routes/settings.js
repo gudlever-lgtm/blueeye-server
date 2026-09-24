@@ -199,9 +199,10 @@ function createSettingsRouter({ settingsService, featureGate, dispatcher, analys
     }
   }));
 
-  // PUT /api/settings/geoip { dbPath?, autoUpdate? } — point the server at an
-  // offline GeoIP/ASN range CSV and reload it live, and/or toggle monthly
-  // auto-update (admin). Empty dbPath clears the override (falls back to env /
+  // PUT /api/settings/geoip { dbPath?, autoUpdate?, cityDbPath?, includeCity? } —
+  // point the server at an offline GeoIP/ASN range CSV and reload it live,
+  // and/or toggle monthly auto-update (admin). cityDbPath/includeCity are the
+  // city-level table the traceroute map falls back on (docs/geo.md). Empty dbPath clears the override (falls back to env /
   // disables). The response reports how many ranges loaded, so a wrong/unreadable
   // path surfaces as ranges:0 rather than a silent no-op.
   router.put('/geoip', ...admin, asyncHandler(async (req, res) => {
@@ -218,11 +219,15 @@ function createSettingsRouter({ settingsService, featureGate, dispatcher, analys
   // POST /api/settings/geoip/update — fetch the latest DB-IP Lite release, build
   // the CSV server-side (into the /data volume) and reload the provider (admin).
   // Runs in the background and returns 202 + the job status; poll GET to track it.
-  // { countryOnly: true } skips the heavier ASN file.
+  // { countryOnly: true } skips the heavier ASN file; { includeCity: bool }
+  // overrides the Settings toggle for the city table for this one run.
   router.post('/geoip/update', ...admin, asyncHandler(async (req, res) => {
     if (!geoipUpdater) return res.status(503).json({ error: 'GeoIP auto-update is not available on this server' });
-    const includeAsn = (req.body && req.body.countryOnly) ? false : true;
-    res.status(202).json({ update: geoipUpdater.trigger({ includeAsn }) });
+    const body = req.body || {};
+    const includeAsn = body.countryOnly ? false : true;
+    const opts = { includeAsn };
+    if (typeof body.includeCity === 'boolean') opts.includeCity = body.includeCity;
+    res.status(202).json({ update: geoipUpdater.trigger(opts) });
   }));
 
   // GET /api/settings/geoip/update — current update-job status (idle/running/ok/

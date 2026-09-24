@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.189.1 — Traceroute hops placed by city, not just country
+
+Pair with agent 0.40.1, which sends each public hop's PTR name (`hostname`).
+Older agents keep working; their hops fall back to GeoIP.
+
+**Router names.** A backbone router's name usually says where it stands
+(`ae3.cph-bb1.telia.net`, `fra03.atlas.cogentco.com`). The server reads the
+city out of it against a curated code table (`src/geo/networkPlaces.js`) and
+puts the hop there.
+
+**City GeoIP as fallback.** When the name says nothing, DB-IP City Lite places
+the hop. "Update now" builds it next to the country table (Settings → Map →
+City-level data; about 120 MB to download, about 60 MB of memory), or
+`scripts/build-geoip.js --city`. Flows stay at country level.
+
+**Speed-of-light check.** Every placement is checked against the hop's fastest
+reply: R ms round trip means at most R × 100 km from the agent's site. A place
+that is too far is skipped for the next source; an anycast address registered
+in the US but answering from 3 ms away is left off the map, and the map says
+why.
+
+The popup and the Destinations path list show the city, how it was found and
+the router's name. Country-only stops are drawn hollow.
+
 ## 0.188.0 — Audit fixes: switch ports, OT traffic, coverage gaps, agent offline
 
 Fixes the findings in `docs/audit/fejlscenarie-audit.md` (section 8 lists each

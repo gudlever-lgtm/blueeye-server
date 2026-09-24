@@ -1,6 +1,6 @@
 'use strict';
 
-const { isPrivate } = require('../geo/privateIp');
+const { locateHop } = require('../geo/hopLocation');
 
 // Turns a set of traceroute probe results (repeated runs to one target) into a
 // directed, weighted path graph — the model behind the dashboard's path map.
@@ -12,9 +12,10 @@ const { isPrivate } = require('../geo/privateIp');
 // robust centre, unmoved by a single odd run), classify against fixed thresholds,
 // and attach a plain-language `explain` to every node. No ML, no cloud.
 //
-//   buildPathGraph(results, { geoProvider, centroids, target })
+//   buildPathGraph(results, { geoProvider, cityProvider, centroids, target, origin })
 //     results  - probe rows (type 'traceroute') for ONE target, any order
-//     deps     - optional geoProvider.lookup(ip) and centroids.get(country)
+//     deps     - optional geoProvider.lookup(ip), cityProvider.lookup(ip) and
+//                centroids.get(country); origin = the agent's site { lat, lng }
 
 // Severity thresholds, shared with the fleet verdict so the colours mean the same
 // thing everywhere (see public/app.js fleetKpis): loss% / jitter ms / latency ms.
@@ -64,19 +65,18 @@ function mode(values) {
   return best;
 }
 
-function enrichGeo(ip, geoProvider, centroids) {
-  if (!ip || isPrivate(ip) || !geoProvider) return { country: null, asn: null, asnName: null, lat: null, lng: null, private: !!(ip && isPrivate(ip)) };
-  const geo = geoProvider.lookup(ip) || null;
-  const country = geo && geo.country ? geo.country : null;
-  const point = country && centroids ? centroids.get(country) : null;
-  return {
-    country,
-    asn: geo ? geo.asn ?? null : null,
-    asnName: geo ? geo.asnName ?? null : null,
-    lat: point ? point.lat : null,
-    lng: point ? point.lng : null,
-    private: false,
-  };
+// Where a hop goes on the map: the router's own name first, then city GeoIP,
+// then the country centroid — each checked against the hop's RTT. See
+// src/geo/hopLocation.js. `rttMs` is the lowest RTT seen (the tightest bound).
+function enrichGeo(ip, deps = {}, { hostname = null, rttMs = null } = {}) {
+  return locateHop({ ip, hostname, rttMs }, deps);
+}
+
+// The fastest reply a hop gave across runs — minMs where the agent sends it,
+// else the per-run average. The speed-of-light check wants the lowest number.
+function fastestOf(h) {
+  const v = h.minMs != null ? h.minMs : h.rttMs;
+  return typeof v === 'number' && Number.isFinite(v) ? v : null;
 }
 
 // The probe types that produce a hop list. Both trace the same kind of path —
@@ -86,7 +86,7 @@ function enrichGeo(ip, geoProvider, centroids) {
 // ICMP path and a working TCP path to the same host are two different findings.
 const PATH_PROBE_TYPES = Object.freeze(['traceroute', 'tcptraceroute']);
 
-function buildPathGraph(results, { geoProvider = null, centroids = null, target = null, origin = null } = {}) {
+function buildPathGraph(results, { geoProvider = null, cityProvider = null, centroids = null, target = null, origin = null } = {}) {
   const runs = (Array.isArray(results) ? results : [])
     .filter((r) => r && PATH_PROBE_TYPES.includes(r.type) && Array.isArray(r.hops));
   const tsList = runs.map((r) => (r.ts ? new Date(r.ts).getTime() : null)).filter((n) => n != null);
@@ -101,8 +101,11 @@ function buildPathGraph(results, { geoProvider = null, centroids = null, target 
   };
   if (!runs.length) return { ...meta, nodes: [], links: [] };
 
-  // Bucket every hop by its TTL position across all runs.
+  // Bucket every hop by its TTL position across all runs. Per address, the PTR
+  // name (newest run wins) and the fastest reply seen, for placing it on the map.
   const byPos = new Map();
+  const names = new Map();
+  const fastest = new Map();
   let maxPos = 0;
   for (const run of runs) {
     for (const h of run.hops) {
@@ -113,6 +116,9 @@ function buildPathGraph(results, { geoProvider = null, centroids = null, target 
       const b = byPos.get(pos);
       b.runs += 1;
       b.ips.push(h.ip || null);
+      if (h.ip && h.hostname) names.set(h.ip, h.hostname);
+      const fast = fastestOf(h);
+      if (h.ip && fast != null) fastest.set(h.ip, Math.min(fastest.has(h.ip) ? fastest.get(h.ip) : Infinity, fast));
       // A hop "responded" in a run if it produced an RTT. lossPct may be absent on
       // legacy single-sample hops, so fall back to 0/100 from whether it answered.
       const answered = h.rttMs != null;
@@ -128,6 +134,8 @@ function buildPathGraph(results, { geoProvider = null, centroids = null, target 
   // can be anchored geographically; null when the site has no coordinates.
   const originLat = origin && Number.isFinite(origin.lat) ? origin.lat : null;
   const originLng = origin && Number.isFinite(origin.lng) ? origin.lng : null;
+  const geoOrigin = originLat != null && originLng != null ? { lat: originLat, lng: originLng } : null;
+  const geoDeps = { geoProvider, cityProvider, centroids, origin: geoOrigin };
   const nodes = [{
     index: 0, kind: 'source', hop: 0, ip: null, label: (origin && origin.label) || 'Agent',
     country: null, asn: null, asnName: null, lat: originLat, lng: originLng,
@@ -145,7 +153,7 @@ function buildPathGraph(results, { geoProvider = null, centroids = null, target 
     const lossPct = round(median(b.loss));
     const worstLossPct = round(b.loss.length ? Math.max(...b.loss) : null);
     const isDest = pos === maxPos;
-    const geo = enrichGeo(ip, geoProvider, centroids);
+    const geo = enrichGeo(ip, geoDeps, { hostname: names.get(ip) || null, rttMs: fastest.has(ip) ? fastest.get(ip) : null });
     const { severity, reason } = classify({ lossPct, jitterMs, rttMs, responded: b.responded, unresponsive });
     nodes.push({
       index: pos,
@@ -159,6 +167,9 @@ function buildPathGraph(results, { geoProvider = null, centroids = null, target 
       lat: geo.lat,
       lng: geo.lng,
       private: geo.private,
+      hostname: geo.hostname,
+      place: geo.place,
+      geoRejected: geo.rejected,
       rttMs,
       jitterMs,
       lossPct,
@@ -196,7 +207,7 @@ function buildPathGraph(results, { geoProvider = null, centroids = null, target 
     if (r > worstRank && r >= sevRank.warn) { worstRank = r; worstHopIndex = n.index; }
   }
 
-  const branches = buildBranches(runs, byPos, maxPos, { geoProvider, centroids });
+  const branches = buildBranches(runs, byPos, maxPos, { ...geoDeps, names, fastest });
 
   return { ...meta, worstHopIndex, nodes, links, branches };
 }
@@ -216,7 +227,9 @@ function buildPathGraph(results, { geoProvider = null, centroids = null, target 
 //                            responded, runs, severity, explain, primary }] }],
 //     edges: [{ fromHop, fromIp, toHop, toIp, runs }],
 //   }
-function buildBranches(runs, byPos, maxPos, { geoProvider = null, centroids = null } = {}) {
+function buildBranches(runs, byPos, maxPos, {
+  geoProvider = null, cityProvider = null, centroids = null, origin = null, names = new Map(), fastest = new Map(),
+} = {}) {
   // Per (position, ip): accumulate the samples so each branch carries its own
   // aggregated metrics, exactly like the linear nodes but split by IP.
   const perPos = new Map(); // pos -> Map(ip -> { rtt:[], loss:[], jitter:[], responded, runs })
@@ -279,11 +292,11 @@ function buildBranches(runs, byPos, maxPos, { geoProvider = null, centroids = nu
       const rttMs = round(median(b.rtt));
       const jitterMs = round(median(b.jitter));
       const lossPct = round(median(b.loss));
-      const geo = enrichGeo(ip, geoProvider, centroids);
+      const geo = enrichGeo(ip, { geoProvider, cityProvider, centroids, origin }, { hostname: names.get(ip) || null, rttMs: fastest.has(ip) ? fastest.get(ip) : null });
       const { severity, reason } = classify({ lossPct, jitterMs, rttMs, responded: b.responded, unresponsive: false });
       ips.push({
         ip, asn: geo.asn, asnName: geo.asnName, country: geo.country, private: geo.private,
-        lat: geo.lat, lng: geo.lng,
+        lat: geo.lat, lng: geo.lng, hostname: geo.hostname, place: geo.place,
         rttMs, jitterMs, lossPct, responded: b.responded, runs: b.runs,
         severity, explain: reason, primary: ip === primaryIp,
       });
@@ -441,8 +454,9 @@ function describeWorse({ lossBefore, lossNow, hopLossBefore, hopLossNow, silentB
 // One hop from a trace that is STILL RUNNING, shaped like a graph node so the
 // dashboard can draw it with the same code as a finished path. Single run, so
 // no medians: the numbers are the hop's own. Geo follows the same rule as the
-// graph — public addresses only, country centroid.
-function describeLiveHop(h, { geoProvider = null, centroids = null } = {}) {
+// graph — public addresses only, the same name → city → country order and the
+// same speed-of-light check (origin = the agent's site, when known).
+function describeLiveHop(h, { geoProvider = null, cityProvider = null, centroids = null, origin = null } = {}) {
   const hop = Number(h && h.hop);
   if (!Number.isInteger(hop) || hop < 1 || hop > 64) return null;
   const ip = typeof h.ip === 'string' && h.ip.length <= 64 ? h.ip : null;
@@ -453,8 +467,11 @@ function describeLiveHop(h, { geoProvider = null, centroids = null } = {}) {
   const responded = rttMs != null ? 1 : 0;
   const unresponsive = responded === 0;
   const { severity, reason } = classify({ lossPct, jitterMs, rttMs, responded, unresponsive });
+  const geo = enrichGeo(ip, { geoProvider, cityProvider, centroids, origin }, { hostname: h.hostname, rttMs: num(h.minMs) ?? rttMs });
   return {
-    kind: 'hop', hop, ip, label: ip || '* * *', ...enrichGeo(ip, geoProvider, centroids),
+    kind: 'hop', hop, ip, label: ip || '* * *',
+    country: geo.country, asn: geo.asn, asnName: geo.asnName, lat: geo.lat, lng: geo.lng, private: geo.private,
+    hostname: geo.hostname, place: geo.place, geoRejected: geo.rejected,
     rttMs, lossPct, jitterMs, responded, runs: 1, unresponsive, severity, explain: reason,
   };
 }

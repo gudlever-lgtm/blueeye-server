@@ -1,6 +1,7 @@
 'use strict';
 
 const net = require('net');
+const { cleanHostname } = require('../geo/hostnameHints');
 
 const PROBE_TYPES = ['ping', 'tcp', 'dns', 'rdns', 'traceroute', 'tcptraceroute', 'http', 'curl', 'pageload', 'transaction', 'path_mtu', 'tls'];
 // How many payload sizes one ping sweep may carry, and how large each may be.
@@ -270,6 +271,10 @@ function validateProbeResults(body) {
           // reported" and "one address answered" are different claims, and
           // only the second may rule ECMP out.
           ips: h && Array.isArray(h.ips) ? hopIpsOf(h, ip0) : null,
+          // The router's PTR name (agent 0.40+, public hops only). The path map
+          // reads its city out of it (src/geo/hostnameHints.js). Anything that is
+          // not a plain DNS name is dropped, never stored.
+          hostname: cleanHostname(h && h.hostname),
           rttMs: numOrNull(h && h.rttMs),
           minMs: numOrNull(h && h.minMs),
           maxMs: numOrNull(h && h.maxMs),

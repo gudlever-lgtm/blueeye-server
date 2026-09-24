@@ -11,9 +11,11 @@ const { asGraphFromNodes } = require('../analysis/asPath');
 const { METRICS, getMetric, bucketMetric } = require('../analysis/pathTimeseries');
 
 // Read API for active-probe results (ping/tcp/dns/traceroute/tcptraceroute). viewer+.
-// geoProvider/centroids are optional — when wired, the path graph enriches public
-// hop IPs with GeoIP/ASN; without them the graph is metrics-only.
-function createProbesRouter({ probeResultsRepo, agentsRepo, geoProvider = null, centroids = null }) {
+// geoProvider/cityProvider/centroids are optional — when wired, the path graph
+// enriches public hop IPs with GeoIP/ASN and places them on the map (router name
+// → city GeoIP → country, src/geo/hopLocation.js); without them the graph is
+// metrics-only.
+function createProbesRouter({ probeResultsRepo, agentsRepo, geoProvider = null, cityProvider = null, centroids = null }) {
   const router = express.Router();
   const reader = requireRole(ROLES.VIEWER, ROLES.OPERATOR, ROLES.ADMIN);
 
@@ -79,7 +81,7 @@ function createProbesRouter({ probeResultsRepo, agentsRepo, geoProvider = null, 
       lng: agent.location_lng ?? null,
       label: agent.display_name || agent.hostname || 'Agent',
     };
-    const graph = buildPathGraph(runs, { geoProvider, centroids, target, origin });
+    const graph = buildPathGraph(runs, { geoProvider, cityProvider, centroids, target, origin });
     // `origin` rides along even when there are no runs yet, so a live trace
     // can anchor its first hops to the agent's site before anything is stored.
     res.json({ agentId, probeType, origin, ...graph, asGraph: asGraphFromNodes(graph.nodes) });

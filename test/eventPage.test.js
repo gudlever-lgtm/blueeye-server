@@ -191,13 +191,21 @@ test('a viewer is offered no move, only the way back', async (t) => {
   assert.ok(!panelTitles(doc).includes('Config context'));
 });
 
-test('the work log is first, because that is what the next shift reads first', async (t) => {
+test('the evidence comes first and the work log straight after it', async (t) => {
   const { doc } = boot({ t, routes: SESSION() });
   await settle();
-  const first = doc.querySelector('#view .ui-page > *:nth-child(2)');
-  assert.match(first.textContent, /Work log/);
+  const kids = [...doc.querySelectorAll('#view .ui-page > *')];
+  const at = (re) => kids.findIndex((k) => re.test(k.textContent));
+  const anomalies = at(/Anomalies/);
+  const log = at(/Work log/);
+  assert.ok(anomalies > 0, 'no anomalies panel');
+  assert.ok(log > anomalies, 'the work log is above the evidence');
+  // Nothing but evidence sits between the anomalies and the work log.
+  for (const k of kids.slice(anomalies + 1, log)) {
+    assert.match(k.textContent, /Affected path|Traffic and interface errors/);
+  }
   // It draws its own card, so the page does not put a panel around it.
-  assert.ok(!first.classList.contains('panel-ui'), 'the work log is double-framed');
+  assert.ok(!kids[log].classList.contains('panel-ui'), 'the work log is double-framed');
 });
 
 test('the anomalies panel says how many and reads as a history', async (t) => {

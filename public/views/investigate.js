@@ -77,7 +77,11 @@
             options: [['', t('inv.pickAgent')]].concat(agents.map(function (a) {
               return [String(a.id), a.display_name || a.hostname];
             })),
-            onchange: function (e) { state.value = e.target.value; clearError(); },
+            onchange: function (e) {
+              state.value = e.target.value;
+              clearError();
+              if (deps.onContext) deps.onContext({ agentId: state.value || null });
+            },
           });
         }
         if (state.type === 'site') {
@@ -144,7 +148,10 @@
                     // lunch was out of reach with an hour.
                     options: [['15', t('inv.window.15')], ['30', t('inv.window.30')], ['60', t('inv.window.60')],
                       ['240', t('inv.window.240')], ['1440', t('inv.window.1440')]],
-                    onchange: function (e) { state.window = e.target.value; },
+                    onchange: function (e) {
+                      state.window = e.target.value;
+                      if (deps.onContext) deps.onContext({ windowMin: state.window });
+                    },
                   }),
                 }),
               ],
@@ -236,7 +243,11 @@
                 inv: inv,
                 cells: {
                   when: ui.fmt.abs(inv.createdAt || (inv.window && inv.window.to)),
-                  target: ui.meta(targetOf(inv)),
+                  // An agent target opens the agent; a site or subnet has no
+                  // page of its own to open.
+                  target: inv.locationRef && inv.locationRef.type === 'agent' && deps.openAgent
+                    ? ui.hostLink(targetOf(inv), function () { deps.openAgent(Number(inv.locationRef.value)); })
+                    : ui.meta(targetOf(inv)),
                   verdict: ui.badge(CLASS_TONE[inv.classification] || 'neutral', classLabel(inv.classification)),
                   conf: confidence(inv),
                   why: inv.explanation || '–',

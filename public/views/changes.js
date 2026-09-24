@@ -174,6 +174,12 @@
             [ui.fmt.short(ev.timestamp), t('changes.drawer.last')],
             [null, t('changes.drawer.seen', { count: Number(ev.count) || 1 })],
           ].concat(ev.acknowledgedAt ? [[ui.fmt.short(ev.acknowledgedAt), t('changes.drawer.acked')]] : []))),
+          // The same host and moment, opened on the screens that take it
+          // further (Probes, Diagnose, Investigate, Device log).
+          deps.contextActions && ev.agentId != null ? deps.contextActions({
+            agentId: Number(ev.agentId), target: ev.target || null,
+            sinceMs: Date.parse(ev.firstAt || ev.timestamp),
+          }) : null,
         ];
         ui.openDrawer({
           title: ev.summary,

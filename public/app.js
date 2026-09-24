@@ -458,6 +458,16 @@ function applyFeatureVisibility() {
 // to the always-available landing page.
 const ROLE_RANK = { viewer: 1, operator: 2, admin: 3 };
 function roleAtLeast(min) { return (ROLE_RANK[role] || 0) >= (ROLE_RANK[min] || 1); }
+// Whether this user can open a view: its nav entry is neither above their role
+// nor excluded by the licence. A view with no nav entry is allowed.
+function viewAllowed(view) {
+  if (typeof document === 'undefined') return true;
+  const b = document.querySelector(`.tabs button[data-view="${view}"]`);
+  if (!b) return true;
+  if (b.dataset.minRole && !roleAtLeast(b.dataset.minRole)) return false;
+  if (b.dataset.feature && !featureEntitled(b.dataset.feature)) return false;
+  return true;
+}
 function applyRoleVisibility() {
   for (const b of document.querySelectorAll('.tabs button[data-min-role]')) {
     const allowed = roleAtLeast(b.dataset.minRole);
@@ -4066,6 +4076,157 @@ function targetTimelineCard(agentId) {
   return card;
 }
 
+// ---- Event evidence ---------------------------------------------------------
+// The window every evidence chart on an event uses: from well before the first
+// anomaly (a quarter of the event's age, at least an hour) to half an hour after
+// the last one, or now. The minutes BEFORE the fault are the baseline — a chart
+// that starts at the fault shows the problem with nothing to compare it to.
+function eventEvidenceWindow(inc) {
+  const now = Date.now();
+  const first = inc.firstEventAt ? Date.parse(inc.firstEventAt) : now - 3600 * 1000;
+  const last = inc.lastEventAt ? Date.parse(inc.lastEventAt) : now;
+  const age = Math.max(0, now - first);
+  const before = Math.max(3600 * 1000, age * 0.25);
+  return { fromMs: first - before, toMs: Math.min(now, Math.max(last + 30 * 60 * 1000, first + 3600 * 1000)) };
+}
+
+// What / where / why, from the explanation GET /api/events/:id already sends:
+// the device and site, the interface when the evidence names one, and the
+// measurement against its own baseline.
+function eventExplanation(x, inc) {
+  if (!x) return null;
+  const where = x.where || {};
+  const why = x.why || {};
+  const rows = [
+    [t('ev.what.metric'), (x.what && x.what.anomalyType) || '–'],
+    [t('ev.what.where'), where.summary || incAgentLabel(inc)],
+    where.interface ? [t('ev.what.iface'), el('code', {}, where.interface)] : null,
+    why.observed != null ? [t('ev.what.observed'), fmtUnit(why.observed)] : null,
+    why.baseline != null ? [t('ev.what.baseline'), fmtUnit(why.baseline)] : null,
+    why.deviation != null ? [t('ev.what.deviation'), `${fmtUnit(why.deviation)} σ`] : null,
+  ].filter(Boolean);
+  return el('div', {},
+    why.explanation ? el('p', {}, why.explanation) : null,
+    ui.keyValues(rows));
+}
+
+// The situation(s) this event is part of: a situation groups findings from
+// several agents, and a finding of this event may be one of them. Found by
+// matching member ids, so no extra endpoint is needed.
+async function loadEventSituations(anomalies, firstMs, slot) {
+  const ids = new Set((anomalies || []).map((a) => String(a.id)));
+  if (!ids.size) return;
+  const from = new Date((firstMs || Date.now()) - 24 * 3600 * 1000).toISOString();
+  try {
+    const { clusters } = await api(`/api/event-clusters?from=${encodeURIComponent(from)}&limit=200`);
+    const hits = (clusters || []).filter((c) => (c.memberFindingIds || []).some((m) => ids.has(String(m))));
+    if (!hits.length) return;
+    slot.replaceChildren(el('div', { class: 'ui ctx-actions' },
+      el('span', { class: 'meta-xs' }, t('ev.partOf')),
+      ...hits.map((c) => ui.button('secondary', t('ev.openSituation', { id: c.id }), {
+        size: 'xs', onclick: () => openCluster(c.id),
+      }))));
+  } catch { /* best-effort: the link is extra, the event stands on its own */ }
+}
+
+// The device around the event: its traffic, and its interface errors and
+// discards on the same time axis, from the results the agent reported. This is
+// the "is the link itself sick?" half of the question the probe chart asks.
+async function loadEventDeviceEvidence(inc, agentId, anomalies, host) {
+  const { fromMs, toMs } = eventEvidenceWindow(inc);
+  let rows;
+  try {
+    rows = await api(`/agents/${agentId}/results?from=${new Date(fromMs).toISOString()}&to=${new Date(toMs).toISOString()}&limit=1000`);
+  } catch (e) { host.replaceChildren(el('p', { class: 'error' }, errText(e))); return; }
+  const samples = (rows || []).slice().reverse().map((r) => {
+    const tr = r.payload && r.payload.traffic;
+    const totals = tr && tr.totals;
+    const elapsed = tr && Number(tr.elapsedSec) > 0 ? Number(tr.elapsedSec) : 1;
+    let errs = 0; let drops = 0; let seen = false;
+    for (const i of (tr && Array.isArray(tr.interfaces) ? tr.interfaces : [])) {
+      if (!i || typeof i !== 'object') continue;
+      seen = true;
+      errs += (Number(i.rxErrors) || 0) + (Number(i.txErrors) || 0);
+      drops += (Number(i.rxDrop) || 0) + (Number(i.txDrop) || 0);
+    }
+    return {
+      t: new Date(r.created_at).getTime(),
+      rx: totals ? Number(totals.rxBytesPerSec) || 0 : null,
+      tx: totals ? Number(totals.txBytesPerSec) || 0 : null,
+      err: seen ? errs / elapsed : null,
+      drop: seen ? drops / elapsed : null,
+    };
+  }).filter((p) => Number.isFinite(p.t));
+  if (samples.length < 2) { host.replaceChildren(el('p', { class: 'muted' }, t('ev.device.none'))); return; }
+  const markers = [
+    ...(inc.firstEventAt ? [{ t: Date.parse(inc.firstEventAt), kind: inc.severity || 'WARN', label: t('ev.device.start') }] : []),
+    ...findingMarkers(anomalies),
+  ];
+  const traffic = samples.filter((p) => p.rx != null);
+  const counters = samples.filter((p) => p.err != null);
+  const anyErr = counters.some((p) => p.err > 0 || p.drop > 0);
+  host.replaceChildren(
+    traffic.length > 1 ? el('div', { class: 'overview-chart' }, historyChart([
+      { id: 'rx', label: '↓ RX', color: ui.token('--series-0'), points: traffic.map((p) => ({ t: p.t, y: p.rx })) },
+      { id: 'tx', label: '↑ TX', color: ui.token('--series-1'), points: traffic.map((p) => ({ t: p.t, y: p.tx })) },
+    ], { fromMs, toMs, markers, unit: 'B/s', height: 200 })) : null,
+    counters.length > 1 && anyErr ? el('div', { class: 'overview-chart' }, historyChart([
+      { id: 'err', label: t('iface.col.err'), color: ui.token('--series-3'), points: counters.map((p) => ({ t: p.t, y: p.err })) },
+      { id: 'drop', label: t('iface.col.drop'), color: ui.token('--series-1'), points: counters.map((p) => ({ t: p.t, y: p.drop })) },
+    ], { fromMs, toMs, markers, unit: '/s', height: 140 })) : null,
+    el('p', { class: 'muted small' }, counters.length > 1
+      ? (anyErr ? t('ev.device.note') : t('ev.device.noErrors'))
+      : t('ev.device.noCounters')));
+}
+
+// The recommended next step: a matching playbook, and what fixed the same
+// kind of event before. When the AI assistant is on, the server may ask it to
+// fill the gap, which sends context to a third party — so then it is fetched
+// on a click, never just by opening the page.
+function loadEventRecommendation(id, host) {
+  const render = async (force) => {
+    host.replaceChildren(el('p', { class: 'muted' }, t('common.loading')));
+    let rec;
+    try { rec = await api(`/api/events/${id}/recommendation${force ? '?force_ai=true' : ''}`); } catch (e) {
+      host.replaceChildren(el('p', { class: 'error' }, errText(e))); return;
+    }
+    const parts = [];
+    const pb = rec.matching_playbook;
+    if (pb) {
+      parts.push(el('div', { class: 'rec-block' },
+        el('strong', {}, t('ev.rec.playbook', { name: pb.name || '' })),
+        pb.already_run && pb.run
+          ? el('p', {}, t('ev.rec.ran', { status: pb.run.status || '', at: pb.run.ran_at ? fmtDate(pb.run.ran_at) : '–' }),
+            pb.run.result_text ? el('span', { class: 'muted' }, ` — ${pb.run.result_text}`) : null)
+          : (pb.manual_action_text ? el('p', {}, pb.manual_action_text) : el('p', { class: 'muted' }, t('ev.rec.auto')))));
+    }
+    const hist = rec.historical_matches || [];
+    if (hist.length) {
+      parts.push(el('div', { class: 'rec-block' },
+        el('strong', {}, t('ev.rec.before')),
+        el('ul', { class: 'inc-similar' }, ...hist.slice(0, 3).map((h) => el('li', { class: 'clickable', onclick: () => openEvent(h.id) },
+          h.title || `#${h.id}`,
+          el('span', { class: 'muted' }, ` · ${h.resolvedAt ? fmtDate(h.resolvedAt) : ''}`
+            + `${h.resolutionTimeSeconds != null ? ` · ${fmtDuration(h.resolutionTimeSeconds)}` : ''}`
+            + `${h.playbook && h.playbook.name ? ` · ${h.playbook.name}` : ''}`
+            + `${h.closedBy ? ` · ${h.closedBy}` : ''}`))))));
+    }
+    const ai = rec.ai_suggestion;
+    if (ai && ai.suggestion) {
+      parts.push(el('div', { class: 'rec-block' },
+        el('strong', {}, t('ev.rec.ai')), el('p', {}, ai.suggestion)));
+    }
+    host.replaceChildren(...(parts.length ? parts : [el('p', { class: 'muted' }, t('ev.rec.none'))]));
+  };
+  if (featureEnabled('assistant')) {
+    host.replaceChildren(el('div', { class: 'ui' },
+      el('p', { class: 'muted' }, t('ev.rec.askHint')),
+      ui.button('secondary', t('ev.rec.load'), { onclick: () => render(false) })));
+  } else {
+    render(false);
+  }
+}
+
 async function loadEventSimilar(id, card) {
   const head = el('h3', {}, 'Similar past events');
   try {
@@ -4270,15 +4431,57 @@ function getEventPage() {
         render();
       } catch (err) { toast(errText(err), true); }
     },
-    panels: (inc, anomalies, id) => {
+    panels: (inc, anomalies, id, data) => {
       const out = [];
-      // The work log is first because "what has already been tried and ruled
-      // out" is what the next shift must read before anything else.
+      const devNum = Number.parseInt(inc.hostId, 10);
+      const agentId = Number.isInteger(devNum) && devNum > 0 ? devNum : null;
+      const pathTarget = (anomalies.find((a) => a.target) || {}).target || inc.target || null;
+      const firstMs = inc.firstEventAt ? Date.parse(inc.firstEventAt) : null;
+
+      // EVIDENCE FIRST. What was measured, where, and the numbers around the
+      // moment it started — the reason somebody opened the event. The work log
+      // follows straight after: it is what the next shift reads, but a shift
+      // that cannot see the fault cannot judge what was ruled out.
+      const ctxRow = contextActions({ agentId, target: pathTarget, sinceMs: firstMs });
+      if (ctxRow) out.push({ key: 'context', wrap: false, node: ctxRow });
+      const situationSlot = el('div', {});
+      loadEventSituations(anomalies, firstMs, situationSlot);
+      out.push({ key: 'situation', wrap: false, node: situationSlot });
+
+      const what = eventExplanation(data && data.explanation, inc);
+      if (what) out.push({ key: 'explanation', title: t('ev.what'), node: what });
+      out.push({ key: 'anomalies' });
+
+      // The affected path needs both a numeric device and a target to draw
+      // between; without one it is not a panel that could be empty, it is a
+      // panel that does not apply.
+      if (pathTarget && agentId != null) {
+        const body = el('div', { class: 'muted' }, t('common.loading'));
+        (async () => {
+          const { fromMs, toMs } = eventEvidenceWindow(inc);
+          try {
+            body.replaceChildren(await pathVisualization({
+              sourceId: agentId, targetId: pathTarget, eventId: id, timeRange: { fromMs, toMs },
+            }));
+          } catch (e) { body.replaceChildren(el('div', { class: 'error' }, errText(e))); }
+        })();
+        out.push({ key: 'path', title: t('ev.path'), node: body });
+      }
+      if (agentId != null) {
+        const body = el('div', { class: 'muted' }, t('common.loading'));
+        loadEventDeviceEvidence(inc, agentId, anomalies, body);
+        out.push({ key: 'device', title: t('ev.device'), node: body });
+      }
+
+      // The work log; "ruled out" is pinned at its top.
       // These three draw their own card, so the page does not put a panel
       // around them — a box inside a box with the same name on both.
       out.push({ key: 'notes', wrap: false, node: eventNotesCard(id) });
+
+      const rec = el('div', {});
+      loadEventRecommendation(id, rec);
+      out.push({ key: 'recommendation', title: t('ev.rec.title'), node: rec });
       if (canWrite()) out.push({ key: 'guide', wrap: false, node: eventGuideCard(inc) });
-      out.push({ key: 'anomalies' });
 
       if (inc.blastRadius) {
         const body = el('div', { class: 'muted' }, t('common.loading'));
@@ -4293,6 +4496,10 @@ function getEventPage() {
           }));
         })();
         out.push({ key: 'blast', title: t('ev.blast'), node: body });
+      } else if (inc.blastRadiusError) {
+        // A failed lookup is said out loud: no panel at all read as "nothing
+        // downstream depends on this device", which is an all-clear nobody gave.
+        out.push({ key: 'blast', title: t('ev.blast'), node: el('p', { class: 'muted' }, t('ev.blastUnavailable')) });
       }
 
       const timeline = el('div', { class: 'muted' }, t('common.loading'));
@@ -4302,24 +4509,6 @@ function getEventPage() {
       const similar = el('div', { class: 'muted' }, t('common.loading'));
       loadEventSimilar(id, similar);
       out.push({ key: 'similar', title: t('ev.similar'), node: similar });
-
-      // The affected path needs both a numeric device and a target to draw
-      // between; without one it is not a panel that could be empty, it is a
-      // panel that does not apply.
-      const devNum = Number.parseInt(inc.hostId, 10);
-      const pathTarget = (anomalies.find((a) => a.target) || {}).target || inc.target || null;
-      if (pathTarget && Number.isInteger(devNum) && devNum > 0) {
-        const body = el('div', { class: 'muted' }, t('common.loading'));
-        (async () => {
-          const fromMs = inc.firstEventAt ? Date.parse(inc.firstEventAt) : (Date.now() - 24 * 3600 * 1000);
-          try {
-            body.replaceChildren(await pathVisualization({
-              sourceId: devNum, targetId: pathTarget, eventId: id, timeRange: { fromMs, toMs: Date.now() },
-            }));
-          } catch (e) { body.replaceChildren(el('div', { class: 'error' }, errText(e))); }
-        })();
-        out.push({ key: 'path', title: t('ev.path'), node: body });
-      }
 
       if (canWrite()) {
         const cfg = el('div', { class: 'muted' }, t('common.loading'));
@@ -4491,6 +4680,42 @@ PAGE_INFO.clusters = {
   ],
 };
 
+// Who a situation is about: one row per member finding, naming the agent (a
+// link), what it measured against its normal, and the event it sits in on that
+// device. The header only said "3 agents", and which three had to be pieced
+// together from the timeline.
+function situationMembersPanel(members) {
+  if (!members.length) return null;
+  const rows = members.map((m) => ({
+    cells: {
+      agent: m.host != null ? ui.hostLink(agentLabel(m.host), () => openAgent(Number(m.host))) : '–',
+      sev: ui.badge(m.severity === 'CRIT' ? 'crit' : m.severity === 'WARN' ? 'warn' : 'info', m.severity || '–'),
+      metric: el('code', {}, m.metric || '–'),
+      value: m.observed != null
+        ? `${fmtUnit(m.observed)}${m.baseline != null ? ` (${t('sit.members.normal', { v: fmtUnit(m.baseline) })})` : ''}`
+        : '–',
+      event: m.eventCaseId != null ? ui.hostLink(`#${m.eventCaseId}`, () => openEvent(Number(m.eventCaseId))) : ui.meta('–'),
+      time: m.createdAt ? ui.fmt.short(m.createdAt) : '–',
+    },
+  }));
+  return ui.panel({
+    title: t('sit.members.title'),
+    note: t('sit.members.note', { n: new Set(members.map((m) => String(m.host))).size }),
+    children: [ui.dataTable({
+      dense: true,
+      columns: [
+        { key: 'agent', label: t('sit.members.agent') },
+        { key: 'sev', label: t('sit.members.sev'), width: '90px' },
+        { key: 'metric', label: t('sit.members.metric') },
+        { key: 'value', label: t('sit.members.value') },
+        { key: 'event', label: t('sit.members.event'), width: '90px' },
+        { key: 'time', label: t('sit.members.time'), width: '130px', time: true },
+      ],
+      rows,
+    })],
+  });
+}
+
 // ---- Situations (MIGRATED — see public/views/situations.js) -----------------
 let situationsPage = null;
 const situationsPageState = {};
@@ -4574,6 +4799,11 @@ function getSituationPage() {
     mount: (detail) => {
       const id = selectedClusterId;
       const container = el('div', { class: 'cluster-detail' });
+      const members = Array.isArray(detail.members) ? detail.members : [];
+      const firstHost = members.map((m) => Number(m.host)).find((h) => Number.isInteger(h) && h > 0);
+      const lead = el('div', {},
+        contextActions({ agentId: firstHost, sinceMs: detail.firstSeen ? Date.parse(detail.firstSeen) : null }),
+        situationMembersPanel(members));
       (async () => {
         let timeline = null;
         let timelineError = false;
@@ -4596,7 +4826,7 @@ function getSituationPage() {
             },
           }));
       })();
-      return container;
+      return el('div', {}, lead, container);
     },
   });
   return situationPage;
@@ -6699,7 +6929,14 @@ function investigationCard(inv) {
       : null,
     hints,
     narrativeEl,
-    nis2El);
+    nis2El,
+    // An agent investigation leads on to the tools that test the verdict.
+    inv.locationRef && inv.locationRef.type === 'agent'
+      ? contextActions({
+        agentId: Number(inv.locationRef.value),
+        sinceMs: inv.window && inv.window.from ? Date.parse(inv.window.from) : null,
+      }, { exclude: ['investigation'] })
+      : null);
 }
 
 // Help text for the Investigate view (i18n-backed: the getters re-read the
@@ -6745,6 +6982,7 @@ function getDiagnoseView() {
     el, t, ui, errText, plural,
     state: diagnoseState,
     navigate: diagnoseNavigate,
+    onContext: writeContextParams,
     isViewer: () => role === 'viewer',
     help: () => {
       const info = PAGE_INFO.diagnose || {};
@@ -6807,6 +7045,7 @@ function getDiagnoseView() {
 }
 
 views.diagnose = async () => {
+  applyContextFromUrl('diagnose');
   const v = getDiagnoseView();
   if (!v) return el('div', { class: 'empty error' }, t('diag.err.ask'));
   return v.view();
@@ -6857,6 +7096,9 @@ function getDeviceLogView() {
   deviceLogView = window.DeviceLogView.create({
     el, t, ui, errText,
     state: deviceLogState,
+    onContext: writeContextParams,
+    agentName: agentLabel,
+    fetchAgents: () => api('/agents').catch(() => []),
     help: () => {
       const info = PAGE_INFO.deviceLog || {};
       return { lead: info.hero || '', title: info.title || t('devlog.title'), body: info.body || (() => []) };
@@ -6868,6 +7110,8 @@ function getDeviceLogView() {
       if (f.eventType) qs.set('eventType', f.eventType);
       if (f.transport) qs.set('transport', f.transport);
       if (f.q) qs.set('q', f.q);
+      if (f.agentId != null) qs.set('agentId', String(f.agentId));
+      if (f.deviceId != null) qs.set('deviceId', String(f.deviceId));
       return api(`/api/device-events?${qs.toString()}`);
     },
     fetchCatalog: async () => api('/api/device-events/catalog'),
@@ -6877,6 +7121,7 @@ function getDeviceLogView() {
 }
 
 views.deviceLog = async () => {
+  applyContextFromUrl('deviceLog');
   const v = getDeviceLogView();
   if (!v) return el('div', { class: 'empty error' }, t('devlog.err.title'));
   return v.view();
@@ -6917,6 +7162,8 @@ function getInvestigateView() {
     el, t, ui, errText,
     state: investigateState,
     card: investigationCard,
+    onContext: writeContextParams,
+    openAgent,
     help: () => {
       const info = PAGE_INFO.investigation || {};
       return { lead: info.hero || '', title: info.title || t('inv.title'), body: info.body || (() => []) };
@@ -6941,6 +7188,7 @@ function getInvestigateView() {
 }
 
 views.investigation = async () => {
+  applyContextFromUrl('investigation');
   const v = getInvestigateView();
   if (!v) return el('div', { class: 'empty error' }, t('inv.err.run'));
   return v.view();
@@ -7108,6 +7356,8 @@ function getTroubleshootingView() {
   if (typeof window === 'undefined' || !window.TroubleshootingPage || !ui) return null;
   troubleshootingView = window.TroubleshootingPage.create({
     el, t, ui, errText, openAgent, openCluster, gotoView,
+    onContext: writeContextParams,
+    contextActions,
     // A node on this map is an agent OR a polled switch, and they open two
     // different pages. The id says which: a switch is `d:<id>` (see
     // src/topology/snmpTopologyMerge.js), because a polled switch is not an
@@ -7121,7 +7371,9 @@ function getTroubleshootingView() {
     TV: window.TroubleshootingView,
     topologySvg: tshootTopologySvg,
     brushSvg: tshootBrushSvg,
-    timelineRow: (e) => window.TimelineView.renderRow(document, e, { formatTime: fmtDate }),
+    // Rows open the device they concern — they were drawn without a handler,
+    // so the timeline was the one list on the page nobody could click through.
+    timelineRow: (e) => window.TimelineView.renderRow(document, e, { formatTime: fmtDate, onOpen: (id) => openAgent(id) }),
     help: () => {
       const info = PAGE_INFO.troubleshooting || {};
       return { lead: info.hero || '', title: info.title || t('tshoot.title'), body: info.body || (() => []) };
@@ -7140,6 +7392,7 @@ function getTroubleshootingView() {
 }
 
 views.troubleshooting = async () => {
+  applyContextFromUrl('troubleshooting');
   const v = getTroubleshootingView();
   if (!v) return el('div', { class: 'empty error' }, t('tshoot.err.title'));
   return v.view();
@@ -7202,6 +7455,9 @@ views.interfaces = async () => {
 // persists the active sub-tab across re-renders; gotoView('tests') deep-links here
 // onto the packages tab (the old standalone Tests page).
 let probesTab = 'run'; // 'run' | 'connection' | 'packages'
+// The hand-off into Run a probe (openInContext) and the agent last used there.
+let probeRunContext = null;
+let probeLastAgentId = null;
 // ---- Probes & Tests (page shell MIGRATED — see public/views/probes.js) ------
 // The shell is on the UI contract; the three tab bodies below are not yet, and
 // they migrate in their own commits. Built lazily: `ui` is declared far down
@@ -7238,6 +7494,10 @@ function getProbesView() {
 }
 
 views.probes = async () => {
+  if (probesTab === 'run' && !probeRunContext) {
+    const c = contextFromUrl();
+    if (c.agentId != null || c.target) probeRunContext = { agentId: c.agentId, target: c.target };
+  }
   const v = getProbesView();
   if (v) return v.view();
   // The module did not load: the tab bodies still work, so serve them rather
@@ -8149,6 +8409,20 @@ async function probeRunnerView() {
   const typeSel = el('select', {}, ...[['ping', 'Ping (ICMP)'], ['tcp', 'TCP-connect'], ['dns', 'DNS'], ['traceroute', 'Traceroute'], ['tcptraceroute', t('probe.tcptraceroute')], ['path_mtu', t('probe.pathMtu')], ['tls', t('probe.tls')], ['rdns', t('probe.rdns')], ['curl', 'cURL (content check)'], ['pageload', 'Page load'], ['transaction', 'Transaction (multi-step)']].map(([v, l]) => el('option', { value: v }, l)));
   const target = el('input', { type: 'text', placeholder: 'e.g. 1.1.1.1 or example.com' });
   const targetWrap = el('label', { class: 'inline muted' }, 'Target ', target);
+  // Opened from a record (openInContext) or a shared link: the agent and the
+  // target are already chosen. Otherwise the agent picked last time, rather
+  // than whichever one happens to sort first.
+  const ctx = probeRunContext || {};
+  probeRunContext = null;
+  const preferred = [ctx.agentId, probeLastAgentId].find((id) => id != null && agents.some((a) => String(a.id) === String(id)));
+  if (preferred != null) agentSel.value = String(preferred);
+  if (ctx.target) target.value = ctx.target;
+  probeLastAgentId = agentSel.value;
+  agentSel.addEventListener('change', () => {
+    probeLastAgentId = agentSel.value;
+    writeContextParams({ agentId: agentSel.value });
+  });
+  target.addEventListener('change', () => writeContextParams({ target: target.value.trim() }));
   const portInput = el('input', { type: 'number', min: '1', max: '65535', value: '443' });
   const portWrap = el('label', { class: 'inline muted' }, 'Port ', portInput);
   const countInput = el('input', { type: 'number', min: '1', max: '20', value: '4' });
@@ -8684,7 +8958,7 @@ function getChangesView() {
   if (changesView) return changesView;
   if (typeof window === 'undefined' || !window.ChangesView || !ui) return null;
   changesView = window.ChangesView.create({
-    el, api, t, errText, openAgent, openEvent, openCluster, ui,
+    el, api, t, errText, openAgent, openEvent, openCluster, contextActions, ui,
     WINDOWS: CHANGES_WINDOWS.map((w) => [w, w === CHANGES_LAST_SEEN ? t('changes.window.lastSeen') : w]),
     LAST_SEEN: CHANGES_LAST_SEEN,
     getWindow: () => changesWindow,
@@ -9461,6 +9735,7 @@ function getAgentPage() {
     openLocation,
     exportInvestigation: exportInvestigationMenu,
     runTest,
+    contextActions,
     rerender: () => render(),
     helpBody: () => [
       el('p', {}, t('ad.info.p1')),
@@ -17118,11 +17393,160 @@ function syncLocation() {
   if (!Routes || !Routes.VIEWS[currentView]) return;
   try {
     const target = Routes.pathFor(currentView, { tab: routeTabFor(currentView), id: routeIdFor(currentView) });
-    if (Routes.normalise(window.location.pathname) === target) return;
-    const url = target + (window.location.search || '') + (window.location.hash || '');
+    const search = pendingSearch != null ? pendingSearch : null;
+    pendingSearch = null;
+    if (Routes.normalise(window.location.pathname) === target) {
+      if (search != null) window.history.replaceState(null, '', target + search + (window.location.hash || ''));
+      return;
+    }
+    const url = target + (search != null ? search : searchForNextView(currentView)) + (window.location.hash || '');
     if (routerReplacing) window.history.replaceState(null, '', url);
     else window.history.pushState(null, '', url);
   } catch { /* URL/History API off — the app still works, the address does not follow */ }
+}
+
+// ---- Fault context: agent, target and window, carried between screens ------
+// A technician chasing one fault used to pick the same agent three times: on
+// Probes, on Diagnose and on Investigate, with nothing filled in from the event
+// or situation they came from. openInContext() hands the context over — the
+// screen opens with the agent, the target and a matching window already chosen
+// — and puts it in the address (?agent=12&target=10.0.0.1&window=60), so the
+// link can be sent to a colleague and opens on the same thing.
+const CONTEXT_KEYS = ['agent', 'target', 'window'];
+const CONTEXT_VIEWS = new Set(['diagnose', 'investigation', 'deviceLog', 'probes', 'troubleshooting']);
+// Owned by the path chart on ONE record (an event, a probe row). Carried to
+// the next screen they replaced that screen's own window with a stale one.
+const EPHEMERAL_KEYS = ['from', 'to', 'metric', 'overlay'];
+let pendingSearch = null;
+
+// The query string to keep when the path changes: filters that are shared
+// across screens stay, the context only where a screen reads it, and the
+// per-record chart window never.
+function searchForNextView(view) {
+  try {
+    const q = new URLSearchParams(window.location.search || '');
+    for (const k of EPHEMERAL_KEYS) q.delete(k);
+    if (!CONTEXT_VIEWS.has(view)) for (const k of CONTEXT_KEYS) q.delete(k);
+    const qs = q.toString();
+    return qs ? `?${qs}` : '';
+  } catch { return window.location.search || ''; }
+}
+
+function contextFromUrl() {
+  try {
+    const q = new URLSearchParams(window.location.search || '');
+    const agent = Number.parseInt(q.get('agent') || '', 10);
+    const win = Number.parseInt(q.get('window') || '', 10);
+    return {
+      agentId: Number.isInteger(agent) && agent > 0 ? agent : null,
+      target: (q.get('target') || '').trim().slice(0, 255) || null,
+      windowMin: Number.isInteger(win) && win > 0 ? win : null,
+    };
+  } catch { return { agentId: null, target: null, windowMin: null }; }
+}
+
+// Mirror a screen's current choice into the address without a history step.
+function writeContextParams(ctx) {
+  try {
+    const q = new URLSearchParams(window.location.search || '');
+    const set = (k, v) => { if (v == null || v === '') q.delete(k); else q.set(k, String(v)); };
+    if ('agentId' in ctx) set('agent', ctx.agentId);
+    if ('target' in ctx) set('target', ctx.target);
+    if ('windowMin' in ctx) set('window', ctx.windowMin);
+    const qs = q.toString();
+    window.history.replaceState(null, '', window.location.pathname + (qs ? `?${qs}` : '') + (window.location.hash || ''));
+  } catch { /* URL API off — the hand-off still works, the address does not follow */ }
+}
+
+// The smallest offered window that still covers `minutes`; the largest when
+// none does.
+function windowCovering(minutes, offered) {
+  const list = offered.map(Number).sort((a, b) => a - b);
+  if (!(minutes > 0)) return null;
+  return list.find((w) => w >= minutes) || list[list.length - 1];
+}
+
+// Minutes from `sinceMs` until now, with a quarter added in front so the
+// minutes BEFORE the fault are in view too — the baseline is half the story.
+function windowSince(sinceMs) {
+  const ms = Number(sinceMs);
+  if (!Number.isFinite(ms)) return null;
+  const minutes = Math.max(1, (Date.now() - ms) / 60000);
+  return Math.ceil(minutes * 1.25) + 5;
+}
+
+function applyContext(view, ctx) {
+  const { agentId = null, target = null, windowMin = null } = ctx || {};
+  switch (view) {
+    case 'diagnose':
+      if (!diagnoseState) diagnoseState = {};
+      if (agentId != null) diagnoseState.agentId = agentId;
+      if (target) diagnoseState.target = target;
+      break;
+    case 'investigation':
+      if (agentId != null) { investigateState.type = 'agent'; investigateState.value = String(agentId); }
+      if (windowMin) investigateState.window = String(windowCovering(windowMin, [15, 30, 60, 240, 1440]));
+      break;
+    case 'deviceLog':
+      if (!deviceLogState) deviceLogState = {};
+      deviceLogState.agentId = agentId;
+      if (windowMin) deviceLogState.minutes = windowCovering(windowMin, [15, 60, 120, 480, 1440, 4320, 10080]);
+      break;
+    case 'probes':
+      probesTab = 'run';
+      probeRunContext = { agentId, target };
+      break;
+    case 'troubleshooting':
+      if (windowMin) troubleshootingState.window = String(windowCovering(windowMin, [60, 360, 1440, 10080]));
+      troubleshootingState.brush = null;
+      break;
+    default:
+      break;
+  }
+}
+
+function openInContext(view, ctx = {}) {
+  applyContext(view, ctx);
+  // A result for another target is not an answer to this one.
+  if (view === 'investigation') investigateState.lastResult = null;
+  const q = new URLSearchParams();
+  if (ctx.agentId != null) q.set('agent', String(ctx.agentId));
+  if (ctx.target) q.set('target', String(ctx.target));
+  if (ctx.windowMin) q.set('window', String(Math.round(ctx.windowMin)));
+  pendingSearch = q.toString() ? `?${q}` : '';
+  if (typeof closeDrawer === 'function') closeDrawer();
+  currentView = view;
+  render();
+}
+
+// A deep link (or a reload) on one of the context screens: the address is the
+// source of truth for what it opens on.
+function applyContextFromUrl(view) {
+  const ctx = contextFromUrl();
+  if (ctx.agentId == null && !ctx.target && !ctx.windowMin) return;
+  applyContext(view, ctx);
+}
+
+// The row of hand-off buttons a record shows: the same fault, opened on each
+// screen that can take it further. `ctx` is { agentId, target, sinceMs }.
+function contextActions(ctx, { exclude = [] } = {}) {
+  const c = {
+    agentId: ctx.agentId != null && Number(ctx.agentId) > 0 ? Number(ctx.agentId) : null,
+    target: ctx.target || null,
+    windowMin: ctx.windowMin || windowSince(ctx.sinceMs),
+  };
+  if (c.agentId == null && !c.target) return null;
+  const can = (v) => !exclude.includes(v) && viewAllowed(v);
+  const items = [
+    can('probes') && c.agentId != null ? ['probes', 'ctx.probe'] : null,
+    can('diagnose') ? ['diagnose', 'ctx.diagnose'] : null,
+    can('investigation') && c.agentId != null ? ['investigation', 'ctx.investigate'] : null,
+    can('deviceLog') && c.agentId != null ? ['deviceLog', 'ctx.deviceLog'] : null,
+  ].filter(Boolean);
+  if (!items.length) return null;
+  return el('div', { class: 'ui ctx-actions', role: 'group', 'aria-label': t('ctx.label') },
+    el('span', { class: 'meta-xs' }, t('ctx.label')),
+    ...items.map(([view, key]) => ui.button('secondary', t(key), { size: 'xs', onclick: () => openInContext(view, c) })));
 }
 
 // Section / page / sub-page, rebuilt from the route on every render. The labels

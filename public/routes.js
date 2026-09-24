@@ -118,7 +118,7 @@
   // them too, but a typed URL does not go through the nav). Checked in the
   // client — the server has no session on an HTML request.
   var MIN_ROLE = {
-    delta: 'operator', troubleshooting: 'operator', investigation: 'operator',
+    delta: 'operator', investigation: 'operator',
     enrollment: 'operator', serviceAssurance: 'operator',
     discovery: 'admin', logs: 'admin', userLogs: 'admin', users: 'admin', screening: 'admin',
     kitchenSink: 'admin',

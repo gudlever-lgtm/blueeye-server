@@ -82,7 +82,10 @@
         agentSel = ui.select({
           id: 'diag-agent', label: t('diag.agent'), value: st.agentId == null ? '' : String(st.agentId),
           options: agentOpts,
-          onchange: function (e) { st.agentId = e.target.value ? Number(e.target.value) : null; },
+          onchange: function (e) {
+            st.agentId = e.target.value ? Number(e.target.value) : null;
+            if (deps.onContext) deps.onContext({ agentId: st.agentId });
+          },
         });
         peerSel = ui.select({
           id: 'diag-peer', label: t('diag.peer'), value: st.peerAgentId == null ? '' : String(st.peerAgentId),
@@ -93,6 +96,7 @@
           id: 'diag-target', type: 'text', placeholder: t('diag.target.placeholder'),
           'aria-label': t('diag.target'),
           oninput: function () { st.target = String(targetIn.value || '').trim() || null; },
+          onchange: function () { if (deps.onContext) deps.onContext({ target: st.target }); },
         });
         targetIn.value = st.target || '';
         askBtn = ui.button('primary', t('diag.submit'), { onclick: ask });

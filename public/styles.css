@@ -2165,3 +2165,13 @@ button.ghost.small:has(> .icon-glyph) {
 .chart-readout .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; }
 .chart-readout-time { color: var(--muted); }
 .chart-readout-line { stroke: var(--muted); stroke-width: 1; stroke-dasharray: 3 3; pointer-events: none; }
+
+/* Hand-off row (contextActions in app.js): the same fault opened on the next
+   screen, with agent, target and window already chosen. */
+.ctx-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 4px 0 12px; }
+.ctx-scope { display: flex; align-items: center; gap: 6px; margin: 0 0 8px; }
+
+/* Event page: recommendation blocks. */
+.rec-block { margin: 0 0 10px; }
+.rec-block p { margin: 4px 0 0; }
+.ts-cause-hosts { margin: 4px 0 0; font-size: var(--fs-sm, 13px); }

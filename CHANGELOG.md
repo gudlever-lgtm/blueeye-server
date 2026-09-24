@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.196.0 — One-click update: name what broke the checksum
+## 0.196.1 — One-click update: name what broke the checksum
 
 Pair with agent **0.43.0**, which is where the actual fix lives: the agent now
 downloads the signed release with `Accept-Encoding: identity`. Node's `fetch`

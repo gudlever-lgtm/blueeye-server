@@ -1737,6 +1737,18 @@ function makeEventCasesRepo(overrides = {}) {
       .filter((r) => r.cluster_id != null && Number(r.cluster_id) === Number(clusterId))
       .sort((a, b) => new Date(a.first_event_at) - new Date(b.first_event_at) || a.id - b.id)
       .map(mapJoined)),
+    // Mirrors listOpenOutsideSituations: open|investigating cases not linked to
+    // a LIVE situation, newest activity first. The fake knows no clusters, so a
+    // linked case counts as live unless `isClusterLive(id)` says otherwise.
+    listOpenOutsideSituations: overrides.listOpenOutsideSituations || (async ({ limit = 100 } = {}) => {
+      const live = overrides.isClusterLive || (() => true);
+      return rows
+        .filter((r) => (r.status === 'open' || r.status === 'investigating')
+          && (r.cluster_id == null || !live(r.cluster_id)))
+        .sort((a, b) => new Date(b.last_event_at) - new Date(a.last_event_at) || b.id - a.id)
+        .slice(0, limit)
+        .map(mapJoined);
+    }),
     findOpenByHost: overrides.findOpenByHost || (async (hostId) => {
       const open = rows
         .filter((x) => x.host_id === hostId && (x.status === 'open' || x.status === 'investigating'))
@@ -2826,6 +2838,14 @@ function makeFeatureGate(overrides = {}) {
 // A fake analysis finding store (in-memory). Mirrors FindingStore's surface.
 function makeFindingStore(overrides = {}) {
   const rows = [];
+  // The narrow projection (FindingStore LIGHT_COLUMNS): no evidence, no
+  // explanation, no correlations — a caller that wrongly relies on them fails
+  // in tests too.
+  const lightFinding = (f) => ({
+    id: f.id, hostId: f.hostId, deviceId: f.deviceId ?? null, interfaceId: f.interfaceId ?? null,
+    metric: f.metric, severity: f.severity, kind: f.kind, eventCaseId: f.eventCaseId ?? null,
+    createdAt: f.createdAt, acked: !!f.acked,
+  });
   return {
     rows,
     save: overrides.save || (async (f) => { const saved = { ...f, id: f.id || `f${rows.length + 1}`, acked: false }; rows.push(saved); return saved; }),
@@ -2967,11 +2987,19 @@ function makeFindingStore(overrides = {}) {
         seen.add(String(id));
         const f = rows.find((r) => String(r.id) === String(id));
         if (!f) continue;
-        out.push(light
-          ? { id: f.id, hostId: f.hostId, metric: f.metric, severity: f.severity, kind: f.kind, createdAt: f.createdAt, acked: !!f.acked }
-          : f);
+        out.push(light ? lightFinding(f) : f);
       }
       return out;
+    }),
+    // Mirrors FindingStore.listByEventCases: the findings of several event
+    // cases in one read, oldest first, bounded by `limit`.
+    listByEventCases: overrides.listByEventCases || (async (caseIds, { light = false, limit } = {}) => {
+      const want = new Set((Array.isArray(caseIds) ? caseIds : []).map(Number));
+      let out = rows
+        .filter((f) => f.eventCaseId != null && want.has(Number(f.eventCaseId)))
+        .sort((a, b) => new Date(a.createdAt || 0) - new Date(b.createdAt || 0));
+      if (Number.isInteger(limit) && limit > 0) out = out.slice(0, limit);
+      return out.map((f) => (light ? lightFinding(f) : f));
     }),
     ack: overrides.ack || (async (id) => { const f = rows.find((x) => x.id === id); if (!f) return false; f.acked = true; return true; }),
     // Counts what THIS call changed, like the real store: `acked = 0` is part

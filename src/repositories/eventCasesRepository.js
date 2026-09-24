@@ -208,6 +208,29 @@ function createEventCasesRepository(db) {
     return rows.map(mapRow);
   }
 
+  // Still-open cases (open|investigating) that are NOT part of a live
+  // situation, newest activity first, with the device identity — the
+  // Troubleshooting overview's second source of faults. A single-host fault
+  // never forms a cross-agent cluster, so on a one-agent site this is the only
+  // place "what is broken now" lives. A case linked to a situation that is
+  // still open/acknowledged is left out because the situation already counts
+  // its findings; one whose situation has been resolved (or deleted — ON
+  // DELETE SET NULL) is back in, since nothing else counts it any more.
+  async function listOpenOutsideSituations({ limit = 100 } = {}) {
+    const lim = Number.isInteger(limit) && limit > 0 && limit <= 1000 ? limit : 100;
+    const [rows] = await pool.query(
+      `SELECT ${IC_COLUMNS}, ${DEVICE_COLUMNS}
+       FROM event_cases ic ${DEVICE_JOIN}
+       WHERE ic.status IN (?, ?)
+         AND (ic.cluster_id IS NULL OR NOT EXISTS (SELECT 1 FROM event_clusters c
+              WHERE c.id = ic.cluster_id AND c.status IN ('open', 'acknowledged')))
+       ORDER BY ic.last_event_at DESC, ic.id DESC
+       LIMIT ?`,
+      [OPEN_STATUSES[0], OPEN_STATUSES[1], lim]
+    );
+    return rows.map(mapRow);
+  }
+
   // Investigating events whose last activity is older than `olderThan` — the
   // auto-resolve candidates (no new anomalies linked within the inactivity
   // window). Oldest-first so the job processes the stalest first.
@@ -297,7 +320,7 @@ function createEventCasesRepository(db) {
 
   return {
     create, findById, findOpenByHost, updateActivity, updateStatus, setConfigChange,
-    linkCluster, listByCluster, listStaleInvestigating, listResolvedClosed, list,
+    linkCluster, listByCluster, listOpenOutsideSituations, listStaleInvestigating, listResolvedClosed, list,
   };
 }
 

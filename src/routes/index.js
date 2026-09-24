@@ -397,6 +397,9 @@ function createApiRouter({
         // The device rows, for the poll state of each switch on the map. The
         // switches themselves arrive with the graph (src/topology/graph.js).
         snmpDevicesRepo,
+        // Open event cases: the faults a single-agent site has, which never
+        // form a cross-agent cluster (docs/troubleshooting-dashboard.md).
+        eventCasesRepo,
         logger,
       }),
     }));

@@ -17,7 +17,13 @@ const MAX_LIST = 5000;
 // `correlated_with`: those are JSON blobs, and pulling tens of thousands of them
 // back just to count severities is the difference between a few hundred KB and
 // tens of MB on the wire.
-const LIGHT_COLUMNS = 'id, host_id, metric, severity, kind, acked, created_at';
+//
+// device_id/interface_id/event_case_id are small integers and ride along: the
+// Troubleshooting overview needs them to say WHICH node an open fault sits on
+// (a switch port finding carries the polling agent in host_id) and which event
+// case it belongs to, and a second read for three integers would cost more
+// than it saves.
+const LIGHT_COLUMNS = 'id, host_id, device_id, interface_id, metric, severity, kind, event_case_id, acked, created_at';
 
 // How many ids go into one IN (...) batch. Keeps the statement (and the
 // prepared-parameter list) inside sane limits while still turning an N+1 into
@@ -172,9 +178,12 @@ function mapLightRow(row) {
   return {
     id: row.id,
     hostId: row.host_id,
+    deviceId: row.device_id == null ? null : Number(row.device_id),
+    interfaceId: row.interface_id == null ? null : Number(row.interface_id),
     metric: row.metric,
     severity: row.severity,
     kind: row.kind,
+    eventCaseId: row.event_case_id == null ? null : Number(row.event_case_id),
     createdAt: row.created_at,
     acked: row.acked === 1 || row.acked === true,
   };
@@ -457,6 +466,27 @@ class FindingStore {
       [eventCaseId, MAX_LIST]
     );
     return rows.map(mapRow);
+  }
+
+  // The findings of SEVERAL event cases in one read — the Troubleshooting
+  // overview's case path (a single-host fault never forms a cross-agent
+  // cluster, so its open event cases are what the screen rolls up). One
+  // `event_case_id IN (...)` statement rather than listByEventCase per case,
+  // oldest first (the order the event page shows them), bounded by `limit`
+  // like every list here. `light: true` is the narrow projection listByIds
+  // uses; the case path only counts and places the members.
+  async listByEventCases(eventCaseIds, { light = false, limit = MAX_LIST } = {}) {
+    const ids = [...new Set((Array.isArray(eventCaseIds) ? eventCaseIds : [])
+      .map(Number).filter((n) => Number.isInteger(n) && n > 0))];
+    if (!ids.length) return [];
+    const n = Number.isInteger(limit) && limit > 0 ? limit : MAX_LIST;
+    const [rows] = await this.pool.query(
+      `SELECT ${light ? LIGHT_COLUMNS : COLUMNS} FROM findings
+        WHERE event_case_id IN (${ids.map(() => '?').join(', ')})
+        ORDER BY created_at ASC, id LIMIT ?`,
+      [...ids, n]
+    );
+    return rows.map(light ? mapLightRow : mapRow);
   }
 
   // Bulk fetch by id — the N+1 killer for callers that already hold a list of

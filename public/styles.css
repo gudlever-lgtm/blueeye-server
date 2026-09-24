@@ -1566,6 +1566,10 @@ li.guide-step.done .guide-step-title { text-decoration: line-through; opacity: 0
 .ts-node text { fill: var(--muted); font-size: 11px; pointer-events: none; }
 .ts-node.ts-ok circle { stroke: var(--ok); }
 .ts-node.ts-down circle { stroke: var(--bad); fill: var(--bad-weak); }
+/* Reachable, with an open fault on it (a port down, probes failing): warn, not
+   green — and solid, because we can hear it. */
+.ts-node.ts-degraded circle { stroke: var(--warn); fill: var(--warn-weak); }
+.ts-link.ts-degraded { stroke: var(--warn); }
 .ts-node.ts-unreachable_downstream circle { stroke: var(--muted); fill: var(--muted-weak); stroke-dasharray: 3 2; }
 /* Never polled. Outlined rather than filled and dashed rather than solid: it is
    not a fault and it is not health either, and it must not read as either. */

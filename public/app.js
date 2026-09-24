@@ -7644,9 +7644,11 @@ function tshootTopologySvg(topology, { onSelect, layerFilter } = {}) {
 
   // Highlight a blast-radius path returned by /api/topology/blast-radius.
   wrap.highlightPath = (ids) => {
-    const set = new Set((ids || []).map(Number));
-    nodeEls.forEach((g, id) => g.classList.toggle('on-path', set.has(Number(id))));
-    linkEls.forEach((l) => l.el.classList.toggle('on-path', set.has(Number(l.source)) && set.has(Number(l.target))));
+    // Keyed as strings: a switch is `d:<id>`, and Number() made every switch
+    // NaN, so a path through one never lit up.
+    const set = new Set((ids || []).map(String));
+    nodeEls.forEach((g, id) => g.classList.toggle('on-path', set.has(String(id))));
+    linkEls.forEach((l) => l.el.classList.toggle('on-path', set.has(String(l.source)) && set.has(String(l.target))));
   };
   wrap.clearPath = () => {
     nodeEls.forEach((g) => g.classList.remove('on-path'));
@@ -7728,6 +7730,8 @@ function getTroubleshootingView() {
   if (typeof window === 'undefined' || !window.TroubleshootingPage || !ui) return null;
   troubleshootingView = window.TroubleshootingPage.create({
     el, t, ui, errText, openAgent, openCluster, gotoView,
+    // A root cause from a single host's open event case opens that event.
+    openEvent,
     onContext: writeContextParams,
     contextActions,
     // A node on this map is an agent OR a polled switch, and they open two

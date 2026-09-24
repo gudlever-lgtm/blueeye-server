@@ -1322,6 +1322,58 @@ check('situations: grouping basis round-trips, cases link to the FIRST live situ
   assert.ok((await cases.listStaleInvestigating(ago(30 * 60 * 1000), 5000)).some((c) => c.id === k3), 'without the option: unchanged');
 });
 
+// The Troubleshooting overview's case path: open cases outside a LIVE
+// situation, and every finding of a set of cases in one bulk read.
+check('troubleshooting: open cases outside a live situation, and their findings in one read', async (pool) => {
+  const clusters = repoOf('eventClustersRepository', 'createEventClustersRepository')({ pool });
+  const cases = repoOf('eventCasesRepository', 'createEventCasesRepository')({ pool });
+  const { FindingStore } = require(path.join(ROOT, 'src/analysis/findings'));
+  const store = new FindingStore({ db: { pool } });
+
+  const free = await cases.create({ host_id: '41', title: 'free', first_event_at: ago(60000), last_event_at: ago(1000) });
+  const inv = await cases.create({ host_id: '41', title: 'inv', status: 'investigating', first_event_at: ago(90000), last_event_at: ago(2000) });
+  const held = await cases.create({ host_id: '42', title: 'held', first_event_at: ago(60000), last_event_at: ago(500) });
+  const wasHeld = await cases.create({ host_id: '42', title: 'was held', first_event_at: ago(60000), last_event_at: ago(3000) });
+  const done = await cases.create({ host_id: '43', title: 'done', status: 'resolved', first_event_at: ago(60000), last_event_at: ago(100) });
+  const live = await clusters.create({ confidence: 'high', memberFindingIds: ['x'], detectedAt: new Date() });
+  const over = await clusters.create({ confidence: 'high', memberFindingIds: ['y'], detectedAt: new Date() });
+  await cases.linkCluster([held], live);
+  await cases.linkCluster([wasHeld], over);
+  assert.ok(await clusters.updateStatus(over, { from: 'open', to: 'resolved', at: new Date() }));
+
+  const open = (await cases.listOpenOutsideSituations({ limit: 1000 })).map((c) => c.id);
+  assert.ok(open.includes(free) && open.includes(inv), 'open/investigating cases missing');
+  assert.ok(open.includes(wasHeld), 'a case of a RESOLVED situation must be back in');
+  assert.ok(!open.includes(held), 'a case of a LIVE situation must be left out');
+  assert.ok(!open.includes(done), 'a resolved case is not open work');
+  assert.ok(open.indexOf(free) < open.indexOf(inv), 'newest activity first');
+  const row = (await cases.listOpenOutsideSituations({ limit: 1000 })).find((c) => c.id === free);
+  assert.ok('agentName' in row && 'locationName' in row, 'the device identity join is missing');
+
+  const save = async (id, over2) => store.save({
+    id, hostId: '41', metric: 'if.7.link.down', severity: 'CRIT', kind: 'THRESHOLD',
+    explanation: 'Port down.', evidence: [{ ts: new Date(), value: 0 }], ...over2,
+  });
+  await save('ts-case-a', { deviceId: null, createdAt: ago(5000) });
+  await save('ts-case-b', { createdAt: ago(4000) });
+  await save('ts-case-c', { createdAt: ago(3000) });
+  await store.setEventCase('ts-case-a', free);
+  await store.setEventCase('ts-case-b', inv);
+  await store.setEventCase('ts-case-c', free);
+
+  const light = await store.listByEventCases([free, inv, free, 'junk'], { light: true, limit: 100 });
+  assert.deepStrictEqual(light.map((f) => f.id), ['ts-case-a', 'ts-case-b', 'ts-case-c'], 'oldest first across cases');
+  assert.deepStrictEqual(light.map((f) => f.eventCaseId), [free, inv, free]);
+  assert.ok(!('evidence' in light[0]), 'the light projection carries evidence');
+  assert.ok('deviceId' in light[0] && 'interfaceId' in light[0]);
+  assert.strictEqual((await store.listByEventCases([free], { light: true, limit: 1 })).length, 1, 'LIMIT ignored');
+  assert.strictEqual((await store.listByEventCases([free]))[0].explanation, 'Port down.', 'the full projection');
+  assert.deepStrictEqual(await store.listByEventCases([]), []);
+  // The light projection of listByIds carries the same three new columns.
+  const [byId] = await store.listByIds(['ts-case-a'], { light: true });
+  assert.strictEqual(byId.eventCaseId, free);
+});
+
 // Migration 131: the new-device detector's long memory.
 check('known devices: per-scope reads, an upsert that keeps first_seen and never ages last_seen, the 400-day purge', async (pool) => {
   const repo = repoOf('knownDevicesRepository', 'createKnownDevicesRepository')({ pool });

@@ -111,6 +111,15 @@
           var tone = !c.value ? undefined
             : (c.key === 'rootCauses' || c.key === 'activeFaults') ? 'crit' : 'warn';
           var card = { value: c.value, label: c.label, title: c.hint, tone: tone };
+          // The affected-device figure counts degraded nodes too (reachable,
+          // with an open fault on them), so its breakdown has to name them.
+          if (c.key === 'affectedDevices' && Number(data.summary && data.summary.devicesDegraded) > 0) {
+            card.title = t('tshoot.kpi.affectedHint', {
+              down: Number(data.summary.devicesDown) || 0,
+              degraded: Number(data.summary.devicesDegraded) || 0,
+              unreachable: Number(data.summary.devicesUnreachable) || 0,
+            });
+          }
           if (c.key === 'activeFaults' && c.value) {
             card.active = faults.open;
             card.title = faults.open ? t('tshoot.faults.hide') : t('tshoot.faults.link', { count: c.value });
@@ -144,7 +153,8 @@
               detail.replaceChildren(
                 el('div', { class: 'ts-node-head' },
                   el('strong', {}, n.label),
-                  ui.badge(n.state === 'down' ? 'crit' : n.state === 'ok' ? 'ok' : 'neutral', TV.stateLabel(n.state))),
+                  ui.badge(n.state === 'down' ? 'crit' : n.state === 'ok' ? 'ok' : n.state === 'degraded' ? 'warn' : 'neutral',
+                    TV.stateLabel(n.state, t))),
                 ui.metaXs(n.lastSeen ? t('tshoot.lastSeen', { when: ui.fmt.abs(n.lastSeen) }) : t('tshoot.neverSeen')),
                 // A switch and an agent open different pages, and the button
                 // has to say which one it is about to open.
@@ -164,6 +174,11 @@
         var legend = el('div', { class: 'ui-chart-legend site-legend' },
           el('span', { class: 'ui-legend-item' }, el('span', { class: 'ui-legend-dot health-ok' }),
             t('tshoot.state.ok', { n: counts.ok || 0 })),
+          // Only when something is: reachable, with an open fault on it.
+          counts.degraded
+            ? el('span', { class: 'ui-legend-item' }, el('span', { class: 'ui-legend-dot health-warn' }),
+              t('tshoot.state.degraded', { n: counts.degraded }))
+            : null,
           el('span', { class: 'ui-legend-item' }, el('span', { class: 'ui-legend-dot health-bad' }),
             t('tshoot.state.down', { n: counts.down || 0 })),
           el('span', { class: 'ui-legend-item' }, el('span', { class: 'ui-legend-dot health-warn' }),
@@ -196,7 +211,7 @@
         deps.blastRadius(model.pathAnchorId)
           .then(function (ids) {
             if (graphEl && graphEl.highlightPath) {
-              graphEl.highlightPath([Number(model.pathAnchorId)].concat(ids));
+              graphEl.highlightPath([model.pathAnchorId].concat(ids));
               // The graph sits below the causes; bring the highlight into view
               // rather than lighting it up off screen.
               if (ids.length && topoHost.scrollIntoView) topoHost.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -273,19 +288,30 @@
             // Show path walks the blast radius, which is operator+; a viewer's
             // overview says it was left out, so the action is not offered.
             var canPath = m.pathAnchorId != null && !(data.restricted && data.restricted.indexOf('blastRadius') >= 0);
+            // A cause from an open event case opens that event; a situation
+            // opens the situation. Their ids overlap, so never `m.id`.
+            var fromCase = m.source === 'case' && m.caseId != null;
             var actions = ui.rowActions(
               !canPath ? null : {
                 label: t('tshoot.showPath'), onclick: function () { showPath(m, slot); },
               },
               [
                 { label: t('tshoot.whatChanged'), onclick: function () { showChanges(m, slot); } },
-                { label: t('tshoot.openSituation'), onclick: function () { deps.openCluster(m.id); } },
+                fromCase
+                  ? { label: t('tshoot.openEvent'), onclick: function () { deps.openEvent(m.caseId); } }
+                  : { label: t('tshoot.openSituation'), onclick: function () { deps.openCluster(m.clusterId); } },
               ]);
-            return el('div', { class: 'ts-cause' },
+            return el('div', { class: 'ts-cause', 'data-source': m.source },
               el('div', { class: 'ts-cause-head' },
                 ui.badge(sevTone(m.severity), m.severity),
                 el('strong', {}, m.cause),
                 m.confidence ? ui.meta(t('tshoot.confidence', { level: m.confidence })) : null,
+                // Where the cause comes from, and a way there: one host's
+                // open event, not a correlation across agents.
+                fromCase
+                  ? el('span', { class: 'ts-cause-case', title: t('tshoot.fromCase.title') },
+                    ui.hostLink(t('tshoot.fromCase', { id: m.caseId }), function () { deps.openEvent(m.caseId); }))
+                  : null,
                 actions),
               el('div', { class: 'ts-cause-meta' },
                 ui.metaXs(m.affectedText),
@@ -395,6 +421,10 @@
                   when: m.createdAt ? ui.fmt.abs(m.createdAt)
                     : (m.missing ? t('tshoot.faults.purged') : '—'),
                   cause: el('span', {}, m.cause || '—',
+                    // A row from an open event case links to that event.
+                    m.source === 'case' && m.caseId != null && deps.openEvent
+                      ? el('span', {}, ' · ', ui.hostLink(t('tshoot.faults.event', { id: m.caseId }), function () { deps.openEvent(m.caseId); }))
+                      : null,
                     m.acked ? ui.badge('neutral', t('tshoot.faults.acked')) : null),
                 },
               };

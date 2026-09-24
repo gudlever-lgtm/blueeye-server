@@ -294,3 +294,100 @@ test('an empty timeline is an EmptyState, not an empty brush', async (t) => {
   assert.ok(panel.querySelector('.state'), 'no EmptyState');
   assert.equal(panel.querySelectorAll('svg.ts-brush').length, 0);
 });
+
+// --- single-host faults: a root cause from an open event case ----------------
+// A site with one agent never forms a cross-agent situation, so its faults
+// arrive as causes built from its open event cases. The row has to say so and
+// open the EVENT (its id is a case id, not a cluster id), and a switch with an
+// open port fault is degraded on the map, not green.
+const CASE_OVERVIEW = {
+  summary: { activeFaults: 4, affectedDevices: 3, devicesDown: 0, devicesUnreachable: 0, devicesDegraded: 3, rootCauses: 1, anomalies: 0 },
+  topology: {
+    nodes: [
+      { id: 1, label: 'vv-agent', kind: 'agent', state: 'degraded', lastSeen: '2026-09-24T11:59:00.000Z' },
+      { id: 'd:1', label: 'sw-core', kind: 'device', state: 'degraded', lastSeen: '2026-09-24T11:59:00.000Z' },
+      { id: 'd:2', label: 'sw-pump', kind: 'device', state: 'degraded', lastSeen: '2026-09-24T11:59:00.000Z' },
+    ],
+    links: [{ source: 1, target: 'd:1', layer: 'l2', state: 'degraded' }, { source: 'd:1', target: 'd:2', layer: 'l2', state: 'degraded' }],
+    counts: { ok: 0, down: 0, unreachable_downstream: 0, degraded: 3 },
+    layers: { l2: 2, l3: 0 },
+    discovered: [],
+  },
+  rootCauses: [{
+    id: 'case:5', source: 'case', caseId: 5, clusterId: null, severity: 'CRIT',
+    cause: 'Port Gi0/1 on sw-core went down (SNMP poll).', affectedDeviceIds: [1, 'd:1', 'd:2'],
+    blastRadiusCount: 0, primaryDeviceId: 'd:1', memberCount: 4, status: 'open',
+    firstSeen: '2026-09-24T11:10:00.000Z', lastSeen: '2026-09-24T11:55:00.000Z',
+  }],
+  anomalies: [],
+  timeline: [],
+  restricted: [],
+};
+const CASE_FAULTS = {
+  total: 1,
+  faults: [{
+    findingId: 'f-down', source: 'case', caseId: 5, clusterId: null, severity: 'CRIT', hostId: '1',
+    metric: 'if.11.link.down', createdAt: '2026-09-24T11:10:00.000Z', cause: 'Port Gi0/1 on sw-core went down (SNMP poll).',
+  }],
+};
+
+test('a single-host case renders as a root cause that says so and opens its event', async (t) => {
+  const { doc, window, log, errors } = boot({ t, routes: SESSION({
+    'GET /api/troubleshooting/overview': CASE_OVERVIEW,
+    'GET /api/events/5': { id: 5, title: 'CRIT if.11.link.down on vv-agent', status: 'open', severity: 'CRIT', anomalies: [] },
+  }) });
+  await settle();
+  assert.deepEqual(errors, []);
+  const [cause] = causes(doc);
+  assert.ok(cause, 'the case did not render as a cause');
+  assert.equal(cause.getAttribute('data-source'), 'case');
+  assert.match(cause.textContent, /Port Gi0\/1 on sw-core went down/);
+  assert.match(cause.textContent, /Event #5 · one host/);
+  // The KPI strip is not the "nothing is broken" strip any more.
+  assert.match(cards(doc).find((c) => /Active faults/i.test(c.textContent)).textContent, /4/);
+  assert.match(cards(doc).find((c) => /Root causes/i.test(c.textContent)).textContent, /1/);
+
+  // The ⋯ menu offers the EVENT, not a situation that does not exist.
+  const shown = [...cause.querySelectorAll('.row-act > button')];
+  shown[shown.length - 1].dispatchEvent(new window.Event('click', { bubbles: true }));
+  await settle();
+  const labels = [...doc.querySelectorAll('.ui-rowmenu button')].map((b) => b.textContent);
+  assert.ok(labels.some((l) => /Open event/i.test(l)), `menu: ${labels.join(', ')}`);
+  assert.ok(!labels.some((l) => /Open situation/i.test(l)), 'a case cause offered to open a situation');
+
+  // The inline link opens the event page for case 5.
+  const link = cause.querySelector('.ts-cause-case a.hostlink');
+  assert.ok(link, 'the event reference is not a link');
+  link.dispatchEvent(new window.Event('click', { bubbles: true }));
+  await settle();
+  assert.ok(log.some((x) => x.key === 'GET /api/events/5'), 'the event page was not opened');
+  assert.ok(!log.some((x) => /\/api\/event-clusters\/5/.test(x.url)), 'the case id was sent to the situation API');
+});
+
+test('a degraded switch is drawn and listed as degraded, in the catalogue\'s words', async (t) => {
+  const { doc } = boot({ t, routes: SESSION({ 'GET /api/troubleshooting/overview': CASE_OVERVIEW }) });
+  await settle();
+  assert.equal(doc.querySelectorAll('#view .ts-node.ts-degraded').length, 3, 'degraded nodes drawn as another state');
+  assert.equal(doc.querySelectorAll('#view .ts-node.ts-ok').length, 0);
+  const legend = doc.querySelector('#view .site-legend');
+  assert.match(legend.textContent, /Degraded \(3\)/);
+});
+
+test('fault rows from a case link to that event', async (t) => {
+  const { doc, window, log } = boot({ t, routes: SESSION({
+    'GET /api/troubleshooting/overview': CASE_OVERVIEW,
+    'GET /api/troubleshooting/faults': CASE_FAULTS,
+    'GET /api/events/5': { id: 5, title: 'x', status: 'open', severity: 'CRIT', anomalies: [] },
+  }) });
+  await settle();
+  cards(doc).find((c) => /Active faults/i.test(c.textContent)).dispatchEvent(new window.Event('click', { bubbles: true }));
+  await settle();
+  const [row] = faultRows(doc);
+  assert.ok(row, 'no fault row');
+  assert.match(row.textContent, /event #5/);
+  const link = [...row.querySelectorAll('button, a')].find((x) => /event #5/.test(x.textContent));
+  assert.ok(link, 'the event reference is not a link');
+  link.dispatchEvent(new window.Event('click', { bubbles: true }));
+  await settle();
+  assert.ok(log.some((x) => x.key === 'GET /api/events/5'));
+});

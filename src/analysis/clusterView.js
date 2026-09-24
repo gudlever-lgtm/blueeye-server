@@ -58,6 +58,9 @@ function memberRef(f) {
     acked: Boolean(f.acked),
     explanation: f.explanation ?? null,
     evidenceSamples: Array.isArray(f.evidence) ? f.evidence.length : 0,
+    // The event this finding was grouped into on its own device, so the
+    // situation page can link each member to the record somebody works in.
+    eventCaseId: f.eventCaseId ?? null,
     createdAt: f.createdAt instanceof Date ? f.createdAt.toISOString() : (f.createdAt ?? null),
   };
 }

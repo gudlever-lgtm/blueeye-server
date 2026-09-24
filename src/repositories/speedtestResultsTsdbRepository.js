@@ -1,5 +1,7 @@
 'use strict';
 
+const { numOrNull } = require('../lib/num');
+
 // TSDB variant of the speed-test WRITE path (docs/storage-split-audit.md).
 // Rows land in the TimescaleDB `speedtest_results` hypertable
 // (server/db/timescale/001_init.sql). Same columns as the MySQL table, minus
@@ -14,7 +16,7 @@ const COLUMNS = [
   'down_ms', 'up_ms', 'target', 'detail',
 ];
 
-const wholeOrNull = (n) => (n == null || !Number.isFinite(Number(n)) ? null : Math.round(Number(n)));
+const wholeOrNull = (n) => { const v = numOrNull(n); return v == null ? null : Math.round(v); };
 
 function createSpeedtestResultsTsdbRepository(tsdb) {
   const { pool } = tsdb;

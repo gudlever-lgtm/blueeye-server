@@ -1,5 +1,7 @@
 'use strict';
 
+const { numOrNull } = require('../lib/num');
+
 // TSDB variant of the probe-results WRITE path (docs/storage-split-audit.md).
 // Rows land in the TimescaleDB `probe_results` hypertable
 // (server/db/timescale/001_init.sql).
@@ -55,7 +57,7 @@ function toRecord(agentId, r) {
   // Integer columns: MySQL rounds a fractional value silently, Postgres refuses
   // it and would fail the whole batch (a certificate 12.5 days from expiry).
   for (const c of INTEGER_COLUMNS) {
-    if (rec[c] != null) rec[c] = Number.isFinite(Number(rec[c])) ? Math.round(Number(rec[c])) : null;
+    if (rec[c] != null) { const n = numOrNull(rec[c]); rec[c] = n == null ? null : Math.round(n); }
   }
   return rec;
 }

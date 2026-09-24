@@ -128,11 +128,13 @@ const { createFlowsRepository } = require('./repositories/flowsRepository');
 const { createGeoProvider } = require('./geo/provider');
 const { createGeoipUpdater } = require('./geo/geoipUpdater');
 const { createCentroids } = require('./geo/centroids');
+const { createCityProvider } = require('./geo/cityProvider');
 const { describeLiveHop } = require('./analysis/pathGraph');
 const { createGeoEnricher } = require('./geo/enricher');
 const { createFlowPipeline } = require('./geo/flowPipeline');
 const { loadAlertingConfig } = require('./analysis/alerting/config');
 const { createDispatcher } = require('./analysis/alerting/dispatcher');
+const { createAlertContext } = require('./analysis/alerting/alertContext');
 const { createSilencer } = require('./analysis/alerting/maintenance');
 const { createEmailChannel, createSmtpTransport } = require('./analysis/alerting/channels/email');
 const { createUserMailer } = require('./services/userMailer');
@@ -881,6 +883,9 @@ function start() {
       return featureGate.isFeatureEnabled('alerting');
     },
     alertLog: alertDispatchLogRepo,
+    // Every alert names its agent and carries a link into the dashboard
+    // (BLUEEYE_PUBLIC_URL). Without the URL the alert still goes, unlinked.
+    enrich: createAlertContext({ publicUrl: config.publicUrl || null, agentsRepo, logger }).enrich,
     logger,
   });
   // One-time-password email for local user creation. It reuses the SAME live
@@ -987,6 +992,10 @@ function start() {
   // change detection; reused below for flow enrichment and the path/destination
   // maps. Without a DB it simply no-ops (no country/ASN).
   const geoProvider = createGeoProvider({ dbPath: config.geo.dbPath, logger });
+  // City-level GeoIP (config.geo.cityDbPath / Settings → Map). Only the
+  // traceroute maps use it, as the fallback when a router's name does not say
+  // where it stands. Streams in the background; lookups answer null meanwhile.
+  const cityProvider = createCityProvider({ dbPath: config.geo.cityDbPath, logger });
 
   // Active-probe analysis: derive findings (reachability/loss/latency/jitter/cert/
   // AS-path change) from probe-results on ingest, alongside the traffic detector
@@ -1114,7 +1123,7 @@ function start() {
   const settingsService = createSettingsService({
     settingsRepo: createSettingsRepository(db), config,
     liveAnalysis: analysisConfig, liveRetention: retentionConfig, liveAlerting: alertingConfig,
-    liveGeo: geoProvider, secretBox,
+    liveGeo: geoProvider, liveGeoCity: cityProvider, secretBox,
   });
   // Re-apply persisted analysis/retention edits onto the live config so they
   // survive restarts. Best-effort + fire-and-forget (consumers read lazily).
@@ -1328,6 +1337,7 @@ function start() {
     flowsRepo,
     geoTileConfig: config.geo,
     geoProvider,
+    cityProvider,
     geoipUpdater,
     centroids,
     assistant,
@@ -1402,6 +1412,24 @@ function start() {
     logRing,
   });
 
+  // The agent's site for a LIVE trace, so its hops get the same speed-of-light
+  // check as the finished path. Cached a minute per agent: a trace streams up
+  // to 40 hops, and they should not each cost a query. Every hop of one trace
+  // waits on the same promise, so they reach the dashboard in order.
+  const liveOrigins = new Map();
+  function liveTraceOrigin(agentId) {
+    const hit = liveOrigins.get(agentId);
+    if (hit && Date.now() - hit.at < 60000) return hit.promise;
+    const promise = Promise.resolve()
+      .then(() => agentsRepo.findById(agentId))
+      .then((a) => (a && Number.isFinite(a.location_lat) && Number.isFinite(a.location_lng)
+        ? { lat: a.location_lat, lng: a.location_lng } : null))
+      .catch(() => null);
+    liveOrigins.set(agentId, { at: Date.now(), promise });
+    if (liveOrigins.size > 1000) liveOrigins.delete(liveOrigins.keys().next().value);
+    return promise;
+  }
+
   const server = app.listen(config.port, () => {
     logger.info(
       `blueeye-server listening on port ${config.port} (env: ${config.env})`
@@ -1444,7 +1472,10 @@ function start() {
     // Push live online/offline transitions to the dashboard.
     notifyDashboard,
     // Live traceroute hops, geolocated the same way as the finished path.
-    describeTraceHop: (hop) => describeLiveHop(hop, { geoProvider, centroids }),
+    // The agent's site anchors the speed-of-light check (src/geo/hopLocation.js).
+    describeTraceHop: async (hop, agentId) => describeLiveHop(hop, {
+      geoProvider, cityProvider, centroids, origin: await liveTraceOrigin(agentId),
+    }),
     // Transaction-test channel: config push on connect/change + result ingest +
     // threshold findings. The assistant supplies an optional Danish diagnosis,
     // appended to the deterministic one.

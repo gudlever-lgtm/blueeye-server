@@ -191,6 +191,7 @@ function createApiRouter({
   discoveryConfig,
   geoTileConfig,
   geoProvider,
+  cityProvider = null,
   geoipUpdater,
   centroids,
   assistant,
@@ -413,7 +414,7 @@ function createApiRouter({
     agentsRepo, resultsRepo, probeResultsRepo, agentCommander,
     assistant, auditLogger, logger,
   }));
-  if (probeResultsRepo) router.use('/api/probes', createProbesRouter({ probeResultsRepo, agentsRepo, geoProvider, centroids }));
+  if (probeResultsRepo) router.use('/api/probes', createProbesRouter({ probeResultsRepo, agentsRepo, geoProvider, cityProvider, centroids }));
   if (probeResultsRepo) router.use('/api/fleet', createFleetRouter({ agentsRepo, probeResultsRepo, resultsRepo, speedtestResultsRepo, settingsService, logger }));
   // Overview "open issues" rollup (license feature `dashboard_advanced`,
   // Professional+) — active events + recent findings, gated. Surfaced inline

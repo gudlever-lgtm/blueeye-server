@@ -43,6 +43,36 @@
       var d = Number(dev) || 0;
       return (d > 0 ? '+' : '') + Math.round(d * 100) + '%';
     }
+    // Where a hop or a stop is, as precisely as the server could say: "Frankfurt,
+    // DE" when the router's name or city GeoIP gave a city, else the country.
+    function placeLabel(nodes) {
+      for (var i = 0; i < nodes.length; i += 1) {
+        var p = nodes[i].place;
+        if (p) return [p.city, p.country].filter(Boolean).join(', ');
+      }
+      return nodes.length ? (nodes[0].country || null) : null;
+    }
+    // How the place was found (router name / city GeoIP / country only).
+    function placeSource(p) {
+      if (!p) return null;
+      if (p.source === 'rdns') return t('pathmap.place.rdns', { code: p.code || '' });
+      if (p.source === 'geoip-city') return t('pathmap.place.geoipCity');
+      return t('pathmap.place.country');
+    }
+    // Hops the server left off the map because their reply was too fast for
+    // any place it had for them (anycast, mostly).
+    function rejectedNotes(nodes) {
+      return (nodes || []).filter(function (n) {
+        return n.lat == null && Array.isArray(n.geoRejected) && n.geoRejected.length;
+      }).map(function (n) {
+        var r = n.geoRejected[n.geoRejected.length - 1];
+        return ui.inlineNote(t('pathmap.rejected', {
+          hop: n.hop, ip: n.ip || '*', where: [r.city, r.country].filter(Boolean).join(', ') || '?',
+          km: r.distanceKm, max: r.maxKm,
+        }), 'info');
+      });
+    }
+
     function destTitle(d) {
       return (d.country || '??')
         + (d.asn ? ' · AS' + d.asn : '')
@@ -366,7 +396,7 @@
         return [
           ui.inlineNote(t('dest.path.liveNote', { n: nodes.length, s: secs }), 'info'),
           el('ul', { class: 'path-stops' }, nodes.map(function (n) {
-            var where = [n.asnName || (n.asn ? 'AS' + n.asn : null), n.country || null,
+            var where = [n.asnName || (n.asn ? 'AS' + n.asn : null), placeLabel([n]),
               n.private ? t('dest.path.privateAddr') : null].filter(Boolean).join(' · ');
             return el('li', {},
               el('span', { class: 'ui-legend-dot sev-' + (n.severity || 'ok') }),
@@ -400,7 +430,7 @@
 
         function stopRow(s) {
           var isSrc = s.nodes.some(function (n) { return n.kind === 'source'; });
-          var place = isSrc ? (s.nodes[0].label || t('dest.path.origin')) : (s.nodes[0].country || '—');
+          var place = isSrc ? (s.nodes[0].label || t('dest.path.origin')) : (placeLabel(s.nodes) || '—');
           var hopLabel = isSrc ? t('dest.path.origin')
             : s.nodes.length > 1
               ? t('dest.path.hops', { from: s.nodes[0].hop, to: s.nodes[s.nodes.length - 1].hop })
@@ -438,7 +468,7 @@
             var where = [
               n.asnName || (n.asn ? 'AS' + n.asn : null),
               n.asnName && n.asn ? 'AS' + n.asn : null,
-              n.country || null,
+              placeLabel([n]),
               n.private ? t('dest.path.privateAddr') : null,
             ].filter(Boolean).join(' · ');
             var measured = [
@@ -450,13 +480,15 @@
               t('dest.path.hop', { n: n.hop }),
               el('div', {},
                 el('div', { class: 'mono' }, n.ip || t('dest.path.silent')),
+                n.hostname ? el('div', { class: 'mono' }, n.hostname) : null,
                 where ? ui.metaXs(where) : null,
+                n.place ? ui.metaXs(placeSource(n.place)) : null,
                 measured ? ui.metaXs(measured) : null,
                 n.explain ? ui.metaXs(n.explain) : null),
             ];
           });
           ui.openDrawer({
-            title: s.nodes[0].country || t('dest.path.stop'),
+            title: placeLabel(s.nodes) || t('dest.path.stop'),
             meta: t('dest.path.stopMeta', { hops: s.nodes.length }),
             row: row,
             sections: [ui.drawerSection(t('dest.path.stopHops'), ui.keyValues(pairs))],
@@ -482,7 +514,7 @@
                 : t('dest.path.noHops')), 'warn')
             : null,
           body,
-        ].filter(Boolean);
+        ].concat(rejectedNotes(graph.nodes)).filter(Boolean);
       }
 
       // Mounted ONCE. A period change redraws the markers and retitles the

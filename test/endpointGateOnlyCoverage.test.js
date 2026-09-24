@@ -228,6 +228,9 @@ test('PUT /api/settings/geoip: admin stores the override and gets the effective 
   const bad = await call(app, 'put', '/api/settings/geoip', 'admin', { dbPath: 'x'.repeat(1025) });
   assert.equal(bad.status, 400);
   assert.ok(bad.body.details.dbPath);
+  const badCity = await call(app, 'put', '/api/settings/geoip', 'admin', { cityDbPath: 'x'.repeat(1025) });
+  assert.equal(badCity.status, 400);
+  assert.ok(badCity.body.details.cityDbPath);
 
   assert.equal((await call(app, 'put', '/api/settings/geoip', 'operator', { autoUpdate: false })).status, 403);
   assert.equal((await call(app, 'put', '/api/settings/geoip', null, { autoUpdate: false })).status, 401);
@@ -252,6 +255,11 @@ test('POST/GET /api/settings/geoip/update: 503/unavailable without an updater; w
   const countryOnly = await call(app, 'post', '/api/settings/geoip/update', 'admin', { countryOnly: true });
   assert.equal(countryOnly.status, 202);
   assert.deepEqual(triggered, [{ includeAsn: true }, { includeAsn: false }]);
+  // includeCity overrides the Settings toggle for one run; anything but a boolean is ignored.
+  await call(app, 'post', '/api/settings/geoip/update', 'admin', { includeCity: false });
+  await call(app, 'post', '/api/settings/geoip/update', 'admin', { includeCity: 'yes' });
+  assert.deepEqual(triggered.slice(2), [{ includeAsn: true, includeCity: false }, { includeAsn: true }]);
+  triggered.length = 2;
 
   const st = await call(app, 'get', '/api/settings/geoip/update', 'viewer');
   assert.equal(st.status, 200);

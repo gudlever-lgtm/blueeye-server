@@ -32,7 +32,9 @@
     var ui = deps.ui;
 
     var SEV_TONE = { CRIT: 'crit', WARN: 'warn', INFO: 'info' };
-    var STATUS_TONE = { open: 'info', investigating: 'warn', resolved: 'ok', closed: 'neutral' };
+    // The same tones as the event page (views/event.js): an open event was
+    // blue in this list and red on its own page.
+    var STATUS_TONE = { open: 'crit', investigating: 'warn', resolved: 'ok', closed: 'neutral' };
     var SEV_RANK = { CRIT: 3, WARN: 2, INFO: 1 };
 
     // The event state machine, mirrored for the UI. It lives in

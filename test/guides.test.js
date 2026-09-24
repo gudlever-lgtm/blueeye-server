@@ -469,9 +469,10 @@ test('one version across the fleet reads as done', async (t) => {
 });
 
 test('a step never offers a screen the reader cannot open', async (t) => {
-  // Enrollment, Troubleshooting, Investigate and Topology delta are operator+.
-  // A viewer gets the screen named and greyed with the reason, not a button
-  // that would land them somewhere else.
+  // Enrollment, Investigate and Topology delta are operator+. A viewer gets the
+  // screen named and greyed with the reason, not a button that would land them
+  // somewhere else. Troubleshooting is open to viewers (with the operator-only
+  // panels left out), so it IS offered.
   const { doc } = await boot(t, { ...fullRoutes(), ...GENERAL_ROUTES }, 'viewer');
 
   await openGuide(doc, 'fleet');
@@ -485,8 +486,10 @@ test('a step never offers a screen the reader cannot open', async (t) => {
   await openGuide(doc, 'diagnostics');
   await click([...doc.querySelectorAll('#view .guide-stepper-btn')][4], 150); // → When it is a real outage
   labels = [...doc.querySelectorAll('#view .guide-actions button')].map((b) => b.textContent);
-  assert.deepEqual(labels, [], `a viewer was offered an operator-only screen: ${labels.join(' | ')}`);
-  assert.equal(doc.querySelectorAll('#view .guide-unavailable').length, 2, 'the two operator-only screens are not both named');
+  assert.deepEqual(labels, ['Open Troubleshooting'], `a viewer was offered an operator-only screen: ${labels.join(' | ')}`);
+  const refused = [...doc.querySelectorAll('#view .guide-unavailable')].map((n) => n.textContent);
+  assert.equal(refused.length, 1, 'Investigate is not named as operator-only');
+  assert.match(refused[0], /Investigate/);
 });
 
 test('an admin is offered those same screens as buttons', async (t) => {

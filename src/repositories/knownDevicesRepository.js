@@ -1,5 +1,7 @@
 'use strict';
 
+const { numOrNull } = require('../lib/num');
+
 // Data-access for `known_devices` (migration 131) — the new-device detector's
 // long memory of which MACs a site has ever had.
 //
@@ -14,8 +16,10 @@
 // Where a sighting counts as "known". A site when there is one — a device that
 // moves between two agents' view on the same site is not new — else the agent.
 function scopeKey({ siteId = null, agentId = null } = {}) {
-  if (siteId != null && Number.isFinite(Number(siteId))) return `site:${Number(siteId)}`;
-  if (agentId != null && Number.isFinite(Number(agentId))) return `agent:${Number(agentId)}`;
+  const site = numOrNull(siteId);
+  if (site != null) return `site:${site}`;
+  const agent = numOrNull(agentId);
+  if (agent != null) return `agent:${agent}`;
   return null;
 }
 

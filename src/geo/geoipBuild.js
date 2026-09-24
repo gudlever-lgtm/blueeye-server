@@ -165,6 +165,74 @@ async function buildFromSources({ country, asn = null, out, httpGet, source }) {
   return { rows, countryRanges: c.length, asnRanges: a.length };
 }
 
+// City table for placing traceroute hops (src/geo/cityProvider.js):
+//   start_ip,end_ip,country,lat,lng,city
+// from DB-IP "IP to City Lite", whose rows are
+//   ip_start,ip_end,continent,country,stateprov,city,latitude,longitude
+// IPv4 only. Consecutive rows that land on the same point are merged into one
+// range — the file is large, and the provider holds every range in memory.
+// Streams both ways: neither the source nor the output is ever held whole.
+// Returns { rows, sourceRows }.
+async function buildCityFromSource({ city, out, httpGet, source = 'DB-IP City Lite (CC-BY-4.0)' }) {
+  const stream = await openSource({ ...city, httpGet });
+  // The line iterator is taken NOW, before any await: readline starts reading
+  // as soon as it exists, and lines emitted before `for await` begins would be
+  // lost — the loop would then wait forever for a close it already missed.
+  const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
+  const lines = rl[Symbol.asyncIterator]();
+  const dir = path.dirname(path.resolve(out));
+  fs.mkdirSync(dir, { recursive: true });
+  const tmp = path.join(dir, `.geoip-city-${process.pid}-${Date.now()}.tmp`);
+  const ws = fs.createWriteStream(tmp);
+  const write = (s) => new Promise((res, rej) => { ws.write(s, (e) => (e ? rej(e) : res())); });
+  let rows = 0;
+  let sourceRows = 0;
+  let cur = null;
+  const flush = async () => {
+    if (!cur) return;
+    await write(`${intToIp(cur.lo)},${intToIp(cur.hi)},${cur.country},${cur.lat},${cur.lng},${csvCell(cur.city)}\n`);
+    rows += 1;
+  };
+  try {
+    await write(`# BlueEyes city GeoIP table — built ${new Date().toISOString()} from ${source}\n`);
+    await write('# format: start_ip,end_ip,country,lat,lng,city\n');
+    for await (const raw of lines) {
+      const line = raw.trim();
+      if (!line || line.startsWith('#')) continue;
+      const c = splitCsv(line);
+      const lo = ipv4ToInt(c[0]);
+      const hi = ipv4ToInt(c[1]);
+      if (lo === null || hi === null || hi < lo) continue; // IPv6 / header / junk
+      const country = String(c[3] || '').trim().toUpperCase();
+      const lat = Number(c[6]);
+      const lng = Number(c[7]);
+      if (!/^[A-Z]{2}$/.test(country) || !Number.isFinite(lat) || !Number.isFinite(lng)) continue;
+      sourceRows += 1;
+      const row = {
+        lo, hi, country,
+        lat: Math.round(lat * 10000) / 10000,
+        lng: Math.round(lng * 10000) / 10000,
+        city: String(c[5] || '').trim(),
+      };
+      if (cur && lo === cur.hi + 1 && row.country === cur.country && row.lat === cur.lat && row.lng === cur.lng && row.city === cur.city) {
+        cur.hi = hi;
+        continue;
+      }
+      await flush(); // eslint-disable-line no-await-in-loop
+      cur = row;
+    }
+    await flush();
+    await new Promise((res, rej) => ws.end((err) => (err ? rej(err) : res())));
+    fs.renameSync(tmp, out);
+    return { rows, sourceRows };
+  } catch (e) {
+    ws.destroy();
+    stream.destroy();
+    try { fs.unlinkSync(tmp); } catch { /* nothing to clean up */ }
+    throw e;
+  }
+}
+
 const DEFAULT_DBIP_BASE = 'https://download.db-ip.com/free';
 const pad2 = (n) => String(n).padStart(2, '0');
 const ym = (d) => `${d.getUTCFullYear()}-${pad2(d.getUTCMonth() + 1)}`;
@@ -175,6 +243,7 @@ function dbipUrls(baseUrl, month) {
   return {
     country: `${b}/dbip-country-lite-${month}.csv.gz`,
     asn: `${b}/dbip-asn-lite-${month}.csv.gz`,
+    city: `${b}/dbip-city-lite-${month}.csv.gz`,
   };
 }
 
@@ -188,5 +257,5 @@ function monthCandidates(now = new Date()) {
 
 module.exports = {
   ipv4ToInt, splitCsv, intToIp, csvCell, openSource, loadRanges, joinCountryAsn,
-  writeCsv, buildFromSources, dbipUrls, monthCandidates, DEFAULT_DBIP_BASE,
+  writeCsv, buildFromSources, buildCityFromSource, dbipUrls, monthCandidates, DEFAULT_DBIP_BASE,
 };

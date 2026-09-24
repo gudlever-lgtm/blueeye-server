@@ -311,8 +311,8 @@ test('the negotiated duplex rides in the Link column and the named reasons sit u
   await settle();
   assert.deepEqual(errors, []);
   const row = (n) => rows(doc).find((tr) => tr.querySelector('td').textContent.trim() === n);
-  assert.match(row('eth1').textContent, /100 Mb\/s · half duplex · up/);
+  assert.match(row('eth1').textContent, /100 Mbit\/s · half duplex · up/);
   assert.match(row('eth1').textContent, /duplex mismatch suspected/);
   assert.match(row('eth1').textContent, /NIC FIFO overruns/);
-  assert.match(row('eth0').textContent, /1 Gb\/s · full duplex · up/);
+  assert.match(row('eth0').textContent, /1 Gbit\/s · full duplex · up/);
 });

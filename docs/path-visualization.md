@@ -76,18 +76,24 @@ dashboard Probes tab  ←  GET /api/probes/path  ←  buildPathGraph()  ←─�
 ### Geographic map
 
 The same path can be plotted on the **Destinations** map (Leaflet, EU/self-hosted
-tiles via `GET /api/map/config`). Each node's `lat/lng` comes from its country
-centroid; the **source** node is anchored at the agent's site
+tiles via `GET /api/map/config`). Each node's `lat/lng` comes from
+`src/geo/hopLocation.js`: the router's PTR name when it names a city
+(`ae3.cph-bb1.telia.net` → Copenhagen), else city GeoIP, else the country
+centroid — each checked against the hop's fastest RTT, so a hop is never drawn
+somewhere its reply was too fast to come from (see `docs/geo.md` → "Traceroute
+hops"). The **source** node is anchored at the agent's site
 (`locations.latitude/longitude`, surfaced on `agentsRepo.findById` as
 `location_lat/location_lng` and passed to `buildPathGraph` as `origin`).
 
 `pathGraph()` adds a lazily-built "Geographic map" panel (`drawPathMap()`):
-`pathGeoStops()` collapses consecutive hops sharing a centroid into one stop, then
+`pathGeoStops()` collapses consecutive hops sharing a coordinate into one stop, then
 it draws a polyline (each segment coloured by the downstream stop's severity)
-through circle markers, with a per-stop popup (hops · ASN · latency · loss). Since
-geo precision is country-level by design, same-country hops stack on one stop — the
-per-hop precision stays in the topology graph; the map answers "which countries did
-the traffic cross, and where did it degrade?". When there aren't at least two
+through circle markers, with a per-stop popup (hops · hostname · ASN · latency ·
+loss). Consecutive hops placed in the same city stack on one stop (hops known only to their country
+still stack on the country centroid, drawn hollow with a dashed ring). The popup
+names the city, how it was found (router name, city GeoIP, country only) and each
+hop's hostname. Hops ruled out by the RTT check (anycast, mostly) are listed under
+the map instead of drawn in the wrong place. When there aren't at least two
 geolocated stops (no GeoIP DB, or all-private hops) the panel explains why.
 
 The same overlay is also reachable **from the Destinations tab**, where several
@@ -98,8 +104,8 @@ traces can sit on the map at once:
 - **Trace now** always runs a new trace and draws it **while it runs**: agent
   0.38+ sends a `trace_hop` frame over `/ws/agent` for every hop the moment the
   traceroute binary prints it; the server geolocates it (`describeLiveHop` in
-  `analysis/pathGraph.js` — public addresses only, country centroid, same rule
-  as the finished graph) and relays it to the dashboard socket as `trace-hop`.
+  `analysis/pathGraph.js` — public addresses only, router name → city GeoIP →
+  country with the RTT check, same rule as the finished graph) and relays it to the dashboard socket as `trace-hop`.
   Nothing is stored per hop — the submitted run is the record.
 - When a traceroute/tcptraceroute result is stored (`POST /agents/probe-results`)
   the server sends `probe-result` to the dashboard, so the finished path draws
@@ -236,5 +242,7 @@ derivation over the hops already stored:
 - **Privacy.** RFC1918 / private hop IPs are never geolocated. Metadata only —
   IPs, ASN, timings; never payload.
 - **Geo is offline + EU.** Enrichment uses the local GeoIP/ASN provider
-  (`src/geo/provider.js`, DB-IP Lite) and country centroids — no US SDK, no
-  network call, country precision only (see [geo.md](geo.md)).
+  (`src/geo/provider.js`, DB-IP Lite), the router's own PTR name (looked up by
+  the agent), DB-IP City Lite and country centroids — no US SDK, no network call
+  on the server. City precision where the router name or city GeoIP gives it and
+  the RTT allows it, country otherwise (see [geo.md](geo.md)).

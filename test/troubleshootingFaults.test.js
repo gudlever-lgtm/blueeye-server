@@ -215,9 +215,15 @@ test('401 without a token', async () => {
   assert.equal((await request(appFor({ findingStore, clustersRepo })).get(FAULTS_PATH)).status, 401);
 });
 
-test('403 for a viewer — the detail of an operator-gated number stays operator-gated', async () => {
+test('200 for a viewer — the finding rows are viewer+ under /api/findings too', async () => {
   const { findingStore, clustersRepo } = await seed();
   const res = await request(appFor({ findingStore, clustersRepo })).get(FAULTS_PATH).set('Authorization', authHeader('viewer'));
+  assert.equal(res.status, 200);
+});
+
+test('403 for a token with no recognised role', async () => {
+  const { findingStore, clustersRepo } = await seed();
+  const res = await request(appFor({ findingStore, clustersRepo })).get(FAULTS_PATH).set('Authorization', authHeader('guest'));
   assert.equal(res.status, 403);
 });
 

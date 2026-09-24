@@ -9,7 +9,7 @@ const request = require('supertest');
 
 const { makeApp, makeSettingsService, authHeader } = require('../test-support/fakes');
 const { createDispatcher } = require('../src/analysis/alerting/dispatcher');
-const { createSilencer, isWindowActive } = require('../src/analysis/alerting/maintenance');
+const { createSilencer, isWindowActive, windowMatches } = require('../src/analysis/alerting/maintenance');
 
 const NOW = () => Date.parse('2026-06-02T12:00:00Z');
 const span = { from: '2026-06-02T11:00:00Z', to: '2026-06-02T13:00:00Z' };
@@ -35,6 +35,38 @@ test('createSilencer matches global / agent / location scopes', async () => {
 
   const expired = createSilencer({ getWindows: async () => [{ id: 'x', scope: 'global', from: '2026-06-01T00:00:00Z', to: '2026-06-01T01:00:00Z' }], now: NOW });
   assert.equal(await expired({ hostId: 5 }), null);
+});
+
+test('windowMatches is the one scope rule, and createSilencer agrees with it', async () => {
+  const cases = [
+    [{ scope: 'global' }, { agentId: 5, locationId: null }, true],
+    [{ scope: 'agent', targetId: 5 }, { agentId: '5', locationId: null }, true], // id type does not matter
+    [{ scope: 'agent', targetId: 5 }, { agentId: 6, locationId: null }, false],
+    [{ scope: 'location', targetId: 2 }, { agentId: 5, locationId: 2 }, true],
+    [{ scope: 'location', targetId: 2 }, { agentId: 5, locationId: null }, false], // unknown location never matches
+    [{ scope: 'location', targetId: 2 }, { agentId: 5, locationId: 9 }, false],
+    [{ scope: 'site', targetId: 2 }, { agentId: 5, locationId: 2 }, false], // unknown scope
+  ];
+  for (const [w, who, expected] of cases) {
+    assert.equal(windowMatches(w, who), expected, JSON.stringify([w, who]));
+    const silencer = createSilencer({
+      getWindows: async () => [{ id: 'w', ...w, ...span }],
+      getAgentLocationId: async () => who.locationId,
+      now: NOW,
+    });
+    assert.equal(Boolean(await silencer({ hostId: who.agentId })), expected, `silencer ${JSON.stringify([w, who])}`);
+  }
+});
+
+test('createSilencer only looks up the location when a location window is active', async () => {
+  let lookups = 0;
+  const getAgentLocationId = async () => { lookups += 1; return 2; };
+  const agentOnly = createSilencer({ getWindows: async () => [{ id: 'a', scope: 'agent', targetId: 5, ...span }], getAgentLocationId, now: NOW });
+  await agentOnly({ hostId: 6 });
+  assert.equal(lookups, 0);
+  const withLoc = createSilencer({ getWindows: async () => [{ id: 'l', scope: 'location', targetId: 2, ...span }], getAgentLocationId, now: NOW });
+  assert.ok(await withLoc({ hostId: 6 }));
+  assert.equal(lookups, 1);
 });
 
 test('dispatcher suppresses a silenced finding (still no notification, no throttle)', async () => {

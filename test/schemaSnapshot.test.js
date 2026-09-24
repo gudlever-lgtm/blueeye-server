@@ -153,6 +153,17 @@ test('no two foreign keys in the snapshot share a constraint name', () => {
   assert.deepEqual(clashes, [], 'a foreign key constraint name is reused — MySQL refuses the second one');
 });
 
+test('a foreign key added behind a TABLE_CONSTRAINTS guard reaches the snapshot', () => {
+  // Migration 123 adds its FK behind IF(EXISTS(… information_schema.TABLE_CONSTRAINTS …))
+  // so the migration can be re-run. The builder must evaluate that guard the way
+  // MySQL does (constraint absent → apply) instead of refusing it or skipping it.
+  const table = buildModel().tables.get('blueeye_nis2_incidents');
+  assert.ok(table, 'blueeye_nis2_incidents exists');
+  const fk = table.keys.find((k) => k.name === 'fk_nis2_incidents_event_case');
+  assert.ok(fk, 'the guarded constraint is modelled');
+  assert.match(fk.def, /FOREIGN KEY \(event_case_id\) REFERENCES event_cases \(id\) ON DELETE SET NULL/);
+});
+
 test('the retired incident_* vocabulary is gone from the snapshot', () => {
   // Migration 077 renamed these; the snapshot must show the renamed world, not
   // the pre-077 one, and its foreign keys must point at the new names.

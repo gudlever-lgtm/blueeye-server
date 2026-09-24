@@ -49,3 +49,31 @@ test('classifyAsn returns null for unknown or invalid ASNs', () => {
   assert.equal(classifyAsn(0, index), null);
   assert.equal(classifyAsn(null, index), null);
 });
+
+test('the Industrial / OT category classifies the ICS protocol ports', () => {
+  const index = buildIndex(DEFAULT_CATEGORIES);
+  const ot = DEFAULT_CATEGORIES.find((c) => c.id === 'ot');
+  assert.equal(ot.label, 'Industrial / OT');
+  assert.equal(ot.kind, 'port');
+  for (const p of [102, 502, 2404, 4840, 20000, 34962, 44818, 47808]) {
+    assert.equal(classifyPort(p, index), 'ot', `port ${p}`);
+  }
+});
+
+test('ports that would cry wolf are deliberately NOT in the OT category', () => {
+  const index = buildIndex(DEFAULT_CATEGORIES);
+  assert.equal(classifyPort(2222, index), null); // alternate SSH far more often than EtherNet/IP I/O
+  assert.equal(classifyPort(1883, index), null); // MQTT: general IoT/cloud messaging
+  assert.equal(classifyPort(8883, index), null);
+});
+
+test('every OT category port has a service name, so an OT edge never reads as a bare number', () => {
+  const { serviceForPort } = require('../services');
+  const ot = DEFAULT_CATEGORIES.find((c) => c.id === 'ot');
+  for (const p of ot.ports) assert.ok(serviceForPort(p), `port ${p} has no service name`);
+});
+
+test('category ids are unique', () => {
+  const ids = DEFAULT_CATEGORIES.map((c) => c.id);
+  assert.equal(new Set(ids).size, ids.length);
+});

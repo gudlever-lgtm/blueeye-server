@@ -12,6 +12,10 @@ function createPurge({ repo, config, now = () => new Date() }) {
     const findingCut = new Date(t - config.findingRetentionDays * DAY_MS);
     const flowRollups = await repo.purgeFlowRollupsBefore(rollupCut);
     const metricRollups = await repo.purgeMetricRollupsBefore(rollupCut);
+    // The internal (LAN/OT) flow rollup shares the rollup window. Guarded like
+    // the dimensions below.
+    const internalFlowRollups = typeof repo.purgeInternalFlowRollupsBefore === 'function'
+      ? await repo.purgeInternalFlowRollupsBefore(rollupCut) : 0;
     const findings = await repo.purgeAckedFindingsBefore(findingCut);
     // Raw device-config snapshots. Guarded so a repo/config without this
     // dimension (older wiring / tests) simply skips it.
@@ -40,11 +44,16 @@ function createPurge({ repo, config, now = () => new Date() }) {
     // dimensions above.
     let fdbEntries = 0;
     let snmpNeighbors = 0;
+    let deviceVlans = 0;
     if (config.fdbRetentionDays && typeof repo.purgeFdbEntriesBefore === 'function') {
       const cut = new Date(t - config.fdbRetentionDays * DAY_MS);
       fdbEntries = await repo.purgeFdbEntriesBefore(cut);
       if (typeof repo.purgeSnmpNeighborsBefore === 'function') {
         snmpNeighbors = await repo.purgeSnmpNeighborsBefore(cut);
+      }
+      // VLAN names label the forwarding table and age with it.
+      if (typeof repo.purgeDeviceVlansBefore === 'function') {
+        deviceVlans = await repo.purgeDeviceVlansBefore(cut);
       }
     }
     // Burst runs. A burst is a deliberate measurement rather than a stream, so
@@ -79,7 +88,30 @@ function createPurge({ repo, config, now = () => new Date() }) {
         interfaceStates = await repo.purgeInterfaceStatesBefore(cut);
       }
     }
-    return { flowRollups, metricRollups, findings, configSnapshots, arpEntries, deviceEvents, fdbEntries, snmpNeighbors, burstRuns, deviceCounters, deviceInterfaces, interfaceTransitions, interfaceStates };
+    // Measurement history, change records and stale inventory that used to
+    // grow forever. One table each, each on its own window (see config.js),
+    // each guarded like the dimensions above; a window of 0 (or unset) keeps
+    // that table as it is.
+    const byAge = async (days, method) => {
+      if (!days || typeof repo[method] !== 'function') return 0;
+      return repo[method](new Date(t - days * DAY_MS));
+    };
+    // The MAC moves the loop detector counts (migration 117): their own short window.
+    const fdbMoves = await byAge(config.fdbMoveRetentionDays, 'purgeFdbMovesBefore');
+    const probeResults = await byAge(config.probeResultRetentionDays, 'purgeProbeResultsBefore');
+    const probeOutages = await byAge(config.probeOutageRetentionDays, 'purgeResolvedProbeOutagesBefore');
+    const speedtestResults = await byAge(config.speedtestRetentionDays, 'purgeSpeedtestResultsBefore');
+    const transactionResults = await byAge(config.transactionResultRetentionDays, 'purgeTransactionResultsBefore');
+    const topologyChanges = await byAge(config.topologyChangeRetentionDays, 'purgeTopologyChangesBefore');
+    const discoveredDevices = await byAge(config.discoveredDeviceRetentionDays, 'purgeStaleDiscoveredDevicesBefore');
+    const hostConnections = await byAge(config.hostConnectionRetentionDays, 'purgeHostConnectionsBefore');
+    const auditEvents = await byAge(config.auditEventRetentionDays, 'purgeAuditEventsBefore');
+    return {
+      flowRollups, metricRollups, internalFlowRollups, findings, configSnapshots, arpEntries, deviceEvents,
+      fdbEntries, snmpNeighbors, deviceVlans, fdbMoves, burstRuns, deviceCounters, deviceInterfaces, interfaceTransitions, interfaceStates,
+      probeResults, probeOutages, speedtestResults, transactionResults, topologyChanges, discoveredDevices,
+      hostConnections, auditEvents,
+    };
   }
 
   return { purgeExpired };

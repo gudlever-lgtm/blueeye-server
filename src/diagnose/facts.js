@@ -20,6 +20,8 @@
 // returns unknown, and unknown is the honest answer for a test that did not run.
 // A zero would be a lie that reads as a verdict.
 
+const { subnetKey } = require('./addr');
+
 // `*` is a single dynamic segment: `ping.size_*.loss_pct` covers size_64,
 // size_1472 and whatever else an operator asks for.
 const FACT_SCHEMA = [
@@ -40,6 +42,11 @@ const FACT_SCHEMA = [
   // The path itself.
   'traceroute.ok', 'traceroute.hop_count', 'traceroute.branch_count',
   'traceroute.sustained_loss_from_hop', 'traceroute.worst_hop_loss_pct',
+  // A member of an ECMP group that answered in the earlier runs and has gone
+  // quiet while loss rose (ecmpAnalysis in src/analysis/pathGraph.js). The
+  // missing address IS the evidence, so it is a fact of its own.
+  'traceroute.lost_member_count', 'traceroute.lost_member_hop', 'traceroute.lost_member_ips',
+  'traceroute.lost_member_explain',
   // The other protocol probes.
   'dns.ok', 'dns.rtt_ms', 'dns.loss_pct',
   'http.ok', 'http.status', 'http.rtt_ms',
@@ -56,6 +63,7 @@ const FACT_SCHEMA = [
   'reverse.ping.ok', 'reverse.ping.loss_pct', 'reverse.ping.rtt_ms',
   'reverse.traceroute.ok', 'reverse.traceroute.hop_count',
   'path_compare.compared', 'path_compare.same_hops',
+  'path_compare.matched_hops', 'path_compare.match_ratio', 'path_compare.exact_matches',
 ];
 
 // Does `path` match the schema, allowing `*` to stand for one segment?
@@ -178,18 +186,59 @@ function sustainedLossFromHop(hops, { threshold = 5 } = {}) {
   return 0;
 }
 
-function tracerouteFacts(r, { branchCount } = {}) {
+// How many members answered at the widest hop of ONE run, from the per-hop
+// `ips` lists. Undefined when the agent did not send the lists: an older agent
+// reports one address per hop whatever the path looks like, so its "1" is not a
+// measurement of a single path — reading it as one is how ECMP used to be ruled
+// out on every trace.
+function withinRunBranches(hops) {
+  if (!hops.some((h) => h && Array.isArray(h.ips))) return undefined;
+  return hops.reduce((max, h) => {
+    const set = new Set([...(h && h.ip ? [h.ip] : []), ...(h && Array.isArray(h.ips) ? h.ips : [])].filter(Boolean));
+    return Math.max(max, set.size);
+  }, 1);
+}
+
+// A traceroute's facts. The ECMP half comes from the path graph's analysis
+// (`ecmp` = ecmpAnalysis() over this run and the recent runs before it), which
+// is where branches are computed — recomputing them here would be a second,
+// quietly different answer to the same question. `branchCount` is the older,
+// plain-number form of the same input and is still honoured.
+//
+// branch_count is only stated when it was MEASURED: a fork seen anywhere is a
+// fork; "one path" needs either the agent's own per-hop member lists or at
+// least MIN_RUNS_FOR_SINGLE_PATH earlier runs that all agreed.
+const MIN_RUNS_FOR_SINGLE_PATH = 2;
+
+function tracerouteFacts(r, { branchCount, ecmp } = {}) {
   const hops = Array.isArray(r.hops) ? r.hops : [];
   const losses = hops.map((h) => num(h && h.lossPct)).filter((v) => v !== undefined);
+  const inRun = withinRunBranches(hops);
+  let branches;
+  let lost = {};
+  if (ecmp && typeof ecmp === 'object') {
+    const n = num(ecmp.branchCount);
+    if (n !== undefined && (n > 1 || inRun !== undefined || (ecmp.runsCompared || 0) >= MIN_RUNS_FOR_SINGLE_PATH)) branches = n;
+    if ((ecmp.runsCompared || 0) > 0) {
+      const list = Array.isArray(ecmp.lostMembers) ? ecmp.lostMembers : [];
+      lost = {
+        // Zero is a real answer: there WAS history, and no member went missing.
+        lost_member_count: list.length,
+        lost_member_hop: list.length ? num(list[0].hop) : undefined,
+        lost_member_ips: list.length ? list.flatMap((m) => m.missingIps || []).join(', ') : undefined,
+        lost_member_explain: list.length ? list.map((m) => m.explain).join(' ') : undefined,
+      };
+    }
+  } else {
+    branches = num(branchCount) ?? inRun;
+  }
   return defined({
     ok: typeof r.ok === 'boolean' ? r.ok : undefined,
     hop_count: hops.length || undefined,
-    // How many parallel paths the trace saw. Supplied by the caller from the
-    // path graph, which is where ECMP branches are already computed — recomputing
-    // them here would be a second, quietly different answer to the same question.
-    branch_count: num(branchCount),
+    branch_count: branches,
     sustained_loss_from_hop: sustainedLossFromHop(hops),
     worst_hop_loss_pct: losses.length ? Math.max(...losses) : undefined,
+    ...lost,
   });
 }
 
@@ -238,18 +287,69 @@ function ifaceFacts(interfaces) {
   });
 }
 
-// Do the two directions traverse the same hops? Only answerable when both
+// How much of the two paths must line up before they are called "the same".
+// Not 100%: a router that answers one direction and rate-limits the other, or
+// one silent hop, must not turn a symmetric path into a confirmed asymmetry.
+const SAME_PATH_RATIO = 0.6;
+
+// Do the two directions traverse the same routers? Only answerable when both
 // traces actually returned hops; `compared` says whether the question was even
 // asked, so a rule can tell "the paths differ" from "nobody looked".
+//
+// WHY NOT RAW ADDRESS OVERLAP. A router answers a traceroute from the interface
+// the probe ARRIVED on. Going out, router R answers from the side facing the
+// origin; coming back, from the side facing the far end. So a perfectly
+// symmetric path shows two DIFFERENT address lists, and comparing them address
+// by address confirmed "asymmetric" on nearly every path.
+//
+// What this does instead, and why each step:
+//   1. drops the endpoints — the far end is the forward target and the origin is
+//      the reverse target; they are hosts, not routers on the path;
+//   2. reverses the reverse trace, so both lists run origin → far end;
+//   3. matches a hop pair when the address is the same OR both sit in the same
+//      /24 (IPv4) or /64 (IPv6): the two ends of a router-to-router link are
+//      numbered from one small subnet, so R's two interfaces on the link it
+//      shares with its neighbour land in the same /24;
+//   4. counts the longest run of matches IN ORDER (LCS), so one shared /24 at
+//      each end cannot make two different middles look alike;
+//   5. calls it the same path when ≥ SAME_PATH_RATIO of the shorter path's
+//      hops line up.
+//
+// LIMITS, carried in the result as `method`: a provider numbering links from a
+// shared /24 pool matches more than it should, and links numbered from
+// unrelated subnets on each side match less; the forward target is assumed to
+// sit at (or next to) the far-end agent — if it does not, the two traces cover
+// different stretches and the comparison says so by not matching.
 function comparePaths(forward, reverse) {
-  const a = (forward && Array.isArray(forward.hops) ? forward.hops : []).map((h) => h && h.ip).filter(Boolean);
-  const b = (reverse && Array.isArray(reverse.hops) ? reverse.hops : []).map((h) => h && h.ip).filter(Boolean);
+  const ipsOf = (r) => (r && Array.isArray(r.hops) ? r.hops : []).map((h) => h && h.ip).filter(Boolean);
+  const dropEnd = (list, end) => (end && list.length && list[list.length - 1] === end ? list.slice(0, -1) : list);
+  const a = dropEnd(ipsOf(forward), forward && forward.target);
+  const b = dropEnd(ipsOf(reverse), reverse && reverse.target).slice().reverse();
   if (a.length === 0 || b.length === 0) return { compared: false };
+
+  const keyOf = (ip) => subnetKey(ip);
+  const match = (x, y) => x === y || (keyOf(x) !== null && keyOf(x) === keyOf(y));
+  // LCS over the two ordered hop lists, with `match` as equality.
+  const dp = Array.from({ length: a.length + 1 }, () => new Array(b.length + 1).fill(0));
+  for (let i = 1; i <= a.length; i += 1) {
+    for (let j = 1; j <= b.length; j += 1) {
+      dp[i][j] = match(a[i - 1], b[j - 1]) ? dp[i - 1][j - 1] + 1 : Math.max(dp[i - 1][j], dp[i][j - 1]);
+    }
+  }
+  const matched = dp[a.length][b.length];
   const setB = new Set(b);
-  // The reverse trace walks the path backwards, so order proves nothing; what
-  // matters is whether the two directions visit the same routers at all.
-  const overlap = a.filter((ip) => setB.has(ip)).length;
-  return { compared: true, same_hops: overlap >= Math.min(a.length, b.length) };
+  const exact = a.filter((ip) => setB.has(ip)).length;
+  const ratio = Math.round((matched / Math.min(a.length, b.length)) * 100) / 100;
+  return {
+    compared: true,
+    same_hops: ratio >= SAME_PATH_RATIO,
+    matched_hops: matched,
+    exact_matches: exact,
+    match_ratio: ratio,
+    forward_hops: a.length,
+    reverse_hops: b.length,
+    method: `reverse trace reversed; hops matched in order by same address or same /24 (IPv4) / /64 (IPv6); same path when >= ${Math.round(SAME_PATH_RATIO * 100)}% of the shorter path lines up`,
+  };
 }
 
 // Builds the fact object a playbook's rules are evaluated against.
@@ -257,8 +357,10 @@ function comparePaths(forward, reverse) {
 //   results  — probe results from the session's own agent, newest wins
 //   reverse  — the same from the far-end agent, when there is one
 //   interfaces — computeInterfaceHealth() output for the session's agent
-//   branchCounts — { [probeType]: n } from the path graph, for ECMP
-function buildFacts({ results = [], reverse = [], interfaces = null, branchCounts = {} } = {}) {
+//   branchCounts — { [probeType]: n } from the path graph, for ECMP (older form)
+//   ecmp     — { [probeType]: ecmpAnalysis() } from the path graph: branches
+//              across this run and the recent runs, and any member that died
+function buildFacts({ results = [], reverse = [], interfaces = null, branchCounts = {}, ecmp = {} } = {}) {
   const facts = {};
   const take = (rows, into) => {
     for (const r of Array.isArray(rows) ? rows : []) {
@@ -269,14 +371,22 @@ function buildFacts({ results = [], reverse = [], interfaces = null, branchCount
       // that ran the same probe twice means the operator re-ran it: the later
       // answer is the one they are looking at.
       if (into[r.type] !== undefined) continue;
-      const v = shape(r, { branchCount: branchCounts[r.type] });
+      const v = shape(r, { branchCount: branchCounts && branchCounts[r.type], ecmp: ecmp && ecmp[r.type] });
       if (hasAny(v)) into[r.type] = v;
     }
   };
   take(results, facts);
 
   const rev = {};
-  take(reverse, rev);
+  // The reverse direction has no history of its own here; its ECMP is not read.
+  const takeReverse = (rows) => {
+    for (const r of Array.isArray(rows) ? rows : []) {
+      if (!r || typeof r.type !== 'string' || !SHAPERS[r.type] || rev[r.type] !== undefined) continue;
+      const v = SHAPERS[r.type](r, {});
+      if (hasAny(v)) rev[r.type] = v;
+    }
+  };
+  takeReverse(reverse);
   if (hasAny(rev)) facts.reverse = rev;
 
   const iface = ifaceFacts(interfaces);
@@ -302,4 +412,4 @@ function readFact(facts, path) {
   return cur === null ? undefined : cur;
 }
 
-module.exports = { buildFacts, readFact, isKnownFactPath, sustainedLossFromHop, comparePaths, ifaceFacts, FACT_SCHEMA };
+module.exports = { buildFacts, readFact, isKnownFactPath, sustainedLossFromHop, comparePaths, ifaceFacts, FACT_SCHEMA, SAME_PATH_RATIO, MIN_RUNS_FOR_SINGLE_PATH };

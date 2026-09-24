@@ -41,6 +41,7 @@ const HOST_MAX = 255;
 const NAME_MAX = 255;
 const COMMUNITY_MAX = 128;
 const IFNAME_MAX = 64;
+const SYSDESCR_MAX = 255;
 
 const MIN_INTERVAL_SEC = 60;
 const MAX_INTERVAL_SEC = 86400;
@@ -343,6 +344,10 @@ function validateDeviceTopology(raw) {
 
   return {
     deviceId,
+    // SNMPv2-MIB sysDescr — what the device says it is (model, OS, firmware).
+    // Optional: an agent older than migration 116 does not send it, and null
+    // is what makes the ingest keep the one it already has rather than erase it.
+    sysDescr: str(raw.sysDescr, SYSDESCR_MAX),
     fdb,
     fdbSkipped,
     fdbTruncated: !!raw.fdbTruncated,

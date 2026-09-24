@@ -34,6 +34,16 @@ function mapRow(row) {
     notificationRequired: !!row.notification_required,
     status: row.status,
     lessonsLearned: row.lessons_learned ?? null,
+    // Art. 23(4) fields and the submission record (migration 122).
+    suspectedMalicious: !!row.suspected_malicious,
+    crossBorderImpact: !!row.cross_border_impact,
+    crossBorderDetails: row.cross_border_details ?? null,
+    authorityReference: row.authority_reference ?? null,
+    earlyWarningSubmittedAt: toIso(row.early_warning_submitted_at),
+    notificationSubmittedAt: toIso(row.notification_submitted_at),
+    finalReportSubmittedAt: toIso(row.final_report_submitted_at),
+    // The event case this incident was drafted from (migration 123), or null.
+    eventCaseId: row.event_case_id == null ? null : Number(row.event_case_id),
     createdAt: toIso(row.created_at),
     updatedAt: toIso(row.updated_at),
   };
@@ -41,7 +51,10 @@ function mapRow(row) {
 
 const COLS = `id, incident_id, title, severity, detected_at, started_at, resolved_at,
   affected_systems, business_impact, root_cause, actions_taken, nis2_relevant,
-  notification_required, status, lessons_learned, created_at, updated_at`;
+  notification_required, status, lessons_learned,
+  suspected_malicious, cross_border_impact, cross_border_details, authority_reference,
+  early_warning_submitted_at, notification_submitted_at, final_report_submitted_at,
+  event_case_id, created_at, updated_at`;
 
 // Data-access for `blueeye_nis2_incidents` (NIS2 security incidents — distinct
 // from the probe-derived network `probe_outages`). A human reference INC-YYYY-NNNN
@@ -83,39 +96,74 @@ function createNis2IncidentsRepository(db) {
     return mapRow(rows[0]) ?? null;
   }
 
+  // The Art. 23 columns (migration 122), in one place so create and update
+  // bind them identically. Every caller that predates them (the cluster and
+  // investigation drafts) passes none, which reads as "not suspected, nothing
+  // submitted" — exactly what a fresh draft is.
+  const art23 = (input) => [
+    input.suspectedMalicious ? 1 : 0,
+    input.crossBorderImpact ? 1 : 0,
+    input.crossBorderDetails ?? null,
+    input.authorityReference ?? null,
+    toMysqlDateTime(input.earlyWarningSubmittedAt),
+    toMysqlDateTime(input.notificationSubmittedAt),
+    toMysqlDateTime(input.finalReportSubmittedAt),
+  ];
+
   async function create(input) {
     const ref = await nextRef();
     const [res] = await pool.query(
       `INSERT INTO blueeye_nis2_incidents
          (incident_id, title, severity, detected_at, started_at, resolved_at,
           affected_systems, business_impact, root_cause, actions_taken,
-          nis2_relevant, notification_required, status, lessons_learned)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          nis2_relevant, notification_required, status, lessons_learned,
+          suspected_malicious, cross_border_impact, cross_border_details, authority_reference,
+          early_warning_submitted_at, notification_submitted_at, final_report_submitted_at,
+          event_case_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         ref, input.title, input.severity, toMysqlDateTime(input.detectedAt), toMysqlDateTime(input.startedAt),
         toMysqlDateTime(input.resolvedAt), input.affectedSystems ?? null, input.businessImpact ?? null,
         input.rootCause ?? null, input.actionsTaken ?? null, input.nis2Relevant ? 1 : 0,
         input.notificationRequired ? 1 : 0, input.status, input.lessonsLearned ?? null,
+        ...art23(input),
+        input.eventCaseId ?? null,
       ]
     );
     return findById(res.insertId);
   }
 
+  // A full replace of the editable fields. `event_case_id` is deliberately NOT
+  // among them: the link is made once, by the from-event-case draft, and an
+  // edit form that does not carry it must not be able to sever it.
   async function update(id, input) {
     await pool.query(
       `UPDATE blueeye_nis2_incidents SET
          title = ?, severity = ?, detected_at = ?, started_at = ?, resolved_at = ?,
          affected_systems = ?, business_impact = ?, root_cause = ?, actions_taken = ?,
-         nis2_relevant = ?, notification_required = ?, status = ?, lessons_learned = ?
+         nis2_relevant = ?, notification_required = ?, status = ?, lessons_learned = ?,
+         suspected_malicious = ?, cross_border_impact = ?, cross_border_details = ?, authority_reference = ?,
+         early_warning_submitted_at = ?, notification_submitted_at = ?, final_report_submitted_at = ?
        WHERE id = ?`,
       [
         input.title, input.severity, toMysqlDateTime(input.detectedAt), toMysqlDateTime(input.startedAt),
         toMysqlDateTime(input.resolvedAt), input.affectedSystems ?? null, input.businessImpact ?? null,
         input.rootCause ?? null, input.actionsTaken ?? null, input.nis2Relevant ? 1 : 0,
-        input.notificationRequired ? 1 : 0, input.status, input.lessonsLearned ?? null, id,
+        input.notificationRequired ? 1 : 0, input.status, input.lessonsLearned ?? null,
+        ...art23(input), id,
       ]
     );
     return findById(id);
+  }
+
+  // The NIS2 incidents already drafted from one event case, newest first — so
+  // the case page can link to its record instead of drafting a second one.
+  async function findByEventCase(eventCaseId) {
+    const [rows] = await pool.query(
+      `SELECT ${COLS} FROM blueeye_nis2_incidents WHERE event_case_id = ? ORDER BY id DESC`,
+      [eventCaseId]
+    );
+    return rows.map(mapRow);
   }
 
   async function remove(id) {
@@ -123,7 +171,7 @@ function createNis2IncidentsRepository(db) {
     return res.affectedRows > 0;
   }
 
-  return { findAll, findById, create, update, remove, nextRef };
+  return { findAll, findById, findByEventCase, create, update, remove, nextRef };
 }
 
 module.exports = { createNis2IncidentsRepository, mapRow };

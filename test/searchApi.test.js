@@ -107,6 +107,33 @@ test('GET /api/search returns 400 for an out-of-range limit', async () => {
   assert.equal((await search(app, 'aarhus', 'viewer', '&limit=5')).status, 200);
 });
 
+// ---------------------------------------------------------------- rate limit
+// server.js hands createApp a per-user searchRateLimiter; createApp used to drop
+// it on the floor (only enrollRateLimiter was forwarded), so the router got
+// null and the throttle was a no-op in production.
+test('createApp forwards searchRateLimiter: 429 once the limit is spent', async () => {
+  const { createRateLimiter } = require('../src/middleware/rateLimit');
+  const searchRateLimiter = createRateLimiter({
+    windowMs: 60 * 1000, max: 2,
+    keyFn: (req) => `search:${(req.user && req.user.id) || req.ip || 'anon'}`,
+  });
+  const app = appWith({ searchRateLimiter });
+  assert.equal((await search(app, 'aarhus')).status, 200);
+  assert.equal((await search(app, 'aarhus')).status, 200);
+  const third = await search(app, 'aarhus');
+  assert.equal(third.status, 429);
+  assert.ok(third.headers['retry-after'], 'says when to come back');
+});
+
+test('the limiter runs after auth: an unauthenticated call is 401, not counted', async () => {
+  let hits = 0;
+  const app = appWith({ searchRateLimiter: (req, res, next) => { hits += 1; next(); } });
+  assert.equal((await request(app).get('/api/search?q=aarhus')).status, 401);
+  assert.equal(hits, 0);
+  assert.equal((await search(app, 'aarhus')).status, 200);
+  assert.equal(hits, 1);
+});
+
 // ------------------------------------------------------------------- 200 shape
 test('every hit carries type, display_name, target, confidence, source and last_seen', async () => {
   const res = await search(appWith(), 'aarhus');

@@ -180,7 +180,8 @@ Nothing in the schema records `unreachable_downstream`. It is computed:
 | --- | --- |
 | `agents.status = 'online'` | `ok` |
 | `agents.status = 'offline'` | `down` |
-| L2-isolated behind a `down` node, not itself down | `unreachable_downstream` |
+| switch that has never answered a poll | `unknown` |
+| L2-isolated behind a `down` node, and neither `ok` nor `down` itself | `unreachable_downstream` |
 | unknown status / no agent row | `ok` |
 
 Two choices worth stating plainly:
@@ -188,6 +189,13 @@ Two choices worth stating plainly:
 - **Unknown status maps to `ok`.** We will not invent a fault we have no evidence
   for. A missing agent row means the graph carries an edge to a host we no longer
   monitor, not that the host failed.
+- **A node we can hear is never greyed.** An agent that is online and reporting
+  (or a switch that answered its poll) is reachable by definition, whatever the
+  graph walk says. The L2 graph is undirected, so from an offline leaf agent the
+  walk reaches its access switch and every host behind it; that used to grey out
+  healthy neighbours and blame them for one host's outage (fault-scenario audit,
+  scenario 12). The blast radius the overview computes is given `isAlive`, so it
+  stops at live nodes (`known_reachable`), and the view never overrules an `ok`.
 - **Only tier 1 greys a node.** A service dependent is *degraded*, not *unreachable*.
   `unreachable_downstream` means "we cannot hear it", which is not the same claim as
   "it is broken" — the label says so, and the colour never travels without it.

@@ -148,6 +148,9 @@ function createApp({
   enrollConfig,
   notifyDashboard,
   enrollRateLimiter,
+  // Per-user throttle for GET /api/search (see server.js). Forwarded to the
+  // router like enrollRateLimiter; it used to stop here, so search ran unthrottled.
+  searchRateLimiter = null,
   logger = silentLogger,
   // In-memory operational log ring buffer, surfaced admin-only in the Logs view.
   logRing = null,
@@ -354,6 +357,7 @@ function createApp({
       enrollConfig,
       notifyDashboard,
       enrollRateLimiter,
+      searchRateLimiter,
       logger,
       logRing,
     })

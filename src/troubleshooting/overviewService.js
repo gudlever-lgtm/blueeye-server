@@ -10,6 +10,7 @@ const {
   buildSummary,
   asArray,
   toNodeId,
+  aliveFrom,
 } = require('./overview');
 const { buildClusterDetail } = require('../analysis/clusterView');
 
@@ -187,12 +188,17 @@ function createTroubleshootingOverviewService({
   }
 
   // Blast radius for every device named by a root cause, from the single graph.
-  function blastRadiusFor(graph, nodeIds) {
+  //
+  // `isAlive` is what keeps the answer honest: an agent that is online and
+  // reporting, or a switch whose last poll answered, is reachable by
+  // definition, so the walk neither lists it nor continues through it. Without
+  // it an offline agent "isolated" every healthy host on its access switch.
+  function blastRadiusFor(graph, nodeIds, isAlive = null) {
     const byNode = new Map();
     if (!graph) return byNode;
     for (const id of nodeIds) {
       try {
-        byNode.set(id, computeBlastRadius(graph, id));
+        byNode.set(id, computeBlastRadius(graph, id, { isAlive }));
       } catch (err) {
         // Best-effort: a node the engine cannot walk costs that node's count,
         // not the panel.
@@ -283,7 +289,9 @@ function createTroubleshootingOverviewService({
         if (id !== null) nodesOfInterest.add(id);
       }
     }
-    const blastByNode = includeOperatorData ? blastRadiusFor(got.graph, nodesOfInterest) : new Map();
+    const blastByNode = includeOperatorData
+      ? blastRadiusFor(got.graph, nodesOfInterest, aliveFrom(got.agents, got.snmpDevices))
+      : new Map();
 
     const rootCauses = buildRootCauses(clusterDetails, { blastByNode });
     // The switches are IN the graph now (src/topology/graph.js), so the view

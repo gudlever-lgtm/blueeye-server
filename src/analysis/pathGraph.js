@@ -201,9 +201,11 @@ function buildPathGraph(results, { geoProvider = null, centroids = null, target 
   return { ...meta, worstHopIndex, nodes, links, branches };
 }
 
-// ECMP / multipath inference — server-only, from the runs already stored (no
-// agent change). Load-balancers make the responding IP at one TTL vary run to
-// run; the linear graph above collapses that to the single mode IP. Here we keep
+// ECMP / multipath inference, from the runs already stored. Load-balancers make
+// the responding IP at one TTL vary run to run — and, for agents that report
+// every responder per hop (`hop.ips`), within ONE run too, when its probes were
+// hashed onto different members. The linear graph above collapses that to the
+// single mode IP. Here we keep
 // EVERY distinct responding IP per TTL as a separate branch node, and record the
 // observed hop→hop transitions across runs so the UI can fan the parallel paths
 // out and rejoin them. `multipath` is true when any TTL saw more than one IP.
@@ -223,7 +225,9 @@ function buildBranches(runs, byPos, maxPos, { geoProvider = null, centroids = nu
 
   for (const run of runs) {
     // Ordered, responding hops in this run (skip silent/no-IP hops so branches
-    // stay connected across a silent router).
+    // stay connected across a silent router). Each step is the SET of members
+    // that answered at that TTL in this run — one address for a plain hop, two
+    // or more when the probes of one run were spread over an ECMP group.
     const seq = [];
     for (const h of run.hops) {
       const pos = Number(h.hop);
@@ -232,21 +236,34 @@ function buildBranches(runs, byPos, maxPos, { geoProvider = null, centroids = nu
       if (ip == null || h.rttMs == null) continue; // only responding hops branch
       if (!perPos.has(pos)) perPos.set(pos, new Map());
       const ipMap = perPos.get(pos);
-      if (!ipMap.has(ip)) ipMap.set(ip, { rtt: [], loss: [], jitter: [], responded: 0, runs: 0 });
-      const b = ipMap.get(ip);
-      b.runs += 1;
-      b.responded += 1;
-      b.rtt.push(h.rttMs);
-      if (h.jitterMs != null) b.jitter.push(h.jitterMs);
-      b.loss.push(h.lossPct != null ? h.lossPct : 0);
-      seq.push({ pos, ip });
+      const members = hopMembers(h);
+      for (const m of members) {
+        if (!ipMap.has(m)) ipMap.set(m, { rtt: [], loss: [], jitter: [], responded: 0, runs: 0 });
+        const b = ipMap.get(m);
+        b.runs += 1;
+        b.responded += 1;
+        // The hop's latency/loss/jitter are aggregates over ALL its probes, and
+        // the agent does not split them per member. They are attributed to the
+        // representative address only; another member counts as having answered
+        // but carries no number it did not produce.
+        if (m !== ip) continue;
+        b.rtt.push(h.rttMs);
+        if (h.jitterMs != null) b.jitter.push(h.jitterMs);
+        b.loss.push(h.lossPct != null ? h.lossPct : 0);
+      }
+      seq.push({ pos, ips: members });
     }
-    // Consecutive responding hops become a directed transition (the branch edge).
+    // Consecutive responding hops become directed transitions (the branch
+    // edges). Within one run the agent cannot say which member led to which, so
+    // every member of one step is joined to every member of the next — which is
+    // exactly the fan-out/rejoin an ECMP group draws.
     for (let i = 1; i < seq.length; i += 1) {
-      const a = seq[i - 1];
-      const b = seq[i];
-      const key = `${a.pos}|${a.ip}|${b.pos}|${b.ip}`;
-      edgeCounts.set(key, (edgeCounts.get(key) || 0) + 1);
+      for (const aIp of seq[i - 1].ips) {
+        for (const bIp of seq[i].ips) {
+          const key = `${seq[i - 1].pos}|${aIp}|${seq[i].pos}|${bIp}`;
+          edgeCounts.set(key, (edgeCounts.get(key) || 0) + 1);
+        }
+      }
     }
   }
 
@@ -285,6 +302,142 @@ function buildBranches(runs, byPos, maxPos, { geoProvider = null, centroids = nu
   return { multipath, hops, edges };
 }
 
+// Every address that answered at one hop in one run: `ips` from agents that
+// report it (all distinct responders at that TTL, first == ip), else just the
+// hop's own `ip`. Empty for a silent hop.
+function hopMembers(h) {
+  const out = [];
+  if (h && h.ip) out.push(String(h.ip));
+  for (const ip of (h && Array.isArray(h.ips) ? h.ips : [])) {
+    if (ip && !out.includes(String(ip))) out.push(String(ip));
+  }
+  return out;
+}
+
+// A member must have answered in at least this many earlier runs before its
+// absence means anything. One sighting is a one-off reroute, not a member.
+const ECMP_MIN_SIGHTINGS = 2;
+// "More loss than usual": the newest run's end-to-end loss, or its worst hop
+// loss, must exceed the median of the earlier runs by at least this many
+// percentage points — or the newest run must have more silent hops than the
+// earlier runs' median.
+const ECMP_LOSS_RISE_PCT = 5;
+
+const lossOf = (r) => (r && typeof r.lossPct === 'number' && Number.isFinite(r.lossPct) ? r.lossPct : null);
+const worstHopLoss = (r) => {
+  const xs = (r && Array.isArray(r.hops) ? r.hops : []).map((h) => h && h.lossPct).filter((v) => typeof v === 'number' && Number.isFinite(v));
+  return xs.length ? Math.max(...xs) : null;
+};
+const silentHops = (r) => (r && Array.isArray(r.hops) ? r.hops : []).filter((h) => h && (h.ip == null || h.rttMs == null)).length;
+
+// ECMP members per hop, from one run and the runs before it — the question the
+// diagnose rules ask ("is there more than one path, and has one of them died?").
+//
+//   ecmpAnalysis(runs, { latest })
+//     runs    earlier runs of the SAME probe type to the SAME target (any order;
+//             `latest` itself may be among them and is then ignored)
+//     latest  the run being judged (the diagnose test's own result)
+//
+//   → { branchCount, hops: [{ hop, ips, currentIps }], lostMembers: [...] ,
+//       runsCompared }
+//
+// `branchCount` is the widest hop: the distinct members seen at one TTL, across
+// the newest run's own `ips` AND the earlier runs. Counting inside one run alone
+// was always 1 for an agent that reported one address per hop — so ECMP was
+// "ruled out" on every path, including the ones that had it.
+//
+// A LOST MEMBER is a hop that answered from N distinct addresses in the earlier
+// runs (each seen at least ECMP_MIN_SIGHTINGS times) and now answers from fewer,
+// while the newest run also shows more loss or more silent hops than usual. Both
+// halves are required: a member that simply was not hashed to this time is
+// normal, and loss with every member present is a different fault. The evidence
+// is the missing address itself, plus the before/after numbers.
+//
+// LIMITS, stated so nobody reads more into it: a trace that sends fewer probes
+// per hop than there are members cannot see them all (so a hop is only judged
+// when it was probed at least N times, where the agent says how many), and a
+// Paris-style trace pins one flow to one member by design and never shows the
+// others.
+function ecmpAnalysis(runs, { latest = null } = {}) {
+  const earlier = (Array.isArray(runs) ? runs : [])
+    .filter((r) => r && r !== latest && Array.isArray(r.hops) && (latest == null || latest.id == null || r.id !== latest.id));
+  const hist = new Map(); // pos -> Map(ip -> sightings)
+  for (const r of earlier) {
+    for (const h of r.hops) {
+      const pos = Number(h && h.hop);
+      if (!Number.isInteger(pos) || pos < 1 || h.rttMs == null) continue;
+      if (!hist.has(pos)) hist.set(pos, new Map());
+      const m = hist.get(pos);
+      for (const ip of hopMembers(h)) m.set(ip, (m.get(ip) || 0) + 1);
+    }
+  }
+  const cur = new Map(); // pos -> { ips:Set, sent }
+  for (const h of (latest && Array.isArray(latest.hops) ? latest.hops : [])) {
+    const pos = Number(h && h.hop);
+    if (!Number.isInteger(pos) || pos < 1) continue;
+    const ips = h.rttMs == null ? [] : hopMembers(h);
+    cur.set(pos, { ips: new Set(ips), sent: Number.isInteger(h.sent) ? h.sent : null });
+  }
+
+  const positions = [...new Set([...hist.keys(), ...cur.keys()])].sort((a, b) => a - b);
+  const hops = [];
+  let branchCount = null;
+  for (const pos of positions) {
+    const all = new Set([...(hist.get(pos) || new Map()).keys(), ...((cur.get(pos) || {}).ips || [])]);
+    if (all.size === 0) continue;
+    branchCount = Math.max(branchCount || 0, all.size);
+    hops.push({ hop: pos, ips: [...all], currentIps: [...((cur.get(pos) || {}).ips || [])] });
+  }
+
+  const lostMembers = [];
+  if (latest && earlier.length) {
+    const med = (xs) => {
+      const a = xs.filter((v) => v != null).sort((x, y) => x - y);
+      if (!a.length) return null;
+      return a.length % 2 ? a[a.length >> 1] : (a[a.length / 2 - 1] + a[a.length / 2]) / 2;
+    };
+    const lossBefore = med(earlier.map(lossOf));
+    const hopLossBefore = med(earlier.map(worstHopLoss));
+    const silentBefore = med(earlier.map(silentHops));
+    const lossNow = lossOf(latest);
+    const hopLossNow = worstHopLoss(latest);
+    const silentNow = silentHops(latest);
+    const worse = (lossNow != null && lossBefore != null && lossNow - lossBefore >= ECMP_LOSS_RISE_PCT)
+      || (hopLossNow != null && hopLossBefore != null && hopLossNow - hopLossBefore >= ECMP_LOSS_RISE_PCT)
+      || (silentBefore != null && silentNow > silentBefore);
+    if (worse) {
+      for (const [pos, seen] of hist) {
+        const members = [...seen].filter(([, n]) => n >= ECMP_MIN_SIGHTINGS).map(([ip]) => ip);
+        if (members.length < 2) continue;
+        const now = cur.get(pos);
+        if (!now || now.ips.size === 0) continue; // a silent hop proves nothing either way
+        if (now.sent != null && now.sent < members.length) continue; // too few probes to see them all
+        const missing = members.filter((ip) => !now.ips.has(ip));
+        if (missing.length === 0 || missing.length === members.length) continue; // none gone, or the whole hop changed
+        lostMembers.push({
+          hop: pos,
+          missingIps: missing,
+          previousIps: members,
+          currentIps: [...now.ips],
+          lossBefore, lossNow, worstHopLossBefore: hopLossBefore, worstHopLossNow: hopLossNow,
+          silentHopsBefore: silentBefore, silentHopsNow: silentNow,
+          explain: `Hop ${pos} answered from ${members.length} addresses (${members.join(', ')}) across ${earlier.length} earlier run(s) and now only from ${now.ips.size} — ${missing.join(', ')} is missing, while ${describeWorse({ lossBefore, lossNow, hopLossBefore, hopLossNow, silentBefore, silentNow })}.`,
+        });
+      }
+    }
+  }
+  lostMembers.sort((a, b) => a.hop - b.hop);
+  return { branchCount, hops, lostMembers, runsCompared: earlier.length };
+}
+
+function describeWorse({ lossBefore, lossNow, hopLossBefore, hopLossNow, silentBefore, silentNow }) {
+  const bits = [];
+  if (lossNow != null && lossBefore != null && lossNow - lossBefore >= ECMP_LOSS_RISE_PCT) bits.push(`end-to-end loss rose from ${round(lossBefore)}% to ${round(lossNow)}%`);
+  if (hopLossNow != null && hopLossBefore != null && hopLossNow - hopLossBefore >= ECMP_LOSS_RISE_PCT) bits.push(`the worst hop loss rose from ${round(hopLossBefore)}% to ${round(hopLossNow)}%`);
+  if (silentBefore != null && silentNow > silentBefore) bits.push(`${silentNow} hop(s) timed out (usually ${round(silentBefore)})`);
+  return bits.join(' and ');
+}
+
 // One hop from a trace that is STILL RUNNING, shaped like a graph node so the
 // dashboard can draw it with the same code as a finished path. Single run, so
 // no medians: the numbers are the hop's own. Geo follows the same rule as the
@@ -306,4 +459,7 @@ function describeLiveHop(h, { geoProvider = null, centroids = null } = {}) {
   };
 }
 
-module.exports = { buildPathGraph, describeLiveHop, PATH_PROBE_TYPES, buildBranches, THRESHOLDS: T };
+module.exports = {
+  buildPathGraph, describeLiveHop, PATH_PROBE_TYPES, buildBranches, hopMembers, ecmpAnalysis,
+  THRESHOLDS: T, ECMP_MIN_SIGHTINGS, ECMP_LOSS_RISE_PCT,
+};

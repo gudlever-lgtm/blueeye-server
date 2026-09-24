@@ -230,17 +230,6 @@ function planDisplayName(planKey) {
   return p ? `BlueEyes ${p.plan_name}` : 'a higher BlueEyes plan';
 }
 
-// Whether `planKey` is at least as capable as the plan that first grants
-// `featureKey` — used to phrase upgrade hints. Compares by PLAN_ORDER position.
-function meetsFeatureTier(planKey, featureKey) {
-  const meta = FEATURE_CATALOG[featureKey];
-  if (!meta) return false;
-  const have = PLAN_ORDER.indexOf(planKey);
-  const need = PLAN_ORDER.indexOf(meta.minPlan);
-  if (have === -1 || need === -1) return false;
-  return have >= need;
-}
-
 module.exports = {
   PLANS,
   FALLBACK_PLANS,
@@ -253,5 +242,4 @@ module.exports = {
   featureStatus,
   getPlan,
   planDisplayName,
-  meetsFeatureTier,
 };

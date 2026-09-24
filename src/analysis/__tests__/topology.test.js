@@ -88,3 +88,50 @@ test('caps nodes/edges by weight and flags truncation', () => {
   assert.equal(g.truncated, true);
   assert.equal(g.totals.edges, 50); // totals reflect the full graph
 });
+
+test('an edge says what it carries: named services, dominant first, OT flagged', () => {
+  const g = buildTopology([
+    {
+      srcIp: '10.1.1.9', dstIp: '10.1.1.5', bytes: 5000, packets: 50, flowCount: 5,
+      services: [{ port: 502, proto: 'tcp', bytes: 4000 }, { port: 443, proto: 'tcp', bytes: 1000 }],
+    },
+    { srcIp: '10.0.0.5', dstIp: '10.0.0.6', bytes: 100, packets: 1, flowCount: 1, services: [{ port: 443, proto: 'tcp', bytes: 100 }] },
+  ]);
+  const scada = g.edges.find((e) => e.from === '10.1.1.9');
+  assert.equal(scada.service, 'Modbus/TCP');
+  assert.equal(scada.ot, true);
+  assert.deepEqual(scada.services.map((s) => [s.port, s.name, s.category]), [[502, 'Modbus/TCP', 'ot'], [443, 'HTTPS', 'web']]);
+  const office = g.edges.find((e) => e.from === '10.0.0.5');
+  assert.equal(office.service, 'HTTPS');
+  assert.equal(office.ot, false);
+});
+
+test('an unnamed service port is shown as port/proto, and an edge without ports has none', () => {
+  const g = buildTopology([
+    { srcIp: '10.0.0.5', dstIp: '10.0.0.6', bytes: 10, services: [{ port: 3000, proto: 'tcp', bytes: 10 }] },
+    { srcIp: '10.0.0.7', dstIp: '10.0.0.8', bytes: 5 }, // older repo / fake: no services at all
+  ]);
+  assert.equal(g.edges.find((e) => e.from === '10.0.0.5').service, '3000/tcp');
+  const bare = g.edges.find((e) => e.from === '10.0.0.7');
+  assert.deepEqual(bare.services, []);
+  assert.equal(bare.service, null);
+  assert.equal(bare.ot, false);
+});
+
+test('one pair arriving as several rows keeps ONE service list, not a doubled one', () => {
+  const services = [{ port: 102, proto: 'tcp', bytes: 50 }];
+  const g = buildTopology([
+    { srcIp: '10.0.0.5', dstIp: '10.0.0.6', extIp: null, bytes: 30, services },
+    { srcIp: '10.0.0.5', dstIp: '10.0.0.6', extIp: '10.0.0.6', bytes: 20, services },
+  ]);
+  assert.equal(g.edges.length, 1);
+  assert.equal(g.edges[0].services.length, 1);
+  assert.equal(g.edges[0].ot, true);
+});
+
+test('an admin-edited category list decides what counts as OT', () => {
+  const rows = [{ srcIp: '10.0.0.5', dstIp: '10.0.0.6', bytes: 10, services: [{ port: 9999, proto: 'tcp', bytes: 10 }] }];
+  assert.equal(buildTopology(rows).edges[0].ot, false);
+  const categories = [{ id: 'ot', label: 'Plant', kind: 'port', ports: [9999] }];
+  assert.equal(buildTopology(rows, { categories }).edges[0].ot, true);
+});

@@ -22,7 +22,10 @@ const { execSync } = require('child_process');
 const request = require('supertest');
 const jwt = require('jsonwebtoken');
 
-const { makeApp, makeUsersRepo, makeAgentsRepo, makeLocationsRepo, authHeader, throwingAsync } = require('../../test-support/fakes');
+const {
+  makeApp, makeUsersRepo, makeAgentsRepo, makeLocationsRepo, makeAgentCommander, makeIntegrationsDispatcher,
+  authHeader, throwingAsync,
+} = require('../../test-support/fakes');
 const { listRoutes, hasParam, fill, key } = require('./_routes');
 const { buildCsp } = require('../../src/middleware/securityHeaders');
 
@@ -219,6 +222,36 @@ test('a missing id is 404 on every GET/DELETE route with an id (never 200, never
     if (res.status !== 404) bad.push(`${key(r)} → ${res.status}`);
   }
   assert.deepEqual(bad, []);
+});
+
+test('a missing id on every POST/PUT/PATCH route with an id is 404 or 400 (never 2xx, never 500) and sends nothing', async () => {
+  // The write-side twin of the sweep above. An empty body may fail validation
+  // before the id is looked up, so 400 is accepted too — what is NOT accepted is
+  // a success, a conflict or a crash on an id that names nothing, or a command
+  // pushed to an agent on its behalf. An agent-token route with an :id would
+  // answer 401 here; none exists, and adding one means listing it deliberately.
+  const sent = [];
+  const record = (id, cmd) => { sent.push({ id, cmd: cmd && cmd.name }); return 1; };
+  const writeApp = makeApp({
+    agentCommander: makeAgentCommander({
+      sendCommand: record,
+      sendCommandAndWait: async (id, cmd) => { record(id, cmd); return { delivered: 1, acked: true, reply: {} }; },
+    }),
+    // The real dispatcher answers null for an integration it cannot find; the
+    // default fake reports a successful test-fire for any id.
+    integrationsDispatcher: makeIntegrationsDispatcher({ testFire: async () => null }),
+  });
+  const bad = [];
+  let checked = 0;
+  for (const r of listRoutes(writeApp)) {
+    if (!hasParam(r.path) || !['post', 'put', 'patch'].includes(r.method) || PUBLIC_ROUTES.has(key(r))) continue;
+    checked += 1;
+    const res = await request(writeApp)[r.method](fill(r.path, '999999')).set('Authorization', authHeader('admin')).send({});
+    if (res.status !== 404 && res.status !== 400) bad.push(`${key(r)} → ${res.status}`);
+  }
+  assert.deepEqual(bad, []);
+  assert.deepEqual(sent, [], 'a command was sent on behalf of an id that names nothing');
+  assert.ok(checked >= 50, `only ${checked} write routes with an id enumerated`);
 });
 
 test('a non-numeric id never produces a 500 on any route', async () => {

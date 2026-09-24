@@ -96,6 +96,24 @@ function createDiscoveredDevicesRepository(db) {
     return rows.map(mapRow);
   }
 
+  // The candidate row for one address, or null. The new-device detector asks
+  // this BEFORE the upsert, which is the only reliable way to tell an insert
+  // from a refresh (affectedRows cannot: with CLIENT_FOUND_ROWS an unchanged
+  // refresh reports 1, the same as an insert).
+  async function findByIp(ip) {
+    const [rows] = await pool.query(`SELECT ${COLS} FROM discovered_devices WHERE ip = ?`, [ip]);
+    return rows[0] ? mapRow(rows[0]) : null;
+  }
+
+  // When discovery first found anything — the new-device detector's "has
+  // discovery run before" guard, so the first sweep of a scope (which finds
+  // everything) is a baseline and not a flood of alarms. null when empty.
+  async function oldestFirstSeen() {
+    const [rows] = await pool.query('SELECT MIN(first_seen) AS oldest FROM discovered_devices');
+    const v = rows[0] && rows[0].oldest;
+    return v ? new Date(v) : null;
+  }
+
   async function countByStatus() {
     const [rows] = await pool.query('SELECT status, COUNT(*) AS n FROM discovered_devices GROUP BY status');
     const out = { discovered: 0, promoted: 0, ignored: 0 };
@@ -103,7 +121,7 @@ function createDiscoveredDevicesRepository(db) {
     return out;
   }
 
-  return { upsertCandidate, list, search, findById, setStatus, countByStatus };
+  return { upsertCandidate, list, search, findById, findByIp, setStatus, oldestFirstSeen, countByStatus };
 }
 
 module.exports = { createDiscoveredDevicesRepository, mapRow };

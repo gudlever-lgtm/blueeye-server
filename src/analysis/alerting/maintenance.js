@@ -42,17 +42,20 @@ function createSilencer({ getWindows, getAgentLocationId, now = () => Date.now()
     const active = (await windows()).filter((w) => isWindowActive(w, now()));
     if (!active.length) return null;
     const agentId = finding.hostId;
-    // Global + per-agent need no DB lookup.
+    // One matching rule (windowMatches), applied in two passes so the location
+    // lookup is only paid for when a location window is actually active.
+    // Global + per-agent need no DB lookup: judged with no location known.
+    const byLocation = (w) => w.scope === 'location';
     for (const w of active) {
-      if (w.scope === 'global' || (w.scope === 'agent' && String(w.targetId) === String(agentId))) return w;
+      if (!byLocation(w) && windowMatches(w, { agentId, locationId: null })) return w;
     }
     // Per-location: resolve the agent's location once, only if needed.
-    const locWindows = active.filter((w) => w.scope === 'location');
+    const locWindows = active.filter(byLocation);
     if (locWindows.length && typeof getAgentLocationId === 'function') {
       let locationId = null;
       try { locationId = await getAgentLocationId(agentId); } catch { locationId = null; }
       for (const w of locWindows) {
-        if (locationId != null && String(w.targetId) === String(locationId)) return w;
+        if (windowMatches(w, { agentId, locationId })) return w;
       }
     }
     return null;

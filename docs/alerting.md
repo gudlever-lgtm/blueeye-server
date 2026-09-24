@@ -73,21 +73,13 @@ Email puts the link on the line after the explanation, Matrix as a link in the
 formatted body, the webhook as top-level `link` / `hostName` (additive — older
 receivers ignore them), syslog as `agent="…" link=…` in the message.
 
-## Agent offline (`src/health/agentOfflineAlerter.js`)
+## Agent offline
 
-An agent whose socket closes and does not come back within a **grace period**
-(2 minutes; `AGENT_OFFLINE_ALERT_GRACE_MS` overrides it) raises one alert:
-`metric: agent.connection`, `kind: OFFLINE`, severity CRIT, naming the agent
-and when it went. When it reconnects a recovery (`kind: ONLINE`) follows. The
-grace rides out restarts, self-updates and blips the agent's own reconnect
-bridges. It goes through the same dispatcher, so channel floors, the cooldown
-and **maintenance windows** apply — planned work on a site does not page.
-
-At boot every socket is new, so the agents seen in the last ten minutes get the
-same grace; one that does not reconnect is alerted. An agent that reconnected
-to another server instance (its `last_seen` moved on after the disconnect) is
-not alerted by this one. Polled SNMP devices never hold a socket and are never
-watched.
+Handled by the leader-only monitor in `src/health/agentOfflineMonitor.js`: an
+agent offline past its grace raises one `agent.offline` finding (dead agent vs.
+network down, explained) through the normal store → event case → dispatcher
+path, so the alert carries the agent's name and a link to its event like any
+other.
 
 ## API
 
@@ -125,7 +117,7 @@ dispatch through.
 
 `src/analysis/alerting/__tests__/` (dispatcher rules, throttling, isolation,
 channel HMAC/syslog format/email + transport rebuild, alert context: name + link
-per channel), `test/agentOfflineAlerter.test.js` and `test/alertingApi.test.js`,
+per channel) and `test/alertingApi.test.js`,
 `test/alertingPipeline.test.js` + `test/alertingSettings.test.js` (runtime config:
 secret-safe reads, live-apply to the dispatcher/channels, licence gate). All
 outgoing calls are mocked — no real emails/webhooks/syslog in tests.

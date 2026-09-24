@@ -55,24 +55,35 @@ function createDeviceInterfacesRepository(db) {
   // Upserts one poll's interface list for one device, and reports what changed
   // in a way the counter path can act on.
   //
-  // Returns { upserted, renumbered: [{ ifName, from, to }] }. `renumbered` is
-  // the load-bearing half: a port whose ifIndex moved has a counter reading
-  // that belongs to a DIFFERENT port than last time, and a delta across that
-  // boundary is a fabricated number. The caller marks the cycle discontinuous
-  // rather than storing it.
+  // Returns { upserted, renumbered: [{ ifName, from, to }], statusChanges }.
+  // `renumbered` is the load-bearing half: a port whose ifIndex moved has a
+  // counter reading that belongs to a DIFFERENT port than last time, and a delta
+  // across that boundary is a fabricated number. The caller marks the cycle
+  // discontinuous rather than storing it.
+  //
+  // `statusChanges` is the other thing this upsert used to overwrite without a
+  // trace: a port whose admin or oper status differs from what the previous
+  // poll stored — [{ interfaceId, ifName, from: { adminStatus, operStatus },
+  // to: { adminStatus, operStatus } }]. A port seen for the FIRST time is not
+  // in it (a first sighting is not a change), and neither is a port whose new
+  // status is unknown: a poll that could not read ifOperStatus has not said the
+  // link changed.
   async function upsertMany(deviceId, interfaces, { at = new Date() } = {}) {
     const rows = Array.isArray(interfaces) ? interfaces.filter((i) => i && i.ifName) : [];
-    if (!rows.length) return { upserted: 0, renumbered: [] };
+    if (!rows.length) return { upserted: 0, renumbered: [], statusChanges: [] };
 
     // Read the current index map first, so a move can be REPORTED rather than
     // just overwritten. One indexed read per poll against at most a few
-    // thousand rows.
+    // thousand rows — and the same read carries the previous link state.
     const [existing] = await pool.query(
-      'SELECT if_name, if_index FROM device_interfaces WHERE device_id = ?', [deviceId],
+      'SELECT id, if_name, if_index, admin_status, oper_status FROM device_interfaces WHERE device_id = ?',
+      [deviceId],
     );
     const before = new Map(existing.map((r) => [r.if_name, r.if_index == null ? null : Number(r.if_index)]));
+    const prevState = new Map(existing.map((r) => [r.if_name, r]));
 
     const renumbered = [];
+    const statusChanges = [];
     const placeholders = [];
     const params = [];
     for (const i of rows) {
@@ -80,6 +91,19 @@ function createDeviceInterfacesRepository(db) {
       const next = i.ifIndex == null ? null : Number(i.ifIndex);
       const moved = prev !== undefined && prev !== null && next !== null && prev !== next;
       if (moved) renumbered.push({ ifName: i.ifName, from: prev, to: next });
+
+      const was = prevState.get(i.ifName);
+      const toAdmin = i.adminStatus ?? null;
+      const toOper = i.operStatus ?? null;
+      if (was && toOper != null
+        && ((was.oper_status ?? null) !== toOper || (toAdmin != null && (was.admin_status ?? null) !== toAdmin))) {
+        statusChanges.push({
+          interfaceId: Number(was.id),
+          ifName: i.ifName,
+          from: { adminStatus: was.admin_status ?? null, operStatus: was.oper_status ?? null },
+          to: { adminStatus: toAdmin, operStatus: toOper },
+        });
+      }
 
       placeholders.push('(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
       params.push(
@@ -116,7 +140,23 @@ function createDeviceInterfacesRepository(db) {
          last_seen    = VALUES(last_seen)`,
       params,
     );
-    return { upserted: Number(res.affectedRows || 0), renumbered };
+    return { upserted: Number(res.affectedRows || 0), renumbered, statusChanges };
+  }
+
+  // Records a port's link state learned OUTSIDE a poll — a trap or a syslog
+  // line saying the link went down. The row is the port's latest known state,
+  // and keeping it current is also what stops the next poll re-announcing a
+  // change a trap already reported. `last_seen` is left alone: nothing has been
+  // re-inventoried.
+  async function setStatus(id, { adminStatus, operStatus } = {}) {
+    const fields = [];
+    const params = [];
+    if (adminStatus !== undefined) { fields.push('admin_status = ?'); params.push(adminStatus); }
+    if (operStatus !== undefined) { fields.push('oper_status = ?'); params.push(operStatus); }
+    if (!fields.length) return false;
+    params.push(id);
+    const [res] = await pool.query(`UPDATE device_interfaces SET ${fields.join(', ')} WHERE id = ?`, params);
+    return Number(res.affectedRows || 0) > 0;
   }
 
   // ifName -> row id, for one device. The counter path resolves its samples
@@ -197,7 +237,9 @@ function createDeviceInterfacesRepository(db) {
     return removed;
   }
 
-  return { upsertMany, idMapForDevice, listForDevice, listMacs, findById, countForDevice, purgeBefore };
+  return {
+    upsertMany, setStatus, idMapForDevice, listForDevice, listMacs, findById, countForDevice, purgeBefore,
+  };
 }
 
 module.exports = { createDeviceInterfacesRepository, mapRow };

@@ -12,7 +12,7 @@ const { createRateLimiter } = require('./rateLimiter');
 // Refuses (throws {code}) when scope is empty/invalid or exceeds the address cap
 // — checked BEFORE any address is enumerated or probed.
 
-const DEFAULT_PORTS = [22, 80, 161, 443, 3389];
+const DEFAULT_PORTS = [22, 80, 102, 161, 443, 502, 2404, 3389, 4840, 20000, 44818];
 
 class DiscoveryScopeError extends Error {
   constructor(code, message) { super(message); this.code = code; this.name = 'DiscoveryScopeError'; }

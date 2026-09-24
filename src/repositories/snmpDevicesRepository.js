@@ -10,7 +10,7 @@
 // uses, and for the same reason. `listForAgentWithSecret` is the single
 // exception and is named so nobody reaches for it absent-mindedly.
 
-const SAFE_COLUMNS = `id, agent_id, host, port, version, display_name, location_id,
+const SAFE_COLUMNS = `id, agent_id, host, port, version, display_name, sys_descr, location_id,
   credential_profile_id, collect, interval_sec, counter_interval_sec, enabled,
   last_polled_at, last_ok_at, last_error, last_uptime_ticks, last_uptime_at,
   supported, created_at, updated_at`;
@@ -35,6 +35,9 @@ function mapRow(row) {
     port: Number(row.port),
     version: String(row.version),
     displayName: row.display_name ?? null,
+    // What the device says it IS — SNMPv2-MIB sysDescr, as of its last good
+    // topology poll (migration 116). NULL until an agent that sends it polls.
+    sysDescr: row.sys_descr ?? null,
     locationId: row.location_id == null ? null : Number(row.location_id),
     // NULL means "resolve it" — by site, then globally (migration 112). A
     // device with its own community still wins over both, so every row that
@@ -273,14 +276,23 @@ function createSnmpDevicesRepository(db, { secretBox = null, credentialProfilesR
   // `last_ok_at`; a failure keeps the LAST GOOD time so the UI can say "last
   // answered 41 minutes ago" rather than just "failing", which is the
   // difference between a switch that just blipped and one that is gone.
-  async function recordPoll(id, { ok, error = null, supported = null, at = new Date() } = {}) {
+  //
+  // `sysDescr` is COALESCEd like `supported`: an agent too old to send it must
+  // not erase the one a newer agent read.
+  async function recordPoll(id, {
+    ok, error = null, supported = null, sysDescr = null, at = new Date(),
+  } = {}) {
     if (ok) {
       await pool.query(
         `UPDATE snmp_devices
             SET last_polled_at = ?, last_ok_at = ?, last_error = NULL,
-                supported = COALESCE(?, supported)
+                supported = COALESCE(?, supported),
+                sys_descr = COALESCE(?, sys_descr)
           WHERE id = ?`,
-        [at, at, supported == null ? null : JSON.stringify(supported), id],
+        [
+          at, at, supported == null ? null : JSON.stringify(supported),
+          sysDescr == null ? null : String(sysDescr).slice(0, 255), id,
+        ],
       );
       return;
     }

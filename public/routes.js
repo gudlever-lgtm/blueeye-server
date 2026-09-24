@@ -76,6 +76,7 @@
     location: { path: '/locations', param: true },
     enrollment: { path: '/enrollment' },
     discovery: { path: '/discovery' },
+    coverage: { path: '/coverage' },
     logs: { path: '/logs' },
     userLogs: { path: '/user-logs' },
     screening: { path: '/test-settings' },
@@ -120,7 +121,7 @@
   var MIN_ROLE = {
     delta: 'operator', investigation: 'operator',
     enrollment: 'operator', serviceAssurance: 'operator',
-    discovery: 'admin', logs: 'admin', userLogs: 'admin', users: 'admin', screening: 'admin',
+    discovery: 'admin', coverage: 'admin', logs: 'admin', userLogs: 'admin', users: 'admin', screening: 'admin',
     kitchenSink: 'admin',
   };
 

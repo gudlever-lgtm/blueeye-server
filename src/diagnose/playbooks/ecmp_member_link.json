@@ -123,6 +123,15 @@
       }
     },
     {
+      "id": "member_went_missing",
+      "when": "traceroute.lost_member_count > 0",
+      "effect": "confirm",
+      "because": {
+        "en": "A hop that answered from several addresses in the earlier runs has lost one of them, and loss or timeouts on the path rose at the same time — that member is the broken one (the missing address is in the measurements).",
+        "da": "Et hop, der svarede fra flere adresser i de tidligere kørsler, har mistet én af dem, og samtidig er tab eller timeouts på stien steget — det medlem er det ødelagte (den manglende adresse står i målingerne)."
+      }
+    },
+    {
       "id": "single_path",
       "when": "traceroute.branch_count == 1",
       "effect": "rule_out",

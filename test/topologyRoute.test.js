@@ -80,3 +80,19 @@ test('GET /api/topology scopes to a location when locationId is valid', async ()
   assert.equal(receivedLocationId, 3);
   assert.equal(res.body.locationId, 3);
 });
+
+test('GET /api/topology marks OT edges and names their service (Modbus/TCP)', async () => {
+  const flowsRepo = makeFlowsRepo({
+    topologyEdges: async () => [
+      { srcIp: '10.1.1.9', dstIp: '10.1.1.5', extIp: null, bytes: 900, packets: 9, flowCount: 9, services: [{ port: 502, proto: 'tcp', bytes: 900 }] },
+      ...sampleEdges,
+    ],
+  });
+  const res = await request(makeApp({ flowsRepo }))
+    .get('/api/topology').set('Authorization', authHeader('viewer'));
+  assert.equal(res.status, 200);
+  const plc = res.body.edges.find((e) => e.from === '10.1.1.9');
+  assert.equal(plc.service, 'Modbus/TCP');
+  assert.equal(plc.ot, true);
+  assert.equal(res.body.edges.find((e) => e.to === '8.8.8.8').ot, false);
+});

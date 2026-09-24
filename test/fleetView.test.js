@@ -239,3 +239,30 @@ test('sorting by latency actually reorders — it reads the field the cell reads
   const names = rows(doc).map((r) => r.querySelector('a.hostlink').textContent);
   assert.deepEqual(names, ['slow', 'middling', 'quick'], `latency sort did nothing: ${names.join(', ')}`);
 });
+
+// The probe-outage widget is called `probeOutages` by the server; the panel read
+// `events`, and threw on every current server. It also offers the outage's NIS2
+// notification draft (GET /api/reports/nis2-draft/:id), which had no UI caller.
+test('open issues: probe outages render, and each offers its NIS2 draft to an operator', async (t) => {
+  const widgets = {
+    probeOutages: { active: 1, recent: [{ id: 42, agentId: 1, agentName: 'oslo-edge-01', metric: 'reachability', severity: 'critical', startedAt: '2026-09-17T13:40:00.000Z' }] },
+    findings: { open: 0, recent: [] },
+    eventCases: { open: 0, recent: [] },
+  };
+  const { doc, window, errors, log } = boot({
+    t,
+    routes: SESSION({
+      'GET /api/dashboard/advanced': { widgets },
+      'GET /api/reports/nis2-draft/42': { probeOutageId: 42, draft: 'NIS2 INCIDENT NOTIFICATION — DRAFT\nIncident reference: #42' },
+    }),
+  });
+  await settle();
+  assert.deepEqual(errors, []);
+  const btn = [...doc.querySelectorAll('#view .fleet-issues button')].find((b) => /NIS2 draft/.test(b.textContent));
+  assert.ok(btn, 'no NIS2 draft action on the outage');
+  btn.dispatchEvent(new window.Event('click', { bubbles: true }));
+  await settle();
+  assert.ok(log.some((x) => x.key === 'GET /api/reports/nis2-draft/42'));
+  assert.match(doc.querySelector('#view .fleet-issues pre').textContent, /Incident reference: #42/);
+  assert.equal(window.location.pathname, '/fleet', 'the button did not also open the agent row');
+});

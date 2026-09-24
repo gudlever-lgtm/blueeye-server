@@ -20,6 +20,14 @@ Because `l2_link` (LLDP/CDP) adjacency is **undirected/symmetric**, "downstream"
 means the failing node's L2-reachable neighbourhood within the depth cap — the
 hosts cut off with or behind it.
 
+That makes the bare walk a **what-if** ("if this node died, what could it take
+with it"), which is what the ad-hoc endpoint asks. A caller that knows what is
+actually up passes `isAlive(id)`: a live node (an agent online and reporting, a
+switch that answered its poll) is never listed as isolated and the walk does not
+continue through it; the nodes it stopped at come back as `known_reachable`. The
+Troubleshooting overview does this, so an offline leaf agent no longer "isolates"
+every healthy host on its access switch.
+
 ## Bounds & safety
 
 - **Depth cap** — configurable via `BLAST_RADIUS_MAX_DEPTH` (default 4). Applied

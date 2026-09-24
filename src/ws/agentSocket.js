@@ -66,9 +66,6 @@ function attachAgentWebSocket({
   licenseGuard = () => true,
   // Optional: pushes live agent online/offline events to the dashboard channel.
   notifyDashboard = null,
-  // Optional: told of every online/offline transition — (agentId, status,
-  // { closeCode }) — so the offline alerter can start or cancel its grace.
-  onAgentStatus = null,
   // Optional: turns one streamed traceroute hop into a map-ready node (geo +
   // severity) — describeLiveHop bound to the geo provider. Without it, hops
   // are still forwarded, just without coordinates.
@@ -217,9 +214,6 @@ function attachAgentWebSocket({
       try { notifyDashboard({ type: 'agent-status', payload: { agentId: agent.agentId, status: 'online' } }); } catch { /* best-effort */ }
     }
     recordAgentAudit('agent.online', agent.agentId, ws._remoteIp);
-    if (typeof onAgentStatus === 'function') {
-      try { onAgentStatus(agent.agentId, 'online', {}); } catch { /* best-effort */ }
-    }
 
     // Protocol-version handshake. The agent declares its wire-contract version in
     // the upgrade header; absent means a pre-versioning agent (→ v1). A mismatch
@@ -387,9 +381,6 @@ function attachAgentWebSocket({
         try { notifyDashboard({ type: 'agent-status', payload: { agentId: agent.agentId, status: 'offline' } }); } catch { /* best-effort */ }
       }
       recordAgentAudit('agent.offline', agent.agentId, ws._remoteIp);
-      if (typeof onAgentStatus === 'function') {
-        try { onAgentStatus(agent.agentId, 'offline', { closeCode: ws._session.closeCode }); } catch { /* best-effort */ }
-      }
     });
 
     ws.on('error', (err) => logger.error('Agent WS connection error:', err));
@@ -622,6 +613,17 @@ function attachAgentWebSocket({
     };
   }
 
+  // Ids of every agent with an OPEN socket on this process. The periodic
+  // stale-offline sweep leaves these alone: a live socket is proof of life even
+  // when last_seen lags (its throttled touch is best-effort and can fail).
+  function connectedAgentIds() {
+    const ids = new Set();
+    for (const ws of wss.clients) {
+      if (ws.agentId != null && ws.readyState === ws.OPEN) ids.add(ws.agentId);
+    }
+    return [...ids];
+  }
+
   // Force-closes an agent's live socket(s) so the agent re-dials on its own
   // (its client reconnects with backoff, re-runs its reconcile and reloads its
   // transaction config). This is the only "reconnect" the server can offer —
@@ -640,7 +642,7 @@ function attachAgentWebSocket({
     return closed;
   }
 
-  return { wss, sendCommand, sendCommandAndWait, broadcast, close, connectionCount, getSflowStatus, pushTransactionConfig, getConnectionInfo, disconnectAgent };
+  return { wss, sendCommand, sendCommandAndWait, broadcast, close, connectionCount, getSflowStatus, pushTransactionConfig, getConnectionInfo, disconnectAgent, connectedAgentIds };
 }
 
 module.exports = { attachAgentWebSocket, traceHopPayload };

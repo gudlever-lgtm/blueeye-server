@@ -34,16 +34,47 @@ function createSnmpTopologyIngest({
   // timer it would either check a table nothing has touched or miss the window
   // where a loop is visible at all.
   l2LoopService = null,
+  // Switch-port link history (./switchPortStateService.js): the ports whose
+  // status this poll changed, recorded instead of overwritten.
+  switchPortStateService = null,
+  // Switch-seen LLDP changes into topology_changes
+  // (topologyChangeService.processDeviceSnapshot).
+  topologyChangeService = null,
   logger = null,
   now = () => new Date(),
 }) {
-  // deviceId -> agentId, refreshed per batch. A batch is at most 200 devices
+  // deviceId -> device, refreshed per batch. A batch is at most 200 devices
   // and arrives every few minutes, so one read per batch is the right cost —
   // and reading it fresh each time is what makes a re-assignment take effect
-  // on the next cycle rather than after a restart.
+  // on the next cycle rather than after a restart. The row itself (not just
+  // the id) because the port history and the neighbour diff name the switch.
   async function ownedBy(agentId) {
     const rows = await snmpDevicesRepo.list({ agentId });
-    return new Set(rows.map((d) => d.id));
+    return new Map(rows.map((d) => [d.id, d]));
+  }
+
+  // The neighbours this switch reported on its PREVIOUS poll that carried any.
+  // snmp_neighbors is upserted, never replaced, so the stored rows are every
+  // neighbour seen inside retention; the ones from the last snapshot are those
+  // sharing its (newest) last_seen. Anything older is a neighbour that had
+  // already gone, and must not be "removed" a second time.
+  function lastSnapshot(stored) {
+    const ms = (v) => (v == null ? NaN : new Date(v).getTime());
+    let newest = -Infinity;
+    for (const n of stored) { const t = ms(n.lastSeen); if (t > newest) newest = t; }
+    if (!Number.isFinite(newest)) return [];
+    // One second of slack: last_seen is a DATETIME, and a sweep's rows share
+    // one `at` that MySQL may have rounded.
+    return stored.filter((n) => newest - ms(n.lastSeen) <= 1000);
+  }
+
+  function asEdge(n) {
+    return {
+      localPort: n.localIfName || (n.localPort != null ? String(n.localPort) : null),
+      remoteChassisId: n.remoteChassisId,
+      remotePort: n.remotePortId ?? '',
+      remoteName: n.remoteSysName || null,
+    };
   }
 
   // Stores one cycle. Returns counts the route reports verbatim.
@@ -55,6 +86,9 @@ function createSnmpTopologyIngest({
     let fdbRows = 0;
     let neighbourRows = 0;
     let interfaceRows = 0;
+    let vlanRows = 0;
+    let portTransitions = 0;
+    let neighbourChanges = 0;
     let refused = 0;
     const deviceErrors = [];
     // Ports whose ifIndex moved since the last poll. Reported back to the
@@ -67,7 +101,8 @@ function createSnmpTopologyIngest({
     const storedDeviceIds = [];
 
     for (const d of devices) {
-      if (!owned.has(d.deviceId)) {
+      const device = owned.get(d.deviceId);
+      if (!device) {
         refused += 1;
         if (logger) {
           logger.warn(`snmp-topology: agent ${agentId} submitted device ${d.deviceId} it does not poll`);
@@ -75,6 +110,21 @@ function createSnmpTopologyIngest({
         continue;
       }
       try {
+        // The neighbours as they stood BEFORE this poll. Read once and used
+        // twice: the port history asks "was this an uplink" (a link that just
+        // went down has usually taken its LLDP neighbour with it, so the answer
+        // is in the previous table), and the neighbour diff needs the previous
+        // snapshot to compare against.
+        let storedNeighbours = null;
+        if (snmpNeighborsRepo && (switchPortStateService || topologyChangeService)) {
+          try {
+            storedNeighbours = await snmpNeighborsRepo.listForDevice(d.deviceId, { limit: 512 });
+          } catch (err) {
+            if (logger) logger.warn(`snmp-topology: previous neighbours unavailable for device ${d.deviceId} (${err.message})`);
+          }
+        }
+        const previousSnapshot = Array.isArray(storedNeighbours) ? lastSnapshot(storedNeighbours) : null;
+
         // Interfaces FIRST: the forwarding table and the neighbours both name
         // ports, and a port that does not exist in the inventory yet cannot be
         // joined to. Best-effort like the neighbours — an inventory failure
@@ -84,12 +134,50 @@ function createSnmpTopologyIngest({
             const out = await deviceInterfacesRepo.upsertMany(d.deviceId, d.interfaces, { at });
             interfaceRows += out.upserted;
             for (const r of out.renumbered) renumbered.push({ deviceId: d.deviceId, ...r });
+            // Ports whose link state this poll changed. Recorded as history
+            // rather than silently overwritten — best-effort, after the write.
+            if (switchPortStateService && Array.isArray(out.statusChanges) && out.statusChanges.length) {
+              try {
+                const ports = await switchPortStateService.recordPollChanges({
+                  agentId, device, changes: out.statusChanges, neighbours: previousSnapshot, at,
+                });
+                portTransitions += ports.transitions + ports.flapped;
+              } catch (err) {
+                if (logger) logger.warn(`snmp-topology: port history failed for device ${d.deviceId} (${err.message})`);
+              }
+            }
           } catch (err) {
             if (logger) logger.warn(`snmp-topology: interface ingest failed for device ${d.deviceId} (${err.message})`);
           }
         }
         if (d.fdb.length) {
           fdbRows += await fdbEntriesRepo.upsertMany(d.deviceId, d.fdb, { at });
+        }
+        // VLAN names (migration 117). Best-effort: a name is a label, and a
+        // label failing to store must not cost the table it labels.
+        if (d.vlans && d.vlans.length && typeof fdbEntriesRepo.upsertVlans === 'function') {
+          try {
+            vlanRows += await fdbEntriesRepo.upsertVlans(d.deviceId, d.vlans, { at });
+          } catch (err) {
+            if (logger) logger.warn(`snmp-topology: vlan names failed for device ${d.deviceId} (${err.message})`);
+          }
+        }
+        // The switch's own LLDP table against its previous snapshot, BEFORE
+        // the upsert moves last_seen. First snapshot = baseline, no rows.
+        if (topologyChangeService && previousSnapshot && d.neighbours.length
+          && typeof topologyChangeService.processDeviceSnapshot === 'function') {
+          try {
+            const diff = await topologyChangeService.processDeviceSnapshot({
+              agentId,
+              deviceId: d.deviceId,
+              deviceName: device.displayName || device.host,
+              prev: previousSnapshot.map(asEdge),
+              next: d.neighbours.map(asEdge),
+            });
+            neighbourChanges += diff.changes.length;
+          } catch (err) {
+            if (logger) logger.warn(`snmp-topology: neighbour diff failed for device ${d.deviceId} (${err.message})`);
+          }
         }
         // LLDP neighbours seen BY THE SWITCH, stored per device. They are NOT
         // merged into the topology graph here: a switch sees far more
@@ -105,7 +193,9 @@ function createSnmpTopologyIngest({
             if (logger) logger.warn(`snmp-topology: neighbour ingest failed for device ${d.deviceId} (${err.message})`);
           }
         }
-        await snmpDevicesRepo.recordPoll(d.deviceId, { ok: true, supported: d.supported, at });
+        await snmpDevicesRepo.recordPoll(d.deviceId, {
+          ok: true, supported: d.supported, sysDescr: d.sysDescr ?? null, at,
+        });
         stored += 1;
         if (d.fdb.length) storedDeviceIds.push(d.deviceId);
       } catch (err) {
@@ -148,7 +238,8 @@ function createSnmpTopologyIngest({
     }
 
     return {
-      stored, fdbRows, neighbourRows, interfaceRows, renumbered, loops,
+      stored, fdbRows, neighbourRows, interfaceRows, vlanRows, renumbered, loops,
+      portTransitions, neighbourChanges,
       refused, failuresRecorded, deviceErrors,
     };
   }

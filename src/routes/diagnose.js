@@ -13,7 +13,15 @@ const { buildFacts } = require('../diagnose/facts');
 const { evaluateSession } = require('../diagnose/evaluate');
 const { localize, DEFAULT_LOCALE } = require('../diagnose/catalog');
 const { computeInterfaceHealth } = require('../health/interfaceHealth');
+const { ecmpAnalysis, PATH_PROBE_TYPES } = require('../analysis/pathGraph');
+const { pickReverseTarget } = require('../diagnose/reverseTarget');
 const { silentLogger } = require('../logger');
+
+// How far back, and how many runs, the ECMP check compares a fresh trace with.
+// A day of the scheduled traceroute is enough to have seen every member of a
+// group; twenty runs keeps it one small indexed read.
+const ECMP_HISTORY_MS = 24 * 3600 * 1000;
+const ECMP_HISTORY_RUNS = 20;
 
 // Symptom-first diagnosis. Mounted at /api/diagnose and /api/playbooks.
 //
@@ -87,12 +95,14 @@ function createDiagnoseRouter({
     if (!sessionsRepo) return unavailable(res);
 
     // An agent that does not exist is a 404, not a plan built around nothing.
+    const found = {};
     for (const [field, id] of [['agentId', value.agentId], ['peerAgentId', value.peerAgentId]]) {
       if (id == null) continue;
       if (!agentsRepo) return unavailable(res);
       // eslint-disable-next-line no-await-in-loop
       const agent = await agentsRepo.findById(id);
       if (!agent) return notFound(res, field === 'agentId' ? 'Agent' : 'Peer agent');
+      found[field] = agent;
     }
 
     const locale = value.locale;
@@ -126,10 +136,20 @@ function createDiagnoseRouter({
     }
 
     const target = value.target ?? (entities && entities.target) ?? null;
+    // The reverse direction probes BACK to the origin agent (the return path),
+    // at the address src/diagnose/reverseTarget.js picks and explains. No
+    // origin agent, or none of its addresses known → the reverse tests are
+    // skipped with that reason rather than aimed at the wrong target.
+    const reverseTarget = value.peerAgentId != null
+      ? (found.agentId
+        ? pickReverseTarget({ origin: found.agentId, peer: found.peerAgentId, forwardTarget: target })
+        : { address: null, reason: 'No origin agent was chosen, so there is nothing for the far end to probe back to.' })
+      : null;
     const plan = buildPlan({
       matches, catalog, target,
       agentId: value.agentId ?? null,
       peerAgentId: value.peerAgentId ?? null,
+      reverseTarget,
       locale, matchedBy,
     });
 
@@ -142,9 +162,11 @@ function createDiagnoseRouter({
       createdBy: (req.user && req.user.email) || null,
       // Only dispatchable tests become rows. A plan with no target is still a
       // useful plan — it says what to run — but there is nothing to run yet.
+      // Each row carries its OWN target: a reverse row points at the origin
+      // agent, not at the session's target.
       tests: target ? plan.tests.map((t) => ({
         playbookId: t.playbookId, agentId: t.agentId, direction: t.direction,
-        probeType: t.probeType, target, params: t.params,
+        probeType: t.probeType, target: t.target, params: t.params,
       })) : [],
     });
 
@@ -264,6 +286,7 @@ function createDiagnoseRouter({
     // Collect each dispatched test's result, newest first per direction.
     const forward = [];
     const reverse = [];
+    const forwardTraces = [];
     for (const t of dispatched) {
       // eslint-disable-next-line no-await-in-loop
       const row = await sessionsRepo.findResultFor(t);
@@ -276,11 +299,14 @@ function createDiagnoseRouter({
       }
       const shaped = shapeResult(row);
       (t.direction === 'reverse' ? reverse : forward).push(shaped);
+      if (t.direction !== 'reverse' && PATH_PROBE_TYPES.includes(shaped.type)) {
+        forwardTraces.push({ test: t, row, shaped });
+      }
     }
 
     const interfaces = await loadInterfaces(session.agentId);
-    const branchCounts = countBranches(forward);
-    const facts = buildFacts({ results: forward, reverse, interfaces, branchCounts });
+    const ecmp = await ecmpFor(forwardTraces);
+    const facts = buildFacts({ results: forward, reverse, interfaces, ecmp });
 
     const playbooks = (session.plan && Array.isArray(session.plan.causes) ? session.plan.causes : [])
       .map((c) => catalog.get(c.id))
@@ -327,6 +353,8 @@ function createDiagnoseRouter({
       jitterMs: row.jitter_ms, lossPct: row.loss_pct, status: row.status,
       hops: parse(row.hops), sizes: parse(row.sizes), mtu: parse(row.mtu),
       detail: row.detail,
+      errorCode: row.error_code ?? null,
+      failure: row.failure ?? null,
     };
   }
 
@@ -345,21 +373,36 @@ function createDiagnoseRouter({
     }
   }
 
-  // How many parallel paths a trace saw, for the ECMP rules. Counted from the
-  // distinct hop IPs observed at each position: two different addresses at the
-  // same distance is a fork.
-  function countBranches(results) {
+  // How many parallel paths a trace saw, and whether one of them has gone, for
+  // the ECMP rules — from the path graph's own analysis (ecmpAnalysis in
+  // src/analysis/pathGraph.js), over the session's trace AND the recent runs of
+  // the same probe before it.
+  //
+  // It used to count distinct addresses per hop inside ONE result. An agent
+  // reports one address per hop per run, so that was always 1, and every ECMP
+  // cause was "ruled out" — including on paths that had it. Members show up
+  // across runs (and, for agents that report `hop.ips`, within one run), so
+  // both are read. History is best effort: without it the within-run count
+  // still stands, and a failed read must not sink the evaluation.
+  async function ecmpFor(traces) {
     const out = {};
-    for (const r of results) {
-      if (!Array.isArray(r.hops) || r.hops.length === 0) continue;
-      const byPos = new Map();
-      for (const h of r.hops) {
-        if (!h || h.ip == null || h.hop == null) continue;
-        if (!byPos.has(h.hop)) byPos.set(h.hop, new Set());
-        byPos.get(h.hop).add(h.ip);
+    for (const { test, row, shaped } of traces) {
+      if (out[shaped.type]) continue; // first (newest) result per type, as buildFacts reads it
+      let history = [];
+      if (probeResultsRepo && typeof probeResultsRepo.recentRuns === 'function' && test.agentId != null) {
+        const at = row.ts ? new Date(row.ts) : new Date();
+        try {
+          // eslint-disable-next-line no-await-in-loop
+          history = await probeResultsRepo.recentRuns({
+            agentId: test.agentId, type: shaped.type, target: shaped.target,
+            before: at, from: new Date(at.getTime() - ECMP_HISTORY_MS), limit: ECMP_HISTORY_RUNS,
+          });
+        } catch (err) {
+          logger.warn(`diagnose: could not read earlier ${shaped.type} runs (${err.message}) — ECMP judged on this run alone`);
+          history = [];
+        }
       }
-      const widest = [...byPos.values()].reduce((max, s) => Math.max(max, s.size), 1);
-      out[r.type] = widest;
+      out[shaped.type] = ecmpAnalysis(Array.isArray(history) ? history : [], { latest: shaped });
     }
     return out;
   }

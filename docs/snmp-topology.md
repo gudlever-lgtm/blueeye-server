@@ -230,6 +230,19 @@ data VLAN). Folding those would silently discard a real observation. Devices
 implementing only BRIDGE-MIB report no VLAN; those rows use `vlan 0`, which is
 not a real VLAN id and is therefore unambiguous as *"the device did not say"*.
 
+The only history kept is of **moves** (`fdb_mac_moves`, migration 117): one
+row per observed move, for the loop detector's window, aged out after two days
+(`RETENTION_FDB_MOVE_DAYS`) — see `docs/l2-loop.md`.
+
+### `device_vlans` and `sysDescr` (migrations 116–117)
+
+The VLAN names the agent reads (Q-BRIDGE `dot1qVlanStaticName`) are upserted per
+`(device, vlan)` and age out with the forwarding table; a sweep without names
+never erases them. The device detail route (`GET /api/snmp-devices/:id`) returns
+them as `vlans`. `sysDescr` — what the switch says it is — is optional in the
+batch (an older agent does not send it) and stored on `snmp_devices.sys_descr`
+with `COALESCE`, so an older agent never erases what a newer one read.
+
 ### `snmp_neighbors` — and why it is not `lldp_neighbors`
 
 `lldp_neighbors` (063) keys on `local_agent_id`, which is an **`agents`** id.

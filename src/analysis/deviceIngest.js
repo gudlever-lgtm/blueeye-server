@@ -41,6 +41,13 @@ const METRICS = [
   ['inDiscPps', 'in.discPps'],
   ['outDiscPps', 'out.discPps'],
   ['fcsPps', 'fcs.pps'],
+  // Late collisions (migration 116). Stored as a raw counter from the start and
+  // never analysed, because a counter only rises; the RATE is what a baseline
+  // can hold. The suffix is `duplex.collPps` rather than anything spelling
+  // "late": the changes feed and the event guide classify a metric by regex,
+  // both test /lat/ for latency before they test for an interface fault, and a
+  // late collision is the duplex-mismatch signature, not a latency problem.
+  ['lateCollPps', 'duplex.collPps'],
   ['inBcastPps', 'in.bcastPps'],
 ];
 

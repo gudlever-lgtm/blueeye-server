@@ -5,6 +5,7 @@ const express = require('express');
 const { asyncHandler } = require('../middleware/asyncHandler');
 const { validateResults } = require('../validation/resultsValidation');
 const { validateCapabilities } = require('../validation/agentValidation');
+const { capabilitiesForStorage } = require('../lib/agentCapabilities');
 const { validateProbeResults } = require('../validation/probeValidation');
 const { normalizeReportedArp } = require('../identity/arpTable');
 const { validateDeviceEventBatch } = require('../validation/deviceEventValidation');
@@ -365,7 +366,7 @@ function createAgentReportsRouter({ agentAuth, resultsRepo, resultsTsdbRepo = nu
       if (errors.capabilities) {
         return res.status(400).json({ error: 'Validation failed', details: errors });
       }
-      const updated = await agentsRepo.setCapabilities(req.agent.agentId, capabilities);
+      const updated = await agentsRepo.setCapabilities(req.agent.agentId, capabilitiesForStorage(capabilities));
       if (!updated) {
         return res.status(404).json({ error: 'Agent not found' });
       }
@@ -389,9 +390,9 @@ function createAgentReportsRouter({ agentAuth, resultsRepo, resultsTsdbRepo = nu
       }
       // Connection-table edges (metadata only) → host_connections, a second
       // source for the service dependency graph so a proc/snmp-only host still
-      // contributes. Read from the RAW body (kept out of the agents JSON blob).
+      // contributes. Kept out of the agents JSON blob (capabilitiesForStorage).
       // Best-effort: never breaks the capabilities report.
-      const reportedConns = req.body && req.body.capabilities && req.body.capabilities.connections;
+      const reportedConns = capabilities.connections;
       if (hostConnectionsRepo && Array.isArray(reportedConns)) {
         try {
           await hostConnectionsRepo.replaceForAgent(req.agent.agentId, reportedConns);
@@ -400,10 +401,10 @@ function createAgentReportsRouter({ agentAuth, resultsRepo, resultsTsdbRepo = nu
         }
       }
       // ARP/neighbour entries → arp_entries, the IP↔MAC identity source behind
-      // the universal search field. Read from the RAW body like the connection
-      // table, and normalised (dropping incomplete/broadcast/multicast rows)
+      // the universal search field. Kept out of the agents JSON blob like the
+      // connection table, and normalised (dropping incomplete/broadcast/multicast rows)
       // before storage. Best-effort: never breaks the capabilities report.
-      const reportedArp = req.body && req.body.capabilities && req.body.capabilities.arp;
+      const reportedArp = capabilities.arp;
       if (arpEntriesRepo && Array.isArray(reportedArp)) {
         try {
           const { entries } = normalizeReportedArp(reportedArp);

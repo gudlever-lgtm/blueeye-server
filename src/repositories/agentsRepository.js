@@ -186,6 +186,91 @@ function createAgentsRepository(db) {
     return res.affectedRows || 0;
   }
 
+  // The PERIODIC form of markStaleOffline, run every minute by the agent-offline
+  // monitor (src/health/agentOfflineMonitor.js). Same rule, two differences:
+  //
+  //   * it returns WHICH agents it flipped, not how many — a flip here is a
+  //     real online→offline transition nobody else recorded (the WS close that
+  //     would have is exactly what went missing), so the caller audits and
+  //     pushes each one like the close handler would have;
+  //   * `exceptIds` are left alone: agents with a live socket on THIS process.
+  //     A live socket is proof of life, whatever last_seen says (its throttled
+  //     touch may simply have failed to write).
+  //
+  // Select-then-update, with the stale predicate repeated in the UPDATE: an
+  // agent that reconnects between the two statements has its fresh last_seen
+  // and is not flipped. Returns the ids flipped (a subset of those selected).
+  async function sweepStaleOffline({ olderThanSec = 300, exceptIds = [] } = {}) {
+    const except = (Array.isArray(exceptIds) ? exceptIds : [])
+      .map(Number).filter((n) => Number.isInteger(n) && n > 0);
+    const exceptSql = except.length ? ` AND id NOT IN (${except.map(() => '?').join(', ')})` : '';
+    const [rows] = await pool.query(
+      `SELECT id FROM agents
+        WHERE status = 'online'
+          AND (last_seen IS NULL OR last_seen < (NOW() - INTERVAL ? SECOND))${exceptSql}`,
+      [olderThanSec, ...except],
+    );
+    const ids = (rows || []).map((r) => Number(r.id)).filter((n) => Number.isInteger(n) && n > 0);
+    if (!ids.length) return [];
+    const flipped = [];
+    for (const id of ids) {
+      const [res] = await pool.query(
+        `UPDATE agents SET status = 'offline'
+          WHERE id = ? AND status = 'online'
+            AND (last_seen IS NULL OR last_seen < (NOW() - INTERVAL ? SECOND))`,
+        [id, olderThanSec],
+      );
+      if (res && res.affectedRows) flipped.push(id);
+    }
+    return flipped;
+  }
+
+  // OTHER agents' reachability probes towards a set of targets (an agent's own
+  // addresses) since `from` — "can anybody else still reach this host?", the
+  // peer-probe half of the agent-offline verdict. Lives here rather than in the
+  // probe-results repository because the question is about an AGENT: the
+  // targets are its addresses and the answer is read beside its row.
+  //
+  // The diagnostic probe types are excluded for the same reason uptime leaves
+  // them out (probeResultsRepository DIAGNOSTIC_TYPES): path_mtu reports ok on
+  // a blackhole, a TLS/rDNS verdict is not reachability. Bounded on every side
+  // — at most 16 targets, `from` required, LIMIT capped — and served by
+  // idx_probe_ts, since `from` is at most a few hours back.
+  async function peerProbesTowards({ targets, from, excludeAgentId = null, limit = 200 } = {}) {
+    const list = [...new Set((Array.isArray(targets) ? targets : [])
+      .filter((t) => typeof t === 'string' && t.trim())
+      .map((t) => t.trim()))].slice(0, 16);
+    if (!list.length || !from) return [];
+    const diagnostic = ['path_mtu', 'tls', 'rdns'];
+    const where = [
+      `pr.target IN (${list.map(() => '?').join(', ')})`,
+      `pr.type NOT IN (${diagnostic.map(() => '?').join(', ')})`,
+      'pr.ts >= ?',
+    ];
+    const params = [...list, ...diagnostic, from];
+    if (excludeAgentId != null) { where.push('pr.agent_id <> ?'); params.push(excludeAgentId); }
+    const lim = Number.isInteger(limit) && limit > 0 && limit <= 1000 ? limit : 200;
+    params.push(lim);
+    const [rows] = await pool.query(
+      `SELECT pr.agent_id, pr.ts, pr.type, pr.target, pr.ok,
+              COALESCE(a.display_name, a.hostname) AS agent_name
+         FROM probe_results pr
+         LEFT JOIN agents a ON a.id = pr.agent_id
+        WHERE ${where.join(' AND ')}
+        ORDER BY pr.ts DESC
+        LIMIT ?`,
+      params,
+    );
+    return (rows || []).map((r) => ({
+      agentId: Number(r.agent_id),
+      agentName: r.agent_name ?? null,
+      ts: r.ts instanceof Date ? r.ts.toISOString() : r.ts,
+      type: r.type,
+      target: r.target,
+      ok: r.ok === 1 || r.ok === true,
+    }));
+  }
+
   return {
     findAll,
     findById,
@@ -199,6 +284,8 @@ function createAgentsRepository(db) {
     setStatus,
     touchLastSeen,
     markStaleOffline,
+    sweepStaleOffline,
+    peerProbesTowards,
   };
 }
 

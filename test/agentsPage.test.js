@@ -305,3 +305,51 @@ test('a 500 on the served version costs the update badges, never the list', asyn
   // With nothing to compare against, nothing is claimed to be behind.
   assert.equal(doc.querySelectorAll('#view table.dt .badge-ui.warn.is-update').length, 0);
 });
+
+// The dead-agent vs network-down verdict (src/health/agentOfflineMonitor.js)
+// rides on the agent.offline finding; the connection modal of an OFFLINE agent
+// reads it and shows it next to the connection diagnosis.
+test('"Why online / offline" on an offline agent shows the offline verdict and its checks', async (t) => {
+  const finding = {
+    id: 'f1', hostId: '9', metric: 'agent.offline', createdAt: new Date(NOW).toISOString(),
+    evidence: [{
+      verdict: 'switch_port_down', confidence: 'high', offlineSince: new Date(NOW - 10 * 60 * 1000).toISOString(),
+      checks: [{ check: 'switch_port', result: 'down', detail: 'Switch port sw-a/Gi1/0/7 is down.' }],
+    }],
+  };
+  const { doc, window, log } = boot({
+    t,
+    routes: SESSION({
+      'GET /agents/9/connection': { connected: false, state: 'unreachable', explanation: 'The agent has been offline.', hints: [], evidence: [] },
+      'GET /api/findings': [finding],
+    }),
+  });
+  await settle();
+  const act = rows(doc).find((tr) => cells(tr)[0] === 'sto-branch-07').querySelector('.row-act');
+  act.querySelector('[aria-haspopup="menu"]').dispatchEvent(new window.Event('click', { bubbles: true }));
+  [...doc.querySelectorAll('.ui-rowmenu button')].find((b) => b.textContent === 'Why online / offline').click();
+  await settle();
+  const q = log.find((l) => l.key === 'GET /api/findings');
+  assert.ok(q, 'the offline finding was never asked for');
+  assert.match(q.url, /hostId=9/);
+  assert.match(q.url, /metric=agent\.offline/);
+  const text = doc.querySelector('#modal-card').textContent;
+  assert.match(text, /Why is it offline\?/);
+  assert.match(text, /The switch port the host is plugged into is down/);
+  assert.match(text, /strong evidence/);
+  assert.match(text, /Switch port: Switch port sw-a\/Gi1\/0\/7 is down\./);
+});
+
+test('a connected agent\'s modal does not look for an offline verdict', async (t) => {
+  const { doc, window, log } = boot({
+    t,
+    routes: SESSION({ 'GET /agents/7/connection': { connected: true, state: 'connected', explanation: 'Live.', hints: [], evidence: [] } }),
+  });
+  await settle();
+  const act = rows(doc).find((tr) => cells(tr)[0] === 'oslo-edge-01').querySelector('.row-act');
+  act.querySelector('[aria-haspopup="menu"]').dispatchEvent(new window.Event('click', { bubbles: true }));
+  [...doc.querySelectorAll('.ui-rowmenu button')].find((b) => b.textContent === 'Why online / offline').click();
+  await settle();
+  assert.ok(!log.some((l) => l.key === 'GET /api/findings'));
+  assert.doesNotMatch(doc.querySelector('#modal-card').textContent, /Why is it offline/);
+});

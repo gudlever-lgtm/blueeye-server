@@ -76,6 +76,14 @@
               onclick: function () { deps.setStatus(id, inc.status, to); },
             });
         });
+        // Draft the regulator-facing NIS2 record of this case (pre-filled and
+        // linked server-side). Secondary: it is a follow-up, not the next move.
+        if (deps.canWrite() && typeof deps.draftNis2 === 'function') {
+          actions.push(ui.button('secondary', t('ev.nis2Draft'), {
+            title: t('ev.nis2DraftHint'),
+            onclick: function () { deps.draftNis2(id); },
+          }));
+        }
         actions.push(back());
 
         page.append(ui.pageHeader({

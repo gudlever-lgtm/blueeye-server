@@ -53,6 +53,24 @@ const BROADCAST_SURGE_RATIO = 8;
 const CRIT_SCORE = 5;
 const WARN_SCORE = 3;
 
+// THE ONE CASE BROADCAST CARRIES ON ITS OWN. A loop entirely BEHIND one port —
+// an unmanaged desk switch with two of its ports patched together is the
+// everyday version — never makes a MAC flap on the managed switch: every frame
+// from down there arrives on the same port, over and over. What the managed
+// switch does see is a broadcast storm pouring in on that one port and never
+// stopping. So a port whose broadcast rate is both far above its own baseline
+// AND above this absolute floor, for at least BROADCAST_SUSTAINED_SAMPLES
+// consecutive counter samples, is raised as a SUSPECTED loop behind that port —
+// at WARN, never CRIT, and saying why it is less certain than a MAC flap.
+//
+// The floor is what keeps a quiet port that went from 0.5 to 5 broadcasts a
+// second (a ratio of ten) from reading as a storm; a desk switch in a loop
+// produces thousands.
+const BROADCAST_STORM_MIN_PPS = 200;
+// A single sample above the line is a burst — an ARP sweep, a backup starting.
+// Consecutive samples are a storm that is not stopping.
+const BROADCAST_SUSTAINED_SAMPLES = 2;
+
 function round(n, places = 1) {
   if (n == null || !Number.isFinite(n)) return null;
   const f = 10 ** places;
@@ -80,7 +98,9 @@ function pairsFromMoves(moving) {
     }
     const p = pairs.get(key);
     p.macs += 1;
-    p.moves += Number(m.movesInWindow || m.moveCount || 0);
+    // The moves INSIDE the window, and nothing else. `moveCount` is the
+    // all-time figure and reading it here is the bug migration 117 fixed.
+    p.moves += Number(m.movesInWindow || 0);
     if (m.vlan != null) p.vlans.add(Number(m.vlan));
     // The names are per-port and the row only names the port it is on NOW.
     if (Number(m.bridgePort) === a) p.ifNameA = p.ifNameA || m.ifName;
@@ -130,13 +150,45 @@ function explain({ flappingMacs, totalMoves, pairs, surgingPorts, topoChanges, d
   return parts.join(' ');
 }
 
+// The lower-confidence verdict: no MAC is flapping, but broadcast is pouring
+// in on one or more ports and not stopping (see BROADCAST_STORM_MIN_PPS).
+function explainStorm({ storming, topoChanges, deviceName }) {
+  const where = deviceName ? ` on ${deviceName}` : '';
+  const top = storming[0];
+  const name = top.ifName || `interface ${top.interfaceId}`;
+  const ratio = top.baselineBcastPps > 0 ? Math.round(Number(top.inBcastPps) / Number(top.baselineBcastPps)) : null;
+  const parts = [
+    `Broadcast traffic arriving on ${name}${where} has stayed at ${round(Number(top.inBcastPps))} frames/s`
+    + (ratio ? ` — ${ratio}× its usual ${round(Number(top.baselineBcastPps), 2)}/s —` : '')
+    + ' for several samples in a row, and no MAC addresses are moving between ports.',
+  ];
+  if (storming.length > 1) {
+    parts.push(`${storming.length - 1} other port${storming.length > 2 ? 's show' : ' shows'} the same.`);
+  }
+  parts.push(
+    `A storm that pours in on one port without MACs flapping is what a loop BEHIND that port looks like — `
+    + `an unmanaged switch or a phone with two of its ports cabled together, downstream of ${name}: the circulating `
+    + 'frames all arrive the same way, so this switch never sees an address on two ports.',
+  );
+  if (topoChanges) {
+    parts.push(`Spanning tree also reconverged ${topoChanges} times in the window.`);
+  }
+  parts.push(
+    'This is a suspicion, not a detection: a faulty NIC or a host flooding broadcasts produces the same '
+    + `picture. Look at what is connected to ${name} first.`,
+  );
+  return parts.join(' ');
+}
+
 // Reads one device's window. Every input is something the server already
 // stores; nothing here polls anything.
 //
 //   moving       — fdb_entries rows that moved in the window (migration 111),
 //                  each with { mac, vlan, bridgePort, prevBridgePort,
 //                  movesInWindow, ifName }
-//   broadcast    — [{ interfaceId, ifName, inBcastPps, baselineBcastPps }]
+//   broadcast    — [{ interfaceId, ifName, inBcastPps, baselineBcastPps,
+//                     sustained? }] — `sustained` true when the port's last
+//                  BROADCAST_SUSTAINED_SAMPLES samples were all a surge
 //   topoChanges  — count of stp.topology_change device_events in the window
 //
 // Returns null when there is no case to answer, or a verdict with a severity,
@@ -174,7 +226,46 @@ function detectLoop({
   // The primary fact has to be present. Broadcast and STP corroborate; neither
   // is a loop on its own, and calling one would mean every nightly backup and
   // every port coming up raises a critical.
-  if (flapping.length < MIN_FLAPPING_MACS) return null;
+  //
+  // With ONE exception, and it is a weaker verdict: a storm that is sustained
+  // and loud on a port, with no MAC flapping at all, is the signature of a loop
+  // behind that port (see BROADCAST_STORM_MIN_PPS). Raised at WARN at most,
+  // with the reason it is only a suspicion in the explanation.
+  if (flapping.length < MIN_FLAPPING_MACS) {
+    const storming = surging
+      .filter((b) => b.sustained === true && Number(b.inBcastPps) >= BROADCAST_STORM_MIN_PPS)
+      .sort((a, b) => Number(b.inBcastPps) - Number(a.inBcastPps));
+    if (!storming.length) return null;
+    // Scored on the same scale so the two verdicts compare, but capped below
+    // CRIT: the corroboration a MAC flap gives is exactly what is missing.
+    let score = 2;
+    if (topoChanges >= 2) score += 1;
+    return {
+      deviceId,
+      basis: 'broadcast',
+      severity: 'WARN',
+      score,
+      windowMinutes,
+      flappingMacs: flapping.length,
+      totalMoves,
+      surgingPorts: surging.length,
+      topoChanges: Number(topoChanges) || 0,
+      pairs: [],
+      stormPorts: storming.slice(0, 5).map((b) => ({ interfaceId: b.interfaceId, ifName: b.ifName || null })),
+      evidence: {
+        macs: flapping.slice(0, 20).map((m) => ({
+          mac: m.mac, vlan: m.vlan, from: m.prevBridgePort, to: m.bridgePort,
+          ifName: m.ifName, moves: Number(m.movesInWindow || 0),
+        })),
+        broadcast: storming.slice(0, 10).map((b) => ({
+          interfaceId: b.interfaceId, ifName: b.ifName,
+          pps: round(Number(b.inBcastPps)), baselinePps: round(Number(b.baselineBcastPps), 2),
+          sustained: true,
+        })),
+      },
+      explanation: explainStorm({ storming, topoChanges: Number(topoChanges) || 0, deviceName }),
+    };
+  }
 
   const pairs = pairsFromMoves(flapping);
 
@@ -193,6 +284,7 @@ function detectLoop({
 
   return {
     deviceId,
+    basis: 'mac_flap',
     severity,
     score,
     windowMinutes,
@@ -237,4 +329,6 @@ module.exports = {
   BROADCAST_SURGE_RATIO,
   CRIT_SCORE,
   WARN_SCORE,
+  BROADCAST_STORM_MIN_PPS,
+  BROADCAST_SUSTAINED_SAMPLES,
 };

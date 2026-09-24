@@ -1,7 +1,9 @@
 'use strict';
 
 // Data-access for `topology_changes` (migration 067). Stores the discrete
-// topology change records emitted by the diff at LLDP ingest. Pure data-access;
+// topology change records emitted by the diff at LLDP ingest — the agent's own
+// LLDP report, and (migration 118) each polled switch's LLDP table, where
+// `device_id` names the switch and `agent_id` is the agent that polled it. Pure data-access;
 // the diff, flap-collapse and audit-write logic live in
 // src/topology/topologyChangeService.js.
 
@@ -15,6 +17,8 @@ function mapRow(row) {
   return {
     id: Number(row.id),
     agentId: Number(row.agent_id),
+    // The polled switch the change was seen on; NULL for an agent's own LLDP.
+    deviceId: row.device_id == null ? null : Number(row.device_id),
     changeType: row.change_type,
     localPort: row.local_port ?? null,
     remoteChassisId: row.remote_chassis_id ?? null,
@@ -30,7 +34,7 @@ function mapRow(row) {
 }
 
 const COLS =
-  'id, agent_id, change_type, local_port, remote_chassis_id, remote_port, from_local_port, ' +
+  'id, agent_id, device_id, change_type, local_port, remote_chassis_id, remote_port, from_local_port, ' +
   'link_state_from, link_state_to, severity, summary, detected_at, audit_log_id';
 
 function createTopologyChangesRepository(db) {
@@ -39,11 +43,11 @@ function createTopologyChangesRepository(db) {
   async function insert(c) {
     const [res] = await pool.query(
       `INSERT INTO topology_changes
-         (agent_id, change_type, local_port, remote_chassis_id, remote_port, from_local_port,
+         (agent_id, device_id, change_type, local_port, remote_chassis_id, remote_port, from_local_port,
           link_state_from, link_state_to, severity, summary, detected_at, audit_log_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
-        c.agentId, c.changeType, c.localPort ?? null, c.remoteChassisId ?? null, c.remotePort ?? null,
+        c.agentId, c.deviceId ?? null, c.changeType, c.localPort ?? null, c.remoteChassisId ?? null, c.remotePort ?? null,
         c.fromLocalPort ?? null, c.linkStateFrom ?? null, c.linkStateTo ?? null,
         c.severity || 'INFO', c.summary, c.detectedAt || new Date(), c.auditLogId ?? null,
       ],
@@ -67,14 +71,28 @@ function createTopologyChangesRepository(db) {
   }
 
   // Recent changes for an agent since `since` (newest first) — the flap-detection
-  // lookup input. Bounded.
+  // lookup input. Bounded. The agent's OWN LLDP only (device_id IS NULL): a
+  // switch this agent polls is a different vantage point, and its neighbour
+  // changes must never be read as reversals of the agent's.
   async function recentForAgent({ agentId, since, limit = 500 }) {
     const lim = Number.isInteger(limit) && limit > 0 && limit <= 5000 ? limit : 500;
     const [rows] = await pool.query(
       `SELECT ${COLS} FROM topology_changes
-       WHERE agent_id = ? AND detected_at >= ?
+       WHERE agent_id = ? AND device_id IS NULL AND detected_at >= ?
        ORDER BY detected_at DESC, id DESC LIMIT ?`,
       [agentId, since, lim],
+    );
+    return rows.map(mapRow);
+  }
+
+  // The same lookup for one polled switch, whichever agent polled it.
+  async function recentForDevice({ deviceId, since, limit = 500 }) {
+    const lim = Number.isInteger(limit) && limit > 0 && limit <= 5000 ? limit : 500;
+    const [rows] = await pool.query(
+      `SELECT ${COLS} FROM topology_changes
+       WHERE device_id = ? AND detected_at >= ?
+       ORDER BY detected_at DESC, id DESC LIMIT ?`,
+      [deviceId, since, lim],
     );
     return rows.map(mapRow);
   }
@@ -109,7 +127,7 @@ function createTopologyChangesRepository(db) {
     return rows.map(mapRow);
   }
 
-  return { insert, markFlapping, recentForAgent, listForAgent, list, mapRow };
+  return { insert, markFlapping, recentForAgent, recentForDevice, listForAgent, list, mapRow };
 }
 
 module.exports = { createTopologyChangesRepository, mapRow };

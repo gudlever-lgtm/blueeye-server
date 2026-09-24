@@ -103,7 +103,15 @@ function createSnmpDevicesRouter({
     } catch (err) {
       if (logger) logger.warn(`snmp-devices: interfaces unavailable for ${id} (${err.message})`);
     }
-    res.json({ device, fdb, fdbTotal, neighbours, interfaces });
+    // VLAN names the switch reported (migration 117). Best-effort like the
+    // rest: a page without its VLAN labels is still worth opening.
+    let vlans = [];
+    try {
+      if (fdbEntriesRepo && typeof fdbEntriesRepo.listVlans === 'function') vlans = await fdbEntriesRepo.listVlans(id);
+    } catch (err) {
+      if (logger) logger.warn(`snmp-devices: vlan names unavailable for ${id} (${err.message})`);
+    }
+    res.json({ device, fdb, fdbTotal, neighbours, interfaces, vlans });
   }));
 
   // The port table on its own, for a screen that wants it without the

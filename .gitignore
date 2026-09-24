@@ -29,7 +29,7 @@ dbip-*.csv.gz
 logs/
 
 # Test / coverage output
-coverage/
+/coverage/
 .nyc_output/
 
 # OS / editor cruft

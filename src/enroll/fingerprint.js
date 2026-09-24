@@ -14,11 +14,4 @@ function normalizeFingerprint(input) {
   return s.match(/.{2}/g).join(':');
 }
 
-// True only when both inputs are valid SHA-256 fingerprints AND equal.
-function fingerprintsMatch(a, b) {
-  const na = normalizeFingerprint(a);
-  const nb = normalizeFingerprint(b);
-  return na !== '' && na === nb;
-}
-
-module.exports = { normalizeFingerprint, fingerprintsMatch };
+module.exports = { normalizeFingerprint };

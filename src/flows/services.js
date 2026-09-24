@@ -32,13 +32,39 @@ const WELL_KNOWN = new Map([
   [8080, 'HTTP-alt'], [8443, 'HTTPS-alt'], [8883, 'MQTT (TLS)'], [9090, 'HTTP-alt'],
   [9200, 'Elasticsearch'], [11211, 'memcached'], [27017, 'MongoDB'],
   [51820, 'WireGuard'],
+  // Industrial / OT (ICS) protocols. Named so a PLC<->SCADA conversation reads
+  // "Modbus/TCP" rather than "502". Each port is the IANA registration unless
+  // marked "vendor default" (the vendor's documented factory port, which IANA
+  // has registered to something else or not at all). Matches the 'ot' traffic
+  // category in categories.js. Ports that are only a configurable convention
+  // (e.g. Mitsubishi MELSEC's 5006/5007) are deliberately NOT listed: naming
+  // them would be a guess dressed as a fact.
+  [102, 'S7comm / ISO-TSAP (Siemens, IEC 61850 MMS)'], // IANA iso-tsap (RFC 1006)
+  [502, 'Modbus/TCP'], // IANA mbap
+  [1883, 'MQTT'], // IANA mqtt
+  [1911, 'Niagara Fox'], // vendor default (Tridium Niagara; IANA lists 1911 as mtp)
+  [2404, 'IEC 60870-5-104'], // IANA iec-104
+  [4840, 'OPC UA'], // IANA opcua-tcp
+  [9600, 'OMRON FINS'], // vendor default (Omron FINS/UDP; IANA lists 9600 as micromuse-ncpw)
+  [18245, 'GE SRTP'], // vendor default (GE Fanuc/Emerson PLC SRTP)
+  [20000, 'DNP3'], // IANA dnp
+  [34962, 'PROFINET RT'], // IANA profinet-rt
+  [34963, 'PROFINET RTM'], // IANA profinet-rtm
+  [34964, 'PROFINET CM'], // IANA profinet-cm
+  [44818, 'EtherNet/IP (CIP)'], // IANA EtherNet-IP-2 (explicit messaging)
+  [47808, 'BACnet/IP'], // IANA bacnet (0xBAC0)
 ]);
 
 // A few ports mean different things per transport; refine the name when we know
 // the protocol. QUIC/HTTP-3 rides UDP/443; DNS is DNS on both 53/tcp and 53/udp.
+//
+// EtherNet/IP implicit (I/O) messaging is IANA EtherNet-IP-1 on 2222/udp. It is
+// named ONLY for udp: 2222/tcp is far more often an alternate SSH port than a
+// PLC, and a confident "EtherNet/IP" on somebody's SSH jump host would mislead.
 const BY_PROTO = new Map([
   ['443/udp', 'HTTP/3 (QUIC)'],
   ['80/udp', 'HTTP/3 (QUIC)'],
+  ['2222/udp', 'EtherNet/IP I/O'],
 ]);
 
 // Returns a human service name for a port ("HTTPS"), or null when the port is
@@ -61,6 +87,31 @@ function serviceForPort(port, proto) {
   return WELL_KNOWN.get(p) || null;
 }
 
+// Which end of a conversation is the SERVICE. A flow record carries both ports,
+// and the direction a record was sampled in says nothing about which side is
+// the server: the PLC's reply to a SCADA poll has src_port 502 and an ephemeral
+// dst_port. The rule, in order, and mirrored in SQL by
+// flowsRepository.topologyEdges so both answer the same:
+//   1. dst_port is a named port (WELL_KNOWN)      -> dst_port
+//   2. src_port is a named port                   -> src_port
+//   3. otherwise the LOWER of the two             (a server port is conventionally
+//                                                  below the client's ephemeral one)
+// A missing port on one side yields the other; both missing (ICMP, GRE) -> null.
+function validPort(v) {
+  if (v === null || v === undefined || v === '') return null;
+  const p = Number(v);
+  return Number.isInteger(p) && p >= 1 && p <= 65535 ? p : null;
+}
+function servicePortOf(srcPort, dstPort) {
+  const s = validPort(srcPort);
+  const d = validPort(dstPort);
+  if (d == null) return s;
+  if (s == null) return d;
+  if (WELL_KNOWN.has(d)) return d;
+  if (WELL_KNOWN.has(s)) return s;
+  return Math.min(s, d);
+}
+
 // Enriches a byPort summary row array ([{ port, proto, bytes, flowCount }]) with
 // a `service` field. Copies rows so callers keep their originals.
 function labelPorts(rows) {
@@ -68,4 +119,4 @@ function labelPorts(rows) {
   return rows.map((r) => ({ ...r, service: serviceForPort(r.port, r.proto) }));
 }
 
-module.exports = { WELL_KNOWN, serviceForPort, labelPorts };
+module.exports = { WELL_KNOWN, serviceForPort, servicePortOf, labelPorts };

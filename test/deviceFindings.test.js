@@ -116,13 +116,22 @@ test('a whole cycle extracts in one call', () => {
 });
 
 // ============================================== through the detector
+// A seeded baseline may carry `flatAt`: the value its trailing samples all
+// share. This stub used to answer isFlat() with a constant `false`, which is
+// never true of a port that has not discarded once — its history IS a flat run
+// of zeros — and so hid the fact that the detector called the first real
+// discard a FLATLINE (and every healthy zero one too). It now mirrors the real
+// store: flat only when the value being judged continues the run.
 function fakeBaselines() {
   const store = new Map();
   return {
     bucket: () => 'b',
     get: (hostId, metric) => store.get(`${hostId}|${metric}`) || null,
     update: () => {},
-    isFlat: () => false,
+    isFlat: (hostId, metric, value) => {
+      const b = store.get(`${hostId}|${metric}`);
+      return Boolean(b && b.flatAt !== undefined && (value === undefined || value === b.flatAt));
+    },
     seed: (hostId, metric, v) => store.set(`${hostId}|${metric}`, v),
   };
 }
@@ -130,7 +139,7 @@ function fakeBaselines() {
 test('a port that starts discarding raises a finding that names the PORT', async () => {
   const baselines = fakeBaselines();
   // A port that has never discarded: a tight baseline around zero.
-  baselines.seed('9', 'if.12.in.discPps', { n: 100, median: 0, mad: 0.01, sigma: 0.015 });
+  baselines.seed('9', 'if.12.in.discPps', { n: 100, median: 0, mad: 0.01, sigma: 0.015, flatAt: 0 });
   const detector = createDetector({ baselines, config: { critSigma: 6, warnSigma: 3, baselineDays: 7, minSamples: 10 } });
 
   const [sample] = extractDeviceSamples(SAMPLE({ inDiscPps: 4, inUtilPct: null, outUtilPct: null, inErrPps: null, outErrPps: null, outDiscPps: null, fcsPps: null, inBcastPps: null }), { hostId: '9' });
@@ -141,6 +150,54 @@ test('a port that starts discarding raises a finding that names the PORT', async
   assert.equal(finding.hostId, '9');
   assert.equal(finding.deviceId, 4, 'the finding names the switch');
   assert.equal(finding.interfaceId, 12, 'and the port');
+});
+
+// The same scenario on the REAL baseline store and detector, with nothing
+// stubbed: the audit reproduction (250 zeros on an FCS rate, then a 5).
+function fcsRun(metric) {
+  const { createBaselineStore } = require('../src/analysis/baselines');
+  const { loadConfig } = require('../src/analysis/config');
+  const baselines = createBaselineStore({});
+  const detector = createDetector({ baselines, config: loadConfig({}) }); // minSamples 200
+  const t0 = Date.parse('2026-01-01T03:00:00Z'); // one hour bucket throughout
+  const at = (i) => new Date(t0 + i * 1000);
+  const zeros = [];
+  for (let i = 1; i <= 250; i += 1) {
+    zeros.push(detector.evaluate({ hostId: '9', deviceId: 4, interfaceId: 3, metric, value: 0, ts: at(i), labels: {} }));
+  }
+  const first = detector.evaluate({ hostId: '9', deviceId: 4, interfaceId: 3, metric, value: 5, ts: at(251), labels: {} });
+  const second = detector.evaluate({ hostId: '9', deviceId: 4, interfaceId: 3, metric, value: 5, ts: at(252), labels: {} });
+  return { zeros, first, second };
+}
+
+test('a healthy port reading 0 errors raises nothing — no FLATLINE on a zero counter (real store)', () => {
+  const { zeros } = fcsRun('if.3.fcs.pps');
+  assert.deepEqual(zeros.filter(Boolean), [], 'a constant 0 is the healthy state of an error rate, not a stalled sensor');
+});
+
+test('the FIRST real error on a zero counter is an ANOMALY, not a FLATLINE (real store)', () => {
+  const { first, second } = fcsRun('if.3.fcs.pps');
+  assert.ok(first, 'the first FCS error is reported on the sample it happens');
+  assert.equal(first.kind, 'ANOMALY');
+  assert.equal(first.severity, 'WARN');
+  assert.equal(first.interfaceId, 3);
+  // A zero-MAD baseline has no scale: no fabricated sigma, no Infinity/NaN.
+  assert.equal(first.deviation, null);
+  assert.match(first.explanation, /if\.3\.fcs\.pps at 5 left a constant/);
+  // Once the window holds a non-zero value there is a scale again.
+  assert.equal(second.kind, 'ANOMALY');
+  assert.equal(second.severity, 'CRIT');
+  assert.ok(Number.isFinite(second.deviation) && second.deviation > 0);
+});
+
+test('every device-port rate is flatline-exempt; agent metrics are not', () => {
+  const { isDevicePortMetric } = require('../src/analysis/detector');
+  for (const m of ['in.errPps', 'out.errPps', 'in.discPps', 'out.discPps', 'fcs.pps', 'in.bcastPps', 'in.utilPct', 'out.utilPct']) {
+    assert.equal(isDevicePortMetric(`if.12.${m}`), true, m);
+  }
+  for (const m of ['cpu', 'mem', 'load1', 'if.x.fcs.pps', 'if.3.fcs.pps.extra', 'xif.3.fcs.pps']) {
+    assert.equal(isDevicePortMetric(m), false, m);
+  }
 });
 
 test('a finding about an AGENT still has neither, exactly as before', () => {
@@ -158,7 +215,7 @@ test('the device path runs the SAME pipeline as the agent path', async () => {
   // the whole argument for extending `findings` rather than giving devices a
   // second table.
   const baselines = fakeBaselines();
-  baselines.seed('9', 'if.12.in.errPps', { n: 100, median: 0, mad: 0.01, sigma: 0.015 });
+  baselines.seed('9', 'if.12.in.errPps', { n: 100, median: 0, mad: 0.01, sigma: 0.015, flatAt: 0 });
   const findingStore = makeFindingStore();
   const assigned = [];
   const pipeline = createAnalysisPipeline({

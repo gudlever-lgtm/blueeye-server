@@ -61,8 +61,12 @@ function makeUsersRepo(overrides = {}) {
   let lastSeenChanges = overrides.initialLastSeenChanges || null;
   // Changes-page acknowledgements (migration 115): `${userId}|${key}` → Date.
   const changeAcks = new Map(Object.entries(overrides.initialChangeAcks || {}).map(([k, v]) => [k, new Date(v)]));
+  // "Mute this rule" (migration 134): `${userId}|${key}` → Date until.
+  const changeMutes = new Map(Object.entries(overrides.initialChangeMutes || {}).map(([k, v]) => [k, new Date(v)]));
+  const liveMute = (at) => at.getTime() > Date.now();
   return {
     changeAcks,
+    changeMutes,
     findAll: overrides.findAll || (async () => []),
     findById: overrides.findById || (async () => null),
     findByEmail: overrides.findByEmail || (async () => null),
@@ -100,6 +104,21 @@ function makeUsersRepo(overrides = {}) {
     }),
     ackChange: overrides.ackChange || (async (userId, key, at) => { changeAcks.set(`${userId}|${key}`, new Date(at)); return at; }),
     unackChange: overrides.unackChange || (async (userId, key) => changeAcks.delete(`${userId}|${key}`)),
+    listChangeMutes: overrides.listChangeMutes || (async (userId) => {
+      const out = new Map();
+      for (const [k, until] of changeMutes) {
+        const [uid, key] = k.split('|');
+        if (String(uid) === String(userId) && liveMute(until)) out.set(key, until);
+      }
+      return out;
+    }),
+    muteChange: overrides.muteChange || (async (userId, key, until) => { changeMutes.set(`${userId}|${key}`, new Date(until)); return until; }),
+    unmuteChange: overrides.unmuteChange || (async (userId, key) => {
+      const k = `${userId}|${key}`;
+      const until = changeMutes.get(k);
+      if (!until || !liveMute(until)) return false;
+      return changeMutes.delete(k);
+    }),
   };
 }
 

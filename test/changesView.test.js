@@ -288,3 +288,76 @@ test('a failed acknowledge says so and keeps the row', async (t) => {
   assert.equal(doc.querySelectorAll('#view table.dt tbody tr').length, 2);
   assert.ok(doc.querySelector('#ui-toasts .ui-toast.err'), 'the failure was silent');
 });
+
+// ---------------------------------------------------------------- mute this rule
+// Mute used to be a toast and nothing else. It now mutes the row's rule (source
+// + type, every host) for 24h via POST /api/changes/mute.
+const MUTE_FEED = () => {
+  const f = ACK_FEED();
+  f.events = f.events.map((e, i) => ({ ...e, muteKey: String.fromCharCode(97 + i).repeat(64), mutedUntil: null }));
+  // A second row of the first row's rule, on another host.
+  f.events.push({ ...f.events[0], agentId: 8, summary: 'latency degraded at cph-core-02', ackKey: '9'.repeat(64) });
+  return f;
+};
+const openMenu = (doc, window, rowIndex) => {
+  const tr = doc.querySelectorAll('#view table.dt tbody tr')[rowIndex];
+  click(window, tr.querySelector('.row-act .btn-icon'));
+  return [...doc.querySelectorAll('.ui-rowmenu button')];
+};
+
+test('Mute this rule mutes every row of that rule and hides them', async (t) => {
+  const { doc, window, log } = boot({
+    t,
+    routes: SESSION({
+      'GET /api/changes': MUTE_FEED(),
+      'POST /api/changes/mute': { key: 'a'.repeat(64), mutedUntil: '2026-09-23T10:00:00.000Z' },
+    }),
+  });
+  await settle();
+  assert.equal(doc.querySelectorAll('#view table.dt tbody tr').length, 3);
+  const item = openMenu(doc, window, 0).find((b) => /Mute this rule/.test(b.textContent));
+  assert.ok(item, 'no Mute this rule in the row menu');
+  click(window, item);
+  await settle();
+  const call = log.find((c) => c.key === 'POST /api/changes/mute');
+  assert.ok(call, 'Mute did not call the server');
+  assert.deepEqual(JSON.parse(call.body), { key: 'a'.repeat(64) });
+  assert.equal(doc.querySelectorAll('#view table.dt tbody tr').length, 1, 'both rows of the rule should leave the list');
+  assert.match(doc.querySelector('#view').textContent, /2 muted hidden/);
+});
+
+test('Show → Muted lists them with Unmute this rule, which calls DELETE', async (t) => {
+  const f = MUTE_FEED();
+  f.events[0].mutedUntil = '2026-09-23T10:00:00.000Z';
+  f.events[3].mutedUntil = '2026-09-23T10:00:00.000Z';
+  const { doc, window, log } = boot({
+    t,
+    routes: SESSION({ 'GET /api/changes': f, [`DELETE /api/changes/mute/${'a'.repeat(64)}`]: { status: 204, body: null } }),
+  });
+  await settle();
+  const show = [...doc.querySelectorAll('#view .toolbar-ui select')].find((s) => [...s.options].some((o) => o.value === 'muted'));
+  assert.ok(show, 'no Muted option');
+  show.value = 'muted';
+  show.dispatchEvent(new window.Event('change', { bubbles: true }));
+  await settle();
+  assert.equal(doc.querySelectorAll('#view table.dt tbody tr').length, 2);
+  assert.match(doc.querySelectorAll('#view table.dt tbody tr')[0].textContent, /Muted/);
+  const item = openMenu(doc, window, 0).find((b) => /Unmute this rule/.test(b.textContent));
+  assert.ok(item, 'no Unmute in the row menu');
+  click(window, item);
+  await settle();
+  assert.ok(log.find((c) => c.key === `DELETE /api/changes/mute/${'a'.repeat(64)}`), 'Unmute did not call the server');
+  assert.equal(doc.querySelectorAll('#view table.dt tbody tr').length, 0);
+});
+
+test('a failed mute says so and keeps the rows', async (t) => {
+  const { doc, window } = boot({
+    t,
+    routes: SESSION({ 'GET /api/changes': MUTE_FEED(), 'POST /api/changes/mute': { status: 500, body: { error: 'Internal Server Error' } } }),
+  });
+  await settle();
+  click(window, openMenu(doc, window, 0).find((b) => /Mute this rule/.test(b.textContent)));
+  await settle();
+  assert.equal(doc.querySelectorAll('#view table.dt tbody tr').length, 3);
+  assert.ok(doc.querySelector('#ui-toasts .ui-toast.err'), 'the failure was silent');
+});

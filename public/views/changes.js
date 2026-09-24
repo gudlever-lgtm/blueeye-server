@@ -81,6 +81,7 @@
               el('p', {}, t('changes.help.p2')),
               el('p', {}, t('changes.help.p3')),
               el('p', {}, t('changes.help.p4')),
+              el('p', {}, t('changes.help.p5')),
             ];
           },
         },
@@ -106,7 +107,8 @@
             })),
             ui.filter(t('changes.filter.status'), ui.select({
               label: t('changes.filter.status'), value: state.status,
-              options: [['open', t('changes.status.open')], ['acked', t('changes.status.acked')], ['all', t('changes.status.all')]],
+              options: [['open', t('changes.status.open')], ['acked', t('changes.status.acked')],
+                ['muted', t('changes.status.muted')], ['all', t('changes.status.all')]],
               onchange: function (e) { state.status = e.target.value; onChange(); },
             })),
             ui.filter(t('changes.filter.host'), el('input', {
@@ -133,6 +135,23 @@
             ev.acknowledgedAt = on ? ((res && res.acknowledgedAt) || new Date().toISOString()) : null;
             ui.closeDrawer();
             ui.toast(on ? t('changes.act.acked') : t('changes.act.unacked'), ev.summary);
+            draw();
+          })
+          .catch(function (e) { ui.toast(t('changes.title'), errText(e), { bad: true }); });
+      }
+
+      // Mute / unmute a RULE: every row sharing this muteKey (source + type, any
+      // host), for the caller only (POST/DELETE /api/changes/mute).
+      function setMute(ev, on) {
+        var req = on
+          ? api('/api/changes/mute', { method: 'POST', body: { key: ev.muteKey } })
+          : api('/api/changes/mute/' + encodeURIComponent(ev.muteKey), { method: 'DELETE' });
+        return req
+          .then(function (res) {
+            var until = on ? ((res && res.mutedUntil) || new Date(Date.now() + 24 * 3600 * 1000).toISOString()) : null;
+            (data.events || []).forEach(function (e) { if (e.muteKey === ev.muteKey) e.mutedUntil = until; });
+            ui.closeDrawer();
+            ui.toast(on ? t('changes.act.muted') : t('changes.act.unmuted'), kindLabel(ev.kind) + ' · ' + (ev.type || ''));
             draw();
           })
           .catch(function (e) { ui.toast(t('changes.title'), errText(e), { bad: true }); });
@@ -173,7 +192,8 @@
             [ui.fmt.short(ev.firstAt || ev.timestamp), t('changes.drawer.first')],
             [ui.fmt.short(ev.timestamp), t('changes.drawer.last')],
             [null, t('changes.drawer.seen', { count: Number(ev.count) || 1 })],
-          ].concat(ev.acknowledgedAt ? [[ui.fmt.short(ev.acknowledgedAt), t('changes.drawer.acked')]] : []))),
+          ].concat(ev.acknowledgedAt ? [[ui.fmt.short(ev.acknowledgedAt), t('changes.drawer.acked')]] : [])
+            .concat(ev.mutedUntil ? [[ui.fmt.short(ev.mutedUntil), t('changes.drawer.mutedUntil')]] : []))),
           // The same host and moment, opened on the screens that take it
           // further (Probes, Diagnose, Investigate, Device log).
           deps.contextActions && ev.agentId != null ? deps.contextActions({
@@ -209,8 +229,10 @@
               time: ui.fmt.short(ev.timestamp),
               severity: ui.badge(SEV_TONE[ev.severity] || 'info', String(ev.severity || '')),
               type: ui.meta(kindLabel(ev.kind)),
-              title: ev.acknowledgedAt
-                ? el('span', {}, ev.summary, ' ', ui.badge('neutral', t('changes.status.acked')))
+              title: ev.acknowledgedAt || ev.mutedUntil
+                ? el('span', {}, ev.summary,
+                  ev.acknowledgedAt ? [' ', ui.badge('neutral', t('changes.status.acked'))] : null,
+                  ev.mutedUntil ? [' ', ui.badge('neutral', t('changes.status.muted'))] : null)
                 : ev.summary,
               // Host is a link in its own column, never a chip on the title.
               host: ev.agentId == null ? ui.meta('—')
@@ -226,6 +248,10 @@
                   { label: t('changes.act.open'), onclick: function () { openRowDrawer(ev, null); } },
                   recordAction(ev),
                   ev.agentId == null ? null : { label: t('changes.act.host'), onclick: function () { openAgent(Number(ev.agentId)); } },
+                  '-',
+                  !ev.muteKey ? null : ev.mutedUntil
+                    ? { label: t('changes.act.unmute'), onclick: function () { setMute(ev, false); } }
+                    : { label: t('changes.act.mute'), danger: true, onclick: function () { setMute(ev, true); } },
                 ].filter(Boolean)),
             },
           };
@@ -260,8 +286,9 @@
       // so acknowledging a WARN takes it off the WARN card too.
       function byStatus() {
         return (data.events || []).filter(function (ev) {
-          if (state.status === 'open') return !ev.acknowledgedAt;
+          if (state.status === 'open') return !ev.acknowledgedAt && !ev.mutedUntil;
           if (state.status === 'acked') return !!ev.acknowledgedAt;
+          if (state.status === 'muted') return !!ev.mutedUntil;
           return true;
         });
       }
@@ -296,6 +323,9 @@
         var pool = byStatus();
         var ackedHidden = state.status === 'open'
           ? (data.events || []).filter(function (ev) { return ev.acknowledgedAt; }).length : 0;
+        // A row both acknowledged and muted is counted once, as acknowledged.
+        var mutedHidden = state.status === 'open'
+          ? (data.events || []).filter(function (ev) { return ev.mutedUntil && !ev.acknowledgedAt; }).length : 0;
         pool.forEach(function (ev) { if (counts[ev.severity] !== undefined) counts[ev.severity]++; });
         var pick = function (sev) {
           return function () { state.severity = state.severity === sev ? '' : sev; draw(); };
@@ -311,7 +341,8 @@
         var kids = [toolbar(draw)];
         kids.push(ui.inlineNote(t('changes.since', { when: ui.fmt.abs(data.since) })
           + (data.correlated > 0 ? ' · ' + t('changes.correlated', { rows: data.total, raw: data.rawTotal }) : '')
-          + (ackedHidden > 0 ? ' · ' + t('changes.ackedHidden', { n: ackedHidden }) : '')));
+          + (ackedHidden > 0 ? ' · ' + t('changes.ackedHidden', { n: ackedHidden }) : '')
+          + (mutedHidden > 0 ? ' · ' + t('changes.mutedHidden', { n: mutedHidden }) : '')));
         // A partial result is a fact about the DATA, so it sits above the table
         // as an inline note — never a banner, never hidden behind the (?).
         if (data.partial && (data.failedSources || []).length) {

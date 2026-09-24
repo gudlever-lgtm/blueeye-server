@@ -66,6 +66,9 @@ function attachAgentWebSocket({
   licenseGuard = () => true,
   // Optional: pushes live agent online/offline events to the dashboard channel.
   notifyDashboard = null,
+  // Optional: told of every online/offline transition — (agentId, status,
+  // { closeCode }) — so the offline alerter can start or cancel its grace.
+  onAgentStatus = null,
   // Optional: turns one streamed traceroute hop into a map-ready node (geo +
   // severity) — describeLiveHop bound to the geo provider. Without it, hops
   // are still forwarded, just without coordinates.
@@ -214,6 +217,9 @@ function attachAgentWebSocket({
       try { notifyDashboard({ type: 'agent-status', payload: { agentId: agent.agentId, status: 'online' } }); } catch { /* best-effort */ }
     }
     recordAgentAudit('agent.online', agent.agentId, ws._remoteIp);
+    if (typeof onAgentStatus === 'function') {
+      try { onAgentStatus(agent.agentId, 'online', {}); } catch { /* best-effort */ }
+    }
 
     // Protocol-version handshake. The agent declares its wire-contract version in
     // the upgrade header; absent means a pre-versioning agent (→ v1). A mismatch
@@ -381,6 +387,9 @@ function attachAgentWebSocket({
         try { notifyDashboard({ type: 'agent-status', payload: { agentId: agent.agentId, status: 'offline' } }); } catch { /* best-effort */ }
       }
       recordAgentAudit('agent.offline', agent.agentId, ws._remoteIp);
+      if (typeof onAgentStatus === 'function') {
+        try { onAgentStatus(agent.agentId, 'offline', { closeCode: ws._session.closeCode }); } catch { /* best-effort */ }
+      }
     });
 
     ws.on('error', (err) => logger.error('Agent WS connection error:', err));

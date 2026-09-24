@@ -20,6 +20,10 @@ function createWebhookChannel({ config = {}, fetchImpl = globalThis.fetch, logge
     const body = JSON.stringify({
       type: isCluster ? 'event_cluster' : 'finding',
       sentAt: new Date().toISOString(),
+      // Where to open it and which machine it is, for receivers that route
+      // or post the alert on (additive: older receivers ignore them).
+      link: finding && finding.link ? finding.link : null,
+      hostName: finding && finding.hostName ? finding.hostName : null,
       finding,
       group: group
         ? {

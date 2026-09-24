@@ -117,6 +117,8 @@ const { createGeoEnricher } = require('./geo/enricher');
 const { createFlowPipeline } = require('./geo/flowPipeline');
 const { loadAlertingConfig } = require('./analysis/alerting/config');
 const { createDispatcher } = require('./analysis/alerting/dispatcher');
+const { createAlertContext } = require('./analysis/alerting/alertContext');
+const { createAgentOfflineAlerter } = require('./health/agentOfflineAlerter');
 const { createSilencer } = require('./analysis/alerting/maintenance');
 const { createEmailChannel, createSmtpTransport } = require('./analysis/alerting/channels/email');
 const { createUserMailer } = require('./services/userMailer');
@@ -757,6 +759,9 @@ function start() {
       return featureGate.isFeatureEnabled('alerting');
     },
     alertLog: alertDispatchLogRepo,
+    // Every alert names its agent and carries a link into the dashboard
+    // (BLUEEYE_PUBLIC_URL). Without the URL the alert still goes, unlinked.
+    enrich: createAlertContext({ publicUrl: config.publicUrl || null, agentsRepo, logger }).enrich,
     logger,
   });
   // One-time-password email for local user creation. It reuses the SAME live
@@ -1229,6 +1234,39 @@ function start() {
   // agent. Still-live agents reconnect within seconds and re-set 'online'; the
   // last_seen threshold means we only touch ones already silent past it, so a
   // healthy fleet doesn't flap. Best-effort.
+  // Alert on an agent that stays disconnected (docs/alerting.md). Uses the
+  // same dispatcher, so channels, severity floors, cooldown and maintenance
+  // windows apply exactly as for any other alert.
+  const agentOfflineAlerter = createAgentOfflineAlerter({
+    dispatcher,
+    isConnected: (id) => {
+      try { return !!(agentWs && agentWs.getConnectionInfo(id).connected); } catch { return false; }
+    },
+    agentName: async (id) => {
+      const a = await agentsRepo.findById(Number(id));
+      return a ? (a.display_name || a.hostname || null) : null;
+    },
+    lastSeen: async (id) => {
+      const a = await agentsRepo.findById(Number(id));
+      return a ? a.last_seen : null;
+    },
+    graceMs: Number(process.env.AGENT_OFFLINE_ALERT_GRACE_MS) > 0 ? Number(process.env.AGENT_OFFLINE_ALERT_GRACE_MS) : undefined,
+    logger,
+  });
+  // A restart drops every socket. The agents that were alive in the last ten
+  // minutes get the same grace to reconnect; one that does not is alerted.
+  Promise.resolve()
+    .then(() => agentsRepo.findAll())
+    .then((agents) => {
+      const cutoff = Date.now() - 10 * 60 * 1000;
+      // Polled SNMP devices share the table but never hold a socket.
+      const recent = (agents || [])
+        .filter((a) => a && a.platform !== 'snmp' && a.last_seen && new Date(a.last_seen).getTime() >= cutoff)
+        .map((a) => a.id);
+      agentOfflineAlerter.watch(recent);
+    })
+    .catch((err) => logger.warn(`agents: offline-alert watch at startup failed: ${err.message}`));
+
   Promise.resolve()
     .then(() => agentsRepo.markStaleOffline({ olderThanSec: 300 }))
     .then((n) => { if (n) logger.info(`agents: reconciled ${n} stale 'online' row(s) to 'offline' at startup.`); })
@@ -1249,6 +1287,12 @@ function start() {
     licenseGuard: (count) => licenseManager.canAcceptNewConnection(count),
     // Push live online/offline transitions to the dashboard.
     notifyDashboard,
+    // ...and to the offline alerter, which alerts on an agent still gone
+    // after its grace period (and again when it is back).
+    onAgentStatus: (agentId, status, info) => {
+      if (status === 'offline') agentOfflineAlerter.onOffline(agentId, info);
+      else agentOfflineAlerter.onOnline(agentId);
+    },
     // Live traceroute hops, geolocated the same way as the finished path.
     describeTraceHop: (hop) => describeLiveHop(hop, { geoProvider, centroids }),
     // Transaction-test channel: config push on connect/change + result ingest +
@@ -1316,6 +1360,7 @@ function start() {
     stopBackgroundJobs();
     baselines.stop();
     revocationRegistry.stop();
+    agentOfflineAlerter.stop();
     agentWs.close();
     dashboardWs.close();
     return new Promise((resolve) => {

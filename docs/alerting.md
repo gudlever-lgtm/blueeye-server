@@ -53,6 +53,42 @@ All share the interface `send(finding, group) → { ok, detail }`.
 Hooked into the analysis pipeline after `findingStore.save()` + correlation,
 behind `ALERTING_ENABLED`. Dispatch is best-effort and never breaks ingestion.
 
+## What every alert carries (`src/analysis/alerting/alertContext.js`)
+
+Before a subject reaches the channels the dispatcher adds two fields to a
+**copy** of it (`enrich`), so the throttle, the alert log and the caller are
+untouched:
+
+- **`hostName`** — the agent's display name (or hostname), looked up and cached
+  for a minute. A situation is named by up to five of its agents. The email
+  subject reads `[BlueEyes CRIT] probe.loss on core-sw-1 (#12)`; without a name
+  it keeps the old `on host 12`.
+- **`link`** — an absolute URL into the dashboard for the most specific record:
+  `/situations/:id` for a situation, `/events/:id` when the finding already
+  belongs to an event, otherwise `/agents/:id`. Built from
+  **`BLUEEYE_PUBLIC_URL`**; when it is unset (or not an absolute http(s) URL)
+  alerts go out without a link rather than with one that does not open.
+
+Email puts the link on the line after the explanation, Matrix as a link in the
+formatted body, the webhook as top-level `link` / `hostName` (additive — older
+receivers ignore them), syslog as `agent="…" link=…` in the message.
+
+## Agent offline (`src/health/agentOfflineAlerter.js`)
+
+An agent whose socket closes and does not come back within a **grace period**
+(2 minutes; `AGENT_OFFLINE_ALERT_GRACE_MS` overrides it) raises one alert:
+`metric: agent.connection`, `kind: OFFLINE`, severity CRIT, naming the agent
+and when it went. When it reconnects a recovery (`kind: ONLINE`) follows. The
+grace rides out restarts, self-updates and blips the agent's own reconnect
+bridges. It goes through the same dispatcher, so channel floors, the cooldown
+and **maintenance windows** apply — planned work on a site does not page.
+
+At boot every socket is new, so the agents seen in the last ten minutes get the
+same grace; one that does not reconnect is alerted. An agent that reconnected
+to another server instance (its `last_seen` moved on after the disconnect) is
+not alerted by this one. Polled SNMP devices never hold a socket and are never
+watched.
+
 ## API
 
 | Method | Path | Description |
@@ -88,7 +124,8 @@ dispatch through.
 ## Tests
 
 `src/analysis/alerting/__tests__/` (dispatcher rules, throttling, isolation,
-channel HMAC/syslog format/email + transport rebuild) and `test/alertingApi.test.js`,
+channel HMAC/syslog format/email + transport rebuild, alert context: name + link
+per channel), `test/agentOfflineAlerter.test.js` and `test/alertingApi.test.js`,
 `test/alertingPipeline.test.js` + `test/alertingSettings.test.js` (runtime config:
 secret-safe reads, live-apply to the dispatcher/channels, licence gate). All
 outgoing calls are mocked — no real emails/webhooks/syslog in tests.

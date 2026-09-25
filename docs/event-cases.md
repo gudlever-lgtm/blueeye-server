@@ -186,7 +186,7 @@ that fallback **without** a provider call. Answers are cached per event+question
 
 | Method + path | Role | Purpose |
 | --- | --- | --- |
-| `GET /api/events` | viewer+ | list (filter `status`/`severity`/`device`/`from`/`to`); each row carries `agentName`/`agentHostname`/`locationId`/`locationName` |
+| `GET /api/events` | viewer+ | list (filter `status`/`severity`/`device`/`from`/`to`); each row carries `agentName`/`agentHostname`/`locationId`/`locationName`; the response also carries `bulkMax`/`bulkAll` (the bulk policy) |
 | `GET /api/events/:id` | viewer+ | one event (+ device identity) + its linked anomalies; `explanation.where` adds `locationId`/`locationName` and a ready-made `summary` |
 | `GET /api/events/:id/timeline` | viewer+ | chronological events (anomalies + config-changes + status changes) |
 | `GET /api/events/:id/config-context` | operator+ | the correlated config change + masked/classified diff + "suspected trigger N min before" |
@@ -252,6 +252,47 @@ open" tells you what to do next.
 
 Every event gets **its own audit row**, marked `(bulk)`. The audit log answers
 "what happened to event 52", and one batch row cannot.
+
+### The cap, and the way past it
+
+That per-event cost — a read, a guarded write and an audit row each — is what
+bounds the id form. The bound is **`bulkMax` in Settings → Events** (default
+500, 1..5000): a statement about what this server can take in one request, not a
+guess at what an operator might select. `GET /api/events` reports it alongside
+the rows, because Settings is admin-only and the page still has to respect it;
+an over-cap request is refused with `400 { error, limit, selected }`.
+
+A queue longer than the cap is not cleared by selecting harder, so the same
+endpoint takes a second, **filter-scoped** form:
+
+```
+POST /api/events/bulk-status  { all: true, status, comment?, filters: { status?, severity?, device?, from?, to? } }
+```
+
+`ids` and `all` are mutually exclusive, and `all` must be explicit — an empty
+body meaning "resolve the entire queue" is the kind of default that gets
+discovered the hard way. `filters` are the **same predicates the list is read
+with**, parsed by the same parser, so "move everything I am looking at" moves
+exactly that.
+
+It is **one UPDATE and one audit row**, so the cap does not apply — the work no
+longer grows with the selection. What it keeps is the state machine: the legal
+`from` statuses for the target go into the `WHERE`, so a row somebody moved a
+second ago is simply missed, never moved illegally, and a reopen still needs its
+comment. A status filter that cannot reach the target (`open` → `closed`) is a
+`400` rather than a quiet `0 moved`. The answer is `{ moved, all: true, status,
+scope }`.
+
+What it gives up, deliberately: per-event outcomes and per-event audit rows.
+Naming 989 rows is not a report anybody reads, and writing 989 audit rows is the
+cost this exists to avoid — so **the filter is the record**, written as one
+`event_status_change_bulk` row carrying the scope and the count.
+
+Sites that do not want operators moving rows nobody scrolled past can turn the
+form off (**`bulkAll` in Settings → Events**); the API then answers `403` and the
+dashboard stops offering it. The dashboard only offers it with a single status
+filter (so "all matching" has one next step) and no location filter (that one
+narrows the rows in the browser, not the server's match).
 
 `POST /api/event-clusters/bulk-resolve` is the same shape for situations, taking
 `{ ids, note }`. Two differences worth knowing:

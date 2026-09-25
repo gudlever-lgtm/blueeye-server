@@ -4,7 +4,7 @@ const express = require('express');
 const { asyncHandler } = require('../middleware/asyncHandler');
 const { requireAuth, requireRole } = require('../auth/middleware');
 const { ROLES } = require('../auth/roles');
-const { canTransition, requiresComment, isStatus } = require('../eventCases/stateMachine');
+const { canTransition, requiresComment, isStatus, STATUSES } = require('../eventCases/stateMachine');
 const { validateStatusPatch } = require('../validation/eventCaseValidation');
 const { validateEventNote } = require('../validation/eventNoteValidation');
 const { buildTimeline } = require('../eventCases/timeline');
@@ -18,10 +18,13 @@ const { buildExplanation } = require('../eventCases/explanation');
 const { EVENT_INSUFFICIENT_ANSWER } = require('../analysis/assistant');
 
 const SEVERITIES = ['INFO', 'WARN', 'CRIT'];
-// How many events one bulk transition may carry. Each is a read, a guarded
-// write and an audit row, so this is a bound on the request's work, not a
-// guess at what an operator might select.
+// How many events one bulk transition may carry by id. Each is a read, a
+// guarded write and an audit row, so this is a bound on the request's work, not
+// a guess at what an operator might select — which is exactly why the number is
+// an admin's to set (Settings → Events). This is the fallback for a server with
+// no settings service wired, and the default the service ships.
 const MAX_BULK_EVENTS = 500;
+const BULK_DEFAULTS = { bulkMax: MAX_BULK_EVENTS, bulkAll: true };
 const OPERATOR_ROLES = [ROLES.OPERATOR, ROLES.ADMIN]; // force_ai (costs a Mistral call) is operator+
 
 function parseEventId(raw) {
@@ -33,6 +36,37 @@ function parseDate(v) {
   if (v == null || v === '') return null;
   const d = new Date(v);
   return Number.isNaN(d.getTime()) ? null : d;
+}
+
+// The filters the list is read with. ONE parser, used by the list endpoint and
+// by the filter-scoped bulk transition, because "move everything I am looking
+// at" is only true while both read the request the same way.
+function parseEventFilters(input) {
+  const q = input || {};
+  const status = q.status ? String(q.status) : '';
+  const severity = q.severity ? String(q.severity) : '';
+  if (status && !isStatus(status)) return { error: 'invalid status filter' };
+  if (severity && !SEVERITIES.includes(severity)) return { error: 'invalid severity filter' };
+  const device = q.device == null ? '' : String(q.device).trim();
+  return {
+    value: {
+      status: status || null,
+      severity: severity || null,
+      hostId: device || null,
+      from: parseDate(q.from),
+      to: parseDate(q.to),
+    },
+  };
+}
+
+// The filters, as a line an auditor can read back. The FILTER is the record
+// when the action names no ids: "resolved 989" that does not say which 989 is
+// not something anybody can check afterwards.
+function describeFilters(f) {
+  const parts = Object.entries(f || {})
+    .filter(([, v]) => v != null && v !== '')
+    .map(([k, v]) => `${k}=${v instanceof Date ? v.toISOString() : v}`);
+  return parts.length ? parts.join(' ') : '(everything)';
 }
 
 // EVENTS — the operator-facing unit of "something is wrong on this device",
@@ -71,29 +105,44 @@ function createEventsRouter({
   remediationPlaybooksRepo = null,
   blastRadiusService = null,
   eventNotesRepo = null,
+  settingsService = null,
   logger = silentLogger,
 }) {
   const router = express.Router();
   const reader = requireRole(ROLES.VIEWER, ROLES.OPERATOR, ROLES.ADMIN);
   const writer = requireRole(ROLES.OPERATOR, ROLES.ADMIN);
 
+  // The bulk policy an admin set (Settings → Events). Read per request rather
+  // than at wiring time, so a changed cap applies to the next call instead of
+  // the next restart. A settings read that fails falls back to the defaults:
+  // a database hiccup must not turn every bulk action into a 500.
+  async function bulkPolicy() {
+    if (!settingsService || typeof settingsService.getEvents !== 'function') return { ...BULK_DEFAULTS };
+    try {
+      const s = await settingsService.getEvents();
+      return {
+        bulkMax: Number.isInteger(s && s.bulkMax) && s.bulkMax > 0 ? s.bulkMax : BULK_DEFAULTS.bulkMax,
+        bulkAll: s ? s.bulkAll !== false : BULK_DEFAULTS.bulkAll,
+      };
+    } catch (err) {
+      logger.warn(`events: bulk policy unreadable (${err && err.message}); using defaults`);
+      return { ...BULK_DEFAULTS };
+    }
+  }
+
   // GET /api/events — filterable list. viewer+.
+  //
+  // The response carries the bulk policy as well as the rows: the page draws
+  // the selection and the bulk bar, and it cannot be honest about either
+  // without knowing the cap. Settings itself is admin-only, so an operator has
+  // no other way to read it — and a cap discovered only by being refused is
+  // how the 989-selected screenshot happened.
   router.get('/', requireAuth, reader, asyncHandler(async (req, res) => {
-    const { status, severity, device } = req.query;
-    if (status && !isStatus(status)) {
-      return res.status(400).json({ error: 'invalid status filter' });
-    }
-    if (severity && !SEVERITIES.includes(severity)) {
-      return res.status(400).json({ error: 'invalid severity filter' });
-    }
-    const events = await eventCasesRepo.list({
-      status: status || null,
-      severity: severity || null,
-      hostId: device || null,
-      from: parseDate(req.query.from),
-      to: parseDate(req.query.to),
-    });
-    return res.json({ events });
+    const { value: filters, error } = parseEventFilters(req.query);
+    if (error) return res.status(400).json({ error });
+    const events = await eventCasesRepo.list(filters);
+    const policy = await bulkPolicy();
+    return res.json({ events, bulkMax: policy.bulkMax, bulkAll: policy.bulkAll });
   }));
 
   // GET /api/events/:id — one event plus its linked anomalies. viewer+.
@@ -477,6 +526,85 @@ function createEventsRouter({
     return res.json({ ...value, cached: false });
   }));
 
+  // The filter-scoped half of POST /bulk-status: one transition applied to
+  // EVERY event matching the same filters the list was read with.
+  //
+  // WHY IT EXISTS. The id form costs a read, a guarded write and an audit row
+  // per event, so it is capped — and a queue of a thousand open events cannot
+  // be cleared 500 ids at a time by somebody who is never going to scroll it.
+  // This is one UPDATE and one audit row, and the cap does not apply because
+  // the work no longer grows with the selection.
+  //
+  // WHAT IT KEEPS. The state machine: the legal `from` statuses for the target
+  // are computed from the SAME table the single PATCH uses and go into the
+  // WHERE, so an illegal transition cannot be performed — only missed. A reopen
+  // still needs its comment. And the filters are the list's own, so this moves
+  // what the operator was looking at rather than a wider set.
+  //
+  // WHAT IT GIVES UP, deliberately: a per-event outcome and a per-event audit
+  // row. Naming 989 rows is not a report anybody reads, and writing 989 audit
+  // rows is the per-event cost this exists to avoid. The FILTER is the record.
+  async function bulkAll(req, res, body, policy) {
+    if (!policy.bulkAll) {
+      return res.status(403).json({ error: 'Filter-scoped bulk actions are disabled (Settings → Events)' });
+    }
+    if (typeof eventCasesRepo.updateStatusWhere !== 'function') {
+      return res.status(501).json({ error: 'Filter-scoped bulk actions are not available on this server' });
+    }
+
+    const { value, errors } = validateStatusPatch(body);
+    if (errors) return res.status(400).json({ error: 'Validation failed', details: errors });
+    const to = value.status;
+
+    // The filters travel in the BODY here (a POST with a body has no business
+    // reading half its input from the query string), but they are the same
+    // shape and the same parser as the list.
+    const { value: filters, error } = parseEventFilters(body.filters || {});
+    if (error) return res.status(400).json({ error });
+
+    // Every status this transition is legal FROM, narrowed by the status filter
+    // when one is set. A filter that cannot move anywhere is refused rather
+    // than answered with "0 moved": the operator asked for something the state
+    // machine does not allow, and silence would read as "nothing matched".
+    const legal = STATUSES.filter((from) => canTransition(from, to));
+    const froms = filters.status ? legal.filter((f) => f === filters.status) : legal;
+    if (!froms.length) {
+      return res.status(400).json({
+        error: filters.status
+          ? `no event with status ${filters.status} can move to ${to}`
+          : `no status can move to ${to}`,
+      });
+    }
+    // A reopen carries its reason in every form. Otherwise bulk becomes the
+    // door that closes-and-reopens the history with nothing recorded.
+    if (froms.some((from) => requiresComment(from, to)) && !value.comment) {
+      return res.status(400).json({ error: 'A comment is required to reopen an event' });
+    }
+
+    const moved = await eventCasesRepo.updateStatusWhere({
+      toStatus: to,
+      fromStatuses: froms,
+      severity: filters.severity,
+      hostId: filters.hostId,
+      from: filters.from,
+      to: filters.to,
+      closedBy: to === 'closed' ? (req.user && req.user.id) || null : null,
+      at: to === 'resolved' ? new Date() : null,
+    });
+
+    if (auditLogger) {
+      const scope = describeFilters({ ...filters, status: froms.join('|') });
+      await auditLogger.record(req, {
+        category: 'event',
+        action: 'event_status_change_bulk',
+        target: 'filter',
+        detail: `→${to}${value.comment ? `: ${value.comment}` : ''} moved=${moved} scope=${scope} (bulk all)`,
+      });
+    }
+
+    return res.status(200).json({ moved, all: true, status: to, scope: filters });
+  }
+
   // PATCH /api/events/:id — status transition. operator/admin only.
   // POST /api/events/bulk-status — one transition applied to many events.
   //
@@ -495,11 +623,28 @@ function createEventsRouter({
   // normal state of a shared queue, not an error.
   router.post('/bulk-status', requireAuth, writer, asyncHandler(async (req, res) => {
     const body = req.body || {};
+    const policy = await bulkPolicy();
+    const wantsAll = body.all === true;
+    const hasIds = Array.isArray(body.ids);
+    // `all` has to be EXPLICIT, and it cannot be combined with ids. An empty
+    // body meaning "resolve the entire queue" is the kind of default that gets
+    // discovered the hard way.
+    if (wantsAll && hasIds) {
+      return res.status(400).json({ error: 'Send either { ids: [...] } or { all: true } with filters, not both' });
+    }
+    if (wantsAll) return bulkAll(req, res, body, policy);
+
     if (!Array.isArray(body.ids) || !body.ids.length) {
       return res.status(400).json({ error: 'ids must be a non-empty array' });
     }
-    if (body.ids.length > MAX_BULK_EVENTS) {
-      return res.status(400).json({ error: `ids must hold at most ${MAX_BULK_EVENTS} events` });
+    if (body.ids.length > policy.bulkMax) {
+      return res.status(400).json({
+        error: policy.bulkAll
+          ? `ids must hold at most ${policy.bulkMax} events — use { all: true } with filters instead`
+          : `ids must hold at most ${policy.bulkMax} events`,
+        limit: policy.bulkMax,
+        selected: body.ids.length,
+      });
     }
     const ids = [];
     for (const raw of body.ids) {

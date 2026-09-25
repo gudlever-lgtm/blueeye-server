@@ -106,6 +106,40 @@ test('GET /api/settings includes throughput defaults (disabled)', async () => {
   assert.ok(res.body.throughput && res.body.throughput.enabled === false);
 });
 
+// ---- PUT /api/settings/events (bulk-action policy) -------------------------
+// The Events page's bulk cap used to be a constant in the router, which meant a
+// number nobody could change on a server that could happily take more — or
+// less. It is a per-server decision, so it is a per-server setting.
+test('PUT /api/settings/events saves the bulk policy and GET reflects it (admin)', async () => {
+  const app = makeApp();
+  const put = await request(app).put('/api/settings/events').set('Authorization', admin())
+    .send({ bulkMax: 1200, bulkAll: false });
+  assert.equal(put.status, 200);
+  assert.equal(put.body.events.bulkMax, 1200);
+  assert.equal(put.body.events.bulkAll, false);
+  const get = await request(app).get('/api/settings').set('Authorization', admin());
+  assert.equal(get.body.events.bulkMax, 1200);
+  assert.equal(get.body.events.bulkAll, false);
+});
+
+test('PUT /api/settings/events refuses a cap outside 1..5000 (400)', async () => {
+  const app = makeApp();
+  for (const bulkMax of [0, 5001, 2.5, 'lots']) {
+    const res = await request(app).put('/api/settings/events').set('Authorization', admin()).send({ bulkMax });
+    assert.equal(res.status, 400, String(bulkMax));
+  }
+});
+
+test('PUT /api/settings/events is admin-only (viewer 403)', async () => {
+  const res = await request(makeApp()).put('/api/settings/events').set('Authorization', viewer()).send({ bulkMax: 10 });
+  assert.equal(res.status, 403);
+});
+
+test('GET /api/settings includes the event defaults (500, all-form on)', async () => {
+  const res = await request(makeApp()).get('/api/settings').set('Authorization', admin());
+  assert.deepEqual(res.body.events, { bulkMax: 500, bulkAll: true });
+});
+
 // ---- PUT /api/settings/agents (default traffic source for new agents) ------
 // The two values are ONE decision. An sFlow source with no exporter binds a
 // collector and waits for datagrams that never arrive — worse than proc, which

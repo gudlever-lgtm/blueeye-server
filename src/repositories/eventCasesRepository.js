@@ -160,6 +160,52 @@ function createEventCasesRepository(db) {
     return res.affectedRows > 0;
   }
 
+  // The SAME guarded transition, applied to every row matching a FILTER rather
+  // than to one id. One statement, no per-row round trip.
+  //
+  // Why this exists: the id form costs a read, a write and an audit row per
+  // event, so it is capped (Settings → Events). A fleet that produced a
+  // thousand open events cannot be cleared 500 at a time by an operator who is
+  // never going to scroll them — and "select everything on screen" was already
+  // a lie, since the list itself is capped.
+  //
+  // `fromStatuses` is the legal set for the target status, computed by the
+  // caller from the same state machine the single PATCH uses: it is IN the
+  // WHERE, so a row somebody moved a second ago is simply not matched. An
+  // illegal transition cannot be performed here, only missed — which is what
+  // "guarded" means at this scale.
+  //
+  // The filters are the SAME predicates `list()` builds, so "move everything I
+  // am looking at" moves exactly that and not a wider set. No LIMIT: a bound
+  // that silently moved the first N rows of an unordered UPDATE would make the
+  // number that comes back meaningless.
+  async function updateStatusWhere({
+    toStatus, fromStatuses = [], severity = null, hostId = null, from = null, to = null,
+    closedBy = null, at = null,
+  }) {
+    const froms = (Array.isArray(fromStatuses) ? fromStatuses : []).filter((s) => typeof s === 'string' && s);
+    if (!toStatus || !froms.length) return 0;
+
+    const sets = ['status = ?'];
+    const params = [toStatus];
+    if (toStatus === 'resolved') { sets.push('resolved_at = ?'); params.push(at); }
+    if (toStatus === 'closed') { sets.push('closed_by = ?'); params.push(closedBy); }
+    if (toStatus === 'open') { sets.push('resolved_at = NULL', 'closed_by = NULL'); }
+
+    const where = [`status IN (${froms.map(() => '?').join(', ')})`];
+    params.push(...froms);
+    if (severity) { where.push('severity = ?'); params.push(severity); }
+    if (hostId) { where.push('host_id = ?'); params.push(hostId); }
+    if (from != null) { where.push('last_event_at >= ?'); params.push(from); }
+    if (to != null) { where.push('first_event_at <= ?'); params.push(to); }
+
+    const [res] = await pool.query(
+      `UPDATE event_cases SET ${sets.join(', ')} WHERE ${where.join(' AND ')}`,
+      params
+    );
+    return Number(res.affectedRows || 0);
+  }
+
   // Links the config change (config_snapshots id) suspected to have triggered an
   // event. Guarded so the FIRST correlated change wins and a later anomaly
   // can't overwrite it (only sets when config_change_id IS NULL). Returns true if
@@ -319,7 +365,7 @@ function createEventCasesRepository(db) {
   }
 
   return {
-    create, findById, findOpenByHost, updateActivity, updateStatus, setConfigChange,
+    create, findById, findOpenByHost, updateActivity, updateStatus, updateStatusWhere, setConfigChange,
     linkCluster, listByCluster, listOpenOutsideSituations, listStaleInvestigating, listResolvedClosed, list,
   };
 }

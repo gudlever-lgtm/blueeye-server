@@ -15,7 +15,7 @@ const assert = require('node:assert/strict');
 const request = require('supertest');
 
 const {
-  makeApp, makeEventCasesRepo, makeEventClustersRepo, makeAuditLogRepo, authHeader,
+  makeApp, makeEventCasesRepo, makeEventClustersRepo, makeAuditLogRepo, makeSettingsService, authHeader,
 } = require('../test-support/fakes');
 
 const op = (app, method, path, body) => request(app)[method](path)
@@ -108,6 +108,116 @@ test('a reopen still needs its comment, in bulk too', async () => {
   assert.equal(withIt.body.moved, 1);
 });
 
+// ---- the filter-scoped form ------------------------------------------------
+// The cap is a bound on the request's WORK — a read, a guarded write and an
+// audit row per id. A queue of a thousand open events is not cleared 500 ids at
+// a time by somebody who is never going to scroll it, so the same transition
+// can be scoped by FILTER instead: one statement, one audit row, no cap.
+
+test('all: true moves everything matching the filters, past the id cap', async () => {
+  const eventCasesRepo = makeEventCasesRepo();
+  for (let i = 0; i < 600; i += 1) {
+    await eventCasesRepo.create({ host_id: '9', title: `e${i}`, last_event_at: new Date() });
+  }
+  const auditLogRepo = makeAuditLogRepo();
+  const app = makeApp({ eventCasesRepo, auditLogRepo });
+
+  const res = await op(app, 'post', '/api/events/bulk-status', {
+    all: true, status: 'resolved', filters: { status: 'open' },
+  });
+  assert.equal(res.status, 200);
+  assert.equal(res.body.moved, 600, 'more than the 500-id cap, in one request');
+  assert.equal(res.body.all, true);
+  assert.ok(eventCasesRepo.rows.every((r) => r.status === 'resolved'));
+
+  // ONE audit row, and the FILTER is the record: "resolved 600" that does not
+  // say which 600 is not something an auditor can check afterwards.
+  const audited = auditLogRepo.rows.filter((r) => r.action === 'event_status_change_bulk');
+  assert.equal(audited.length, 1);
+  assert.equal(audited[0].target, 'filter');
+  assert.match(audited[0].detail, /moved=600/);
+  assert.match(audited[0].detail, /status=open/);
+});
+
+test('all: true still obeys the state machine and the filters', async () => {
+  const { eventCasesRepo, open, inv1, inv2 } = await seededEvents();
+  await eventCasesRepo.updateStatus(inv2, { from: 'investigating', to: 'resolved' });
+  const app = makeApp({ eventCasesRepo });
+
+  // open|investigating → resolved is legal; the already-resolved one is not
+  // matched (its status is not in the legal `from` set), so it is missed rather
+  // than moved illegally.
+  const res = await op(app, 'post', '/api/events/bulk-status', { all: true, status: 'resolved' });
+  assert.equal(res.body.moved, 2);
+  assert.equal(eventCasesRepo.rows.find((r) => r.id === open).status, 'resolved');
+  assert.equal(eventCasesRepo.rows.find((r) => r.id === inv1).status, 'resolved');
+
+  // A status filter that cannot reach the target is REFUSED, not answered with
+  // "0 moved" — the operator asked for something the state machine forbids.
+  const bad = await op(app, 'post', '/api/events/bulk-status', {
+    all: true, status: 'closed', filters: { status: 'open' },
+  });
+  assert.equal(bad.status, 400);
+  assert.match(bad.body.error, /no event with status open can move to closed/);
+});
+
+test('all: true narrows by severity and device like the list does', async () => {
+  const eventCasesRepo = makeEventCasesRepo();
+  const crit = await eventCasesRepo.create({ host_id: '7', title: 'a', severity: 'CRIT', last_event_at: new Date() });
+  const warn = await eventCasesRepo.create({ host_id: '7', title: 'b', severity: 'WARN', last_event_at: new Date() });
+  const other = await eventCasesRepo.create({ host_id: '8', title: 'c', severity: 'CRIT', last_event_at: new Date() });
+  const app = makeApp({ eventCasesRepo });
+
+  const res = await op(app, 'post', '/api/events/bulk-status', {
+    all: true, status: 'resolved', filters: { severity: 'CRIT', device: '7' },
+  });
+  assert.equal(res.body.moved, 1);
+  assert.equal(eventCasesRepo.rows.find((r) => r.id === crit).status, 'resolved');
+  assert.equal(eventCasesRepo.rows.find((r) => r.id === warn).status, 'open', 'the severity filter was ignored');
+  assert.equal(eventCasesRepo.rows.find((r) => r.id === other).status, 'open', 'the device filter was ignored');
+});
+
+test('a reopen needs its comment in the filter-scoped form too', async () => {
+  const eventCasesRepo = makeEventCasesRepo();
+  const id = await eventCasesRepo.create({ host_id: '9', title: 'x', last_event_at: new Date() });
+  for (const [from, to] of [['open', 'investigating'], ['investigating', 'resolved'], ['resolved', 'closed']]) {
+    await eventCasesRepo.updateStatus(id, { from, to });
+  }
+  const app = makeApp({ eventCasesRepo });
+
+  const without = await op(app, 'post', '/api/events/bulk-status', { all: true, status: 'open' });
+  assert.equal(without.status, 400);
+  assert.equal(eventCasesRepo.rows.find((r) => r.id === id).status, 'closed');
+
+  const withIt = await op(app, 'post', '/api/events/bulk-status', { all: true, status: 'open', comment: 'came back' });
+  assert.equal(withIt.body.moved, 1);
+});
+
+test('the cap and the all-form are what Settings → Events says they are', async () => {
+  const { eventCasesRepo, inv1, inv2 } = await seededEvents();
+  const settingsService = makeSettingsService();
+  const app = makeApp({ eventCasesRepo, settingsService });
+
+  // The list reports the policy, because Settings itself is admin-only and the
+  // page still has to respect a cap it cannot read anywhere else.
+  const list = await request(app).get('/api/events').set('Authorization', authHeader('operator'));
+  assert.equal(list.body.bulkMax, 500);
+  assert.equal(list.body.bulkAll, true);
+
+  await settingsService.setEvents({ bulkMax: 1, bulkAll: false });
+  const over = await op(app, 'post', '/api/events/bulk-status', { ids: [inv1, inv2], status: 'resolved' });
+  assert.equal(over.status, 400);
+  assert.equal(over.body.limit, 1);
+  // With the all-form off, the error does not suggest it — and the form itself
+  // is refused rather than quietly ignored.
+  assert.doesNotMatch(over.body.error, /all: true/);
+  assert.equal((await op(app, 'post', '/api/events/bulk-status', { all: true, status: 'resolved' })).status, 403);
+
+  const after = await request(app).get('/api/events').set('Authorization', authHeader('operator'));
+  assert.equal(after.body.bulkMax, 1);
+  assert.equal(after.body.bulkAll, false);
+});
+
 test('events bulk: the boring guards', async () => {
   const { eventCasesRepo, inv1 } = await seededEvents();
   const app = makeApp({ eventCasesRepo });
@@ -119,6 +229,9 @@ test('events bulk: the boring guards', async () => {
   assert.equal((await post({ ids: [inv1], status: 'nope' })).status, 400);
   assert.equal((await post({ ids: ['x'], status: 'resolved' })).status, 400);
   assert.equal((await post({ ids: Array.from({ length: 501 }, (_, i) => i + 1), status: 'resolved' })).status, 400);
+  assert.equal((await post({ ids: [inv1], all: true, status: 'resolved' })).status, 400, 'ids and all are exclusive');
+  assert.equal((await post({ all: true })).status, 400, 'a status is required for the all form too');
+  assert.equal((await post({ all: true, status: 'resolved' }, 'viewer')).status, 403);
   assert.equal((await post({ ids: [inv1], status: 'resolved' }, 'viewer')).status, 403);
   assert.equal((await request(app).post('/api/events/bulk-status').send({ ids: [inv1], status: 'resolved' })).status, 401);
 });

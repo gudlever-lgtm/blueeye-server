@@ -90,7 +90,7 @@
     settings: {
       path: '/settings',
       tabs: ['users', 'auth', 'apitokens', 'agentkey', 'analyse', 'alerting', 'severity', 'thresholds', 'runbooks',
-        'integrations', 'cmdb', 'ai', 'maintenance', 'database', 'retention', 'types', 'map',
+        'events', 'integrations', 'cmdb', 'ai', 'maintenance', 'database', 'retention', 'types', 'map',
         'updates', 'agents', 'snmp', 'screening', 'assurance', 'appearance', 'license'],
       tabKey: 'settingsTab',
     },

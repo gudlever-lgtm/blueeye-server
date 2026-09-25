@@ -27,6 +27,7 @@ function createSettingsRouter({ settingsService, featureGate, dispatcher, analys
       retention: settingsService ? await settingsService.getRetention() : (retentionConfig || null),
       throughput: settingsService ? await settingsService.getThroughput() : null,
       agents: settingsService ? await settingsService.getAgents() : null,
+      events: settingsService ? await settingsService.getEvents() : null,
       assistant: settingsService ? await settingsService.getAssistantSafe() : null,
       map: settingsService ? await settingsService.getMap() : null,
       geoip: settingsService ? await settingsService.getGeoip() : null,
@@ -161,6 +162,19 @@ function createSettingsRouter({ settingsService, featureGate, dispatcher, analys
   router.put('/agents', ...admin, asyncHandler(async (req, res) => {
     try {
       res.json({ agents: await settingsService.setAgents(req.body || {}) });
+    } catch (err) {
+      if (err.statusCode === 400) return res.status(400).json({ error: 'Validation failed', details: err.details || {} });
+      throw err;
+    }
+  }));
+
+  // PUT /api/settings/events — bulk-action policy for the Events page:
+  // { bulkMax: 1..5000, bulkAll: bool }. bulkMax bounds how many ids one bulk
+  // transition may carry; bulkAll decides whether the filter-scoped form
+  // ("everything matching these filters") is offered at all.
+  router.put('/events', ...admin, asyncHandler(async (req, res) => {
+    try {
+      res.json({ events: await settingsService.setEvents(req.body || {}) });
     } catch (err) {
       if (err.statusCode === 400) return res.status(400).json({ error: 'Validation failed', details: err.details || {} });
       throw err;

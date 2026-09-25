@@ -112,3 +112,56 @@ test('POST /api/test-packages/:id/run is forbidden for a viewer (403)', async ()
   const res = await request(makeApp()).post('/api/test-packages/8/run').set('Authorization', viewer());
   assert.equal(res.status, 403);
 });
+
+// ---- Run on a chosen set of agents ----------------------------------------
+//
+// The reverse direction: pick the test, pick who runs it. The override applies
+// to THIS run only — a package aimed at the whole fleet must still be aimed at
+// the whole fleet afterwards, or "run it here once" quietly becomes an edit.
+
+test('POST /api/test-packages/:id/run passes agentIds to the runner as a one-off override', async () => {
+  let seen = null;
+  const repo = makeTestPackagesRepo({ findById: async () => ({ id: 3, name: 'p', items: [], targets: { mode: 'all' } }) });
+  const runner = makeTestPackageRunner({
+    run: async (pkg, opts) => { seen = { pkg, opts }; return { targeted: 2, reached: 2, delivered: 2, items: 1, adhoc: true }; },
+  });
+  const res = await request(makeApp({ testPackagesRepo: repo, testPackageRunner: runner }))
+    .post('/api/test-packages/3/run')
+    .set('Authorization', operator())
+    .send({ agentIds: [4, 9] });
+  assert.equal(res.status, 202);
+  assert.equal(res.body.adhoc, true);
+  assert.deepEqual(seen.opts.agentIds, [4, 9]);
+  // The package's own targets are untouched — the override never writes back.
+  assert.deepEqual(seen.pkg.targets, { mode: 'all' });
+});
+
+test('POST /api/test-packages/:id/run with no body still uses the package\'s own targets', async () => {
+  let seen = 'unset';
+  const repo = makeTestPackagesRepo({ findById: async () => ({ id: 3, name: 'p', items: [], targets: { mode: 'all' } }) });
+  const runner = makeTestPackageRunner({ run: async (pkg, opts) => { seen = opts; return { targeted: 0, reached: 0, delivered: 0, items: 0 }; } });
+  const res = await request(makeApp({ testPackagesRepo: repo, testPackageRunner: runner }))
+    .post('/api/test-packages/3/run').set('Authorization', operator());
+  assert.equal(res.status, 202);
+  assert.deepEqual(seen, {});
+});
+
+test('POST /api/test-packages/:id/run rejects a malformed agentIds with 400', async () => {
+  const repo = makeTestPackagesRepo({ findById: async () => ({ id: 3, name: 'p', items: [], targets: { mode: 'all' } }) });
+  const app = makeApp({ testPackagesRepo: repo });
+  for (const body of [{ agentIds: [] }, { agentIds: 'all' }, { agentIds: [0] }, { agentIds: [1.5] }, { agentIds: ['4'] }]) {
+    const res = await request(app).post('/api/test-packages/3/run').set('Authorization', operator()).send(body);
+    assert.equal(res.status, 400, JSON.stringify(body));
+    assert.ok(res.body.details.agentIds, JSON.stringify(body));
+  }
+});
+
+test('POST /api/test-packages/:id/run validates the body BEFORE it looks the package up', async () => {
+  // A 400 that costs a database read is a 400 an unauthenticated flood can use.
+  let reads = 0;
+  const repo = makeTestPackagesRepo({ findById: async () => { reads += 1; return null; } });
+  const res = await request(makeApp({ testPackagesRepo: repo }))
+    .post('/api/test-packages/3/run').set('Authorization', operator()).send({ agentIds: 'nope' });
+  assert.equal(res.status, 400);
+  assert.equal(reads, 0);
+});

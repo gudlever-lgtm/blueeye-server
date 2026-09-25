@@ -138,8 +138,27 @@ function validateTestPackageInput(body) {
   return Object.keys(errors).length > 0 ? { errors } : { value };
 }
 
+// POST /api/test-packages/:id/run — the OTHER direction: pick a test, run it on
+// a chosen set of agents, once. The body is optional; `{}` means "the package's
+// own targets", which is what Run now has always done. `agentIds` overrides them
+// for this run only and never writes back to the package.
+function validateRunTargets(input) {
+  const body = (input && typeof input === 'object' && !Array.isArray(input)) ? input : {};
+  if (body.agentIds === undefined || body.agentIds === null) return { value: {} };
+  const list = body.agentIds;
+  if (!Array.isArray(list)) return { errors: { agentIds: 'agentIds must be an array of agent ids' } };
+  if (list.length === 0) return { errors: { agentIds: 'agentIds must name at least one agent' } };
+  if (list.length > MAX_TARGET_IDS) return { errors: { agentIds: `agentIds has too many entries (max ${MAX_TARGET_IDS})` } };
+  for (const id of list) {
+    if (!Number.isInteger(id) || id <= 0) return { errors: { agentIds: 'agentIds must be positive integers' } };
+  }
+  return { value: { agentIds: [...new Set(list)] } };
+}
+
 module.exports = {
   validateTestPackageInput,
+  validateRunTargets,
+  MAX_TARGET_IDS,
   MIN_SCHEDULE_MS,
   MAX_SCHEDULE_MS,
   MAX_ITEMS,

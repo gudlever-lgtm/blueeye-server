@@ -179,3 +179,99 @@ test('the DHCP test: offered on the run form, summarised in the table, and its o
   assert.match(detail.textContent, /192\.168\.1\.201/);
   assert.match(detail.textContent, /10\.9\.0\.1/);
 });
+
+// ---- Pick a test, pick who runs it ----------------------------------------
+//
+// The reverse of the agent page's Tests tab. A package aimed at the whole fleet
+// must still be aimed at the whole fleet after a one-off run somewhere else, so
+// this goes through the run endpoint's override and never through a PUT.
+
+const PACKAGES = [{
+  id: 3, name: 'Daily reachability', enabled: true, schedule_ms: 0, schedule_spec: null,
+  targets: { mode: 'all', agentIds: [], locationIds: [] },
+  items: [{ type: 'probe', probe: { type: 'ping', host: '1.1.1.1' } }],
+  last_run_at: null, last_run_summary: null, created_by: null,
+}];
+const PKG_SESSION = (over = {}) => SESSION(Object.assign({
+  'GET /api/test-packages': PACKAGES,
+  'GET /agents': [
+    { id: 7, display_name: 'oslo-edge-01', hostname: 'oslo-edge-01', status: 'online' },
+    { id: 8, display_name: 'cph-core-02', hostname: 'cph-core-02', status: 'online' },
+  ],
+  'GET /locations': [],
+}, over));
+
+test('"Run on…" opens an agent picker and runs the package on the chosen agents only', async (t) => {
+  const sent = [];
+  const { doc, window } = boot({
+    t,
+    url: 'http://server.test/probes/packages',
+    routes: PKG_SESSION({
+      'POST /api/test-packages/3/run': { targeted: 1, reached: 1, delivered: 1, items: 1, adhoc: true },
+    }),
+  });
+  // Record the body as well as the path — the whole point is what is in it.
+  const realFetch = window.fetch;
+  window.fetch = async (u, opts = {}) => {
+    if (String(u).includes('/run')) sent.push(opts.body ? JSON.parse(opts.body) : null);
+    return realFetch(u, opts);
+  };
+  await settle();
+
+  const runOn = [...doc.querySelectorAll('#view button')].find((b) => /Run on/.test(b.textContent));
+  assert.ok(runOn, 'there is no way to run a saved test on chosen agents');
+  runOn.dispatchEvent(new window.Event('click', { bubbles: true }));
+
+  const drawer = doc.querySelector('.ui-drawer');
+  assert.ok(drawer, 'Run on… opened nothing');
+  assert.match(drawer.querySelector('h2').textContent, /Daily reachability/);
+  // It says what the package normally targets, so a one-off run is visibly one.
+  assert.match(drawer.textContent, /This run only/);
+
+  const options = [...drawer.querySelectorAll('.ms-opt')];
+  assert.deepEqual(options.map((o) => o.textContent.replace(/^✓?/, '').trim()), ['oslo-edge-01', 'cph-core-02']);
+  options[1].dispatchEvent(new window.Event('click', { bubbles: true }));
+  [...drawer.querySelectorAll('button')].find((b) => /Run now/.test(b.textContent))
+    .dispatchEvent(new window.Event('click', { bubbles: true }));
+  await settle();
+
+  assert.deepEqual(sent, [{ agentIds: [8] }]);
+});
+
+test('running on nobody is refused in the drawer rather than sent as a fleet-wide run', async (t) => {
+  const sent = [];
+  const { doc, window } = boot({ t, url: 'http://server.test/probes/packages', routes: PKG_SESSION() });
+  const realFetch = window.fetch;
+  window.fetch = async (u, opts = {}) => { if (String(u).includes('/run')) sent.push(u); return realFetch(u, opts); };
+  await settle();
+
+  [...doc.querySelectorAll('#view button')].find((b) => /Run on/.test(b.textContent))
+    .dispatchEvent(new window.Event('click', { bubbles: true }));
+  const drawer = doc.querySelector('.ui-drawer');
+  [...drawer.querySelectorAll('button')].find((b) => /Run now/.test(b.textContent))
+    .dispatchEvent(new window.Event('click', { bubbles: true }));
+  await settle();
+
+  assert.deepEqual(sent, [], 'an empty choice was sent as a run on the package\'s own targets');
+  assert.match(drawer.textContent, /at least one agent/);
+  assert.ok(doc.querySelector('.ui-drawer'), 'the drawer closed on a refusal');
+});
+
+test('plain "Run now" still sends no body, so the package runs on its own targets', async (t) => {
+  const sent = [];
+  const { doc, window } = boot({
+    t,
+    url: 'http://server.test/probes/packages',
+    routes: PKG_SESSION({ 'POST /api/test-packages/3/run': { targeted: 2, reached: 2, delivered: 2, items: 1 } }),
+  });
+  const realFetch = window.fetch;
+  window.fetch = async (u, opts = {}) => {
+    if (String(u).includes('/run')) sent.push(opts.body === undefined ? 'no body' : opts.body);
+    return realFetch(u, opts);
+  };
+  await settle();
+  [...doc.querySelectorAll('#view button')].find((b) => /^Run now$/.test(b.textContent.trim()))
+    .dispatchEvent(new window.Event('click', { bubbles: true }));
+  await settle();
+  assert.deepEqual(sent, ['no body']);
+});

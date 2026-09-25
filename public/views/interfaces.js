@@ -96,8 +96,17 @@
     // reports sampled conversations, not per-interface counters, so this table
     // is ALWAYS empty for it however healthy Diagnose looks — saying "no data
     // yet" there would send the reader to update an agent that is working.
-    function emptyFor(source) {
+    // `agent` is the admin record the drawer/page already holds. With it, the
+    // button opens THAT agent's Edit form on the source field — the one thing
+    // this empty state exists to get changed. It used to navigate to Fleet's
+    // Drift set instead, which from the Fleet drawer meant closing the drawer
+    // and re-rendering the screen the reader was already on: the button looked
+    // broken because, from there, it did nothing.
+    function emptyFor(source, agent) {
       if (source === 'sflow' || source === 'netflow') {
+        var change = agent && deps.changeSource
+          ? function () { deps.changeSource(agent); }
+          : deps.openAgents;
         return ui.emptyState({
           icon: '◎',
           title: t('iface.flowSource.title', { source: source }),
@@ -108,8 +117,8 @@
             ' ', deps.viewLink('overview', t('nav.view.overview')), ', ',
             deps.viewLink('flows', t('nav.view.flows')), ' ', t('common.and'), ' ',
             deps.viewLink('geo', t('nav.view.geo')), '.'),
-          action: deps.openAgents
-            ? ui.button('secondary', t('iface.flowSource.go'), { onclick: deps.openAgents })
+          action: change
+            ? ui.button('secondary', t('iface.flowSource.go'), { onclick: change })
             : null,
         });
       }
@@ -117,12 +126,12 @@
     }
 
     // Shared with the agent detail page — two copies of this table would drift.
-    function table(interfaces, source) {
+    function table(interfaces, source, agent) {
       var list = (interfaces || []).slice().sort(function (a, b) {
         return (rankOf(a) - rankOf(b))
           || ((b.rxBytesPerSec + b.txBytesPerSec) - (a.rxBytesPerSec + a.txBytesPerSec));
       });
-      if (!list.length) return emptyFor(source);
+      if (!list.length) return emptyFor(source, agent || null);
       return ui.dataTable({
         // Dense: a host or switch has many ports, and a technician scans them.
         dense: true,

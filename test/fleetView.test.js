@@ -266,3 +266,99 @@ test('open issues: probe outages render, and each offers its NIS2 draft to an op
   assert.match(doc.querySelector('#view .fleet-issues pre').textContent, /Incident reference: #42/);
   assert.equal(window.location.pathname, '/fleet/health', 'the button did not also open the agent row');
 });
+
+// ---- the drawer: acknowledging, updating, and the flow-source empty state ---
+//
+// Three things in the drawer looked like controls and were not: the amber
+// "update" chip beside the version, the "Change the traffic source" button on a
+// flow-source agent (which closed the drawer and re-rendered the screen the
+// reader was already on), and a CRIT verdict with no way to say somebody is on
+// it. These hold the fix.
+
+const DRIFT = {
+  agents: [{
+    id: 7, hostname: 'oslo-edge-01', display_name: 'oslo-edge-01', platform: 'win32', arch: 'x64',
+    capabilities: { agentVersion: '0.43.0', managed: 'unmanaged', sources: ['sflow', 'proc'] },
+    monitor_config: { source: 'sflow' },
+  }],
+  versions: { offered: '0.44.0', source: '0.44.0' },
+};
+
+function drawerRoutes(over = {}) {
+  return SESSION(Object.assign({
+    'GET /agents': DRIFT.agents,
+    'GET /system/version': { agent: '0.44.0', agentSource: '0.44.0' },
+    'GET /locations': [],
+    'GET /api/fleet/nics': { byAgent: [], drift: [] },
+    'GET /api/interfaces': { source: 'sflow', ts: '2026-09-25T16:51:14.000Z', interfaces: [] },
+  }, over));
+}
+
+const openDrawerOn = async (doc, window, name) => {
+  const row = rows(doc).find((r) => r.textContent.includes(name));
+  row.dispatchEvent(new window.Event('click', { bubbles: true }));
+  await settle();
+  return doc.querySelector('.ui-drawer');
+};
+
+test('a flow-source agent gets a button that opens ITS edit form, not a re-render', async (t) => {
+  const { doc, window, errors } = boot({ t, routes: drawerRoutes() });
+  await settle();
+  const drawer = await openDrawerOn(doc, window, 'oslo-edge-01');
+  const btn = [...drawer.querySelectorAll('button')].find((b) => /Change the traffic source/.test(b.textContent));
+  assert.ok(btn, 'the flow-source empty state has no way out');
+  btn.dispatchEvent(new window.Event('click', { bubbles: true }));
+  await settle();
+  const modal = doc.querySelector('.modal, dialog, .modal-backdrop');
+  assert.ok(modal, 'the button did not open the edit form');
+  assert.match(modal.textContent, /Traffic source/, 'the form opened without the field the button is about');
+  assert.match(modal.textContent, /Edit agent 7/, 'the form opened on the wrong agent');
+  assert.deepEqual(errors, []);
+});
+
+test('the version row carries the update action, not just an amber chip', async (t) => {
+  const { doc, window } = boot({ t, routes: drawerRoutes() });
+  await settle();
+  const drawer = await openDrawerOn(doc, window, 'oslo-edge-01');
+  const identity = [...drawer.querySelectorAll('.dsec')].find((s) => /Identity/.test(s.querySelector('h3').textContent));
+  assert.match(identity.textContent, /v0\.43\.0/);
+  // A Windows agent is not service-managed, so the server cannot push to it —
+  // its action is the in-place one-liner, and it must exist.
+  const btn = [...identity.querySelectorAll('button')][0];
+  assert.ok(btn, 'the update badge is still the only thing in the version row');
+  assert.match(btn.textContent, /Update/);
+});
+
+test('a CRIT verdict can be acknowledged, and acknowledging does not make it green', async (t) => {
+  const acked = {
+    agentId: 7,
+    health: Object.assign({}, HEALTH.agents[0].health, {
+      ack: { at: '2026-09-25T17:00:00.000Z', by: 'ops@x.dk', note: 'ISP ticket 4412', status: 'bad' },
+    }),
+  };
+  const { doc, window, log } = boot({
+    t, routes: drawerRoutes({ 'POST /api/fleet/health/7/ack': { status: 201, body: acked } }),
+  });
+  await settle();
+  const drawer = await openDrawerOn(doc, window, 'oslo-edge-01');
+  const btn = [...drawer.querySelectorAll('.drawer-foot button')].find((b) => /Acknowledge/.test(b.textContent));
+  assert.ok(btn, 'a CRIT row offers no way to say somebody is on it');
+  btn.dispatchEvent(new window.Event('click', { bubbles: true }));
+  await settle();
+  assert.ok(log.some((x) => x.key === 'POST /api/fleet/health/7/ack'));
+  assert.match(drawer.querySelector('.drawer-meta').textContent, /acknowledged/i);
+  // The verdict is untouched: the badge is still the critical one.
+  assert.ok(drawer.querySelector('.drawer-meta .badge-ui.crit'), 'the verdict went soft on acknowledge');
+  assert.match(drawer.textContent, /ISP ticket 4412/);
+  assert.match(btn.textContent, /Un-acknowledge/);
+});
+
+test('a healthy agent is not offered an acknowledgement', async (t) => {
+  const { doc, window } = boot({ t, routes: drawerRoutes() });
+  await settle();
+  const drawer = await openDrawerOn(doc, window, 'ber-edge-03');
+  assert.ok(drawer, 'the row did not open a drawer at all');
+  assert.ok([...drawer.querySelectorAll('.drawer-foot button')].some((b) => /Open the agent page/.test(b.textContent)),
+    'the footer is not the one this test thinks it is');
+  assert.equal([...drawer.querySelectorAll('.drawer-foot button')].filter((b) => /Acknowledge/.test(b.textContent)).length, 0);
+});

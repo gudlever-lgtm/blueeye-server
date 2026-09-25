@@ -7739,16 +7739,25 @@ function getInterfacesPage() {
     // "This agent is on a flow source" ends in changing that source, which is
     // an Edit on the Drift set.
     openAgents: () => gotoView('fleet', 'drift'),
+    // …and when the caller knows WHICH agent, the button opens that agent's
+    // Edit form, where the source lives. A viewer cannot edit, so they keep the
+    // navigation instead of a dialog that would only refuse the save.
+    changeSource: (agent) => {
+      if (agent && canWrite()) { editAgent(agent); return; }
+      gotoView('fleet', 'drift');
+    },
   });
   return interfacesPage;
 }
 
 // The interface table has two readers — the agent page's fold and the Fleet
 // drawer — so it is asked for here rather than copied into either.
-function interfaceTable(interfaces, source = null) {
+// `agent` is the admin record, when the caller has it: the flow-source empty
+// state uses it to open that agent's Edit form rather than navigating to Fleet.
+function interfaceTable(interfaces, source = null, agent = null) {
   const v = getInterfacesPage();
   if (!v) return el('div', { class: 'empty error' }, t('iface.err.title'));
-  return v.table(interfaces, source);
+  return v.table(interfaces, source, agent);
 }
 
 // The capacity forecast: where each link will be in a fortnight. It reads two
@@ -9771,6 +9780,33 @@ function getFleetView() {
         ? `?severity=${encodeURIComponent(fleetFilter.severity.join(','))}` : '';
       return api(`/api/fleet/health${q}`);
     },
+    // "Somebody is on this" on one agent's verdict. The POST answers with the
+    // verdict as stored, so the drawer paints what the server holds; a refusal
+    // says so here and the drawer leaves its state alone.
+    ackHealth: async (agentId, note = null) => {
+      try {
+        const r = await api(`/api/fleet/health/${encodeURIComponent(agentId)}/ack`, {
+          method: 'POST', body: note ? { note } : {},
+        });
+        toast(t('fleet.ack.done'));
+        return r && r.health ? r.health : null;
+      } catch (err) {
+        // 409 is the honest answer to acknowledging an agent that has gone
+        // healthy (or has never reported) since the screen was drawn.
+        toast(err.status === 409 ? t('fleet.ack.nothing') : errText(err), true);
+        throw err;
+      }
+    },
+    unackHealth: async (agentId) => {
+      try {
+        await api(`/api/fleet/health/${encodeURIComponent(agentId)}/ack`, { method: 'DELETE' });
+        toast(t('fleet.ack.cleared'));
+        return null;
+      } catch (err) {
+        toast(err.status === 404 ? t('fleet.ack.gone') : errText(err), true);
+        throw err;
+      }
+    },
     maintenance: () => api('/api/settings/maintenance').then((m) => (m && m.windows) || []),
     // Licence-gated (dashboard_advanced): when the licence excludes it the
     // panels are simply omitted, so the core Overview always renders.
@@ -10422,7 +10458,7 @@ function agentDetailFolds(id, agent) {
     let data;
     try { data = await api(`/api/interfaces?agentId=${encodeURIComponent(id)}`); } catch (e) { ifaceHost.replaceChildren(el('div', { class: 'error' }, e.message)); return; }
     ifaceStatus.textContent = data.ts ? `source: ${data.source} · measured ${fmtTimeShort(new Date(data.ts).getTime())}` : 'no measurements yet';
-    ifaceHost.replaceChildren(interfaceTable(data.interfaces, data.source));
+    ifaceHost.replaceChildren(interfaceTable(data.interfaces, data.source, agent));
   }
 
   // ---- Capacity forecast ----

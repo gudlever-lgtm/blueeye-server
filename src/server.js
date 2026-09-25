@@ -163,6 +163,7 @@ const { createReportSchedulesRepository } = require('./repositories/reportSchedu
 const { createReportMailer } = require('./services/reportMailer');
 const { createReportScheduler } = require('./services/reportScheduler');
 const { createSpeedtestResultsRepository } = require('./repositories/speedtestResultsRepository');
+const { createAgentHealthAcksRepository } = require('./repositories/agentHealthAcksRepository');
 const { createSecretBox } = require('./lib/secretBox');
 const { createIntegrationsRepository } = require('./repositories/integrationsRepository');
 const { createIntegrationAuditRepository } = require('./repositories/integrationAuditRepository');
@@ -402,6 +403,8 @@ function start() {
   const testPackageScheduler = createTestPackageScheduler({ repo: testPackagesRepo, runner: testPackageRunner, logger });
   // Active throughput ("speed test") results reported by agents.
   const speedtestResultsRepo = createSpeedtestResultsRepository(db);
+  // "Somebody is on this" on a Fleet verdict (migration 138).
+  const healthAcksRepo = createAgentHealthAcksRepository(db);
 
   // Transaction tests (http/tcp/dns/icmp journeys): config pushed to agents over
   // WS, results ingested over WS. Secrets (config_secrets) are AES-256-GCM at rest
@@ -1405,6 +1408,7 @@ function start() {
     serviceTests,
     severityRulesRepo,
     speedtestResultsRepo,
+    healthAcksRepo,
     integrationsRepo,
     integrationAuditRepo,
     integrationsDispatcher,

@@ -130,6 +130,8 @@ function createApp({
   // Service Assurance — the assembled module (src/serviceTests/index.js).
   serviceTests = null,
   speedtestResultsRepo,
+  // Fleet-verdict acknowledgements (migration 138).
+  healthAcksRepo = null,
   integrationsRepo,
   integrationAuditRepo,
   integrationsDispatcher,
@@ -349,6 +351,7 @@ function createApp({
       transactionsRepo,
       serviceTests,
       speedtestResultsRepo,
+      healthAcksRepo,
       integrationsRepo,
       integrationAuditRepo,
       integrationsDispatcher,

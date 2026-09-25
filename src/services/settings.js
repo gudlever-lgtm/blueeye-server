@@ -9,6 +9,7 @@ const {
 const { MONITOR_SOURCES } = require('../validation/agentValidation');
 const { parseCidr } = require('../discovery/cidr');
 const { normalizeSecurity, validateSecurity, mergeSecurity } = require('../auth/securityPolicy');
+const { parseWindow } = require('../lib/updateWindow');
 
 // Traffic sources that make sense as a fleet-wide default. SNMP is excluded: it
 // needs a per-device host, so it can only be configured per agent, never as a
@@ -532,7 +533,25 @@ function createSettingsService({ settingsRepo, config, liveAnalysis = null, live
   // Docker agents defer to the hsflowd sidecar and are unaffected by the
   // second flag; a host where hsflowd cannot be built reports the reason
   // through sflow.status and keeps running.
-  const AGENTS_DEFAULTS = { autoInstallTools: false, defaultTrafficSource: 'sflow', defaultSflowHsflowd: true };
+  // Auto-update is OFF by default, and that is a decision, not an oversight: it
+  // means the server pushes code to a customer's hosts only once someone has said
+  // it may. Turning it on is what makes a fleet of two hundred agents updatable
+  // without two hundred clicks — and what reaches the agents that are online for
+  // ten minutes a day, because they ask for their own update when they connect.
+  //
+  // `autoUpdateWindow` bounds WHEN an agent may restart itself, in the agent's
+  // own local time ('HH:MM-HH:MM', empty = any time). A monitoring agent
+  // restarting mid-incident is its own kind of outage.
+  // `autoUpdateBatch` is how many agents a fleet rollout moves at once, so a bad
+  // release costs a batch rather than the fleet.
+  const AGENTS_DEFAULTS = {
+    autoInstallTools: false,
+    defaultTrafficSource: 'sflow',
+    defaultSflowHsflowd: true,
+    autoUpdate: false,
+    autoUpdateWindow: '',
+    autoUpdateBatch: 10,
+  };
 
   function validateAgents(patch) {
     const p = patch && typeof patch === 'object' ? patch : {};
@@ -548,6 +567,23 @@ function createSettingsService({ settingsRepo, config, liveAnalysis = null, live
       }
     }
     bool(p, 'defaultSflowHsflowd', value);
+    bool(p, 'autoUpdate', value);
+    if (p.autoUpdateWindow !== undefined) {
+      const w = String(p.autoUpdateWindow || '').trim();
+      if (w && !parseWindow(w)) {
+        errors.autoUpdateWindow = 'autoUpdateWindow must be HH:MM-HH:MM (24-hour, agent local time) or empty';
+      } else {
+        value.autoUpdateWindow = w;
+      }
+    }
+    if (p.autoUpdateBatch !== undefined) {
+      const n = Number(p.autoUpdateBatch);
+      if (!Number.isInteger(n) || n < 1 || n > 500) {
+        errors.autoUpdateBatch = 'autoUpdateBatch must be an integer between 1 and 500';
+      } else {
+        value.autoUpdateBatch = n;
+      }
+    }
     return { errors: Object.keys(errors).length ? errors : null, value };
   }
 
@@ -556,10 +592,17 @@ function createSettingsService({ settingsRepo, config, liveAnalysis = null, live
     const o = override && typeof override === 'object' ? override : {};
     const base = { ...AGENTS_DEFAULTS, ...o };
     const src = DEFAULT_SOURCE_CHOICES.includes(base.defaultTrafficSource) ? base.defaultTrafficSource : 'proc';
+    const window = parseWindow(base.autoUpdateWindow) ? String(base.autoUpdateWindow).trim() : '';
+    const batch = Number.isInteger(base.autoUpdateBatch) && base.autoUpdateBatch >= 1 && base.autoUpdateBatch <= 500
+      ? base.autoUpdateBatch
+      : AGENTS_DEFAULTS.autoUpdateBatch;
     return {
       autoInstallTools: !!base.autoInstallTools,
       defaultTrafficSource: src,
       defaultSflowHsflowd: !!base.defaultSflowHsflowd,
+      autoUpdate: !!base.autoUpdate,
+      autoUpdateWindow: window,
+      autoUpdateBatch: batch,
     };
   }
 

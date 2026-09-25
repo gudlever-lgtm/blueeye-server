@@ -96,6 +96,104 @@ A malformed version from the signer is dropped rather than shown — a phantom
 (they are cached with the proof) and an unreachable license server (the last
 known values are kept).
 
+## Getting an update to every agent, not just the connected ones
+
+A one-click Update is a push down a live socket, and for a long time that was the
+only way an agent got new code. Three things followed from it, all bad at fleet
+size:
+
+* an agent that was not connected at the moment of the click got `409 Agent not
+  connected`, and nothing was retried. A host online for ten minutes a day could
+  only be updated by someone timing the click to its connection;
+* two hundred agents meant two hundred clicks;
+* only systemd agents were pushed to at all.
+
+All three are addressed, and none of them turns on by itself.
+
+### The queue
+
+`POST /agents/:id/update` on an offline agent now answers `202 { queued: true }`
+and leaves the command in `agent_command_queue` (migration 136). The WebSocket
+hub delivers it the moment that agent next dials in, and the audit row the click
+opened is the row the outcome lands on.
+
+Three properties of that table are load-bearing:
+
+* **the payload is stored UNSIGNED**, and signed at delivery. A command signature
+  carries `issuedAt` and the agent refuses one more than five minutes off its
+  clock, so a signature made when the operator clicked would be dead on arrival —
+  and a queued row is therefore not a replayable credential;
+* **one entry per (agent, kind)**, so clicking Update three times leaves one
+  command, with the newest target;
+* **always an expiry** (24 h by default). An update queued for a host that comes
+  back next month would be for a version two releases old.
+
+A claimed row is deleted in the same transaction it is read in, so two sockets for
+the same agent cannot both deliver it; a command that cannot be written to the
+socket is put back. A six-hourly sweep drops expired rows, for the agents that
+never come back at all.
+
+### The fleet rollout
+
+| Route | Role | What it does |
+| --- | --- | --- |
+| `GET /agents/updates/fleet` | viewer+ | What a rollout would do: the offered version, how many agents are behind, which ones. No side effects. |
+| `POST /agents/updates/fleet` | admin | Moves one batch. `{ batch, agentIds, locationId, dryRun, queueOffline }`; answers what happened to each agent and how many are still behind. |
+
+It selects the agents actually BEHIND the offered version, so a re-run is safe
+and converges. It moves at most `batch` agents (Settings → Agents, default 10) —
+run it with `batch: 1` as a canary, look, then continue — and every agent gets its
+own audit row, because "the fleet was updated" is not something anyone can act on
+six weeks later. Docker and unmanaged agents are left out rather than pushed to
+and declined.
+
+### Agents that ask
+
+`GET /agents/me/config` now carries what this server offers:
+
+```json
+"updates": { "agentVersion": "0.28.0", "auto": true, "window": "02:00-04:00" }
+```
+
+With the policy on (Settings → Agents → **Automatic agent updates**, off by
+default), an agent that reads that and finds itself behind sends an
+`update-request` frame, and the server pushes the update. That is what reaches a
+host which is only ever briefly online: it asks on the config read it already
+makes on every connect.
+
+`auto` is a **permission, not an instruction**. The server re-checks all of it
+before it sends anything — the policy flag, that the agent really is behind, that
+its runtime can be restarted, and a 30-minute per-agent cooldown so a reconnect
+loop cannot become an update loop — because a flag that has travelled to a host
+and back is not a decision this server made. The agent checks the same things
+plus its own local opt-out (`BLUEEYE_AUTO_UPDATE=0`), and evaluates the
+maintenance window in its OWN local time (a fleet across three time zones cannot
+have "02:00" decided here; `src/lib/updateWindow.js` is byte-identical in the
+agent).
+
+### Which agents can be pushed to
+
+`capabilities.managed` decides, and it is the AGENT's report, not its platform:
+
+| `managed` | Pushed to? | How it restarts |
+| --- | --- | --- |
+| `systemd` | yes | `systemctl --no-block restart` |
+| `windows-service` | yes | a detached `cmd` that stops and starts the service — a service cannot stop itself in the foreground, because the stop ends the process that was going to issue the start |
+| `launchd` | yes | `launchctl kickstart -k system/<label>` |
+| `docker` | no | the host rebuilds the image |
+| `unmanaged` | no | nothing on the host would restart it |
+
+A Windows or macOS agent too old to report its runtime says `unmanaged` and keeps
+the installer affordance, which is the right answer for it.
+
+On Windows the blue/green swap cannot be atomic — there is no rename-onto-an-
+existing-junction — so it is a remove plus a create, and the gap is covered by
+when it happens (during an update the old process is still serving; during a
+rollback the service has not started). Neither Windows nor launchd has an
+`ExecStartPre`, so the rollback guard runs IN the agent at startup instead: it
+counts the start, and past the limit repoints `current` at the previous release
+and exits, so the service manager starts the restored release.
+
 ## When the agent refuses the update
 
 An agent installed by `install.sh` pins the server's Ed25519 release **public**

@@ -226,6 +226,7 @@ function createApiRouter({
   transactionsRepo,
   logRing,
   speedtestResultsRepo,
+  healthAcksRepo = null,
   integrationsRepo,
   integrationAuditRepo,
   integrationsDispatcher,
@@ -421,7 +422,7 @@ function createApiRouter({
     assistant, auditLogger, logger,
   }));
   if (probeResultsRepo) router.use('/api/probes', createProbesRouter({ probeResultsRepo, agentsRepo, geoProvider, cityProvider, centroids }));
-  if (probeResultsRepo) router.use('/api/fleet', createFleetRouter({ agentsRepo, probeResultsRepo, resultsRepo, speedtestResultsRepo, settingsService, logger }));
+  if (probeResultsRepo) router.use('/api/fleet', createFleetRouter({ agentsRepo, probeResultsRepo, resultsRepo, speedtestResultsRepo, settingsService, healthAcksRepo, auditLogger, logger }));
   // Overview "open issues" rollup (license feature `dashboard_advanced`,
   // Professional+) — active events + recent findings, gated. Surfaced inline
   // on the Overview page; fleet health itself comes from /api/fleet above.

@@ -9,6 +9,7 @@ const { interfaceHealthSummary } = require('../health/interfaceHealth');
 const { throughputHealthSummary } = require('../health/throughputHealth');
 const { computeDataQuality } = require('../health/dataQuality');
 const { computeNicInventory } = require('../health/nicInventory');
+const { healthSignature, applyAck, isAckable } = require('../health/healthAck');
 const { silentLogger } = require('../logger');
 const { parseId } = require('../validation/locationValidation');
 
@@ -46,7 +47,10 @@ function parseSeverityParam(v) {
 // with its interface signal (link/errors/discards/util) — worst-first. viewer+.
 // Reads all agents + one windowed probe query + the latest result per agent; no
 // new storage.
-function createFleetRouter({ agentsRepo, probeResultsRepo, resultsRepo, speedtestResultsRepo = null, settingsService = null, logger = silentLogger }) {
+function createFleetRouter({
+  agentsRepo, probeResultsRepo, resultsRepo, speedtestResultsRepo = null, settingsService = null,
+  healthAcksRepo = null, auditLogger = null, logger = silentLogger,
+}) {
   const router = express.Router();
 
   // Latest result row per agent, keyed by agent id. Best-effort: a results read
@@ -77,13 +81,47 @@ function createFleetRouter({ agentsRepo, probeResultsRepo, resultsRepo, speedtes
     return { throughputByAgentId, throughputThresholds };
   }
 
+  // Every live acknowledgement, keyed by agent id. Best-effort, like every other
+  // dimension here: a failed read means the rollup shows nothing as
+  // acknowledged, never that the rollup fails.
+  async function acksById() {
+    if (!healthAcksRepo || !healthAcksRepo.findAll) return {};
+    try { return await healthAcksRepo.findAll(); } catch (err) {
+      logger.warn(`fleet: health acknowledgements read failed (${err.message}); showing none as acknowledged`);
+      return {};
+    }
+  }
+
+  // ONE agent's verdict, computed exactly as the fleet rollup computes it.
+  // Shared by GET /agent/:id and the acknowledge route, so what gets
+  // acknowledged is the verdict the reader was looking at — an ack route that
+  // signed the client's idea of the verdict would let a stale tab clear a
+  // problem that has since changed.
+  async function agentVerdict(agent, windowMs = DEFAULT_WINDOW_MS) {
+    const [rows, latest, speed, thresholds] = await Promise.all([
+      probeResultsRepo.findByAgent({ agentId: agent.id, from: new Date(Date.now() - windowMs), limit: 2000 }),
+      resultsRepo && resultsRepo.findByAgentId ? resultsRepo.findByAgentId(agent.id, { limit: 1 }) : Promise.resolve([]),
+      speedtestResultsRepo && speedtestResultsRepo.findByAgent ? speedtestResultsRepo.findByAgent(agent.id, 1).catch(() => []) : Promise.resolve([]),
+      settingsService && settingsService.getThroughput ? settingsService.getThroughput().catch(() => null) : Promise.resolve(null),
+    ]);
+    const probe = computeAgentHealth(rows.slice().reverse());
+    const iface = interfaceHealthSummary(latest && latest[0] && latest[0].payload && latest[0].payload.traffic);
+    let health = mergeHealth(probe, iface);
+    const latestSpeed = speed && speed[0] ? speed[0] : null;
+    const thr = throughputHealthSummary(latestSpeed, thresholds || {});
+    if (thr) health = mergeThroughput(health, thr);
+    health = mergeConnection(health, agent.status === 'offline');
+    return { health, latest, latestSpeed };
+  }
+
   router.get('/health', requireAuth, requireRole(ROLES.VIEWER, ROLES.OPERATOR, ROLES.ADMIN), asyncHandler(async (req, res) => {
     const windowMs = parseWindow(req.query.windowMin);
-    const [agents, rows, latestMap, thrCtx] = await Promise.all([
+    const [agents, rows, latestMap, thrCtx, acks] = await Promise.all([
       agentsRepo.findAll(),
       probeResultsRepo.fleetHealth({ windowMs }),
       latestPerAgentMap(),
       throughputContext(),
+      acksById(),
     ]);
     const byAgent = {};
     for (const r of rows) {
@@ -112,7 +150,16 @@ function createFleetRouter({ agentsRepo, probeResultsRepo, resultsRepo, speedtes
     for (const a of fleet) {
       const latest = latestMap[a.agentId];
       a.quality = computeDataQuality({ capabilities: capsById[a.agentId], latest: latest ? { payload: latest.payload, created_at: latest.created_at } : null });
+      // An acknowledgement annotates the verdict; it never changes it. The
+      // status, the summary counts and the worst-first sort are what they were,
+      // so a cleared agent is still a CRIT agent — it just says who has it.
+      a.health = applyAck(a.health, acks[a.agentId] || null);
     }
+    // How many of the current verdicts are acknowledged, for the "3 of 7
+    // cleared" line. Counted from the merged list rather than from the table,
+    // so an acknowledgement made for a verdict that has since moved is not
+    // counted — it no longer applies.
+    summary.acknowledged = fleet.filter((a) => a.health && a.health.ack).length;
     // `summary` always reflects the WHOLE fleet (so the dashboard's metric-card
     // counts stay honest); only the returned `agents` list is narrowed when a
     // valid severity filter is supplied.
@@ -138,20 +185,13 @@ function createFleetRouter({ agentsRepo, probeResultsRepo, resultsRepo, speedtes
     if (agentId === null) return res.status(400).json({ error: 'agentId must be a positive integer' });
     const agent = await agentsRepo.findById(agentId);
     if (!agent) return res.status(404).json({ error: 'Agent not found' });
-    const windowMs = parseWindow(req.query.windowMin);
-    const [rows, latest, speed, thresholds] = await Promise.all([
-      probeResultsRepo.findByAgent({ agentId, from: new Date(Date.now() - windowMs), limit: 2000 }),
-      resultsRepo && resultsRepo.findByAgentId ? resultsRepo.findByAgentId(agentId, { limit: 1 }) : Promise.resolve([]),
-      speedtestResultsRepo && speedtestResultsRepo.findByAgent ? speedtestResultsRepo.findByAgent(agentId, 1).catch(() => []) : Promise.resolve([]),
-      settingsService && settingsService.getThroughput ? settingsService.getThroughput().catch(() => null) : Promise.resolve(null),
-    ]);
-    const probe = computeAgentHealth(rows.slice().reverse());
-    const iface = interfaceHealthSummary(latest && latest[0] && latest[0].payload && latest[0].payload.traffic);
-    let health = mergeHealth(probe, iface);
-    const latestSpeed = speed && speed[0] ? speed[0] : null;
-    const thr = throughputHealthSummary(latestSpeed, thresholds || {});
-    if (thr) health = mergeThroughput(health, thr);
-    health = mergeConnection(health, agent.status === 'offline');
+    const { health: computed, latest, latestSpeed } = await agentVerdict(agent, parseWindow(req.query.windowMin));
+    let health = computed;
+    if (healthAcksRepo && healthAcksRepo.findByAgent) {
+      try { health = applyAck(health, await healthAcksRepo.findByAgent(agentId)); } catch (err) {
+        logger.warn(`fleet: acknowledgement read for agent ${agentId} failed (${err.message})`);
+      }
+    }
     const quality = computeDataQuality({
       capabilities: agent.capabilities || null,
       latest: latest && latest[0] ? { payload: latest[0].payload, created_at: latest[0].created_at } : null,
@@ -160,6 +200,74 @@ function createFleetRouter({ agentsRepo, probeResultsRepo, resultsRepo, speedtes
       ? { downMbps: latestSpeed.down_mbps != null ? Number(latestSpeed.down_mbps) : null, upMbps: latestSpeed.up_mbps != null ? Number(latestSpeed.up_mbps) : null, ts: latestSpeed.ts || null, ok: latestSpeed.ok === 1 || latestSpeed.ok === true }
       : null;
     res.json({ agentId, displayName: agent.display_name || agent.hostname, health, quality, throughput });
+  }));
+
+  // ---------------------------------------------------------------- acknowledge
+  //
+  // "Somebody is on this." A CRIT verdict on Fleet is derived from live
+  // measurements, so it cannot be closed the way an event is — it clears when
+  // the measurements clear. What a shift needs in the meantime is a way to say
+  // the row has been seen and is being handled, and that is what these two
+  // routes write (migration 138).
+  //
+  // The verdict is recomputed HERE rather than taken from the request: the
+  // signature stored is the one the server currently stands behind, so a tab
+  // left open overnight cannot clear this morning's problem with last night's.
+  // A verdict that moves afterwards re-opens the row on its own.
+  //
+  // operator+ — the same footing as running a test on the agent. Acknowledging
+  // never touches alerting: the rules that page people are in severity_rules
+  // and alert_rules and are not read here.
+  router.post('/health/:id/ack', requireAuth, requireRole(ROLES.OPERATOR, ROLES.ADMIN), asyncHandler(async (req, res) => {
+    const agentId = parseId(req.params.id);
+    if (agentId === null) return res.status(400).json({ error: 'agentId must be a positive integer' });
+    const note = req.body && req.body.note != null ? String(req.body.note).trim() : '';
+    if (note.length > 255) return res.status(400).json({ error: 'note must be 255 characters or fewer' });
+    const agent = await agentsRepo.findById(agentId);
+    if (!agent) return res.status(404).json({ error: 'Agent not found' });
+    if (!healthAcksRepo || !healthAcksRepo.set) return res.status(503).json({ error: 'Acknowledgements are not available' });
+    const { health } = await agentVerdict(agent);
+    // A healthy agent has nothing to acknowledge, and an agent that has never
+    // reported must not be clearable — acknowledging "no data yet" would hide
+    // the one agent nobody has heard from.
+    if (!isAckable(health.status)) {
+      return res.status(409).json({ error: `Nothing to acknowledge — this agent's verdict is "${health.status}"`, status: health.status });
+    }
+    const ack = await healthAcksRepo.set({
+      agentId,
+      signature: healthSignature(health),
+      status: health.status,
+      note: note || null,
+      ackedBy: req.user && req.user.id ? Number(req.user.id) : null,
+      ackedEmail: (req.user && req.user.email) || null,
+    });
+    if (auditLogger) {
+      await auditLogger.record(req, {
+        category: 'agent',
+        action: 'agent_health_ack',
+        target: String(agentId),
+        detail: `status=${health.status} reason="${String(health.reason || '').slice(0, 160)}"${note ? ` note="${note.slice(0, 80)}"` : ''}`,
+      });
+    }
+    return res.status(201).json({ agentId, health: applyAck(health, ack) });
+  }));
+
+  // Undo. 404 when the agent was never acknowledged, so "clear" on a row that
+  // somebody else already un-acknowledged says so instead of reporting success.
+  router.delete('/health/:id/ack', requireAuth, requireRole(ROLES.OPERATOR, ROLES.ADMIN), asyncHandler(async (req, res) => {
+    const agentId = parseId(req.params.id);
+    if (agentId === null) return res.status(400).json({ error: 'agentId must be a positive integer' });
+    const agent = await agentsRepo.findById(agentId);
+    if (!agent) return res.status(404).json({ error: 'Agent not found' });
+    if (!healthAcksRepo || !healthAcksRepo.clear) return res.status(503).json({ error: 'Acknowledgements are not available' });
+    const removed = await healthAcksRepo.clear(agentId);
+    if (!removed) return res.status(404).json({ error: 'This agent is not acknowledged' });
+    if (auditLogger) {
+      await auditLogger.record(req, {
+        category: 'agent', action: 'agent_health_unack', target: String(agentId), detail: 'acknowledgement removed',
+      });
+    }
+    return res.status(204).end();
   }));
 
   return router;

@@ -260,6 +260,10 @@
 .ui .kv-ui dd { margin: 0; font-family: var(--mono); font-size: var(--fs-xs);
   font-variant-numeric: tabular-nums; }
 .ui .panel-ui > .kv-ui { padding: var(--s-4) var(--s-5); }
+/* The drawer's version row: the value, its badge and the button that acts on
+   it sit on one baseline rather than the button dropping onto its own line. */
+.ui .kv-ui .dw-ver { display: inline-flex; align-items: center; gap: var(--s-2);
+  flex-wrap: wrap; }
 .ui-drawer .hist { list-style: none; margin: 0; padding: 0; font-size: var(--fs-sm); }
 .ui-drawer .hist li { display: flex; gap: var(--s-3); padding: var(--s-2) 0;
   border-bottom: 1px solid var(--hairline); }

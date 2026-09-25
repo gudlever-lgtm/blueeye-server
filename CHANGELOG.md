@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.204.3 — Three controls in the Fleet drawer that now do something
+
+All three were things the drawer showed and could not act on.
+
+- **"Change the traffic source"** on a flow-source agent opened Fleet's Drift
+  set. From the Fleet drawer — where the button mostly gets read — that means
+  closing the drawer and re-rendering the screen the reader is already on, which
+  looks exactly like a button that does nothing. It opens **that agent's Edit
+  form**, on the field it is about. A viewer, who cannot edit, keeps the
+  navigation.
+- **The amber `update` chip** beside the version was a badge, not a button: the
+  only way to act on it was the ⋯ menu in the row underneath the open drawer.
+  The version row in the drawer now carries the action itself — a one-click
+  Update for a service-managed agent, the in-place one-liner for Windows — and
+  an agent the server cannot push to says why in the badge's title instead of
+  offering a button that would refuse.
+- **A CRIT verdict can be acknowledged.** The verdict is computed from live
+  measurements, so it cannot be closed the way an event is — it goes green when
+  the measurements do. What a shift needs in the meantime is to see which red
+  rows are already claimed, and that is what this writes: **Acknowledge** in the
+  drawer marks the row with who took it and when, the badge stays red, and the
+  summary counts stay honest. It is shared across the shift, not per-user, and
+  it never touches alerting. A verdict that **changes** re-opens the row on its
+  own — the acknowledgement covers the verdict it was made for and no other.
+
+New endpoints: `POST` / `DELETE /api/fleet/health/:id/ack` (operator+).
+New table: `agent_health_acks` (migration 138).
 ## 0.204.2 — What an agent can run, and running a saved test on chosen agents
 
 **The agent page says what the host can run, before you click.** A new Tests

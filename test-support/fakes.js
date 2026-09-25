@@ -3318,6 +3318,27 @@ function makeSpeedtestResultsRepo(overrides = {}) {
   };
 }
 
+// A fake agent_health_acks repository (migration 138) — one acknowledgement per
+// agent, replaced on re-acknowledge, exactly like the ON DUPLICATE KEY UPDATE
+// the real one does.
+function makeAgentHealthAcksRepo(overrides = {}) {
+  const byAgent = new Map();
+  return {
+    byAgent,
+    findAll: overrides.findAll || (async () => Object.fromEntries(byAgent)),
+    findByAgent: overrides.findByAgent || (async (agentId) => byAgent.get(Number(agentId)) || null),
+    set: overrides.set || (async ({ agentId, signature, status, note = null, ackedBy = null, ackedEmail = null }) => {
+      const row = {
+        agentId: Number(agentId), signature, status, note, ackedBy, ackedEmail,
+        ackedAt: new Date().toISOString(),
+      };
+      byAgent.set(Number(agentId), row);
+      return row;
+    }),
+    clear: overrides.clear || (async (agentId) => byAgent.delete(Number(agentId))),
+  };
+}
+
 // A fake transactions repository (in-memory, stateful). Mirrors the real
 // createTransactionsRepository contract (migration 046): tests (type
 // http/tcp/dns/icmp + config incl. thresholds), agent assignments (join),
@@ -4209,6 +4230,7 @@ function makeApp(overrides = {}) {
     serviceTests,
     logRing: overrides.logRing || makeLogRing(),
     speedtestResultsRepo: overrides.speedtestResultsRepo || makeSpeedtestResultsRepo(),
+    healthAcksRepo: overrides.healthAcksRepo === undefined ? makeAgentHealthAcksRepo() : overrides.healthAcksRepo,
     releaseStore,
     // The real server passes a live resolver over the key service (the key can be
     // generated or deleted without a restart), so the fake does too — otherwise
@@ -4392,6 +4414,7 @@ module.exports = {
   makeLogRing,
   makeTestPackageRunner,
   makeSpeedtestResultsRepo,
+  makeAgentHealthAcksRepo,
   makeLicenseManager,
   makeAgentCommander,
   makeSystemInfo,

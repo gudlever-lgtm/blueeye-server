@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.205.0 — About, Documentation and the Guides catch up with the week
+## 0.205.2 — About, Documentation and the Guides catch up with the week
 
 The in-app text had fallen behind the code. Three gaps, closed:
 

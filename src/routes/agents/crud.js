@@ -8,6 +8,8 @@ const { parseId } = require('../../validation/locationValidation');
 const { validateAgentPosition, validateAgentManagedInput, MAX_INTERVAL_MS } = require('../../validation/agentValidation');
 const { validateTimeRange } = require('../../validation/resultsValidation');
 const { aggregateFlows } = require('./flows');
+const { runnableTests } = require('../../services/agentTestCatalogue');
+const { resolveTargetIds } = require('../../services/testPackageRunner');
 
 // The agent RECORD: list, read, edit its server-managed fields, delete it, and
 // read what it has reported (audit rows, results, flows).
@@ -18,6 +20,7 @@ function createAgentCrudRouter(ctx) {
   const router = express.Router();
   const {
     agentsRepo, locationsRepo, resultsRepo, auditRepo, agentCommander,
+    testPackagesRepo,
     auditLogger, integrationTrigger, logger,
     invalidId, notFound, validationError, recordRequested, markFailed,
   } = ctx;
@@ -123,6 +126,59 @@ function createAgentCrudRouter(ctx) {
         to: range.to ? range.to.toISOString() : null,
         measurements: rows.length,
         ...aggregateFlows(rows, { port, protocol }),
+      });
+    })
+  );
+
+  // GET /agents/:id/tests — what this agent can run, and what is already aimed
+  // at it. The agent's page asks the question one way ("what can THIS host do?")
+  // and the packages screen asks it the other ("who runs THIS test?"); both read
+  // the same two answers, so they are resolved in one place rather than in two
+  // screens that would drift.
+  //
+  // `connected` is the difference between a test that is offered and a test that
+  // can be run right now — an offline agent's socket takes no command.
+  router.get(
+    '/:id/tests',
+    requireAuth,
+    requireRole(ROLES.VIEWER, ROLES.OPERATOR, ROLES.ADMIN),
+    asyncHandler(async (req, res) => {
+      const id = parseId(req.params.id);
+      if (id === null) return invalidId(res);
+      const agent = await agentsRepo.findById(id);
+      if (!agent) return notFound(res);
+
+      // Test packages are optional wiring (the router is mounted only when the
+      // repository exists), so their absence leaves the list empty rather than
+      // taking the whole answer down with it.
+      let packages = [];
+      if (testPackagesRepo && typeof testPackagesRepo.findAll === 'function') {
+        try {
+          const all = await testPackagesRepo.findAll();
+          const agents = await agentsRepo.findAll();
+          packages = all
+            .filter((p) => resolveTargetIds(p, agents).some((target) => Number(target) === id))
+            .map((p) => ({
+              id: p.id,
+              name: p.name,
+              enabled: !!p.enabled,
+              items: (p.items || []).length,
+              schedule_ms: p.schedule_ms || 0,
+              schedule_spec: p.schedule_spec || null,
+              last_run_at: p.last_run_at || null,
+            }));
+        } catch (err) {
+          (req.log || logger).warn(`agents: could not read test packages for agent ${id} (${err.message})`);
+        }
+      }
+
+      res.json({
+        agentId: id,
+        connected: agentCommander && typeof agentCommander.connectedAgentIds === 'function'
+          ? agentCommander.connectedAgentIds().some((open) => Number(open) === id)
+          : agent.status === 'online',
+        tests: runnableTests(agent),
+        packages,
       });
     })
   );

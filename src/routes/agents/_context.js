@@ -33,6 +33,10 @@ function createAgentsContext({
   // Where the "what do we push, and can it be signed" decision lives now, shared
   // with the fleet rollout and with an agent that asks for its own update.
   updateService = null,
+  // Read-only here: GET /agents/:id/tests answers "which saved tests already
+  // target this agent?". Optional wiring — the endpoint returns an empty list
+  // without it rather than failing.
+  testPackagesRepo = null,
 }) {
   // How long POST /:id/reconnect waits for the agent to re-dial after the forced
   // close (the agent's first backoff step is ~1 s), and how often it re-checks.
@@ -121,6 +125,7 @@ function createAgentsContext({
   return {
     // repositories + services
     agentsRepo, locationsRepo, resultsRepo, agentCommander, agentSourceStore,
+    testPackagesRepo,
     commandQueue, updateService: updates, settingsService,
     releaseStore, releasePublicKey, releaseKeyService, licenseManager, publishRelease,
     auditRepo, auditEventsRepo, auditLogger, integrationTrigger, logger,

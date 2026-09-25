@@ -80,6 +80,11 @@ const SESSION = (over = {}) => Object.assign({
   'GET /api/cmdb/assets/status': { enabled: false, type: null },
   'GET /api/topology/dependencies': { outbound: [], inbound: [] },
   'GET /api/targets/7/timeline': { events: [] },
+  'GET /agents/7/tests': {
+    agentId: 7, connected: true,
+    tests: [{ type: 'ping', kind: 'probe', available: true, reason: null }],
+    packages: [],
+  },
 }, over);
 
 const headBtns = (doc) => [...doc.querySelectorAll('#view .page-head button')];
@@ -171,17 +176,58 @@ test('the health résumé shows every number behind the verdict', async (t) => {
   assert.match(health.textContent, /480/);
 });
 
-test('the four folds are there, and the probe form is in one of them', async (t) => {
+test('the five folds are there, and the probe form is in one of them', async (t) => {
   const { doc } = boot({ t, routes: SESSION() });
   await settle();
   const folds = [...doc.querySelectorAll('#view details.sec')];
-  assert.equal(folds.length, 4);
+  assert.equal(folds.length, 5);
   // Each summary carries a status line after its name; the name is the first word.
   assert.deepEqual(folds.map((f) => f.querySelector('summary').textContent.trim().split(/[\s·]/)[0]),
-    ['Probes', 'Interfaces', 'NIC', 'Traffic']);
+    ['Probes', 'Tests', 'Interfaces', 'NIC', 'Traffic']);
   assert.ok(folds[0].querySelector('select'), 'the probe form is gone');
-  // Probes and Interfaces open by default; the other two do not.
-  assert.deepEqual(folds.map((f) => f.open), [true, true, false, false]);
+  // Probes and Interfaces open by default; the rest do not.
+  assert.deepEqual(folds.map((f) => f.open), [true, false, true, false, false]);
+});
+
+// The Tests fold answers BEFORE the run. A test the agent said it cannot run is
+// named as unavailable with the AGENT's own reason, on a host that has no shell
+// for anyone to go and look at afterwards.
+test('the Tests fold names what this agent cannot run, and why', async (t) => {
+  const { doc } = boot({
+    t,
+    routes: SESSION({
+      'GET /agents/7/tests': {
+        agentId: 7, connected: true,
+        tests: [
+          { type: 'ping', kind: 'probe', available: true, reason: null },
+          { type: 'poll-snmp', kind: 'snmp', available: false, reason: 'net-snmp is missing — reinstall the agent' },
+        ],
+        packages: [{ id: 3, name: 'Daily reachability', enabled: true, items: 2, schedule_ms: 0, schedule_spec: null, last_run_at: null }],
+      },
+    }),
+  });
+  await settle();
+  const fold = [...doc.querySelectorAll('#view details.sec')][1];
+  assert.match(fold.textContent, /net-snmp is missing/, "the agent's own reason is not shown");
+  assert.match(fold.textContent, /Daily reachability/, 'the packages aimed at this agent are not listed');
+  // …and the Probes form will not offer the type the agent refused.
+  const snmp = [...doc.querySelectorAll('#view select option')].find((o) => o.value === 'poll-snmp');
+  if (snmp) assert.ok(snmp.disabled, 'an unrunnable type is still selectable');
+});
+
+test('a failed catalogue read costs the catalogue, never the Probes form above it', async (t) => {
+  const { doc, errors } = boot({
+    t, routes: SESSION({ 'GET /agents/7/tests': { status: 500, body: { error: 'boom' } } }),
+  });
+  await settle();
+  assert.deepEqual(errors, []);
+  // Scoped to the Tests fold: the neighbours card draws its own ErrorState in
+  // this fixture, and an unscoped query finds that one first.
+  const fold = [...doc.querySelectorAll('#view details.sec')][1];
+  const err = fold.querySelector('.state.is-error');
+  assert.ok(err, 'a failed catalogue read left a blank fold');
+  assert.match(err.querySelector('code').textContent, /GET \/agents\/7\/tests/);
+  assert.ok(doc.querySelector('#view details.sec select'), 'the Probes form went with it');
 });
 
 test('no agent selected is an EmptyState with a way out', async (t) => {
@@ -228,7 +274,7 @@ test('a failed health read costs the résumé, never the page', async (t) => {
   await settle();
   assert.deepEqual(errors, []);
   assert.ok(doc.querySelector('#view .page-head h1'), 'the page went down with the verdict');
-  assert.equal(doc.querySelectorAll('#view details.sec').length, 4, 'the folds went with it');
+  assert.equal(doc.querySelectorAll('#view details.sec').length, 5, 'the folds went with it');
 });
 
 test('the record marks itself in the rail and in the breadcrumb', async (t) => {

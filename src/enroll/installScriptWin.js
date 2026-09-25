@@ -193,6 +193,144 @@ function Get-AgentSource([string]$outFile, [string]$verb) {
   }
   $serving = if ($live) { $live } else { 'unknown (the server could not be asked)' }
   Fail ("checksum mismatch (expected $want, got $actual) - refusing to $verb." + [Environment]::NewLine + "  the server currently serves: $serving" + [Environment]::NewLine + "  $retry")
+}
+
+# The release key this host trusts, as a file, or $null when there is none.
+#
+# Windows pinned NO key at all before this: BLUEEYE_RELEASE_PUBLIC_KEY was absent
+# from the whole installer, so a Windows agent had nothing to verify a release
+# against and the update path rested entirely on a checksum fetched in a second
+# request. That is the gap a cache or an inspecting proxy walked straight into.
+#
+# Same security order as the shell installer: provisioned out of band wins, then
+# the key already pinned on this host (a re-install must never silently
+# re-anchor an installed agent), then the server, which is trust-on-first-use
+# and says so.
+function Get-ReleaseKeyFile([string]$tmp, [string]$stateDir) {
+  $dest = Join-Path $tmp 'release-key.txt'
+  if ($env:BLUEEYE_RELEASE_PUBLIC_KEY) {
+    Info 'release key: using the provisioned BLUEEYE_RELEASE_PUBLIC_KEY'
+    Set-Content -LiteralPath $dest -Value $env:BLUEEYE_RELEASE_PUBLIC_KEY -Encoding ascii -NoNewline
+    return $dest
+  }
+  $pinned = Join-Path $stateDir 'release-key.pem'
+  if (Test-Path -LiteralPath $pinned) {
+    Info 'release key: already pinned on this host - keeping it'
+    Copy-Item -LiteralPath $pinned -Destination $dest -Force
+    return $dest
+  }
+  try {
+    $fromServer = (Invoke-WebRequest -UseBasicParsing -Uri "$ServerUrl/enroll/agent-release-key").Content
+  } catch { $fromServer = '' }
+  if (-not $fromServer) { return $null }
+  Info 'release key: taken from the server (trust-on-first-use). To anchor it independently, set BLUEEYE_RELEASE_PUBLIC_KEY from an out-of-band copy.'
+  Set-Content -LiteralPath $dest -Value $fromServer -Encoding ascii -NoNewline
+  return $dest
+}
+
+# Stores the key so later updates verify against THIS host's pin rather than
+# whatever the server hands out at the time.
+function Save-ReleaseKey([string]$keyFile, [string]$stateDir) {
+  if (-not $keyFile) { return }
+  $pinned = Join-Path $stateDir 'release-key.pem'
+  if (Test-Path -LiteralPath $pinned) { return }
+  New-Item -ItemType Directory -Force -Path $stateDir | Out-Null
+  Copy-Item -LiteralPath $keyFile -Destination $pinned -Force
+  Info 'signed updates enabled (release key pinned)'
+}
+
+# Downloads the SIGNED release and accepts it only once its signature AND its
+# sha256 both hold. Returns $true when $outFile now holds a release to install,
+# $false when the server publishes none (fall back to the source bundle).
+#
+# A release that IS published and fails to verify does not return $false - it
+# aborts. Falling back there would let anyone who can break the signature
+# downgrade the install to the path that has no signature at all.
+function Get-AgentRelease([string]$outFile, [string]$tmp, [string]$stateDir, [string]$verb) {
+  $hdrFile = Join-Path $tmp 'release.hdr'
+  try {
+    $resp = Invoke-WebRequest -UseBasicParsing -Uri "$ServerUrl/enroll/agent-release.tgz" -OutFile $outFile -PassThru
+  } catch {
+    return $false
+  }
+  $manifestB64 = $resp.Headers['X-Release-Manifest']
+  $sigB64      = $resp.Headers['X-Release-Signature']
+  $relVersion  = $resp.Headers['X-Release-Version']
+  if ($manifestB64 -is [array]) { $manifestB64 = $manifestB64[0] }
+  if ($sigB64 -is [array])      { $sigB64 = $sigB64[0] }
+  if ($relVersion -is [array])  { $relVersion = $relVersion[0] }
+  if (-not $manifestB64 -or -not $sigB64) {
+    Info 'signed release: the server served one without a manifest or signature - falling back to the source bundle'
+    return $false
+  }
+
+  $manifestFile = Join-Path $tmp 'release-manifest.bin'
+  try {
+    [IO.File]::WriteAllBytes($manifestFile, [Convert]::FromBase64String($manifestB64))
+  } catch {
+    Fail 'the signed release manifest could not be decoded - refusing to install'
+  }
+
+  # The sha256 the PUBLISHER put its name to. Read by pattern from the canonical
+  # manifest (keys sorted, no whitespace) and required to be exactly 64 hex, so a
+  # truncated or decorated value fails rather than matching something shorter.
+  $manifestText = [IO.File]::ReadAllText($manifestFile)
+  $m = [regex]::Match($manifestText, '"sha256":"([0-9a-f]{64})"')
+  if (-not $m.Success) { Fail 'the signed release manifest carries no usable sha256 - refusing to install' }
+  $want = $m.Groups[1].Value
+
+  $actual = (Get-FileHash -Algorithm SHA256 -Path $outFile).Hash.ToLower()
+  if ($actual -ne $want) {
+    Fail ("the signed release that arrived does not match its own signed manifest (manifest says $want, got $actual) - something between this host and the server altered or cached it. Refusing to $verb.")
+  }
+
+  $sigFile = Join-Path $tmp 'release.sig.b64'
+  Set-Content -LiteralPath $sigFile -Value $sigB64 -Encoding ascii -NoNewline
+  $keyFile = Get-ReleaseKeyFile $tmp $stateDir
+
+  if (-not $keyFile) {
+    if ($env:BLUEEYE_REQUIRE_SIGNED_INSTALL) {
+      Fail 'BLUEEYE_REQUIRE_SIGNED_INSTALL is set, but this host has no release key to verify against - refusing.'
+    }
+    Info ("signed release v$relVersion" + ': sha256 matches its manifest, but there is no key here to check the SIGNATURE against. Set BLUEEYE_REQUIRE_SIGNED_INSTALL=1 to refuse instead.')
+    return $true
+  }
+
+  # Node is a hard requirement on Windows (the agent runs on it), so unlike the
+  # shell installer there is always a verifier - no "could not check" branch.
+  $verifier = Join-Path $tmp 'verify.js'
+  $verifierJs = @'
+'use strict';
+const fs = require('fs');
+const crypto = require('crypto');
+try {
+  const [manifestFile, signatureFile, keyFile] = process.argv.slice(2);
+  if (!manifestFile || !signatureFile || !keyFile) process.exit(2);
+  let key = fs.readFileSync(keyFile, 'utf8').trim();
+  if (key.indexOf('-----BEGIN') !== 0) key = Buffer.from(key, 'base64').toString('utf8');
+  const ok = crypto.verify(
+    null,
+    fs.readFileSync(manifestFile),
+    crypto.createPublicKey(key),
+    Buffer.from(fs.readFileSync(signatureFile, 'utf8').trim(), 'base64')
+  );
+  process.exit(ok ? 0 : 1);
+} catch (err) {
+  process.exit(2);
+}
+'@
+  Set-Content -LiteralPath $verifier -Value $verifierJs -Encoding ascii
+  & $NodeExe $verifier $manifestFile $sigFile $keyFile 2>&1 | Out-Null
+  $code = $LASTEXITCODE
+  if ($code -eq 0) {
+    Info ("signed release v$relVersion" + ': signature verified, sha256 matches its manifest')
+    Save-ReleaseKey $keyFile $stateDir
+    return $true
+  }
+  if ($code -eq 1) {
+    Fail ("the signed release v$relVersion did NOT pass signature verification against the key this host trusts - refusing to $verb. If the server's signing key was rotated, re-pin this host (Settings -> Updates shows the command).")
+  }
+  Fail ("the signed release v$relVersion could not be verified on this host (the verifier could not run) - refusing to $verb.")
 }`;
 
 // Stops a running agent before its code is replaced. On an upgrade the old process
@@ -351,8 +489,16 @@ try {
   # without hunting for it at the very end of a long install.
   Info ('to remove the agent at any time, run (elevated):  ${psSq(uninstallCmd)}')
 
-  $Tarball = Join-Path $Tmp 'agent-source.tgz'
-  Get-AgentSource $Tarball 'install'
+  # THE SIGNED RELEASE FIRST. It is a fixed artefact: published once, never
+  # repackaged, and carrying its own signed manifest - so its checksum does not
+  # move under the installer, and the sha256 it is judged by travels WITH the
+  # bytes instead of arriving in a second request a cache can answer on its own.
+  $Tarball = Join-Path $Tmp 'agent-release.tgz'
+  if (-not (Get-AgentRelease $Tarball $Tmp $StateDir 'install')) {
+    Info 'no signed release published on this server - using the source bundle'
+    $Tarball = Join-Path $Tmp 'agent-source.tgz'
+    Get-AgentSource $Tarball 'install'
+  }
 
   # Inspection/test mode: verified, nothing written to the system yet.
   if ($env:BLUEEYE_DRY_RUN) { Info 'dry-run: verified, stopping before install'; exit 0 }
@@ -591,8 +737,15 @@ if (-not $tar) {
 $Tmp = Join-Path ([System.IO.Path]::GetTempPath()) ('blueeye-update-' + [System.IO.Path]::GetRandomFileName())
 New-Item -ItemType Directory -Force -Path $Tmp | Out-Null
 try {
-  $Tarball = Join-Path $Tmp 'agent-source.tgz'
-  Get-AgentSource $Tarball 'update'
+  # Signed release first - see the note in the installer. On an update this also
+  # verifies against the key THIS host pinned at install time, not one fetched
+  # from the server now.
+  $Tarball = Join-Path $Tmp 'agent-release.tgz'
+  if (-not (Get-AgentRelease $Tarball $Tmp $StateDir 'update')) {
+    Info 'no signed release published on this server - using the source bundle'
+    $Tarball = Join-Path $Tmp 'agent-source.tgz'
+    Get-AgentSource $Tarball 'update'
+  }
 
   # Inspection/test mode: verified, nothing on the host has been touched yet.
   if ($env:BLUEEYE_DRY_RUN) { Info 'dry-run: verified, stopping before the update'; exit 0 }

@@ -419,3 +419,148 @@ test('the generated systemd unit is sandboxed', () => {
   assert.doesNotMatch(script, /^ProtectSystem=/m, 'ProtectSystem must stay off');
   assert.doesNotMatch(script, /^ProcSubset=/m, 'ProcSubset must stay off');
 });
+
+// ---------------------------------------------------------------------------
+// The SIGNED release path.
+//
+// This is the path that exists because the source bundle could not carry its
+// own integrity: it is repackaged whenever the server restarts, and the
+// checksum to judge it by arrives in a SEPARATE request, which a cache or an
+// inspecting proxy can answer on its own. A signed release is published once
+// and carries its sha256 inside the bytes that were signed, so both of those
+// failure modes stop being possible.
+//
+// These tests run the generated shell for real against a fake curl, with a real
+// Ed25519 keypair — not a shape assertion about the script text.
+
+const { canonicalize } = require('../src/lib/canonicalize');
+
+// A curl that answers per URL and honours -D/-o, so the script's header parsing
+// and its 404 fallback are both exercised.
+function writeReleaseCurl(dir) {
+  const p = path.join(dir, 'release-curl');
+  fs.writeFileSync(p, `#!/bin/sh
+out=""; hdr=""; url=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -o) out="$2"; shift 2 ;;
+    -D) hdr="$2"; shift 2 ;;
+    http*) url="$1"; shift ;;
+    *) shift ;;
+  esac
+done
+case "$url" in
+  *agent-release.tgz*)
+    [ -n "$BLUEEYE_FAKE_RELEASE" ] || exit 22
+    [ -n "$hdr" ] && {
+      printf 'HTTP/1.1 200 OK\\r\\n'                              >  "$hdr"
+      printf 'X-Release-Version: %s\\r\\n' "$BLUEEYE_FAKE_VERSION" >> "$hdr"
+      printf 'X-Release-Manifest: %s\\r\\n' "$BLUEEYE_FAKE_MANIFEST" >> "$hdr"
+      printf 'X-Release-Signature: %s\\r\\n' "$BLUEEYE_FAKE_SIG"  >> "$hdr"
+      printf '\\r\\n'                                             >> "$hdr"
+    }
+    [ -n "$out" ] && printf '%s' "$BLUEEYE_FAKE_RELEASE" > "$out"
+    exit 0 ;;
+  *agent-release-key*)
+    printf '%s' "$BLUEEYE_FAKE_KEY"; exit 0 ;;
+  *agent-source*)
+    [ -n "$out" ] && printf '%s' "$BLUEEYE_FAKE_BYTES" > "$out"
+    printf '%s' "$BLUEEYE_FAKE_BYTES"; exit 0 ;;
+esac
+exit 0
+`, { mode: 0o755 });
+  fs.chmodSync(p, 0o755);
+  return p;
+}
+
+// Builds a release + the env the fake curl serves it from.
+function signedRelease({ bytes = 'the signed agent release', tamperBytes = null, wrongKey = false } = {}) {
+  const { publicKey, privateKey } = crypto.generateKeyPairSync('ed25519');
+  const served = tamperBytes == null ? bytes : tamperBytes;
+  const sha256 = crypto.createHash('sha256').update(Buffer.from(bytes)).digest('hex');
+  const manifest = { version: '0.43.0', sha256, size: Buffer.byteLength(bytes), created_at: '2026-09-25T10:00:00.000Z' };
+  const canonical = Buffer.from(canonicalize(manifest), 'utf8');
+  const signer = wrongKey ? crypto.generateKeyPairSync('ed25519').privateKey : privateKey;
+  return {
+    BLUEEYE_FAKE_RELEASE: served,
+    BLUEEYE_FAKE_VERSION: '0.43.0',
+    BLUEEYE_FAKE_MANIFEST: canonical.toString('base64'),
+    BLUEEYE_FAKE_SIG: crypto.sign(null, canonical, signer).toString('base64'),
+    BLUEEYE_RELEASE_PUBLIC_KEY: publicKey.export({ type: 'spki', format: 'pem' }),
+  };
+}
+
+test('the installer prefers the signed release, and verifies its signature for real', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'blueeye-rel-'));
+  const curl = writeReleaseCurl(dir);
+  const script = renderInstallScript({ serverUrl: 'http://x', code: 'C', sourceSha: 'a'.repeat(64) });
+
+  const out = runScript(script, { BLUEEYE_CURL: curl, BLUEEYE_DRY_RUN: '1', ...signedRelease() });
+  assert.match(out, /signature verified/, 'the signature was not actually checked');
+  assert.match(out, /sha256 matches its manifest/);
+  assert.match(out, /source bundle not needed/, 'it fell back to the unsigned path anyway');
+});
+
+test('a signed release whose bytes do not match its own manifest is refused', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'blueeye-rel-'));
+  const curl = writeReleaseCurl(dir);
+  const script = renderInstallScript({ serverUrl: 'http://x', code: 'C', sourceSha: 'a'.repeat(64) });
+
+  // Exactly the reported production symptom: the manifest is authentic, the
+  // bytes that arrived are not the ones it names.
+  const env = signedRelease({ bytes: 'the real release', tamperBytes: 'a cached, older release' });
+  assert.throws(() => runScript(script, { BLUEEYE_CURL: curl, BLUEEYE_DRY_RUN: '1', ...env }), (err) => {
+    const s = String(err.stderr || '');
+    assert.match(s, /does not match its own signed manifest/);
+    assert.match(s, /altered or cached/);
+    return true;
+  });
+});
+
+test('a bad signature ABORTS — it never falls back to the unsigned bundle', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'blueeye-rel-'));
+  const curl = writeReleaseCurl(dir);
+  const script = renderInstallScript({ serverUrl: 'http://x', code: 'C', sourceSha: 'a'.repeat(64) });
+
+  // Falling back here would mean anyone who can break the signature can
+  // downgrade the install to the path with no signature at all.
+  const env = signedRelease({ wrongKey: true });
+  assert.throws(() => runScript(script, { BLUEEYE_CURL: curl, BLUEEYE_DRY_RUN: '1', ...env }), (err) => {
+    const s = String(err.stderr || '');
+    assert.match(s, /did NOT pass signature verification/);
+    assert.ok(!/checksum OK/.test(String(err.stdout || '')), 'it fell through to the source bundle');
+    return true;
+  });
+});
+
+test('no signed release published falls back to the source bundle, as before', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'blueeye-rel-'));
+  const curl = writeReleaseCurl(dir);
+  const bytes = 'the-source-bytes';
+  const sha = crypto.createHash('sha256').update(Buffer.from(bytes)).digest('hex');
+  const script = renderInstallScript({ serverUrl: 'http://x', code: 'C', sourceSha: sha });
+
+  const out = runScript(script, {
+    BLUEEYE_CURL: curl, BLUEEYE_DRY_RUN: '1', BLUEEYE_FAKE_BYTES: bytes,
+    // BLUEEYE_FAKE_RELEASE unset -> the fake curl answers 404 for the release.
+  });
+  assert.match(out, /no signed release published/);
+  assert.match(out, /checksum OK/);
+});
+
+test('with no key to check against it says so, and REQUIRE_SIGNED_INSTALL turns that into a refusal', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'blueeye-rel-'));
+  const curl = writeReleaseCurl(dir);
+  const script = renderInstallScript({ serverUrl: 'http://x', code: 'C', sourceSha: 'a'.repeat(64) });
+  const env = signedRelease();
+  delete env.BLUEEYE_RELEASE_PUBLIC_KEY;   // and the fake curl serves no key either
+
+  const out = runScript(script, { BLUEEYE_CURL: curl, BLUEEYE_DRY_RUN: '1', ...env });
+  assert.match(out, /SIGNATURE could not be checked here/);
+  assert.match(out, /sha256 matches its manifest/, 'the sha256 binding still has to hold');
+
+  assert.throws(
+    () => runScript(script, { BLUEEYE_CURL: curl, BLUEEYE_DRY_RUN: '1', BLUEEYE_REQUIRE_SIGNED_INSTALL: '1', ...env }),
+    (err) => { assert.match(String(err.stderr || ''), /REQUIRE_SIGNED_INSTALL is set/); return true; },
+  );
+});

@@ -34,7 +34,7 @@ function boot({ t, routes = {}, url = 'http://server.test/agents', role = 'admin
   const log = [];
   window.fetch = async (u, opts = {}) => {
     const p = String(u).split('?')[0];
-    log.push({ key: `${(opts.method || 'GET').toUpperCase()} ${p}`, url: String(u) });
+    log.push({ key: `${(opts.method || 'GET').toUpperCase()} ${p}`, url: String(u), body: opts.body ? JSON.parse(opts.body) : null });
     const hit = routes[`${(opts.method || 'GET').toUpperCase()} ${p}`];
     const status = hit === undefined ? 404 : (hit.status || 200);
     const body = hit === undefined ? { error: 'Not Found' } : (hit.body !== undefined ? hit.body : hit);
@@ -206,6 +206,60 @@ test('Position on map offers to go back to the site once the agent has its own',
   [...card.querySelectorAll('button')].find((b) => /site\u2019s position/.test(b.textContent)).click();
   await settle(100);
   assert.equal(log.filter((l) => l.key === 'PUT /agents/7/position').length, 1);
+});
+
+// Edit agent carries the agent's own position too, as "lat, lng" text.
+async function openEdit(t, agents, extraRoutes = {}) {
+  const env = boot({ t, routes: SESSION({
+    'GET /agents': agents,
+    'PUT /agents/7': { id: 7 },
+    'PUT /agents/7/position': { id: 7 },
+    ...extraRoutes,
+  }) });
+  await settle();
+  const act = rows(env.doc).find((tr) => cells(tr)[0] === 'oslo-edge-01').querySelector('.row-act');
+  act.querySelector('[aria-haspopup="menu"]').dispatchEvent(new env.window.Event('click', { bubbles: true }));
+  [...env.doc.querySelectorAll('.ui-rowmenu button')].find((b) => b.textContent === 'Edit').click();
+  await settle(200);
+  const card = env.doc.querySelector('#modal-card');
+  const field = [...card.querySelectorAll('label')].find((l) => /Coordinates/.test(l.textContent)).querySelector('input');
+  const submit = async () => {
+    card.querySelector('form').dispatchEvent(new env.window.Event('submit', { bubbles: true, cancelable: true }));
+    await settle(150);
+  };
+  const puts = () => env.log.filter((l) => l.key.startsWith('PUT '));
+  return { ...env, card, field, submit, puts };
+}
+
+test('Edit agent: a typed position is saved with the rest', async (t) => {
+  const e = await openEdit(t, AGENTS);
+  assert.equal(e.field.value, '', 'no own position: the field is empty');
+  e.field.value = '52.370216, 4.895168';
+  await e.submit();
+  assert.deepEqual(e.puts().map((l) => l.key), ['PUT /agents/7', 'PUT /agents/7/position']);
+  assert.deepEqual(e.puts()[1].body, { latitude: 52.370216, longitude: 4.895168 });
+});
+
+test('Edit agent: a bad position saves nothing at all', async (t) => {
+  const e = await openEdit(t, AGENTS);
+  e.field.value = 'Amsterdam';
+  await e.submit();
+  assert.deepEqual(e.puts(), [], 'the rest of the form must not be saved either');
+  assert.match(e.card.querySelector('.error').textContent, /latitude, longitude/);
+});
+
+test('Edit agent: an unchanged position is not re-sent; an emptied one goes back to the site', async (t) => {
+  const own = AGENTS.map((a) => (a.id === 7 ? { ...a, latitude: 52.37, longitude: 4.89 } : a));
+  const e = await openEdit(t, own);
+  assert.equal(e.field.value, '52.37, 4.89');
+  await e.submit();
+  assert.deepEqual(e.puts().map((l) => l.key), ['PUT /agents/7'], 'unchanged: no position call');
+
+  const e2 = await openEdit(t, own);
+  e2.field.value = '';
+  await e2.submit();
+  assert.deepEqual(e2.puts().map((l) => l.key), ['PUT /agents/7', 'PUT /agents/7/position']);
+  assert.deepEqual(e2.puts()[1].body, { latitude: null, longitude: null });
 });
 
 test('Flows is offered only to an agent that has them', async (t) => {

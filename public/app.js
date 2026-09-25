@@ -11733,10 +11733,16 @@ async function editAgent(a) {
   // (editAgentSnmp), and this form carries the existing snmp block forward
   // untouched so switching source here can never silently discard a
   // credential somebody configured there.
+  const ownPosition = Number.isFinite(a.latitude) && Number.isFinite(a.longitude);
   openModal(`Edit agent ${a.id}`, [
     { name: 'display_name', label: 'Display name', value: a.display_name || '' },
     { name: 'location_id', label: 'Location', type: 'select', value: a.location_id ? String(a.location_id) : '',
       options: [{ value: '', label: '(none)' }, ...locationCache.map((l) => ({ value: String(l.id), label: l.name }))] },
+    // The agent's OWN position (migration 136), as the same "lat, lng" text a
+    // map application copies. Empty = the site's. The map picker for it is
+    // ⋯ → Position on map (editAgentPosition).
+    { name: 'position', label: t('ag.pos.coords'), value: ownPosition ? `${a.latitude}, ${a.longitude}` : '',
+      hint: t('ag.edit.positionHint') },
     { name: 'notes', label: 'Notes', type: 'textarea', value: a.notes || '' },
     { name: 'source', label: t('ag.source.label'), type: 'select', value: mc.source || 'sflow', options: sourceOptions,
       hint: t('ag.source.hint') },
@@ -11781,6 +11787,18 @@ async function editAgent(a) {
     } else if (v.source === 'proc') {
       monitor_config = { source: 'proc' };
     }
+    // Checked BEFORE anything is saved, so a mistyped position cannot leave
+    // the rest of the form saved and the position silently unchanged.
+    const posText = String(v.position || '').trim();
+    let position = null;
+    if (posText) {
+      const m = posText.match(/^(-?\d+(?:\.\d+)?)\s*[,;\s]\s*(-?\d+(?:\.\d+)?)$/);
+      if (!m || Math.abs(Number(m[1])) > 90 || Math.abs(Number(m[2])) > 180) throw new Error(t('ag.pos.bad'));
+      position = { latitude: Number(m[1]), longitude: Number(m[2]) };
+    }
+    const positionChanged = position
+      ? !(ownPosition && position.latitude === a.latitude && position.longitude === a.longitude)
+      : ownPosition;
     await api(`/agents/${a.id}`, { method: 'PUT', body: {
       display_name: v.display_name || null,
       location_id: v.location_id ? Number(v.location_id) : null,
@@ -11788,6 +11806,9 @@ async function editAgent(a) {
       meta: a.meta || null,
       monitor_config,
     } });
+    if (positionChanged) {
+      await api(`/agents/${a.id}/position`, { method: 'PUT', body: position || { latitude: null, longitude: null } });
+    }
     closeModal(); toast('Agent updated'); render();
   });
 }

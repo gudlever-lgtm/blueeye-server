@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.199.1 — Set an agent's position in Edit agent too
+
+**Edit agent** now has the agent's own position as a text field: paste
+`latitude, longitude` (e.g. `55.6761, 12.5683`), or leave it empty to use the
+site's position. A mistyped value is refused before anything in the form is
+saved. Picking the position on a map is still ⋯ → Position on map.
+
 ## 0.199.0 — Give an agent its own position on the map
 
 An agent was always where its site was. For an agent running in a cloud data

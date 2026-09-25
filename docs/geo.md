@@ -244,7 +244,9 @@ with a button to set the agent's position.
 coordinates unless it has its own: **Agents → ⋯ → Position on map** (or the
 button in the note above) opens a map where the position can be clicked,
 dragged, found by address, or pasted as `latitude, longitude` the way a map
-application copies it. `PUT /agents/:id/position` takes `{ latitude,
+application copies it. **Edit agent** has the same position as a
+text field (`latitude, longitude`; empty = the site's); a mistyped value is
+refused before anything in the form is saved. `PUT /agents/:id/position` takes `{ latitude,
 longitude }` or `{ coordinates: "55.6761, 12.5683" }`; both null goes back to
 the site's position, and an empty body is refused rather than read as "clear".
 The path map (`src/geo/agentPosition.js`) and the Destinations map

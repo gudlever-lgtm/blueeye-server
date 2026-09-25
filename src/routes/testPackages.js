@@ -5,7 +5,7 @@ const { asyncHandler } = require('../middleware/asyncHandler');
 const { requireAuth, requireRole } = require('../auth/middleware');
 const { ROLES } = require('../auth/roles');
 const { parseId } = require('../validation/locationValidation');
-const { validateTestPackageInput } = require('../validation/testPackageValidation');
+const { validateTestPackageInput, validateRunTargets } = require('../validation/testPackageValidation');
 
 // Test packages: viewer+ may read; operator/admin may create/edit/delete and
 // trigger a run. A run pushes the package's items to the resolved, connected
@@ -99,6 +99,11 @@ function createTestPackagesRouter({ repo, runner, usageService = null }) {
   );
 
   // Run now: push the package to its connected targets immediately.
+  //
+  // With `{ agentIds: [...] }` it runs on THOSE agents instead — the reverse of
+  // picking a test on an agent's own page: choose the test, choose who runs it.
+  // The override is for this run only; the package's saved targets are not
+  // touched, which is why this is not a PUT.
   router.post(
     '/:id/run',
     requireAuth,
@@ -106,12 +111,14 @@ function createTestPackagesRouter({ repo, runner, usageService = null }) {
     asyncHandler(async (req, res) => {
       const id = parseId(req.params.id);
       if (id === null) return invalidId(res);
+      const { value, errors } = validateRunTargets(req.body);
+      if (errors) return validationError(res, errors);
       const pkg = await repo.findById(id);
       if (!pkg) return notFound(res);
       if (!runner || typeof runner.run !== 'function') {
         return res.status(503).json({ error: 'Test runner not available' });
       }
-      const summary = await runner.run(pkg);
+      const summary = await runner.run(pkg, value);
       res.status(202).json(summary);
     })
   );

@@ -2307,6 +2307,7 @@ function testPackageRow(p, agents, locations) {
     el('td', { class: 'muted' }, testLastRun(p)),
     el('td', {}, el('div', { class: 'row-actions' },
       canWrite() ? el('button', { class: 'small', onclick: () => runTestPackage(p) }, 'Run now') : null,
+      canWrite() ? el('button', { class: 'small ghost', onclick: (e) => runTestPackageOn(p, agents, e.target.closest('tr')) }, t('pkg.runOn.action')) : null,
       canWrite() ? el('button', { class: 'small ghost', onclick: () => editTestPackage(p, agents, locations) }, 'Edit') : null,
       canWrite() ? el('button', { class: 'small danger', onclick: () => deleteTestPackage(p) }, 'Delete') : null,
     )),
@@ -2355,13 +2356,49 @@ function testLastRun(p) {
   return s ? `${when} · ${s.reached}/${s.targeted} reached` : when;
 }
 
-async function runTestPackage(p) {
+async function runTestPackage(p) { return runPackageOnAgents(p, null); }
+
+// Run a saved test NOW. With `agentIds` it runs on those agents instead of the
+// package's own targets — pick the test, pick who runs it. The override is for
+// this run only, so a package aimed at the whole fleet is still aimed at the
+// whole fleet afterwards.
+async function runPackageOnAgents(p, agentIds) {
   try {
-    const s = await api(`/api/test-packages/${p.id}/run`, { method: 'POST' });
-    if (!s.targeted) { toast(`"${p.name}": no matching agents to run on.`, true); return; }
-    toast(`"${p.name}": ${s.reached}/${s.targeted} agents reached, ${s.delivered} test(s) sent.`);
+    const body = Array.isArray(agentIds) && agentIds.length ? { agentIds } : undefined;
+    const s = await api(`/api/test-packages/${p.id}/run`, { method: 'POST', body });
+    if (!s.targeted) { toast(t('pkg.run.noTargets', { name: p.name }), true); return; }
+    toast(t('pkg.run.sent', { name: p.name, reached: s.reached, targeted: s.targeted, delivered: s.delivered }));
     setTimeout(() => { if (currentView === 'probes' && probesTab === 'packages') render(); }, 1500);
   } catch (err) { toast(errText(err), true); }
+}
+
+// "Run on…" — the agent picker for a one-off run. A drawer rather than a modal
+// because the package table underneath is the context: which test this is, and
+// who it normally runs on.
+function runTestPackageOn(p, agents, row) {
+  const picker = ui.multiSelect({
+    label: t('pkg.runOn.agents'),
+    options: agents.map((a) => [String(a.id), a.display_name || a.hostname]),
+    values: [],
+    searchPlaceholder: t('pkg.runOn.filter'),
+    emptyText: t('pkg.runOn.noneChosen'),
+  });
+  const status = el('div', { class: 'muted small' }, t('pkg.runOn.hint', { targets: testTargetsSummary(p.targets, agents, []) }));
+  const go = ui.button('primary', t('pkg.runOn.go'), {
+    onclick: async () => {
+      const ids = ui.selected(picker).map(Number).filter((n) => Number.isInteger(n) && n > 0);
+      if (!ids.length) { status.className = 'error small'; status.textContent = t('pkg.runOn.pickOne'); return; }
+      ui.closeDrawer();
+      await runPackageOnAgents(p, ids);
+    },
+  });
+  ui.openDrawer({
+    title: t('pkg.runOn.title', { name: p.name }),
+    meta: testItemsSummary(p.items).textContent || undefined,
+    row,
+    sections: [ui.drawerSection(t('pkg.runOn.section'), el('div', {}, picker, status))],
+    footer: ui.drawerFooter([ui.button('secondary', t('pkg.runOn.cancel'), { onclick: () => ui.closeDrawer() })], [go]),
+  });
 }
 
 async function deleteTestPackage(p) {
@@ -4786,6 +4823,54 @@ let trafficView = null;
 // use rather than at module level.
 const trafficViewState = {};
 
+
+// A result older than this is not "current bandwidth" any more, whatever it
+// says — three report intervals (the agent's default is 60 s).
+const BANDWIDTH_STALE_MS = 5 * 60 * 1000;
+
+// Reads one agent's current bandwidth out of its latest result — and, when
+// that is zero, WHY.
+//
+// The rates live in `traffic.totals.rxBytesPerSec`/`txBytesPerSec`. Every
+// source reports them (proc, snmp, and — from agent 0.45.1 — the netflow and
+// sflow collectors), but each has its own way of having nothing to report, and
+// the difference is the whole diagnosis:
+//
+//   noresults    the agent has never reported at all
+//   stale        it reported, but too long ago to call it "current"
+//   noexport     a flow source with an open collector and nothing arriving —
+//                no switch or hsflowd is exporting to it
+//   nodirection  flows ARE arriving, but from an exporter that is not this
+//                host (a switch), so no byte can be called in or out. The
+//                interval's total rate is real and is what the row shows
+//   norates      a flow source on an agent too old to report rates at all
+//   null         nothing is wrong: the link is simply idle
+function readBandwidth(a, row) {
+  const zero = (reason) => ({ a, rx: 0, tx: 0, total: 0, reason });
+  if (!row) return zero('noresults');
+  const traffic = (row.payload && row.payload.traffic) || null;
+  const totals = (traffic && traffic.totals) || null;
+  const rx = Number(totals && totals.rxBytesPerSec) || 0;
+  const tx = Number(totals && totals.txBytesPerSec) || 0;
+  const at = row.created_at ? new Date(row.created_at).getTime() : NaN;
+  if (Number.isFinite(at) && Date.now() - at > BANDWIDTH_STALE_MS) {
+    return { a, rx: 0, tx: 0, total: 0, reason: 'stale', at: row.created_at };
+  }
+  if (rx || tx) return { a, rx, tx, total: rx + tx, reason: null };
+
+  const flowSource = traffic && (traffic.source === 'sflow' || traffic.source === 'netflow');
+  if (flowSource) {
+    const received = traffic.source === 'sflow' ? Number(traffic.datagrams) || 0 : Number(traffic.packets) || 0;
+    if (!received) return zero('noexport');
+    // Rates at all? An agent below 0.45.1 sends byte counts and no rate.
+    if (!totals || totals.bytesPerSec === undefined) return zero('norates');
+    const total = Number(totals.bytesPerSec) || 0;
+    if (total) return { a, rx: 0, tx: 0, total, reason: 'nodirection' };
+  }
+  return { a, rx: 0, tx: 0, total: 0, reason: null };
+}
+
+
 function getTrafficView() {
   if (trafficView) return trafficView;
   if (typeof window === 'undefined' || !window.TrafficView || !ui) return null;
@@ -4825,15 +4910,16 @@ function getTrafficView() {
       return { lead: info.hero || '', title: info.title || t('traffic.title'), body: info.body || (() => []) };
     },
     // One tick: every agent's latest traffic totals, in parallel. An agent that
-    // has not reported counts as zero rather than dropping out of the total.
+    // has not reported counts as zero rather than dropping out of the total —
+    // and carries the REASON it is zero (bandwidthReason), because a column of
+    // bare zeros is the one thing a bandwidth table must never be.
     fetchTick: async () => {
       const agents = await api('/agents');
       const latest = await Promise.all(agents.map(async (a) => {
         try {
           const rows = await api(`/agents/${a.id}/results?limit=1`);
-          const tr = rows[0] && rows[0].payload && rows[0].payload.traffic && rows[0].payload.traffic.totals;
-          return { a, rx: tr ? Number(tr.rxBytesPerSec) || 0 : 0, tx: tr ? Number(tr.txBytesPerSec) || 0 : 0 };
-        } catch { return { a, rx: 0, tx: 0 }; }
+          return readBandwidth(a, rows[0]);
+        } catch { return { a, rx: 0, tx: 0, total: 0, reason: 'unreadable' }; }
       }));
       return { agents, latest };
     },
@@ -10429,15 +10515,117 @@ function agentDetailFolds(id, agent) {
   const nics = agent.capabilities && Array.isArray(agent.capabilities.nic) ? agent.capabilities.nic : [];
   const nicSummary = el('span', { class: 'muted' }, nics.length ? `· ${nics.length} interface(s)` : '· none reported');
 
+  // ---- Tests (what this agent can run, and what already runs on it) ----
+  //
+  // The catalogue comes from the agent's own capabilities report, so a test it
+  // cannot run is named as unavailable with the agent's reason BEFORE the click
+  // — rather than failing a few seconds later on a host with no shell to go and
+  // look at. Its two hosts are filled by one read; a failure costs the
+  // catalogue and never the Probes form above it.
+  const canRunHost = el('div', {}, el('div', { class: 'muted' }, t('common.loading')));
+  const packagesHost = el('div', {}, el('div', { class: 'muted' }, t('common.loading')));
+
+  async function refreshAgentTests() {
+    let data;
+    try { data = await api(`/agents/${encodeURIComponent(id)}/tests`); }
+    catch (e) {
+      canRunHost.replaceChildren(ui.errorState({
+        title: t('ad.tests.err'), body: errText(e),
+        detail: `GET /agents/${id}/tests`, onRetry: refreshAgentTests,
+      }));
+      packagesHost.replaceChildren(ui.emptyState({ title: t('ad.tests.noPackages'), body: t('ad.tests.noPackagesHint') }));
+      return;
+    }
+    applyRunnableTests(data.tests || []);
+    canRunHost.replaceChildren(
+      ui.inlineNote(data.connected ? t('ad.tests.connected') : t('ad.tests.offline'), data.connected ? undefined : 'warn'),
+      runnableList(data.tests || []));
+    packagesHost.replaceChildren(packageList(data.packages || []));
+  }
+
+  // A type the agent said it cannot run is not offered by the Probes form. The
+  // <option> keeps the reason on it, so the answer is where the question is.
+  function applyRunnableTests(list) {
+    const byType = {};
+    list.forEach((x) => { byType[x.type] = x; });
+    Array.prototype.forEach.call(typeSel.options, (o) => {
+      const entry = byType[o.value];
+      o.disabled = !!(entry && !entry.available);
+      o.title = (entry && entry.reason) || '';
+    });
+    if (typeSel.selectedOptions[0] && typeSel.selectedOptions[0].disabled) {
+      const first = Array.prototype.find.call(typeSel.options, (o) => !o.disabled);
+      if (first) { typeSel.value = first.value; syncPort(); }
+    }
+  }
+
+  function runnableList(list) {
+    if (!list.length) return ui.emptyState({ title: t('ad.tests.none'), body: t('ad.tests.noneHint') });
+    return ui.dataTable({
+      dense: true,
+      columns: [
+        { key: 'test', label: t('ad.tests.col.test'), width: '190px' },
+        { key: 'kind', label: t('ad.tests.col.kind'), width: '140px' },
+        { key: 'state', label: t('ad.tests.col.state'), width: '120px' },
+        { key: 'why', label: t('ad.tests.col.why') },
+      ],
+      rows: list.map((x) => ({
+        cells: {
+          test: x.type,
+          kind: ui.meta(t(`ad.tests.kind.${x.kind}`)),
+          state: x.available ? ui.badge('ok', t('ad.tests.available')) : ui.badge('neutral', t('ad.tests.unavailable')),
+          why: x.reason ? ui.metaXs(x.reason) : ui.meta('–'),
+        },
+      })),
+    });
+  }
+
+  // The saved tests already aimed at this agent — and Run here, which pushes
+  // the package to THIS agent alone without touching its saved targets.
+  function packageList(list) {
+    if (!list.length) {
+      return ui.emptyState({
+        title: t('ad.tests.noPackages'),
+        body: t('ad.tests.noPackagesHint'),
+        action: ui.button('secondary', t('ad.tests.openPackages'), { onclick: () => gotoView('tests') }),
+      });
+    }
+    return ui.dataTable({
+      columns: [
+        { key: 'name', label: t('ad.tests.col.package') },
+        { key: 'items', label: t('ad.tests.col.items'), width: '90px', num: true },
+        { key: 'schedule', label: t('ad.tests.col.schedule'), width: '190px' },
+        { key: 'state', label: t('ad.tests.col.state'), width: '110px' },
+        { key: 'act', label: '', width: '130px' },
+      ],
+      rows: list.map((p) => ({
+        cells: {
+          name: p.name,
+          items: String(p.items),
+          schedule: ui.meta(testScheduleLabel(p)),
+          state: ui.badge(p.enabled ? 'ok' : 'neutral', p.enabled ? t('ad.tests.enabled') : t('ad.tests.disabled')),
+          act: canWrite()
+            ? ui.button('secondary', t('ad.tests.runHere'), { onclick: () => runPackageOnAgents(p, [Number(id)]) })
+            : ui.meta('–'),
+        },
+      })),
+    });
+  }
+
   const folds = [
     el('details', { class: 'sec', open: true }, el('summary', {}, 'Probes ', el('span', { class: 'muted' }, '· ping · TCP · DNS · traceroute · cURL')), probeForm, probePauseNote, probeLatestHost),
+    el('details', { class: 'sec' }, el('summary', {}, t('ad.tests.fold'), ' ', el('span', { class: 'muted' }, t('ad.tests.foldHint'))),
+      el('h4', {}, t('ad.tests.can')), canRunHost,
+      el('h4', {}, t('ad.tests.scheduled')), packagesHost),
     el('details', { class: 'sec', open: true }, el('summary', {}, 'Interfaces ', ifaceStatus), ifaceHost,
       el('h4', {}, t('fc.title')), forecastHost),
     el('details', { class: 'sec' }, el('summary', {}, 'NIC firmware ', nicSummary), nicTable(nics)),
     el('details', { class: 'sec' }, el('summary', {}, 'Traffic ', el('span', { class: 'muted' }, '· recent bandwidth')), trafficHost),
   ];
-  // The forecast is not in the poller: it is read once, with the page.
+  // Neither the forecast nor the test catalogue is in the poller: both are read
+  // once, with the page. Their answers move in days.
   loadForecast();
+  refreshAgentTests();
   agentDetailRefresh = async (host) => {
     healthHost = host || healthHost;
     await Promise.all([refreshHealth(), refreshProbes(), refreshIfaces(), refreshTraffic()]);
@@ -10546,6 +10734,9 @@ function getFlowsPage() {
       return { lead: info.hero || '', title: info.title || t('flows.title'), body: info.body || (() => []) };
     },
     fetchAgents: async () => api('/agents').catch(() => []),
+    // "Why is this empty?" asked of the agent itself, from the screen that
+    // raised it. Read-only (viewer+) and the same modal the Fleet action opens.
+    diagnose: (agent) => diagnoseAgent(agent),
     chart: (points, { markers, onBrush }) => el('div', { class: 'overview-chart' },
       historyChart([{ id: 'b', label: t('flows.col.bytes'), color: ui.token('--series-0'), points }], {
         fromMs: points[0].t, toMs: points[points.length - 1].t,

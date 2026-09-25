@@ -2787,6 +2787,10 @@ function makeAgentCommander(overrides = {}) {
         licenseAcceptsNew: true,
       })),
     disconnectAgent: overrides.disconnectAgent || (() => 1),
+    // Ids with an open socket right now. GET /agents/:id/tests reads it to say
+    // whether a test can be run THIS second, so the default is "nothing is
+    // connected" — a test that wants a live agent says so explicitly.
+    connectedAgentIds: overrides.connectedAgentIds || (() => []),
   };
 }
 

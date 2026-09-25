@@ -60,6 +60,12 @@ const ACCEPTS_EMPTY = new Set([
   // which is the question "which devices do I have" asks. Its bounds (limit,
   // offset, kind, q) are pinned in test/l2PathApi.test.js.
   'validateInventoryQuery',
+  // POST /api/test-packages/:id/run takes no body at all in its original form:
+  // an empty object means "run on the package's own saved targets", which is
+  // what Run now has always done. `agentIds` is the OPTIONAL override, and the
+  // bounds on it (an array, non-empty, positive integers, capped) are pinned in
+  // test/testPackages.test.js.
+  'validateRunTargets',
 ]);
 
 test('every exported validator survives garbage input and rejects an empty object where it has required fields', () => {

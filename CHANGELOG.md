@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.204.0 — Three controls in the Fleet drawer that now do something
+## 0.204.3 — Three controls in the Fleet drawer that now do something
 
 All three were things the drawer showed and could not act on.
 
@@ -27,6 +27,26 @@ All three were things the drawer showed and could not act on.
 
 New endpoints: `POST` / `DELETE /api/fleet/health/:id/ack` (operator+).
 New table: `agent_health_acks` (migration 138).
+## 0.204.2 — What an agent can run, and running a saved test on chosen agents
+
+**The agent page says what the host can run, before you click.** A new Tests
+fold reads the agent's own capabilities report, so a test it cannot run is named
+as unavailable *with the agent's own reason* — "net-snmp is missing — reinstall
+the agent" — rather than failing a few seconds later on a machine with no shell
+to go and look at. The Probes form beside it stops offering the types the agent
+refused, and the option carries the reason.
+
+An agent that has reported nothing is not greyed out: an older agent in the
+field reports fewer fields, and reading silence as "no" would be a regression
+dressed as a feature. "Connected" comes from the live socket, not the stored
+status — a row can read online while nothing holds a socket.
+
+**And the other direction: pick the test, pick who runs it.** "Run on…" on the
+test-packages table opens an agent picker; "Run here" in the agent's Tests fold
+runs one package on that agent alone. The override applies to that run only —
+the package's saved targets are never written back, and the run it records is
+marked ad-hoc so a subset run does not read as a broken schedule on a package
+aimed at the whole fleet.
 
 ## 0.202.0 — Trace history: every run kept, openable and comparable
 

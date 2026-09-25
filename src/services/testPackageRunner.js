@@ -9,7 +9,17 @@
 // returns 0 for an offline agent, which is counted as "not reached".
 
 // Resolves the target agent ids for a package, given the full agent list.
-function resolveTargetIds(pkg, agents) {
+//
+// `overrideIds` is the OTHER direction through the same machinery: "run this
+// test on these agents, now" — a one-off choice made at the Run button, which
+// never touches the package's saved targets. Ids that name no agent are
+// dropped rather than counted, so `targeted` stays the number of agents a
+// command was actually addressed to.
+function resolveTargetIds(pkg, agents, overrideIds = null) {
+  if (Array.isArray(overrideIds)) {
+    const want = new Set(overrideIds.map(Number));
+    return agents.filter((a) => want.has(Number(a.id))).map((a) => a.id);
+  }
   const t = (pkg && pkg.targets) || { mode: 'all' };
   if (t.mode === 'agents') {
     const want = new Set((t.agentIds || []).map(Number));
@@ -38,9 +48,10 @@ function itemToCommand(item) {
 function createTestPackageRunner({ agentsRepo, agentCommander, repo, logger = console }) {
   // Pushes every item to every resolved, connected target. Records the run on
   // the package (best-effort) and returns a summary.
-  async function run(pkg) {
+  async function run(pkg, opts = {}) {
+    const adhocIds = Array.isArray(opts.agentIds) ? opts.agentIds : null;
     const agents = await agentsRepo.findAll();
-    const ids = resolveTargetIds(pkg, agents);
+    const ids = resolveTargetIds(pkg, agents, adhocIds);
     const commands = (pkg.items || []).map(itemToCommand);
 
     let delivered = 0;
@@ -59,6 +70,10 @@ function createTestPackageRunner({ agentsRepo, agentCommander, repo, logger = co
       delivered,
       items: commands.length,
     };
+    // An ad-hoc run went to agents the package does not target, so the row it
+    // leaves behind says which kind of run it was. Without it "last run: 1/1
+    // reached" on a package aimed at forty agents reads as a broken schedule.
+    if (adhocIds) summary.adhoc = true;
 
     if (repo && typeof repo.setLastRun === 'function') {
       try { await repo.setLastRun(pkg.id, summary); }

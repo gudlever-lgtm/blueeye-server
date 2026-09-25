@@ -78,3 +78,47 @@ test('run() counts offline agents (delivered 0) as not reached', async () => {
   assert.equal(summary.reached, 2); // agents 1 and 3
   assert.equal(summary.delivered, 2);
 });
+
+test('run({ agentIds }) targets exactly those agents and marks the run ad-hoc', async () => {
+  const sent = [];
+  const runner = createTestPackageRunner({
+    agentsRepo: { findAll: async () => [{ id: 1 }, { id: 2 }, { id: 3 }] },
+    agentCommander: { sendCommand: (id, cmd) => { sent.push([id, cmd.name]); return 1; } },
+    repo: { setLastRun: async () => {} },
+    logger: { info() {}, warn() {} },
+  });
+  const pkg = { id: 9, name: 'p', targets: { mode: 'all' }, items: [{ type: 'probe', probe: { type: 'ping', host: '1.1.1.1' } }] };
+
+  const summary = await runner.run(pkg, { agentIds: [2, 3] });
+  assert.equal(summary.targeted, 2);
+  assert.equal(summary.adhoc, true);
+  assert.deepEqual(sent.map(([id]) => id), [2, 3]);
+});
+
+test('run({ agentIds }) drops ids that name no agent rather than counting them', async () => {
+  const runner = createTestPackageRunner({
+    agentsRepo: { findAll: async () => [{ id: 1 }] },
+    agentCommander: { sendCommand: () => 1 },
+    repo: { setLastRun: async () => {} },
+    logger: { info() {}, warn() {} },
+  });
+  const summary = await runner.run(
+    { id: 9, name: 'p', targets: { mode: 'all' }, items: [{ type: 'speedtest' }] },
+    { agentIds: [1, 404] },
+  );
+  // `targeted` is the number of agents a command was addressed to, so a deleted
+  // agent must not inflate it into "1/2 reached" on a run that reached everyone.
+  assert.equal(summary.targeted, 1);
+  assert.equal(summary.reached, 1);
+});
+
+test('a scheduled run leaves no adhoc flag behind', async () => {
+  const runner = createTestPackageRunner({
+    agentsRepo: { findAll: async () => [{ id: 1 }] },
+    agentCommander: { sendCommand: () => 1 },
+    repo: { setLastRun: async () => {} },
+    logger: { info() {}, warn() {} },
+  });
+  const summary = await runner.run({ id: 9, name: 'p', targets: { mode: 'all' }, items: [{ type: 'speedtest' }] });
+  assert.equal(summary.adhoc, undefined);
+});

@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.198.0 — Installers take the signed release, and can prove it is the right one
+
+The install and update scripts fetched the source bundle and compared its
+sha256 against whatever `/enroll/agent-source.json` said at that moment. Two
+requests, two moments: any rebuild between them — a version bump, a
+non-reproducible tar — ended in `checksum mismatch`, on every platform, for
+bytes nobody had touched.
+
+**Signed release first.** `install.sh` and `install.ps1` now ask for
+`/enroll/agent-release.tgz` and fall back to the source bundle only when the
+server has no signed release. The release is one file whose sha256 was signed
+once; there is no second moment to disagree with.
+
+**Verified, not just downloaded.** Both scripts verify the Ed25519 signature
+over the manifest before unpacking: with `node` if the host has it, else
+`openssl`, else the download is marked `unverified` and the script says so
+rather than pretending. The shell verifier is embedded, so there is nothing
+extra to install.
+
+**`X-Release-Manifest` is now usable.** It carried `JSON.stringify` of the
+manifest — insertion order `{version, sha256, size, created_at}` — while the
+signature was made over the canonical form with its keys sorted. Anything that
+verified the header against the signature got "invalid signature" every time.
+The header now carries the bytes that were actually signed.
+
+**Windows pins a release key.** `install.ps1` never stored one; an update had
+no key to check a signature against. It now saves the release key next to the
+agent state on enrolment, the same as the Linux path.
+
 ## 0.197.0 — Path map: place hops by the path, and notice a cloud-hosted agent
 
 A trace from an agent whose site is Copenhagen drew a line to the middle of the

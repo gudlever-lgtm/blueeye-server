@@ -510,3 +510,98 @@ test('Show all traces puts every traced target on the list, each removable', asy
   await settle();
   assert.match(doc.querySelector('#view').textContent, /1 trace\(s\)/);
 });
+
+// ------------------------------------------------------------ trace history
+//
+// The graph on the map is a median over the newest runs, which is the right
+// answer to "is this path healthy" and the wrong one to "why was it slow on
+// Tuesday". The history keeps the runs apart: open one, and see what changed.
+
+const RUNS = {
+  total: 3,
+  runs: [
+    { id: 3, ts: '2026-09-25T12:00:00Z', ok: true, hopCount: 4, respondingCount: 4, silentCount: 0, rttMs: 60, lossPct: 0, routeChanged: true },
+    { id: 2, ts: '2026-09-25T11:00:00Z', ok: true, hopCount: 3, respondingCount: 3, silentCount: 0, rttMs: 20, lossPct: 0, routeChanged: false },
+    { id: 1, ts: '2026-09-25T10:00:00Z', ok: false, hopCount: 0, respondingCount: 0, silentCount: 0, rttMs: null, lossPct: null, detail: 'could not resolve the target name', routeChanged: false },
+  ],
+};
+const COMPARE = {
+  before: { id: 2, ts: '2026-09-25T11:00:00Z' },
+  after: { id: 3, ts: '2026-09-25T12:00:00Z' },
+  diff: {
+    routeChanged: true, addedCount: 1, removedCount: 0, rttDeltaMs: 40,
+    rows: [
+      { kind: 'same', ip: '10.0.0.1', beforeHop: 1, afterHop: 1, deltaMs: 0 },
+      { kind: 'added', ip: '80.9.9.9', beforeHop: null, afterHop: 3, deltaMs: null },
+      { kind: 'same', ip: '93.1.1.1', beforeHop: 3, afterHop: 4, deltaMs: 40 },
+    ],
+  },
+};
+const GRAPH = {
+  samples: 2, nodes: [{ kind: 'source', hop: 0, lat: 55.6, lng: 12.5, label: 'oslo-edge-01' }, { kind: 'dest', hop: 1, ip: '93.1.1.1', rttMs: 20, lat: 50, lng: 8, place: { country: 'DE', precision: 'country', source: 'geoip-country', certainty: 'exact' } }],
+  stops: [], links: [],
+};
+
+async function openHistory(t, extraRoutes = {}) {
+  const env = await showPath(t, {
+    'GET /api/probes/latest': { agentId: 7, results: [{ type: 'traceroute', target: '8.8.8.8', ok: true }] },
+    'GET /api/probes/path': GRAPH,
+    'GET /api/probes/path/runs': RUNS,
+    'GET /api/probes/path/compare': COMPARE,
+    ...extraRoutes,
+  });
+  const details = [...env.doc.querySelectorAll('#view details')]
+    .find((d) => /History|Historik/.test(d.querySelector('summary').textContent));
+  assert.ok(details, 'the History section is missing from the trace detail');
+  details.open = true;
+  details.dispatchEvent(new env.window.Event('toggle', { bubbles: true }));
+  await settle();
+  return { ...env, details };
+}
+
+test('the history lists every run, and marks the one that took a different route', async (t) => {
+  const { doc, log } = await openHistory(t);
+  assert.equal(log.filter((c) => c.key === 'GET /api/probes/path/runs').length, 1, 'the list is fetched once, when opened');
+  const rows = [...doc.querySelectorAll('#view .path-runs li')];
+  assert.equal(rows.length, 3, 'a run per stored run, newest first');
+  assert.match(rows[0].textContent, /different route/i, 'the reroute is what a history is scanned for');
+  assert.ok(!/different route/i.test(rows[1].textContent));
+  // A run that traced nothing still says why, rather than reading as an empty row.
+  assert.match(rows[2].textContent, /could not resolve/);
+});
+
+test('the history is not fetched until it is opened', async (t) => {
+  const { log } = await showPath(t, {
+    'GET /api/probes/latest': { agentId: 7, results: [{ type: 'traceroute', target: '8.8.8.8', ok: true }] },
+    'GET /api/probes/path': GRAPH,
+    'GET /api/probes/path/runs': RUNS,
+  });
+  assert.equal(log.filter((c) => c.key === 'GET /api/probes/path/runs').length, 0);
+});
+
+test('opening a run loads THAT run and what changed since the one before it', async (t) => {
+  const { doc, window, log } = await openHistory(t, {
+    'GET /api/probes/path': { ...GRAPH, samples: 1, runId: 3 },
+  });
+  [...doc.querySelectorAll('#view .path-runs li')][0].dispatchEvent(new window.Event('click', { bubbles: true }));
+  await settle();
+  const run = log.find((c) => c.key === 'GET /api/probes/path' && /runId=3/.test(c.url));
+  assert.ok(run, 'the run itself was never fetched');
+  assert.ok(log.find((c) => c.key === 'GET /api/probes/path/compare' && /runId=3/.test(c.url)), 'nothing was compared');
+  const view = doc.querySelector('#view').textContent;
+  assert.match(view, /Route changed|Ruten ændrede/, 'the comparison is not shown');
+  assert.match(view, /40 ms slower|40 ms langsommere/, 'the end-to-end change is not shown');
+  assert.match(view, /80\.9\.9\.9/, 'the hop that appeared is not named');
+  // The panel has to say it is showing ONE run, not the usual median.
+  assert.match(view, /one run|én kørsel/i);
+});
+
+test('a history that cannot be read says so, and an empty one is not an error', async (t) => {
+  const bad = await openHistory(t, { 'GET /api/probes/path/runs': { status: 500, body: { error: 'Internal Server Error' } } });
+  assert.match(bad.doc.querySelector('#view').textContent, /Internal Server Error|fejl/i);
+
+  const empty = await openHistory(t, { 'GET /api/probes/path/runs': { total: 0, runs: [] } });
+  const view = empty.doc.querySelector('#view').textContent;
+  assert.match(view, /No runs kept|Ingen kørsler gemt/i);
+  assert.equal(empty.errors.length, 0);
+});

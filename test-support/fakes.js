@@ -1516,6 +1516,12 @@ function makeProbeResultsRepo(overrides = {}) {
     fleetHealth: overrides.fleetHealth || (async () => []),
     availability: overrides.availability || (async () => []),
     recentRuns: overrides.recentRuns || (async () => []),
+    // Trace history. The defaults are empty, so a route that reads them is
+    // exercised by the gate sweeps without a test having to wire them.
+    listRuns: overrides.listRuns || (async () => []),
+    countRuns: overrides.countRuns || (async () => 0),
+    findRunById: overrides.findRunById || (async () => null),
+    previousRun: overrides.previousRun || (async () => null),
   };
 }
 
@@ -3201,6 +3207,39 @@ function makeEvidenceSnapshotsRepo(overrides = {}) {
 
 // A real settings service backed by an in-memory store, so PUT validation and
 // the effective-map overlay behave exactly as in production.
+// In-memory stand-in for agent_command_queue (migration 137). One entry per
+// (agent, kind), take() claims and removes — the same contract the SQL has, which
+// is what the delivery-on-connect logic depends on.
+function makeCommandQueue(overrides = {}) {
+  const rows = new Map(); // `${agentId}:${kind}` -> row
+  let nextId = 1;
+  const api = {
+    enqueue: overrides.enqueue || (async (agentId, command, { ttlSec = 86400, auditId = null } = {}) => {
+      const kind = String((command && command.name) || '');
+      const key = `${agentId}:${kind}`;
+      const id = rows.has(key) ? rows.get(key).id : (nextId += 1);
+      rows.set(key, {
+        id, agentId: Number(agentId), kind, command, auditId,
+        expiresAt: new Date(Date.now() + ttlSec * 1000).toISOString(),
+        createdAt: new Date().toISOString(),
+      });
+      return id;
+    }),
+    pendingFor: overrides.pendingFor || (async (agentId) => [...rows.values()].filter((r) => r.agentId === Number(agentId))),
+    take: overrides.take || (async (agentId) => {
+      const out = [...rows.values()].filter((r) => r.agentId === Number(agentId));
+      for (const r of out) rows.delete(`${r.agentId}:${r.kind}`);
+      return out.filter((r) => new Date(r.expiresAt).getTime() > Date.now());
+    }),
+    remove: overrides.remove || (async (agentId, kind) => (rows.delete(`${agentId}:${kind}`) ? 1 : 0)),
+    countsByAgent: overrides.countsByAgent || (async () => [...rows.values()].map((r) => ({ agentId: r.agentId, kind: r.kind, waiting: 1 }))),
+    purgeExpired: overrides.purgeExpired || (async () => 0),
+  };
+  // Exposed so a test can look at what is waiting without going through the API.
+  api._rows = rows;
+  return api;
+}
+
 function makeSettingsService(overrides = {}) {
   const store = new Map(overrides.initial ? Object.entries(overrides.initial) : []);
   const settingsRepo = {
@@ -3922,6 +3961,13 @@ function makeApp(overrides = {}) {
   // plan → unlimited limits, so existing tests are unaffected; pass `plan:` to
   // makeLicenseManager (or your own planService/usageService) to exercise limits.
   const agentsRepo = overrides.agentsRepo || makeAgentsRepo();
+  // Resolved here rather than inline below, because the REAL agent-update service
+  // is built over them: the decision "what do we push, and can it be signed" must
+  // be exercised by the route specs, not stubbed, since it is what the queue, the
+  // fleet rollout and an agent's own request all go through.
+  const agentSourceStore = overrides.agentSourceStore || makeSourceStore();
+  const releaseStore = overrides.releaseStore || makeReleaseStore();
+  const agentCommandQueue = overrides.agentCommandQueue === undefined ? makeCommandQueue() : overrides.agentCommandQueue;
   const testPackagesRepo = overrides.testPackagesRepo || makeTestPackagesRepo();
   // `=== undefined` so a test can pass null to exercise a deployment without
   // scheduled reports.
@@ -4142,7 +4188,15 @@ function makeApp(overrides = {}) {
     analysisConfig: overrides.analysisConfig || { analysisEnabled: true, assistantEnabled: false, critSigma: 4, warnSigma: 3, baselineDays: 7, minSamples: 200 },
     retentionConfig: overrides.retentionConfig || { enabled: true, rawRetentionDays: 7, rollupRetentionDays: 90, findingRetentionDays: 365, rollupIntervalMinutes: 60 },
     artifactStore: overrides.artifactStore || makeArtifactStore(),
-    agentSourceStore: overrides.agentSourceStore || makeSourceStore(),
+    agentSourceStore,
+    // Commands left for an agent that was not connected. `null` exercises a
+    // deployment without the queue (an offline agent then answers 409, as it did
+    // before migration 137).
+    agentCommandQueue,
+    // Left unset by default so the router builds the REAL service over these
+    // stores, with the on-demand signed-release mint wired in — the same thing
+    // the server does.
+    agentUpdateService: overrides.agentUpdateService || null,
     testPackagesRepo,
     reportSchedulesRepo,
     reportScheduler: overrides.reportScheduler || null,
@@ -4151,7 +4205,7 @@ function makeApp(overrides = {}) {
     serviceTests,
     logRing: overrides.logRing || makeLogRing(),
     speedtestResultsRepo: overrides.speedtestResultsRepo || makeSpeedtestResultsRepo(),
-    releaseStore: overrides.releaseStore || makeReleaseStore(),
+    releaseStore,
     // The real server passes a live resolver over the key service (the key can be
     // generated or deleted without a restart), so the fake does too — otherwise
     // the routes that serve the release key answer 404 in tests while the key
@@ -4374,6 +4428,7 @@ module.exports = {
   makeDb,
   makeServiceTests,
   makeReportSchedulesRepo,
+  makeCommandQueue,
   makeApp,
   tokenFor,
   authHeader,

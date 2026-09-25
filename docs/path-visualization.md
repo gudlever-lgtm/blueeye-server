@@ -92,10 +92,11 @@ through circle markers, with a per-stop popup (hops · hostname · ASN · latenc
 loss). Consecutive hops placed in the same city stack on one stop (hops known only to their country
 still stack on the country centroid, drawn hollow with a dashed ring). The popup
 names the city, how it was found (router name, city GeoIP, country only) and each
-hop's hostname. A hop GeoIP cannot place but whose reply came within 2 ms of a
-placed hop (5 ms of the agent) is drawn with that hop (`place.source:
-'latency'`); the rest of the hops the RTT check rules out are listed under the
-map instead of drawn in the wrong place. When the first public hop is a cloud
+hop's hostname. Every hop GeoIP can place is drawn where it places it, marked
+`approximate` or `registration` when the reply time does not support the pin
+(the ones marked `registration` are listed under the map too); a hop GeoIP can
+place nowhere is drawn with a neighbour whose reply came within 2 ms of it
+(5 ms of the agent), as `place.source: 'latency'`. When the first public hop is a cloud
 provider a few ms away, a note above the map says the agent looks to run there
 rather than at its site (`originHint`). See [geo.md](geo.md) → "Traceroute
 hops". When there aren't at least two
@@ -130,6 +131,40 @@ traces can sit on the map at once:
 Target options come from the agent's recent traceroutes (`/api/probes/latest`).
 `/api/probes/path` always returns the agent's `origin`, so live hops are anchored
 to the agent's site before any run is stored.
+
+## Trace history (every run kept as itself)
+
+`buildPathGraph` takes the **median** over the newest runs. That is the right
+answer to "is this path healthy now" and the wrong one to "why was it slow on
+Tuesday": a median is precisely what hides one bad run, and a route that
+changed and changed back leaves no mark in it.
+
+So the runs are also readable one at a time. `src/analysis/pathHistory.js` is
+the pure part:
+
+| Function | Answers |
+| --- | --- |
+| `summarise(run)` | one row for the list — hops, responding/silent counts, end-to-end RTT, loss, the agent's reason when it failed. **No hops**: the list is read far more often than a run is opened |
+| `routeKey(hops)` | the identity of a route: the addresses that answered, in order. A router that stops sending ICMP is **not** a reroute, so silent hops are not part of it |
+| `withRouteChanges(runs)` | marks each run that went a different way from the run before it **in time**. The oldest run in a window is never a change |
+| `diffRuns(before, after)` | hop by hop, aligned by longest common subsequence — an inserted hop is one `added` row, not "every hop after it changed". Carries `rttDeltaMs` and `worstDelta`, the hop where the time appeared |
+
+| Endpoint | Description |
+| --- | --- |
+| `GET /api/probes/path/runs?agentId=&target=&probeType=&from=&to=&limit=&offset=` | the runs, newest-first, each with `routeChanged`. Paged (limit ≤ 200); the run before the page's oldest row is fetched for context so the first row of page 2 is judged, not assumed unchanged |
+| `GET /api/probes/path?…&runId=` | the graph of that ONE stored run — `samples: 1`, no median. 404 when the run is not that agent's or not a trace |
+| `GET /api/probes/path/compare?agentId=&runId=&againstRunId=` | the two runs hop by hop. Without `againstRunId` it compares with the run before. The pair is ordered oldest-first whichever way it was asked for, and two runs of different paths are a 400 — that diff would say every hop changed |
+
+Runs are kept as long as any probe result: `RETENTION_PROBE_RESULT_DAYS`,
+**400 days** by default (see [retention.md](retention.md)), so the history goes
+back as far as the availability reports do.
+
+**Dashboard.** The trace panel on Destinations has a **History** section
+(`public/views/destinations.js`, loaded when opened, not before). Each row is a
+run with its time, hops, RTT and a "took a different route" marker; clicking one
+draws that run on the map, retitles the panel "one run, <time>", and shows what
+changed against the run before it — the hops that came or went, and the hops
+that got more than 5 ms slower.
 
 ## Shared Path Visualization component (path graph + metric timeline)
 

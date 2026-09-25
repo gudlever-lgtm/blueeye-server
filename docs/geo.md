@@ -202,35 +202,30 @@ A slow reply never pulls a hop anywhere — routers answer ICMP from their slow
 path, so a long RTT says nothing about distance. The check needs the agent's
 site coordinates; without them nothing is rejected.
 
-A country centroid is tested as the country it stands for (its centroid less
-the country's size, `COUNTRY_REACH_KM`), only to tell two kinds of failure
-apart. When the country fits the reply time but its centroid does not, the hop
-is **region-only** (`geoRejected[].regionOnly`): not anycast, but not drawn on
-the centroid either — a pin there is a line no packet took. When no part of the
-country fits — typically an anycast address such as a public DNS resolver,
-registered in the US and answering from 3 ms away — it is anycast. Either way
-the hop gets no coordinates from GeoIP, and `withinKm` says how close to the
-agent it provably is.
+**Every hop that can be placed is drawn.** The reply time does not decide
+whether a hop appears — it decides how the marker is labelled
+(`place.certainty`):
 
-**Placing hops by the path itself** (`settlePath`). GeoIP answers each hop on
-its own; the path answers them together. After every hop has its own
-candidate, a second pass walks the path in TTL order:
+| `certainty` | Means | On the map |
+| --- | --- | --- |
+| `exact` | The position fits what the reply time allows, or there is no agent position / no RTT to check against | Drawn plainly |
+| `approximate` | A country centroid the reply rules out as a point, while the country itself is reachable (its centroid less `COUNTRY_REACH_KM`) | Drawn, marked "approximate" — the marker stands for the country |
+| `registration` | The reply came back far too fast for anywhere in that country: anycast, or a block registered a continent from the rack | Drawn where it is registered, marked, with `withinKm` for what IS known |
 
-- A hop with its own city (router name or city GeoIP) keeps it and becomes the
-  anchor.
-- A hop that is unplaced, or placed only at a country centroid, is drawn at the
-  last anchor when its fastest reply is at most **2 ms** behind it — or, when
-  the anchor is the agent itself, at most **5 ms** in total (the first public
-  hop carries the access link on top of distance). Its `place` then reads
-  `{ source: 'latency', nearHop, deltaMs }`.
-- A moved hop never becomes an anchor, so a chain of small steps cannot creep
-  a pin across a continent.
+Hiding a hop taught an operator less than drawing what the address says and
+being honest about it: a path with holes in it reads as a broken trace.
+`place.offByKm` is how far past the budget the pin sits, and `withinKm` is the
+radius the reply time proves on its own. `alternatives` lists the sources that
+did not win, so the drawer can show the rDNS city behind a GeoIP country.
 
-Cloud and transit networks are exactly where GeoIP is weakest (a block is
-registered where the company is, not where the rack is) and exactly where
-consecutive hops sit in one building. A DigitalOcean router registered in CZ,
-answering in 4 ms from an agent in Copenhagen, is drawn at the agent — not in
-the middle of the Czech Republic.
+**Filling the gaps from the path** (`settlePath`). A hop GeoIP can place
+NOWHERE — no router name, no city, no country — is drawn with the last placed
+hop when its fastest reply is at most **2 ms** behind it, or at the agent when
+it answered within **5 ms**; its `place` then reads
+`{ source: 'latency', nearHop, deltaMs }`. It never moves a hop that has a
+position of its own: overriding the address's own answer collapsed whole paths
+onto the agent and hid what the data said. A filled-in hop never becomes an
+anchor, so a chain of small steps cannot creep a pin across a continent.
 
 **Is the agent where its site says?** (`src/geo/hostingNetworks.js`). Every
 distance is measured from the agent's site. When the first public hop belongs

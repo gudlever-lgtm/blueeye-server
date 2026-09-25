@@ -22,6 +22,8 @@ const { createPasswordHistoryRepository } = require('./repositories/passwordHist
 const { createSecurityPolicy } = require('./auth/securityPolicy');
 const { upgradeClientIp, upgradeAllowed } = require('./auth/securityGate');
 const { createAgentsRepository } = require('./repositories/agentsRepository');
+const { createAgentCommandQueueRepository } = require('./repositories/agentCommandQueueRepository');
+const { createAgentUpdateService } = require('./services/agentUpdateService');
 const { createAgentActionAuditRepository } = require('./repositories/agentActionAuditRepository');
 const { createAuditEventsRepository } = require('./repositories/auditEventsRepository');
 const { createAuditLogRepository } = require('./repositories/auditLogRepository');
@@ -498,6 +500,21 @@ function start() {
   // env/embedded key, so deployments that set AGENT_RELEASE_PUBLIC_KEY keep working.
   const agentReleaseKeyRepo = createAgentReleaseKeyRepository(db);
   const releaseKeyService = createReleaseKeyService({ repo: agentReleaseKeyRepo, secretBox, logger });
+
+  // Commands left for an agent that is not connected right now (migration 137),
+  // and the one place that decides WHAT an update pushes. Both are shared by the
+  // three things that can now start an update — an admin's click, a fleet
+  // rollout, and an agent that noticed on its own that it is behind — so they
+  // cannot drift apart.
+  const agentCommandQueue = createAgentCommandQueueRepository(db);
+  const agentUpdateService = createAgentUpdateService({
+    releaseStore: agentReleaseStore,
+    agentSourceStore,
+    publishRelease: () => publishSignedReleaseFromSource({ sourceStore: agentSourceStore, releaseStore: agentReleaseStore, releaseKeyService, logger }),
+    releaseKeyService,
+    commandQueue: agentCommandQueue,
+    logger,
+  });
   // Signs the privileged agent commands (upgrade/delete/install-tool) with the
   // same key that signs releases, so an agent can verify the SERVER asked — not
   // merely something holding its socket. No managed key => commands go out
@@ -1247,6 +1264,25 @@ function start() {
         stop() { if (t) { clearInterval(t); t = null; } },
       };
     })(),
+    // Queued commands nobody will ever deliver. `take()` clears an agent's rows
+    // the next time it connects, expired ones included — but an agent that never
+    // comes back (decommissioned, re-enrolled, thrown away) would otherwise leave
+    // its row in the table for good.
+    (() => {
+      let t = null;
+      const sweep = () => agentCommandQueue.purgeExpired()
+        .then((n) => { if (n) logger.info(`agents: purged ${n} expired queued command(s).`); })
+        .catch((err) => logger.warn(`agents: queued-command purge failed (${err.message})`));
+      return {
+        start() {
+          if (t) return;
+          sweep();
+          t = setInterval(sweep, 6 * 60 * 60 * 1000);
+          if (t.unref) t.unref();
+        },
+        stop() { if (t) { clearInterval(t); t = null; } },
+      };
+    })(),
   ];
   function startBackgroundJobs() {
     for (const job of backgroundJobs) {
@@ -1277,6 +1313,8 @@ function start() {
     enrollmentCodesRepo,
     enrollmentStore,
     agentTokensRepo,
+    agentCommandQueue,
+    agentUpdateService,
     resultsRepo,
     probeResultsRepo,
     diagnoseSessionsRepo,
@@ -1502,6 +1540,15 @@ function start() {
     // raised through the one sink, so it is alerted once, by it.
     transactionFindingSink: serviceFindingSink,
     assistant,
+    // Commands queued while this agent was away, delivered the moment it dials
+    // in — signed at delivery, because a signature made at enqueue time would be
+    // outside the agent's freshness window by then.
+    commandQueue: agentCommandQueue,
+    signCommand: (agentId, command) => commandSigner.sign(agentId, command),
+    // An agent that has noticed it is behind asks here; the server re-checks the
+    // policy before it sends anything.
+    updateService: agentUpdateService,
+    agentUpdatePolicy: () => settingsService.getAgents(),
   });
 
   // Browser live channel (analysis findings -> dashboard), gated by the user JWT.

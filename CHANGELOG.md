@@ -1,5 +1,99 @@
 # Changelog
 
+## 0.202.0 — Trace history: every run kept, openable and comparable
+
+The path map showed one graph: the median of the newest runs. That answers "is
+this path healthy now" and hides everything else — a single bad run, or a route
+that changed and changed back.
+
+Every run was already stored with all its hops (and kept 400 days). Now it can
+be read:
+
+- **History** in the trace panel lists every run — time, hops, round-trip,
+  loss — and marks the ones that **took a different route** from the run
+  before. A run that failed says why instead of showing an empty row.
+- Clicking a run draws **that run** on the map and says so, rather than the
+  usual median.
+- Under it, what changed since the previous run: the hops that came or went,
+  the end-to-end difference, and the hop where the extra time appeared. An
+  inserted hop reads as one new hop, not as every hop after it having moved.
+
+New endpoints: `GET /api/probes/path/runs`, `GET /api/probes/path?runId=` and
+`GET /api/probes/path/compare`.
+
+## 0.201.0 — An agent that stays connected, and a fleet that can always be updated
+
+Two questions this release answers properly: how does an agent always have a way
+back to the server, and how does an agent that is rarely online ever get updated.
+
+**A dead connection is noticed in 45 seconds instead of 15 minutes.** The agent's
+heartbeat was a send, and a send says nothing about whether anything is still
+listening. It now also sends a WebSocket ping and re-dials when nothing comes
+back. A half-open TCP connection — an expired NAT entry, a firewall that stopped
+forwarding, a load balancer that went away — used to leave a green badge on an
+agent that was taking no commands until the kernel gave up retransmitting.
+
+**A refused token no longer kills the fleet.** A 401 was terminal: the agent
+exited, systemd hit its start limit and gave up, and the unit stayed dead until
+someone logged into the host. A revoked token deserves that; a server restored
+from backup, a re-provisioned server or a half-finished token rotation does not,
+and those take every agent at once. The agent now pauses and re-dials every
+15 minutes, and resumes when the token works again. It still never re-enrolls by
+itself. The diagnosis's `auth-rejected` state says so.
+
+**More than one way in.** Several server URLs can be configured and are tried in
+order when a connection cannot be established; REST follows the live channel, so
+a failover moves the whole agent. Certificate pinning now takes a LIST, so the
+next certificate's fingerprint can be added before a renewal instead of locking
+every pinned agent out of the only channel that could fix it.
+
+**Measurements survive a short outage.** A failed submit is spooled and re-sent
+oldest-first on the next attempt that gets through, bounded and oldest-dropped.
+What is waiting shows in Diagnose — the difference between "this agent stopped
+measuring" and "this agent cannot reach me".
+
+**An update for an offline agent is queued**, not refused, and delivered the
+moment it dials in (migration 136). Stored unsigned and signed at delivery,
+because the agent refuses a signature more than five minutes off its clock.
+
+**A fleet rollout** (`/agents/updates/fleet`, Settings → Updates) selects the
+agents actually behind and moves one batch at a time, with a per-agent audit row.
+Run it with a batch of one as a canary, look, then continue.
+
+**Agents can ask for their own update.** `GET /agents/me/config` now states the
+offered version and whether the policy allows it; with Settings → Agents →
+Automatic agent updates on (off by default), an agent that finds itself behind
+asks, inside a maintenance window it evaluates in its own local time. That is
+what reaches a laptop that is online for ten minutes a day. The server re-checks
+everything the agent claimed, and rate-limits it, because a permission that has
+travelled to a host and back is not a decision this server made.
+
+**Windows services and launchd jobs can be updated from here**, not only systemd
+— which was the largest remaining hole in "can always be updated". Pair with
+agent **0.44.2**.
+
+## 0.200.0 — The path map draws every hop it can place, and says how sure it is
+
+Hops were being stacked onto the agent. Anything within a few milliseconds
+was moved there, so a trace whose first seven hops answered in 1-6 ms drew one
+dot and seven rows reading "At the agent's site" — the location found for each
+address was thrown away.
+
+**Every hop GeoIP can place is now drawn where it places it**, and the reply
+time labels the marker instead of vetoing it:
+
+- *approximate* — a country centroid the reply rules out as a point, while the
+  country itself is reachable. The marker stands for the country.
+- *registered here, answers from closer* — the reply is far too fast for
+  anywhere in that country. Drawn where the address is registered, with the
+  radius the reply time actually proves.
+
+Only a hop GeoIP can place **nowhere** is drawn with a neighbour, and a hop
+that has a position of its own is never moved.
+
+For city-level positions rather than country centroids, load the city database
+under Settings → Map → City-level data.
+
 ## 0.199.1 — Set an agent's position in Edit agent too
 
 **Edit agent** now has the agent's own position as a text field: paste

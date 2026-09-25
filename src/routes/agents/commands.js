@@ -9,7 +9,6 @@ const { parseId } = require('../../validation/locationValidation');
 const { validateProbeSpec } = require('../../validation/probeValidation');
 const { INSTALLABLE_TOOLS, isAllowedTool } = require('../../agentTools');
 const { diagnoseConnection } = require('../../ws/connectionDiagnosis');
-const { isNewer } = require('../../lib/version');
 const { MAX_INTERVAL_MS } = require('../../validation/agentValidation');
 // The fingerprint of a KEY (SHA-256 of its SPKI DER bytes) — what the vendor
 // authorises and what the agent computes over the key it is offered.
@@ -32,6 +31,7 @@ function createAgentCommandsRouter(ctx) {
     reconnectWaitMs, reconnectPollMs,
     signCommand, canSignCommands, invalidId, notFound, validationError,
     recordRequested, recordSystemError, markFailed,
+    updateService,
   } = ctx;
 
   router.post(
@@ -109,65 +109,43 @@ function createAgentCommandsRouter(ctx) {
       const agent = await agentsRepo.findById(id);
       if (!agent) return notFound(res);
 
-      let release = releaseStore && typeof releaseStore.latest === 'function' ? releaseStore.latest() : null;
-      const haveSource = agentSourceStore && typeof agentSourceStore.available === 'function' && agentSourceStore.available();
-      const sourceVersion = agentSourceStore && typeof agentSourceStore.sourceVersion === 'function'
-        ? agentSourceStore.sourceVersion() : null;
-      // Prefer a SIGNED push. If none is published yet — or the newest one is
-      // OLDER than the source now on disk — mint one from the current source,
-      // provided this server holds a signing key. Without that second case a
-      // stale signed release pins the whole fleet backwards: the host pulls the
-      // agent to a new version, the store still holds the old signed bundle, and
-      // every Update keeps pushing the old one. An unsigned push is the last
-      // resort, because an agent that pinned a release key refuses it
-      // ("signature downgrade"). publishRelease is a no-op without a signing
-      // key, which leaves the legacy unsigned-source fallback intact.
-      const releaseIsStale = !release
-        || (sourceVersion && release.version && isNewer(sourceVersion, release.version));
-      if (releaseIsStale && typeof publishRelease === 'function') {
-        try {
-          const minted = await publishRelease();
-          if (minted && minted.version) release = releaseStore.latest();
-        } catch (err) {
-          (req.log || logger).warn(`agents: on-demand signed-release publish failed (${err.message}); falling back to source bundle`);
-        }
-      }
-      // Still behind after the attempt (no signing key, or signing failed): push
-      // the newer SOURCE rather than a signature for code nobody asked for.
-      if (release && sourceVersion && isNewer(sourceVersion, release.version) && haveSource) {
-        (req.log || logger).warn(
-          `agents: signed release v${release.version} is older than the packaged source v${sourceVersion} `
-          + '— pushing the unsigned source bundle. Generate a release signing key so updates stay signed.');
-        release = null;
-      }
-      if (!release && !haveSource) {
+      // What to push, and whether it can be signed. Shared with the fleet
+      // rollout and with an agent that asks for its own update, so all three
+      // make the same decision (services/agentUpdateService.js).
+      const payload = await updateService.resolvePayload({ log: req.log || logger });
+      if (!payload.ok) {
         return res.status(503).json({ error: 'No agent source is published on the server' });
       }
       if (!agentCommander || typeof agentCommander.sendCommandAndWait !== 'function') {
         return res.status(503).json({ error: 'Agent channel not available' });
       }
-      // WHY the push is unsigned, when it is. The dashboard used to guess ("this
-      // server has no release signing key") and send the operator to the wrong
-      // screen; a key that exists but cannot sign — an env-only public key, or a
-      // stored key whose private half no longer decrypts — looks identical from
-      // the outside and needs different advice. Ask the key service instead.
-      const signedReason = release
-        ? null
-        : (releaseKeyService && typeof releaseKeyService.signBlockedReason === 'function'
-          ? (releaseKeyService.signBlockedReason() || 'sign-failed')
-          : 'no-key');
-      const command = release
-        ? { name: 'update', version: release.version, sha256: release.sha256, signature: release.signature }
-        : { name: 'update', sha256: agentSourceStore.sha256, version: (typeof agentSourceStore.sourceVersion === 'function' ? agentSourceStore.sourceVersion() : null) };
-      const targetVersion = command.version;
+      const { command, signed: isSignedRelease, signedReason, targetVersion } = payload;
+      const release = isSignedRelease ? { version: targetVersion } : null;
       // Audit 'requested' first so the command can carry the audit id; the agent
       // echoes it back on completion (handled where the agent reports its result).
       const auditId = await recordRequested('upgrade', agent, req, targetVersion);
       if (auditId) command.auditId = auditId;
       const out = await agentCommander.sendCommandAndWait(id, signCommand(id, command), { timeoutMs: 8000 });
       if (out.delivered === 0) {
+        // Not connected right now. An update is the one command worth LEAVING for
+        // the agent: a host that is online for ten minutes a day could otherwise
+        // only be updated by someone timing the click to the connection. Queued
+        // unsigned and signed at delivery, because a signature made now would be
+        // outside the agent's five-minute freshness window by the time it lands.
+        const queued = await updateService.queue(id, command, { auditId });
+        if (queued.queued) {
+          (req.log || logger).info(`agents: agent ${id} is offline; update to v${targetVersion || '?'} queued for its next connection.`);
+          return res.status(202).json({
+            connected: false,
+            queued: true,
+            targetVersion,
+            signed: isSignedRelease,
+            signedReason,
+            auditId: auditId || null,
+          });
+        }
         await markFailed(auditId, 'agent not connected');
-        return res.status(409).json({ error: 'Agent not connected', connected: false });
+        return res.status(409).json({ error: 'Agent not connected', connected: false, queued: false });
       }
       const reply = out.reply || {};
       // A runtime that declines (docker/unmanaged) is a terminal outcome we know now.

@@ -19,6 +19,7 @@ const crypto = require('crypto');
 const {
   CANONICALIZE_DIGEST, CANONICALIZE_VECTORS, PROTOCOL_VERSION,
   EVIDENCE_ITEMS, EVIDENCE_COMMAND_SET_VERSION, digestOf,
+  UPDATE_WINDOW_DIGEST, VERSION_COMPARE_DIGEST,
 } = require('./_contracts');
 
 const { canonicalize } = require('../../src/lib/canonicalize');
@@ -115,4 +116,52 @@ test('verifyProof rejects a tampered payload, a foreign key and a malformed sign
     assert.equal(verifyProof(bad, signature, publicKey), false, 'a missing payload is not verified');
     assert.equal(verifyProof(payload, signature, bad), false, 'a missing key is not verified');
   }
+});
+
+// ---- the two files that decide WHEN and WHETHER an agent updates -----------
+//
+// Both are evaluated on BOTH sides, and a divergence is silent on each of them:
+// the window decides when an agent may restart itself (only the agent knows its
+// own local time, so only the agent can evaluate it), and the version compare
+// decides what "behind" means (the server picks the agents a rollout touches,
+// the agent decides whether to ask). Disagreement means a fleet that updates at
+// lunchtime, or one that never updates, with nothing to see from either copy.
+
+test('the update-window implementation still matches the pinned cross-repo digest', () => {
+  const source = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'lib', 'updateWindow.js'), 'utf8');
+  const actual = digestOf(source);
+  assert.equal(
+    actual, UPDATE_WINDOW_DIGEST,
+    'the update window changed here but not in the agent.\n'
+    + `Update UPDATE_WINDOW_DIGEST in all three copies of test/gate/_contracts.js to:\n  ${actual}`
+  );
+});
+
+test('the version comparison still matches the pinned cross-repo digest', () => {
+  const source = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'lib', 'version.js'), 'utf8');
+  const actual = digestOf(source);
+  assert.equal(
+    actual, VERSION_COMPARE_DIGEST,
+    '"behind" changed here but not in the agent.\n'
+    + `Update VERSION_COMPARE_DIGEST in all three copies of test/gate/_contracts.js to:\n  ${actual}`
+  );
+});
+
+test('a window that wraps midnight is not an empty one, on both sides', () => {
+  const { parseWindow, isWithinWindow } = require('../../src/lib/updateWindow');
+  const at = (h, m = 0) => new Date(2026, 0, 15, h, m);
+  assert.equal(isWithinWindow('22:00-04:00', at(23)), true);
+  assert.equal(isWithinWindow('22:00-04:00', at(2)), true);
+  assert.equal(isWithinWindow('22:00-04:00', at(12)), false);
+  assert.equal(isWithinWindow('', at(12)), true, 'an unset window restricts nothing');
+  assert.equal(parseWindow('02:00-02:00'), null, 'a zero-length window is not "always"');
+});
+
+test('only a strictly newer, parseable version counts as behind, on both sides', () => {
+  const { isNewer } = require('../../src/lib/version');
+  assert.equal(isNewer('1.0.1', '1.0.0'), true);
+  assert.equal(isNewer('1.0.0', '1.0.0'), false);
+  assert.equal(isNewer('0.9.0', '1.0.0'), false, 'a downgrade is not an update');
+  assert.equal(isNewer('nonsense', '1.0.0'), false, 'unparseable is never "update available"');
+  assert.equal(isNewer('1.0.0', ''), false);
 });

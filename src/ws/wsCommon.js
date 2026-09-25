@@ -26,11 +26,16 @@ function pathnameOf(req) {
 }
 
 // Sends a JSON message, swallowing send failures (the socket may be closing).
+// Returns whether the frame actually went out. Most callers do not care — a
+// dropped push to a socket that just closed is nothing to act on — but the
+// command queue does: a command it claimed and could not send has to go back,
+// or the update is lost in exactly the case the queue exists for.
 function safeSend(ws, obj) {
   try {
     ws.send(JSON.stringify(obj));
+    return true;
   } catch {
-    /* ignore send failures */
+    return false; /* the socket just went away */
   }
 }
 

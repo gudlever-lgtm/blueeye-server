@@ -92,22 +92,54 @@ async function boot(t, app) {
 
 const toastText = (doc) => (doc.querySelector('#toast') || {}).textContent || '';
 
+// Waits for a condition instead of guessing how long a render takes. A fixed
+// delay here failed intermittently under a loaded full suite: the fleet view had
+// not replaced the previous one yet, so the ⋯ menu found below was the Changes
+// page's (Open details / Open host / Mute this rule) and the assertion read as
+// "Update is missing" when the view simply had not arrived.
+async function waitFor(pred, ms, message) {
+  const until = Date.now() + ms;
+  while (!pred()) {
+    if (Date.now() > until) throw new Error(message);
+    // eslint-disable-next-line no-await-in-loop
+    await tick(25);
+  }
+  return pred();
+}
+
 async function clickUpdate(doc) {
   // The agent list is the Fleet screen's Drift column set
   // (docs/fleet-and-sites-consolidation.md).
   doc.querySelector('.tabs button[data-view="fleet"]').click();
-  await tick(350);
-  const drift = [...doc.querySelectorAll('#view .subtabs button')].find((b) => /Drift/.test(b.textContent));
-  assert.ok(drift, 'the Drift column set is missing');
+  // Wait for the FLEET page, by its own heading — not for "a row menu exists",
+  // which the page we came from also has.
+  await waitFor(
+    () => /Fleet/.test((doc.querySelector('#view h1') || {}).textContent || ''),
+    5000,
+    `the fleet view never rendered — #view h1 is "${(doc.querySelector('#view h1') || {}).textContent || ''}"`
+  );
+  const drift = await waitFor(
+    () => [...doc.querySelectorAll('#view .subtabs button')].find((b) => /Drift/.test(b.textContent)),
+    5000,
+    'the Drift column set never appeared'
+  );
   drift.dispatchEvent(new doc.defaultView.Event('click', { bubbles: true }));
-  await tick(350);
   // Update is a ⋯ menu entry, with the other actions that change the agent —
-  // it used to be one of nine buttons in the row.
-  const more = doc.querySelector('#view .row-act [aria-haspopup="menu"]');
+  // it used to be one of nine buttons in the row. The action column only exists
+  // once the deployment read has landed, so wait for it rather than the row.
+  const more = await waitFor(
+    () => doc.querySelector('#view .row-act [aria-haspopup="menu"]'),
+    5000,
+    'the fleet view rendered no row with a ⋯ menu'
+  );
   assert.ok(more, 'the agents row has no ⋯ menu');
   more.dispatchEvent(new doc.defaultView.Event('click', { bubbles: true }));
-  const item = [...doc.querySelectorAll('.ui-rowmenu button')].find((b) => /^Update to v/.test(b.textContent.trim()));
-  assert.ok(item, `no Update entry — found: ${[...doc.querySelectorAll('.ui-rowmenu button')].map((b) => b.textContent).join(' | ')}`);
+  const item = await waitFor(
+    () => [...doc.querySelectorAll('.ui-rowmenu button')].find((b) => /^Update to v/.test(b.textContent.trim())),
+    2000,
+    `no Update entry — found: ${[...doc.querySelectorAll('.ui-rowmenu button')].map((b) => b.textContent).join(' | ')}`
+  );
+  assert.ok(item, 'the ⋯ menu has no Update entry');
   item.click();
   await tick(350);
 }

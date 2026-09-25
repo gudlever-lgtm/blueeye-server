@@ -107,22 +107,20 @@ const centroidsFor = (table) => ({ get: (c) => table[c] || null });
 const CENTROIDS = centroidsFor({ DE: { lat: 51.2, lng: 10.4 }, US: { lat: 39.8, lng: -98.6 }, FI: { lat: 64.9, lng: 26 } });
 const geoFor = (country) => ({ lookup: () => ({ country, asn: 1, asnName: 'X' }) });
 
-test('a near miss on a country centroid is region-only: not drawn, not called anycast', () => {
+test('a near miss on a country centroid is drawn, and marked approximate', () => {
   const hop = locateHop({ ip: '213.239.240.33', rttMs: 2.77 }, { geoProvider: geoFor('DE'), centroids: CENTROIDS, origin: DK_AGENT });
   assert.equal(hop.country, 'DE');
-  assert.equal(hop.lat, null, 'the centroid is 465 km away; the reply allows 437 — no pin there');
-  assert.equal(hop.place, null);
-  assert.equal(hop.rejected.length, 1);
-  assert.equal(hop.rejected[0].regionOnly, true, 'the country fits, so this is not anycast');
-  assert.equal(hop.withinKm, 427);
+  assert.equal(hop.lat, 51.2, 'drawn: the country is feasible even if its middle is not');
+  assert.equal(hop.place.certainty, 'approximate');
+  assert.ok(hop.place.offByKm > 0, 'and says how far past the budget the pin sits');
+  assert.equal(hop.withinKm, 427, 'plus what the reply time proves on its own');
 });
 
-test('an order-of-magnitude miss is still refused, and reports what IS known', () => {
+test('an order-of-magnitude miss is drawn where it is registered, and says so', () => {
   const hop = locateHop({ ip: '76.223.85.0', rttMs: 5.74 }, { geoProvider: geoFor('US'), centroids: CENTROIDS, origin: DK_AGENT });
-  assert.equal(hop.lat, null, 'no part of the US is within 724 km of Denmark — drawing it there would be false');
-  assert.equal(hop.place, null);
-  assert.ok(hop.rejected.length);
-  assert.equal(hop.withinKm, 724, 'the reply time still bounds it, and that bound is the only true thing left to say');
+  assert.equal(hop.lat, 39.8, 'the US registration is what is known, so it is what is drawn');
+  assert.equal(hop.place.certainty, 'registration');
+  assert.equal(hop.withinKm, 724, 'the reply time bounds where it actually answered from');
 });
 
 test('a hop the check accepts outright is exact, not approximate', () => {
@@ -131,9 +129,9 @@ test('a hop the check accepts outright is exact, not approximate', () => {
   assert.equal(hop.place.offByKm, undefined);
 });
 
-test('an exact candidate always wins over an approximate one', () => {
-  // rDNS says Hamburg (close, feasible); GeoIP country says DE (centroid, a
-  // near miss). The precise, feasible candidate must be the one drawn.
+test('the most precise source wins, and here it is also the feasible one', () => {
+  // rDNS says Hamburg (close, feasible); GeoIP country says DE (a centroid).
+  // The precise source is the one drawn.
   const hop = locateHop(
     { ip: '213.239.240.33', hostname: 'ham-core1.example.net', rttMs: 2.77 },
     { geoProvider: geoFor('DE'),
@@ -158,9 +156,9 @@ test('the extra reach only ever adds tolerance — it cannot move a hop', () => 
   assert.equal(near.place.certainty, 'exact');
 });
 
-test('no origin means nothing can be checked, and nothing is rejected', () => {
+test('no origin means nothing can be checked, so every placement is exact', () => {
   const hop = locateHop({ ip: '76.223.85.0', rttMs: 5.74 }, { geoProvider: geoFor('US'), centroids: CENTROIDS, origin: null });
-  assert.ok(Number.isFinite(hop.lat), 'without the agent site there is no bound to apply');
+  assert.equal(hop.lat, 39.8, 'without the agent site there is no bound to apply');
   assert.equal(hop.place.certainty, 'exact');
   assert.equal(hop.withinKm, null);
 });

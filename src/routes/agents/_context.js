@@ -1,6 +1,7 @@
 'use strict';
 
 const { silentLogger } = require('../../logger');
+const { createAgentUpdateService } = require('../../services/agentUpdateService');
 
 // Everything the three agent sub-routers share.
 //
@@ -22,6 +23,16 @@ function createAgentsContext({
   licenseManager = null,
   auditRepo = null, auditEventsRepo = null, auditLogger = null, integrationTrigger = null,
   commandSigner = null, logger = silentLogger, reconnect = {},
+  // The auto-update policy (Settings → Agents): whether agents may update
+  // themselves, inside which local-time window, and how many a fleet rollout
+  // moves at once.
+  settingsService = null,
+  // Commands left for an agent that is not connected (migration 137). Optional:
+  // without it an offline agent still answers 409, as it always did.
+  commandQueue = null,
+  // Where the "what do we push, and can it be signed" decision lives now, shared
+  // with the fleet rollout and with an agent that asks for its own update.
+  updateService = null,
 }) {
   // How long POST /:id/reconnect waits for the agent to re-dial after the forced
   // close (the agent's first backoff step is ~1 s), and how often it re-checks.
@@ -103,9 +114,14 @@ function createAgentsContext({
     commandSigner && typeof commandSigner.canSign === 'function' && commandSigner.canSign()
   );
 
+  const updates = updateService || createAgentUpdateService({
+    releaseStore, agentSourceStore, publishRelease, releaseKeyService, commandQueue, logger,
+  });
+
   return {
     // repositories + services
     agentsRepo, locationsRepo, resultsRepo, agentCommander, agentSourceStore,
+    commandQueue, updateService: updates, settingsService,
     releaseStore, releasePublicKey, releaseKeyService, licenseManager, publishRelease,
     auditRepo, auditEventsRepo, auditLogger, integrationTrigger, logger,
     // reconnect tuning (POST /:id/reconnect)

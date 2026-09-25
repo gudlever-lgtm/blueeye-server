@@ -53,19 +53,28 @@
       }
       return nodes.length ? (nodes[0].country || null) : null;
     }
-    // How the place was found: the router's name, city GeoIP, the country only —
-    // or the path itself, when the reply came back within a millisecond or two
-    // of a hop that is placed (src/geo/hopLocation.js, settlePath).
+    // How the place was found, and how well the reply time supports it. Every
+    // hop that can be placed IS drawn; this is the label that keeps it honest.
     function placeSource(p) {
       if (!p) return null;
-      if (p.source === 'latency') {
-        return p.nearHop === 0
-          ? t('pathmap.place.latencyAgent', { ms: p.deltaMs })
-          : t('pathmap.place.latencyHop', { hop: p.nearHop, ms: p.deltaMs });
-      }
-      return p.source === 'rdns' ? t('pathmap.place.rdns', { code: p.code || '' })
-        : p.source === 'geoip-city' ? t('pathmap.place.geoipCity')
-          : t('pathmap.place.country');
+      var how = p.source === 'latency'
+        ? (p.nearHop === 0 ? t('pathmap.place.latencyAgent', { ms: p.deltaMs }) : t('pathmap.place.latencyHop', { hop: p.nearHop, ms: p.deltaMs }))
+        : p.source === 'rdns' ? t('pathmap.place.rdns', { code: p.code || '' })
+          : p.source === 'geoip-city' ? t('pathmap.place.geoipCity')
+            : t('pathmap.place.country');
+      if (p.certainty === 'approximate') return how + ' \u00b7 ' + t('pathmap.place.approx');
+      if (p.certainty === 'registration') return how + ' \u00b7 ' + t('pathmap.place.registration');
+      return how;
+    }
+    // A short tag for the stop row: "approximate" or "registered here".
+    function certaintyTag(nodes) {
+      var worst = null;
+      (nodes || []).forEach(function (n) {
+        if (!n.place) return;
+        if (n.place.certainty === 'registration') worst = 'registration';
+        else if (n.place.certainty === 'approximate' && worst !== 'registration') worst = 'approximate';
+      });
+      return worst ? t(worst === 'registration' ? 'pathmap.tag.registration' : 'pathmap.tag.approx') : null;
     }
     // The agent's site is the point every distance is measured from. When the
     // first public hop is a cloud provider a few ms away, the agent most likely
@@ -81,38 +90,17 @@
         onclick: function () { deps.editAgentPosition(agentId); },
       }, t('ag.act.position')));
     }
-    // Hops the server left off the map because their reply was too fast for
-    // any place it had for them (anycast, mostly).
-    //
-    // THE DESTINATION IS A SEPARATE CASE, and the one that matters. When a
-    // transit hop is left off, the line on the map still ends where the path
-    // ends. When the DESTINATION is left off, the line ends at the last transit
-    // hop that could be placed — and a reader takes that hop for the endpoint.
-    // "us.cnn.com" drawn as ending at a Danish transit router reads as a broken
-    // trace, when in fact the trace completed and the answer is the interesting
-    // one: the content came off a CDN edge close enough that the traffic never
-    // left the region. The note has to say that, not just why the dot is absent.
+    // A hop the reply time says answers from much closer than its address is
+    // registered: anycast, or a block registered a continent from the rack. It
+    // IS on the map, where it is registered; this says what is really known.
     function rejectedNotes(nodes) {
       return (nodes || []).filter(function (n) {
-        return n.lat == null && Array.isArray(n.geoRejected) && n.geoRejected.length;
+        return n.place && n.place.certainty === 'registration' && Number.isFinite(n.withinKm);
       }).map(function (n) {
-        var r = n.geoRejected[n.geoRejected.length - 1];
-        var where = [r.city, r.country].filter(Boolean).join(', ') || '?';
-        // The country fits the reply time, only its middle does not. Not
-        // anycast: just nowhere in it that could honestly be pinned.
-        if (r.regionOnly) {
-          return ui.inlineNote(t('pathmap.unplacedNear', {
-            hop: n.hop, ip: n.ip || '*', where: where, within: n.withinKm,
-          }), 'info');
-        }
-        if (n.kind === 'dest') {
-          return ui.inlineNote(t('pathmap.rejectedDest', {
-            hop: n.hop, ip: n.ip || '*', where: where, km: r.distanceKm, max: r.maxKm,
-          }), 'info');
-        }
-        return ui.inlineNote(t(Number.isFinite(n.withinKm) ? 'pathmap.rejectedWithin' : 'pathmap.rejected', {
-          hop: n.hop, ip: n.ip || '*', where: where, km: r.distanceKm, max: r.maxKm,
-          within: n.withinKm,
+        return ui.inlineNote(t('pathmap.registeredFar', {
+          hop: n.hop, ip: n.ip || '*',
+          where: [n.place.city, n.place.country].filter(Boolean).join(', ') || '?',
+          km: n.place.offByKm, within: n.withinKm,
         }), 'info');
       });
     }
@@ -124,7 +112,7 @@
     function destShortNote(nodes) {
       var dest = (nodes || []).filter(function (n) { return n.kind === 'dest'; })[0];
       if (!dest || dest.lat != null) return null;
-      if (Array.isArray(dest.geoRejected) && dest.geoRejected.length) return null;
+      if (dest.place) return null;
       return ui.inlineNote(t('pathmap.destUnplaced', { hop: dest.hop, ip: dest.ip || '*' }), 'info');
     }
 
@@ -430,15 +418,156 @@
       }
 
       function traceNote(tr) {
+        // A run opened from the history is ONE run, not a median over several:
+        // the note has to say so, or the reader takes it for the usual graph.
+        if (tr.status === 'done' && tr.viewingRunId) {
+          return t('dest.hist.viewing', { target: tr.target, when: ui.fmt.short(tr.viewingTs) });
+        }
         if (tr.status === 'done' && tr.graph) {
           return t('dest.path.note', { target: tr.target, runs: tr.graph.samples || 0, stops: (tr.graph.stops || []).length });
         }
         return tr.target + ' · ' + agentName(tr.agentId);
       }
 
+      // ---- history of one traced path -----------------------------------
+      //
+      // The graph above is a median over the newest runs, which is the right
+      // answer to "is this path healthy now" and the wrong one to "why was it
+      // slow on Tuesday": a median is precisely what hides a single bad run,
+      // and a route that changed and changed back leaves no mark in it.
+      //
+      // So the runs are listed as themselves. Opening one draws THAT run;
+      // comparing two says which hops came, went or got slower.
+      var historyState = { open: false, runs: null, total: 0, error: null, openRunId: null, compare: null, busy: false };
+
+      function historySection(tr) {
+        var host = el('div', { class: 'path-history' });
+        var sec = el('details', { class: 'sec' },
+          el('summary', {}, t('dest.hist.title'),
+            el('span', { class: 'muted' }, historyState.total ? ' \u00b7 ' + t('dest.hist.count', { n: historyState.total }) : '')),
+          host);
+        if (historyState.open) sec.open = true;
+        sec.addEventListener('toggle', function () {
+          historyState.open = sec.open;
+          if (sec.open && historyState.runs === null) loadRuns(tr, host);
+          else if (sec.open) drawHistory(tr, host);
+        });
+        if (historyState.open) drawHistory(tr, host);
+        return sec;
+      }
+
+      function loadRuns(tr, host) {
+        host.replaceChildren(ui.loadingState(3));
+        deps.fetchPathRuns(tr.agentId, tr.target).then(function (data) {
+          historyState.runs = (data && data.runs) || [];
+          historyState.total = (data && data.total) || 0;
+          historyState.error = null;
+          drawHistory(tr, host);
+        }, function (e) {
+          historyState.error = deps.errText(e);
+          drawHistory(tr, host);
+        });
+      }
+
+      // Opens one stored run: it replaces the drawn path on the map and the
+      // hop list, so the reader is looking at that run and nothing else.
+      function openRun(tr, host, run) {
+        if (historyState.busy) return;
+        historyState.busy = true;
+        Promise.all([
+          deps.fetchPathRun(tr.agentId, run.id),
+          deps.fetchPathCompare(tr.agentId, run.id).catch(function () { return null; }),
+        ]).then(function (out) {
+          historyState.busy = false;
+          historyState.openRunId = run.id;
+          historyState.compare = out[1] && out[1].diff ? out[1] : null;
+          tr.graph = deps.drawStoredRun(tr.agentId, tr.target, out[0]) || out[0];
+          tr.viewingRunId = run.id;
+          tr.viewingTs = run.ts;
+          drawTraces();
+        }, function (e) {
+          historyState.busy = false;
+          ui.toast(t("dest.hist.title"), deps.errText(e), { bad: true });
+        });
+      }
+
+      function runRow(tr, host, run) {
+        var when = ui.fmt.short(run.ts);
+        var bits = [];
+        bits.push(t('dest.hist.hops', { n: run.respondingCount }));
+        if (run.silentCount) bits.push(t('dest.hist.silent', { n: run.silentCount }));
+        if (typeof run.rttMs === 'number') bits.push(Math.round(run.rttMs) + ' ms');
+        if (run.lossPct) bits.push(t('dest.path.lossN', { pct: Math.round(run.lossPct) }));
+        var li = el('li', {
+          class: 'is-clickable' + (historyState.openRunId === run.id ? ' is-open' : ''),
+          tabindex: '0', role: 'button',
+        },
+        el('span', { class: 'ui-legend-dot sev-' + (run.ok ? 'ok' : 'bad') }),
+        el('span', {}, when),
+        // The one thing a trace history is scanned for.
+        run.routeChanged ? ui.metaXs(t('dest.hist.rerouted')) : null,
+        !run.ok && run.detail ? ui.metaXs(run.detail) : null,
+        ui.metaXs(bits.join(' \u00b7 ')));
+        var open = function () { openRun(tr, host, run); };
+        li.addEventListener('click', open);
+        li.addEventListener('keydown', function (e) {
+          if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); }
+        });
+        return li;
+      }
+
+      // What changed between the open run and the one before it.
+      function compareBlock(cmp) {
+        if (!cmp || !cmp.diff) return null;
+        var d = cmp.diff;
+        var head = [];
+        if (d.routeChanged) head.push(t('dest.hist.cmp.rerouted', { added: d.addedCount, removed: d.removedCount }));
+        else head.push(t('dest.hist.cmp.sameRoute'));
+        if (typeof d.rttDeltaMs === 'number' && Math.abs(d.rttDeltaMs) >= 1) {
+          head.push(t(d.rttDeltaMs > 0 ? 'dest.hist.cmp.slower' : 'dest.hist.cmp.faster', { ms: Math.abs(Math.round(d.rttDeltaMs)) }));
+        }
+        var rows = d.rows.filter(function (r) {
+          // Only the rows that say something: what moved, and where the time
+          // went. An unchanged hop in an unchanged route is not news.
+          return r.kind !== 'same' || (typeof r.deltaMs === 'number' && Math.abs(r.deltaMs) >= 5);
+        });
+        return el('div', { class: 'path-compare' },
+          ui.inlineNote(head.join(' \u00b7 '), d.routeChanged ? 'warn' : 'info'),
+          ui.metaXs(t('dest.hist.cmp.against', { when: ui.fmt.short(cmp.before.ts) })),
+          rows.length
+            ? el('ul', { class: 'path-stops' }, rows.map(function (r) {
+              var label = r.kind === 'added' ? t('dest.hist.cmp.added')
+                : r.kind === 'removed' ? t('dest.hist.cmp.removed')
+                  : t(r.deltaMs > 0 ? 'dest.hist.cmp.hopSlower' : 'dest.hist.cmp.hopFaster', { ms: Math.abs(Math.round(r.deltaMs)) });
+              return el('li', {},
+                ui.metaXs(t('dest.path.hop', { n: r.afterHop != null ? r.afterHop : r.beforeHop })),
+                el('span', { class: 'mono' }, r.ip),
+                r.hostname ? el('span', { class: 'mono muted' }, ' ' + r.hostname) : null,
+                ui.metaXs(label));
+            }))
+            : ui.metaXs(t('dest.hist.cmp.nothing')));
+      }
+
+      function drawHistory(tr, host) {
+        if (historyState.error) {
+          host.replaceChildren(ui.inlineNote(historyState.error, 'crit'));
+          return;
+        }
+        var runs = historyState.runs || [];
+        if (!runs.length) {
+          host.replaceChildren(ui.emptyState({ kind: 'nodata', title: t('dest.hist.none'), body: t('dest.hist.noneHint') }));
+          return;
+        }
+        host.replaceChildren(
+          ui.metaXs(t('dest.hist.blurb')),
+          historyState.openRunId ? compareBlock(historyState.compare) : null,
+          el('ul', { class: 'path-stops path-runs' }, runs.map(function (r) { return runRow(tr, host, r); })),
+          historyState.total > runs.length ? ui.metaXs(t('dest.hist.more', { shown: runs.length, total: historyState.total })) : null);
+      }
+
       function traceDetail(tr) {
         if (tr.status === 'running') return liveDetail(tr);
-        if (tr.status === 'done' && tr.graph) return pathDetail(tr.graph);
+        if (tr.status === 'done' && tr.graph) return pathDetail(tr.graph).concat([historySection(tr)]);
         // No path came back. Say which of the two things happened — the probe
         // failed (with the agent's own reason), or it has not reported yet.
         return [
@@ -520,6 +649,8 @@
             role: isSrc ? null : 'button' },
           el('span', { class: 'ui-legend-dot sev-' + (s.severity || 'ok') }),
           el('span', {}, String(place)),
+          // Drawn either way; the tag says how well the reply time backs it.
+          isSrc ? null : (function () { var c = certaintyTag(s.nodes); return c ? ui.metaXs(c) : null; }()),
           bits.length ? ui.metaXs(bits.join(' · ')) : null,
           ui.metaXs(hopLabel));
           if (!isSrc) {

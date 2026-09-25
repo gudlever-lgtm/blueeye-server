@@ -10504,7 +10504,7 @@ function getNicsPage() {
     el, t, ui, errText,
     state: nicsPageState,
     tab: () => nicsTab,
-    setTab: (k) => { nicsTab = k; syncLocation(); },
+    setTab: (k) => { nicsTab = k; syncAddress(); },
     help: () => ({ title: t('nic.info.title'), body: () => [
       el('p', {}, t('nic.info.p1')),
       el('p', {}, t('nic.info.p2')),
@@ -13020,7 +13020,7 @@ function getSettingsPage() {
     groups: settingsGroups,
     label: settingsLabel,
     tab: () => settingsTab,
-    setTab: (k) => { settingsTab = k; syncLocation(); },
+    setTab: (k) => { settingsTab = k; syncAddress(); },
     licence: settingsLicence,
     help: () => ({ title: t('set.info.title'), body: () => [
       el('p', {}, t('set.info.p1')),
@@ -17983,7 +17983,7 @@ function getServiceAssurancePage() {
   serviceAssurancePage = window.ServiceAssurancePage.create({
     el, t, ui,
     mount: mountServiceAssurance,
-    setTab: (tab) => { serviceAssuranceTab = tab; syncLocation(); },
+    setTab: (tab) => { serviceAssuranceTab = tab; syncAddress(); },
     help: () => {
       const info = PAGE_INFO.serviceAssurance || {};
       return { lead: info.hero || '', title: info.title || t('sa.title'), body: info.body || (() => []) };
@@ -18112,7 +18112,7 @@ function getTransactionsPage() {
     state: transactionsPageState,
     isAdmin,
     tab: () => txTab,
-    setTab: (k) => { txTab = k; syncLocation(); },
+    setTab: (k) => { txTab = k; syncAddress(); },
     help: () => {
       const info = PAGE_INFO.transactions || {};
       return { lead: info.hero || '', title: info.title || t('tx.title'), body: info.body || (() => []) };
@@ -18729,6 +18729,19 @@ function applyRoute(loc) {
 }
 
 // Bring the address in line with the view being drawn. Called from render().
+// The address bar and the breadcrumb name the SAME position, so they move
+// together. A tab switch that redraws in place — Settings, NICs, Service
+// Assurance, Transactions — called only syncLocation(): the URL followed the
+// new tab, the crumb did not. Settings → System → Updates then sat under a
+// crumb still reading "Administration / Settings / Users", naming whichever
+// section had been open when the page was last fully rendered (Users is the
+// first one, so it was usually that). render() has always called both; these
+// four had no reason to differ.
+function syncAddress() {
+  syncLocation();
+  syncCrumb();
+}
+
 function syncLocation() {
   // notFound and forbidden are answers ABOUT an address, not screens with one:
   // rewriting the bar to '/' would hide the very address the message names.

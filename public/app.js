@@ -4786,6 +4786,54 @@ let trafficView = null;
 // use rather than at module level.
 const trafficViewState = {};
 
+
+// A result older than this is not "current bandwidth" any more, whatever it
+// says — three report intervals (the agent's default is 60 s).
+const BANDWIDTH_STALE_MS = 5 * 60 * 1000;
+
+// Reads one agent's current bandwidth out of its latest result — and, when
+// that is zero, WHY.
+//
+// The rates live in `traffic.totals.rxBytesPerSec`/`txBytesPerSec`. Every
+// source reports them (proc, snmp, and — from agent 0.45.1 — the netflow and
+// sflow collectors), but each has its own way of having nothing to report, and
+// the difference is the whole diagnosis:
+//
+//   noresults    the agent has never reported at all
+//   stale        it reported, but too long ago to call it "current"
+//   noexport     a flow source with an open collector and nothing arriving —
+//                no switch or hsflowd is exporting to it
+//   nodirection  flows ARE arriving, but from an exporter that is not this
+//                host (a switch), so no byte can be called in or out. The
+//                interval's total rate is real and is what the row shows
+//   norates      a flow source on an agent too old to report rates at all
+//   null         nothing is wrong: the link is simply idle
+function readBandwidth(a, row) {
+  const zero = (reason) => ({ a, rx: 0, tx: 0, total: 0, reason });
+  if (!row) return zero('noresults');
+  const traffic = (row.payload && row.payload.traffic) || null;
+  const totals = (traffic && traffic.totals) || null;
+  const rx = Number(totals && totals.rxBytesPerSec) || 0;
+  const tx = Number(totals && totals.txBytesPerSec) || 0;
+  const at = row.created_at ? new Date(row.created_at).getTime() : NaN;
+  if (Number.isFinite(at) && Date.now() - at > BANDWIDTH_STALE_MS) {
+    return { a, rx: 0, tx: 0, total: 0, reason: 'stale', at: row.created_at };
+  }
+  if (rx || tx) return { a, rx, tx, total: rx + tx, reason: null };
+
+  const flowSource = traffic && (traffic.source === 'sflow' || traffic.source === 'netflow');
+  if (flowSource) {
+    const received = traffic.source === 'sflow' ? Number(traffic.datagrams) || 0 : Number(traffic.packets) || 0;
+    if (!received) return zero('noexport');
+    // Rates at all? An agent below 0.45.1 sends byte counts and no rate.
+    if (!totals || totals.bytesPerSec === undefined) return zero('norates');
+    const total = Number(totals.bytesPerSec) || 0;
+    if (total) return { a, rx: 0, tx: 0, total, reason: 'nodirection' };
+  }
+  return { a, rx: 0, tx: 0, total: 0, reason: null };
+}
+
+
 function getTrafficView() {
   if (trafficView) return trafficView;
   if (typeof window === 'undefined' || !window.TrafficView || !ui) return null;
@@ -4825,15 +4873,16 @@ function getTrafficView() {
       return { lead: info.hero || '', title: info.title || t('traffic.title'), body: info.body || (() => []) };
     },
     // One tick: every agent's latest traffic totals, in parallel. An agent that
-    // has not reported counts as zero rather than dropping out of the total.
+    // has not reported counts as zero rather than dropping out of the total —
+    // and carries the REASON it is zero (bandwidthReason), because a column of
+    // bare zeros is the one thing a bandwidth table must never be.
     fetchTick: async () => {
       const agents = await api('/agents');
       const latest = await Promise.all(agents.map(async (a) => {
         try {
           const rows = await api(`/agents/${a.id}/results?limit=1`);
-          const tr = rows[0] && rows[0].payload && rows[0].payload.traffic && rows[0].payload.traffic.totals;
-          return { a, rx: tr ? Number(tr.rxBytesPerSec) || 0 : 0, tx: tr ? Number(tr.txBytesPerSec) || 0 : 0 };
-        } catch { return { a, rx: 0, tx: 0 }; }
+          return readBandwidth(a, rows[0]);
+        } catch { return { a, rx: 0, tx: 0, total: 0, reason: 'unreadable' }; }
       }));
       return { agents, latest };
     },
@@ -10510,6 +10559,9 @@ function getFlowsPage() {
       return { lead: info.hero || '', title: info.title || t('flows.title'), body: info.body || (() => []) };
     },
     fetchAgents: async () => api('/agents').catch(() => []),
+    // "Why is this empty?" asked of the agent itself, from the screen that
+    // raised it. Read-only (viewer+) and the same modal the Fleet action opens.
+    diagnose: (agent) => diagnoseAgent(agent),
     chart: (points, { markers, onBrush }) => el('div', { class: 'overview-chart' },
       historyChart([{ id: 'b', label: t('flows.col.bytes'), color: ui.token('--series-0'), points }], {
         fromMs: points[0].t, toMs: points[points.length - 1].t,

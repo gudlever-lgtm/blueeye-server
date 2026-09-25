@@ -165,6 +165,15 @@
       'traffic.col.status': 'Status',
       'traffic.col.rx': 'Inbound',
       'traffic.col.tx': 'Outbound',
+      'traffic.col.why': '',
+      // Why a row reads no bandwidth. A zero with no explanation is the thing
+      // people open a ticket about.
+      'traffic.why.noresults': 'Never reported',
+      'traffic.why.stale': 'Last reported {when}',
+      'traffic.why.noexport': 'Nothing is exporting to its collector',
+      'traffic.why.nodirection': '{rate} · direction unknown (the exporter is not this host)',
+      'traffic.why.norates': 'Agent too old to report a rate',
+      'traffic.why.unreadable': 'Could not read its last result',
       'traffic.online': 'Online',
       'traffic.offline': 'Offline',
       'traffic.noAgents': 'No agent is reporting traffic',
@@ -3181,6 +3190,7 @@
       'tshoot.faults.event': 'event #{id}',
       'tshoot.kpi.affectedHint': '{down} down · {degraded} degraded · {unreachable} unreachable downstream',
       'flows.noFlowsHint.source': '{agent} reports traffic as “{source}”, which carries no flows. Flow data needs its traffic source set to NetFlow or sFlow — Fleet → the agent → Edit. An sFlow exporter running on the host is not enough on its own; the agent has to be told to collect it.',
+      'flows.diagnose': 'Diagnose this agent',
       'flows.noFlowsHint.configured': 'This agent is set to {source}, so the source is right — nothing has arrived in this window. Widen the range, or check that the exporter is pointed at this agent.',
       // Settings -> Setup. Every row is computed from what the database holds,
       // never from a box somebody ticked: a checklist you tick yourself starts
@@ -5232,6 +5242,15 @@
       'traffic.col.status': 'Status',
       'traffic.col.rx': 'Indgående',
       'traffic.col.tx': 'Udgående',
+      'traffic.col.why': '',
+      // Hvorfor en række viser ingen båndbredde. Et nul uden forklaring er det,
+      // folk opretter en sag om.
+      'traffic.why.noresults': 'Har aldrig rapporteret',
+      'traffic.why.stale': 'Sidst rapporteret {when}',
+      'traffic.why.noexport': 'Ingen eksportør sender til dens collector',
+      'traffic.why.nodirection': '{rate} · retning ukendt (eksportøren er ikke denne vært)',
+      'traffic.why.norates': 'Agenten er for gammel til at rapportere en hastighed',
+      'traffic.why.unreadable': 'Kunne ikke læse dens seneste resultat',
       'traffic.online': 'Online',
       'traffic.offline': 'Offline',
       'traffic.noAgents': 'Ingen agent rapporterer trafik',
@@ -8251,6 +8270,7 @@
       'tshoot.faults.event': 'hændelse #{id}',
       'tshoot.kpi.affectedHint': '{down} nede · {degraded} forringet · {unreachable} utilgængelig nedstrøms',
       'flows.noFlowsHint.source': '{agent} rapporterer trafik som “{source}”, og det bærer ingen flows. Flowdata kræver at trafikkilden er sat til NetFlow eller sFlow — Flåde → agenten → Redigér. En sFlow-eksportør der kører på værten er ikke nok i sig selv; agenten skal have besked på at opsamle den.',
+      'flows.diagnose': 'Diagnosticér denne agent',
       'flows.noFlowsHint.configured': 'Denne agent er sat til {source}, så kilden er rigtig — der er bare ikke kommet noget i dette vindue. Udvid perioden, eller tjek at eksportøren peger på denne agent.',
       // Indstillinger -> Opsætning. Hver række beregnes ud fra hvad databasen
       // indeholder, aldrig ud fra en boks nogen har sat flueben i.

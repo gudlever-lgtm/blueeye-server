@@ -323,3 +323,61 @@ test('a ?mode deep link opens in that mode', async (t) => {
   await settle();
   assert.equal(tabs(doc)[2].getAttribute('aria-selected'), 'true');
 });
+
+// ---- "Why is this empty?" ---------------------------------------------------
+// When the source IS a flow source, the hint can only say "nothing arrived in
+// this window" — the reason lives on the agent. The empty state offers to ask
+// it (POST /agents/:id/diagnose, read-only, viewer+) rather than sending the
+// reader to another screen to guess.
+
+const EMPTY = { totals: { bytes: 0, flowCount: 0, records: 0 }, series: [], topTalkers: [], byPort: [], byProto: [], scans: [] };
+const FLOW_AGENTS = [
+  { ...AGENTS[0], monitor_config: { source: 'sflow' } },
+  { ...AGENTS[1], monitor_config: { source: 'proc' } },
+];
+const emptyPanel = (doc) => [...doc.querySelectorAll('#view .state.is-nodata')].find((s) => /No flows in this window/.test(s.textContent));
+
+test('an empty flow source offers to diagnose the agent', async (t) => {
+  const { doc } = boot({ t, routes: SESSION({ 'GET /agents': FLOW_AGENTS, 'GET /api/flows/explore': EMPTY }) });
+  await settle();
+  const state = emptyPanel(doc);
+  assert.ok(state, 'the empty state is missing');
+  assert.match(state.textContent, /set to sflow/, 'the hint does not name the source');
+  assert.ok([...state.querySelectorAll('button')].some((b) => /Diagnose/.test(b.textContent)),
+    'no way to ask the agent why it is empty');
+});
+
+test('the diagnose button asks the agent, and shows the verdict', async (t) => {
+  const { doc, window, log } = boot({
+    t,
+    routes: SESSION({
+      'GET /agents': FLOW_AGENTS,
+      'GET /api/flows/explore': EMPTY,
+      'POST /agents/7/diagnose': {
+        connected: true,
+        diagnostic: { source: 'sflow', collector: { listening: true, datagrams: 0, decodedFlows: 0 } },
+      },
+    }),
+  });
+  await settle();
+  const btn = [...emptyPanel(doc).querySelectorAll('button')].find((b) => /Diagnose/.test(b.textContent));
+  btn.dispatchEvent(new window.Event('click', { bubbles: true }));
+  await settle();
+  assert.ok(log.some((c) => c.key === 'POST /agents/7/diagnose'), 'the agent was never asked');
+  // The verdict names the broken link: the collector is up, nothing is exporting.
+  assert.match(doc.body.textContent, /received 0 datagrams/);
+});
+
+test('a proc agent is not offered a flow diagnosis — its source carries no flows', async (t) => {
+  // The first agent is the one selected on load; here it is the proc one.
+  const { doc } = boot({
+    t,
+    routes: SESSION({ 'GET /agents': [FLOW_AGENTS[1], FLOW_AGENTS[0]], 'GET /api/flows/explore': EMPTY }),
+  });
+  await settle();
+  const state = emptyPanel(doc);
+  if (state) {
+    assert.ok(![...state.querySelectorAll('button')].some((b) => /Diagnose/.test(b.textContent)),
+      'a proc agent was offered a flow-pipeline diagnosis');
+  }
+});

@@ -231,6 +231,25 @@
       }
 
       // ---- Top agents --------------------------------------------------------
+      // A row reading 0 B/s is the question this table gets asked most, so it
+      // answers it in place: `reason` (app.js readBandwidth) says whether the
+      // agent never reported, went quiet, has nothing exporting to its
+      // collector, or is simply idle. `nodirection` is the one case with a
+      // real number and no direction — a switch's flows touch neither end of
+      // this host — so the rate goes in the note rather than into a column
+      // that would be claiming something it cannot know.
+      function whyNote(r) {
+        if (!r.reason) return null;
+        if (r.reason === 'nodirection') {
+          return ui.badge('info', t('traffic.why.nodirection', { rate: deps.fmtBytes(r.total) + '/s' }));
+        }
+        if (r.reason === 'stale') {
+          return ui.badge('warn', t('traffic.why.stale', { when: r.at ? ui.fmt.rel(r.at) : '?' }));
+        }
+        var tone = r.reason === 'noresults' || r.reason === 'noexport' ? 'warn' : 'neutral';
+        return ui.badge(tone, t('traffic.why.' + r.reason));
+      }
+
       function drawTop(latest) {
         var top = latest.slice().sort(function (a, b) {
           return (b.rx + b.tx) - (a.rx + a.tx);
@@ -248,20 +267,25 @@
           children: [ui.dataTable({
             dense: true,
             columns: [
-              { key: 'agent', label: t('traffic.col.agent'), width: '260px' },
-              { key: 'status', label: t('traffic.col.status'), width: '120px' },
-              { key: 'rx', label: t('traffic.col.rx'), width: '160px', num: true },
-              { key: 'tx', label: t('traffic.col.tx'), width: '160px', num: true },
+              { key: 'agent', label: t('traffic.col.agent'), width: '220px' },
+              { key: 'status', label: t('traffic.col.status'), width: '110px' },
+              { key: 'rx', label: t('traffic.col.rx'), width: '140px', num: true },
+              { key: 'tx', label: t('traffic.col.tx'), width: '140px', num: true },
+              { key: 'why', label: t('traffic.col.why') },
             ],
             rows: top.map(function (r) {
+              var note = whyNote(r);
               return {
                 a: r.a,
                 cells: {
                   agent: ui.hostLink(r.a.display_name || r.a.hostname, function () { deps.openAgent(r.a.id); }),
                   status: ui.badge(r.a.status === 'online' ? 'ok' : 'neutral',
                     r.a.status === 'online' ? t('traffic.online') : t('traffic.offline')),
-                  rx: deps.fmtBytes(r.rx) + '/s',
-                  tx: deps.fmtBytes(r.tx) + '/s',
+                  // A rate nobody can source is shown as "–", never as 0 B/s:
+                  // the note beside it says which.
+                  rx: note && r.reason !== 'nodirection' ? '–' : deps.fmtBytes(r.rx) + '/s',
+                  tx: note && r.reason !== 'nodirection' ? '–' : deps.fmtBytes(r.tx) + '/s',
+                  why: note || '',
                 },
               };
             }),

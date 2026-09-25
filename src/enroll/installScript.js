@@ -113,6 +113,173 @@ resolve_release_key() {
   printf '%s' "$KEY_FROM_SERVER"
 }
 
+# One header value from a curl -D dump, last occurrence (redirects append).
+hdr_value() {
+  grep -i "^$1:" "$2" 2>/dev/null | tail -n1 | sed 's/^[^:]*:[[:space:]]*//' | tr -d '\r\n'
+}
+
+# The key to VERIFY a signed release against — which is NOT the same question as
+# which key to PIN. resolve_release_key() deliberately prints nothing when a key
+# is already pinned, so that a re-install can never re-anchor an installed agent.
+# Verification needs the actual bytes, so it reads them, and in the same security
+# order: provisioned out of band, then the host's own pin, then the server.
+release_key_for_verify() {
+  if [ -n "\${BLUEEYE_RELEASE_PUBLIC_KEY:-}" ]; then
+    printf '%s' "$BLUEEYE_RELEASE_PUBLIC_KEY"
+    return 0
+  fi
+  PINNED_CONF="$UNIT_DIR/$SERVICE_NAME.service.d/10-release-key.conf"
+  if [ -s "$PINNED_CONF" ]; then
+    sed -n 's/^Environment=BLUEEYE_RELEASE_PUBLIC_KEY=//p' "$PINNED_CONF" | head -n1 | tr -d '\r\n'
+    return 0
+  fi
+  $CURL -fsSL "$SERVER_URL/enroll/agent-release-key" 2>/dev/null || true
+}
+
+b64_decode() {
+  base64 -d 2>/dev/null || openssl base64 -d -A 2>/dev/null
+}
+
+# Verifies the Ed25519 signature over the manifest. Prints one of:
+#   verified    a verifier ran and the signature is good
+#   failed      a verifier ran and said NO — always fatal, never a fallback
+#   unverified  no verifier on this host, or no key to check against
+#
+# Two verifiers because the runtimes differ: a node install has node, a binary or
+# docker install may have neither node nor a modern openssl. Ed25519 needs
+# OpenSSL 1.1.1+, so an older one falls through rather than reporting a failure
+# it is not equipped to judge.
+verify_release_signature() {
+  VR_MANIFEST="$1"
+  VR_SIG_B64="$2"
+  VR_KEY=$(release_key_for_verify)
+  if [ -z "$VR_KEY" ]; then
+    printf 'unverified'
+    return 0
+  fi
+
+  VR_KEYFILE="$TMP/release-key"
+  printf '%s' "$VR_KEY" > "$VR_KEYFILE"
+  VR_SIGFILE="$TMP/release.sig.b64"
+  printf '%s' "$VR_SIG_B64" > "$VR_SIGFILE"
+
+  if command -v node >/dev/null 2>&1; then
+    cat > "$TMP/verify.js" <<'BLUEEYE_VERIFY_EOF'
+'use strict';
+const fs = require('fs');
+const crypto = require('crypto');
+try {
+  const [manifestFile, signatureFile, keyFile] = process.argv.slice(2);
+  if (!manifestFile || !signatureFile || !keyFile) process.exit(2);
+  let key = fs.readFileSync(keyFile, 'utf8').trim();
+  if (key.indexOf('-----BEGIN') !== 0) key = Buffer.from(key, 'base64').toString('utf8');
+  const ok = crypto.verify(
+    null,
+    fs.readFileSync(manifestFile),
+    crypto.createPublicKey(key),
+    Buffer.from(fs.readFileSync(signatureFile, 'utf8').trim(), 'base64')
+  );
+  process.exit(ok ? 0 : 1);
+} catch (err) {
+  process.exit(2);
+}
+BLUEEYE_VERIFY_EOF
+    if node "$TMP/verify.js" "$VR_MANIFEST" "$VR_SIGFILE" "$VR_KEYFILE" >/dev/null 2>&1; then
+      printf 'verified'; return 0
+    fi
+    # Exit 1 is a real refusal; exit 2 means the verifier could not run at all
+    # (unreadable key, no Ed25519 in this Node). Only the first is a failure.
+    if [ $? -eq 1 ]; then printf 'failed'; return 0; fi
+  fi
+
+  if command -v openssl >/dev/null 2>&1; then
+    VR_PEM="$TMP/release-key.pem"
+    if head -c 11 "$VR_KEYFILE" | grep -q -- '-----BEGIN'; then
+      cp "$VR_KEYFILE" "$VR_PEM"
+    else
+      b64_decode < "$VR_KEYFILE" > "$VR_PEM" 2>/dev/null || true
+    fi
+    VR_SIGBIN="$TMP/release.sig"
+    b64_decode < "$VR_SIGFILE" > "$VR_SIGBIN" 2>/dev/null || true
+    if [ -s "$VR_PEM" ] && [ -s "$VR_SIGBIN" ]; then
+      if openssl pkeyutl -verify -rawin -pubin -inkey "$VR_PEM" -sigfile "$VR_SIGBIN" -in "$VR_MANIFEST" >/dev/null 2>&1; then
+        printf 'verified'; return 0
+      fi
+      # Tell "openssl says no" from "this openssl has no Ed25519": ask it.
+      if openssl list -public-key-algorithms 2>/dev/null | grep -qi ed25519; then
+        printf 'failed'; return 0
+      fi
+    fi
+  fi
+
+  printf 'unverified'
+  return 0
+}
+
+# Downloads the SIGNED release and accepts it only once its signature and its
+# sha256 both hold. Sets TARBALL on success.
+#
+# Returns 0 = use it, 1 = the server publishes no signed release (fall back to
+# the source bundle). A release that IS published and fails to verify does not
+# return 1 — it aborts. Falling back there would let anyone who can break the
+# signature downgrade the install to the unsigned path just by breaking it.
+fetch_signed_release() {
+  SR_HDR="$TMP/release.hdr"
+  SR_TGZ="$TMP/agent-release.tgz"
+  if ! $CURL -fsSL -D "$SR_HDR" "$SERVER_URL/enroll/agent-release.tgz" -o "$SR_TGZ" 2>/dev/null; then
+    return 1
+  fi
+
+  SR_MANIFEST_B64=$(hdr_value 'X-Release-Manifest' "$SR_HDR")
+  SR_SIG=$(hdr_value 'X-Release-Signature' "$SR_HDR")
+  SR_VERSION=$(hdr_value 'X-Release-Version' "$SR_HDR")
+  if [ -z "$SR_MANIFEST_B64" ] || [ -z "$SR_SIG" ]; then
+    log "signed release: the server served one without a manifest or signature — falling back to the source bundle"
+    return 1
+  fi
+
+  SR_MANIFEST="$TMP/release-manifest.bin"
+  printf '%s' "$SR_MANIFEST_B64" | b64_decode > "$SR_MANIFEST" 2>/dev/null || true
+  [ -s "$SR_MANIFEST" ] || fail "the signed release manifest could not be decoded — refusing to install"
+
+  # The sha256 the PUBLISHER put its name to. Read by pattern from the canonical
+  # manifest (keys sorted, no whitespace), and required to be exactly 64 hex, so
+  # a truncated or decorated value fails rather than matching something shorter.
+  SR_WANT=$(grep -o '"sha256":"[0-9a-f]\\{64\\}"' "$SR_MANIFEST" | head -n1 | sed 's/.*:"//; s/"$//')
+  [ -n "$SR_WANT" ] || fail "the signed release manifest carries no usable sha256 — refusing to install"
+
+  pick_sha_tool
+  SR_ACTUAL=$($SHA256 "$SR_TGZ" | awk '{print $1}')
+  if [ "$SR_ACTUAL" != "$SR_WANT" ]; then
+    fail "the signed release that arrived does not match its own signed manifest (manifest says $SR_WANT, got $SR_ACTUAL) — something between this host and the server altered or cached it. Refusing to install."
+  fi
+
+  SR_VERDICT=$(verify_release_signature "$SR_MANIFEST" "$SR_SIG")
+  case "$SR_VERDICT" in
+    verified)
+      log "signed release v\${SR_VERSION:-?}: signature verified, sha256 matches its manifest"
+      ;;
+    failed)
+      fail "the signed release v\${SR_VERSION:-?} did NOT pass signature verification against the key this host trusts — refusing to install. If the server's signing key was rotated, re-pin this host (Settings -> Updates shows the command)."
+      ;;
+    *)
+      # No verifier here. The artefact is still strictly better than the source
+      # bundle: it is published once and never repackaged, so its checksum does
+      # not move under the installer, and the sha256 just checked came out of the
+      # signed manifest rather than from a second request that a cache can answer
+      # separately. Say plainly what was not done.
+      if [ -n "\${BLUEEYE_REQUIRE_SIGNED_INSTALL:-}" ]; then
+        fail "BLUEEYE_REQUIRE_SIGNED_INSTALL is set, but this host has no way to verify an Ed25519 signature (needs node, or OpenSSL 1.1.1+) — refusing to install."
+      fi
+      log "signed release v\${SR_VERSION:-?}: sha256 matches its manifest, but the SIGNATURE could not be checked here (no node, no Ed25519-capable openssl). Set BLUEEYE_REQUIRE_SIGNED_INSTALL=1 to refuse instead."
+      ;;
+  esac
+
+  TARBALL="$SR_TGZ"
+  [ -n "$SR_VERSION" ] && AGENT_VERSION="$SR_VERSION"
+  return 0
+}
+
 pick_sha_tool() {
   [ -n "$SHA256" ] && return 0
   if command -v sha256sum >/dev/null 2>&1; then SHA256="sha256sum";
@@ -157,10 +324,33 @@ point_current() {
 }
 
 main() {
-  [ -n "$SOURCE_SHA256" ] || fail "the BlueEyes server has no agent source published — set AGENT_SOURCE_DIR on the server (see docs/enrollment.md), then retry"
-
   TMP=$(mktemp -d)
   trap 'rm -rf "$TMP"' EXIT
+
+  # THE SIGNED RELEASE FIRST. It is a fixed artefact: published once, never
+  # repackaged, and carrying its own signed manifest — so its checksum does not
+  # move under the installer, and the sha256 it is checked against travels WITH
+  # the bytes instead of coming from a second request a cache can answer on its
+  # own. The source bundle below has neither property: it is rebuilt whenever the
+  # server starts, and its checksum is fetched separately.
+  TARBALL=""
+  if fetch_signed_release; then
+    log "installing the signed release (source bundle not needed)"
+  else
+    log "no signed release published on this server — using the source bundle"
+    [ -n "$SOURCE_SHA256" ] || fail "the BlueEyes server has no agent source published either — set AGENT_SOURCE_DIR on the server (see docs/enrollment.md), or publish a signed release, then retry"
+    fetch_source_bundle
+  fi
+
+  # Stop here in test/inspection mode — nothing has been written to the system.
+  if [ -n "\${BLUEEYE_DRY_RUN:-}" ]; then log "dry-run: verified, stopping before install"; exit 0; fi
+
+  install_from_tarball
+}
+
+# The legacy path: an unsigned tarball, checked against a checksum this script
+# had baked into it when the server generated it.
+fetch_source_bundle() {
   TARBALL="$TMP/agent-source.tgz"
 
   log "downloading agent source from $SERVER_URL/enroll/agent-source.tgz"
@@ -193,10 +383,9 @@ main() {
     fail "checksum mismatch (expected $SOURCE_SHA256, got $ACTUAL) — refusing to install. The server currently serves: \${LIVE:-unknown (the server could not be asked)}"
   fi
   log "checksum OK ($SOURCE_SHA256)"
+}
 
-  # Stop here in test/inspection mode — nothing has been written to the system.
-  if [ -n "\${BLUEEYE_DRY_RUN:-}" ]; then log "dry-run: verified, stopping before install"; exit 0; fi
-
+install_from_tarball() {
   # Pick a runtime. Priority order (unless BLUEEYE_RUNTIME overrides):
   #   binary  — pre-built self-contained executable; no Node.js or Docker needed
   #   node    — native Node.js + systemd

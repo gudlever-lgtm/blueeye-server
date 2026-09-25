@@ -11,7 +11,7 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const request = require('supertest');
 
-const { makeApp, makeArtifactStore, makeSourceStore, makeEnrollmentCodesRepo, makeReleaseKeyService } = require('../test-support/fakes');
+const { makeApp, makeArtifactStore, makeSourceStore, makeEnrollmentCodesRepo, makeReleaseKeyService, makeReleaseStore } = require('../test-support/fakes');
 const { createArtifactStore } = require('../src/enroll/artifactStore');
 
 // A real artifact store over a temp dir with one published binary.
@@ -341,4 +341,41 @@ test('GET /enroll/update.ps1 404s when no agent source is published', async () =
   const res = await request(app).get('/enroll/update.ps1');
   assert.equal(res.status, 404);
   assert.match(res.headers['content-type'], /text\/plain/);
+});
+
+// --- the signed release's manifest header ----------------------------------
+//
+// X-Release-Manifest exists so a client can verify X-Release-Signature without
+// reimplementing the canonical form. It used to carry JSON.stringify(manifest)
+// — insertion order — while the signature is made over canonicalize(manifest)
+// — sorted keys. The manifest is built {version, sha256, size, created_at} and
+// signed as {created_at, sha256, size, version}, so ANY client verifying
+// against that header got "invalid signature" for bytes nobody had touched.
+// That is a silent, total failure of the one path that is supposed to make
+// installs tamper-evident, so it is pinned here with a real signature.
+test('the release manifest header carries the bytes the signature was made over', async () => {
+  const { canonicalize } = require('../src/lib/canonicalize');
+
+  const { publicKey, privateKey } = crypto.generateKeyPairSync('ed25519');
+  const buffer = Buffer.from('agent release bytes');
+  const sha256 = crypto.createHash('sha256').update(buffer).digest('hex');
+  // Built in the same field order the real publisher uses, which is what makes
+  // this test meaningful: sorted and unsorted must differ.
+  const manifest = { version: '0.43.0', sha256, size: buffer.length, created_at: '2026-09-25T10:00:00.000Z' };
+  const signature = crypto.sign(null, Buffer.from(canonicalize(manifest), 'utf8'), privateKey).toString('base64');
+
+  const releaseStore = makeReleaseStore();
+  releaseStore.add({ version: '0.43.0', buffer, sha256, size: buffer.length, signature, manifest });
+
+  const res = await request(makeApp({ releaseStore })).get('/enroll/agent-release.tgz');
+  assert.equal(res.status, 200);
+
+  const headerBytes = Buffer.from(res.headers['x-release-manifest'], 'base64');
+  assert.ok(
+    crypto.verify(null, headerBytes, publicKey, Buffer.from(res.headers['x-release-signature'], 'base64')),
+    'the signature does not verify against the manifest header — a client cannot use it',
+  );
+  // And the header still parses back to the manifest, so a client can read the
+  // sha256 it must bind the downloaded bytes to.
+  assert.equal(JSON.parse(headerBytes.toString('utf8')).sha256, sha256);
 });

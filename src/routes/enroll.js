@@ -1,6 +1,7 @@
 'use strict';
 
 const fs = require('fs');
+const { canonicalize } = require('../lib/canonicalize');
 const express = require('express');
 const { asyncHandler } = require('../middleware/asyncHandler');
 const { renderInstallScript } = require('../enroll/installScript');
@@ -194,7 +195,17 @@ function createEnrollRouter({ artifactStore, sourceStore, binaryStore, releaseSt
     res.setHeader('X-Content-SHA256', full.sha256);
     res.setHeader('X-Release-Version', full.version);
     res.setHeader('X-Release-Signature', full.signature);
-    res.setHeader('X-Release-Manifest', Buffer.from(JSON.stringify(full.manifest)).toString('base64'));
+    // base64 of the CANONICAL bytes — the exact bytes the signature was made
+    // over (src/lib/canonicalize.js: keys sorted, no whitespace). JSON.stringify
+    // preserves insertion order, so the manifest is built as
+    // {version, sha256, size, created_at} but signed as
+    // {created_at, sha256, size, version}. A client that verified
+    // X-Release-Signature against a base64-decode of this header therefore got
+    // "invalid signature" every single time, for bytes that were never
+    // tampered with. Serving what was signed is what makes the header usable:
+    // the consumer verifies these bytes directly and does not have to
+    // reimplement the canonical form to do it.
+    res.setHeader('X-Release-Manifest', Buffer.from(canonicalize(full.manifest), 'utf8').toString('base64'));
     res.setHeader('Content-Disposition', `attachment; filename="blueeye-agent-${full.version}.tgz"`);
     res.status(200).send(full.buffer);
   }));

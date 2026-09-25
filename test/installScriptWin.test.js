@@ -366,3 +366,108 @@ test('renderUpdatePs1 and renderUninstallPs1 refuse a non-elevated session too',
   assert.ok(uni.indexOf('Administrator') < uni.indexOf('Unregister-ScheduledTask'), 'uninstall checks elevation before removing anything');
   assert.match(uni, /exit 1/);
 });
+
+// ---------------------------------------------------------------------------
+// The SIGNED release path on Windows.
+//
+// Windows pinned NO release key at all before this: BLUEEYE_RELEASE_PUBLIC_KEY
+// appeared nowhere in the installer, so a Windows agent had nothing to verify a
+// release against and its update rested entirely on a checksum fetched in a
+// SECOND request — which is what a cache or an inspecting proxy answers on its
+// own, producing "checksum mismatch" for bytes the server never altered.
+//
+// There is no PowerShell in CI, so the shell installer's end-to-end run has no
+// equivalent here. What IS checked end to end is the part that decides whether
+// code is authentic: the verifier embedded in the generated script is extracted
+// and run against a real Ed25519 signature.
+
+const crypto = require('node:crypto');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const { execFileSync } = require('node:child_process');
+const { NODE_VERIFIER_JS } = require('../src/enroll/releaseVerify');
+const { canonicalize } = require('../src/lib/canonicalize');
+
+const render = { install: renderInstallPs1, update: renderUpdatePs1 };
+
+// The verifier as it actually ships: pulled back out of the here-string in the
+// generated PowerShell, not read from the module it came from.
+function verifierFromScript(script) {
+  const m = script.match(/\$verifierJs = @'\n([\s\S]*?)\n'@/);
+  assert.ok(m, 'the verifier here-string is not in the generated script');
+  return m[1];
+}
+
+for (const [name, fn] of Object.entries(render)) {
+  test(`${name}: the signed release is tried before the source bundle`, () => {
+    const script = fn({ serverUrl: 'https://s.example', code: 'C', sourceSha: SHA, agentVersion: '0.43.0' });
+    assert.match(script, /function Get-AgentRelease/);
+    const rel = script.indexOf('Get-AgentRelease $Tarball');
+    const src = script.indexOf("Get-AgentSource $Tarball");
+    assert.ok(rel > 0 && src > rel, 'the source bundle is not the fallback');
+    assert.match(script, /no signed release published on this server/);
+  });
+
+  test(`${name}: a release that fails verification aborts instead of falling back`, () => {
+    const script = fn({ serverUrl: 'https://s.example', code: 'C', sourceSha: SHA });
+    // Falling back would let anyone who can break the signature downgrade the
+    // install to the path that has no signature at all.
+    assert.match(script, /did NOT pass signature verification/);
+    assert.match(script, /does not match its own signed manifest/);
+    assert.match(script, /altered or cached/);
+  });
+
+  test(`${name}: the verifier it ships is the reviewed one, byte for byte`, () => {
+    const script = fn({ serverUrl: 'https://s.example', code: 'C', sourceSha: SHA });
+    assert.equal(verifierFromScript(script), NODE_VERIFIER_JS.trimEnd(),
+      'the embedded verifier drifted from src/enroll/releaseVerify.js');
+  });
+
+  test(`${name}: that embedded verifier really verifies, and really refuses`, () => {
+    const script = fn({ serverUrl: 'https://s.example', code: 'C', sourceSha: SHA });
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'blueeye-psverify-'));
+    const vjs = path.join(dir, 'verify.js');
+    fs.writeFileSync(vjs, verifierFromScript(script));
+
+    const { publicKey, privateKey } = crypto.generateKeyPairSync('ed25519');
+    const manifest = { version: '0.43.0', sha256: 'b'.repeat(64), size: 7, created_at: '2026-09-25T10:00:00.000Z' };
+    const canonical = Buffer.from(canonicalize(manifest), 'utf8');
+    const mf = path.join(dir, 'm.bin'); fs.writeFileSync(mf, canonical);
+    const kf = path.join(dir, 'k.pem'); fs.writeFileSync(kf, publicKey.export({ type: 'spki', format: 'pem' }));
+    const sf = path.join(dir, 's.txt');
+
+    const run = () => {
+      try { execFileSync(process.execPath, [vjs, mf, sf, kf], { stdio: 'ignore' }); return 0; }
+      catch (err) { return err.status; }
+    };
+
+    fs.writeFileSync(sf, crypto.sign(null, canonical, privateKey).toString('base64'));
+    assert.equal(run(), 0, 'a good signature was not accepted');
+
+    const other = crypto.generateKeyPairSync('ed25519').privateKey;
+    fs.writeFileSync(sf, crypto.sign(null, canonical, other).toString('base64'));
+    assert.equal(run(), 1, 'a signature from the wrong key was accepted');
+
+    // Exit 2 is "could not even attempt" — the caller must not read it as a
+    // refusal, nor as a pass.
+    fs.writeFileSync(kf, 'not a key at all');
+    assert.equal(run(), 2);
+  });
+}
+
+test('install pins the release key so later updates verify against THIS host', () => {
+  const script = renderInstallPs1({ serverUrl: 'https://s.example', code: 'C', sourceSha: SHA });
+  assert.match(script, /function Save-ReleaseKey/);
+  assert.match(script, /release-key\.pem/);
+  assert.match(script, /already pinned on this host - keeping it/,
+    'a re-install must not silently re-anchor the host to a different key');
+  assert.match(script, /trust-on-first-use/, 'taking the key from the server must say so');
+});
+
+test('BLUEEYE_REQUIRE_SIGNED_INSTALL turns an unverifiable release into a refusal', () => {
+  for (const fn of Object.values(render)) {
+    const script = fn({ serverUrl: 'https://s.example', code: 'C', sourceSha: SHA });
+    assert.match(script, /BLUEEYE_REQUIRE_SIGNED_INSTALL/);
+  }
+});

@@ -101,6 +101,10 @@ test('the tab is in the URL, and a deep link opens it', async (t) => {
   tabs(doc).find((b) => b.dataset.tab === 'agents').dispatchEvent(new window.Event('click', { bubbles: true }));
   await settle(50);
   assert.equal(window.location.pathname, '/nics/agents');
+  // The crumb names the same position as the URL. A tab switch redraws in
+  // place, so it used to move the address and leave the crumb on whichever tab
+  // was open at the last full render — the reader's two signposts disagreeing.
+  assert.match(doc.querySelector('#crumb').textContent, /Agents/, 'the crumb did not follow the tab switch');
 
   const deep = boot({ t, url: 'http://server.test/nics/agents', routes: SESSION() });
   await settle();

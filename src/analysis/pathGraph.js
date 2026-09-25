@@ -212,7 +212,10 @@ function buildPathGraph(results, { geoProvider = null, cityProvider = null, cent
 
   // Is the agent where its site says? A first public hop inside a cloud
   // provider, a few ms away, says it runs in that provider's data centre.
-  const originHint = cloudOrigin(nodes, { fastestOf: (n) => (n.ip && fastest.has(n.ip) ? fastest.get(n.ip) : n.rttMs) });
+  // Not asked once the agent has its own position: that IS the answer to it.
+  const originHint = origin && origin.source === 'agent'
+    ? null
+    : cloudOrigin(nodes, { fastestOf: (n) => (n.ip && fastest.has(n.ip) ? fastest.get(n.ip) : n.rttMs) });
 
   // Links between consecutive nodes: the downstream loss drives the colour, the
   // RTT delta (clamped at 0 — RTT can wobble below the previous hop) the weight.
@@ -534,7 +537,9 @@ function createLiveTraces({ ttlMs = 5 * 60 * 1000, maxTraces = 500, now = () => 
     const copies = [...t.raw.values()].map(clone);
     settlePath(copies.map((n) => ({ hop: n.hop, rttMs: n.fastestMs, node: n })), { origin });
     const out = copies.find((n) => n.hop === node.hop);
-    const hint = cloudOrigin(copies.sort((a, b) => a.hop - b.hop), { fastestOf: (n) => n.fastestMs });
+    const hint = origin && origin.source === 'agent'
+      ? null
+      : cloudOrigin(copies.sort((a, b) => a.hop - b.hop), { fastestOf: (n) => n.fastestMs });
     if (hint && hint.hop === out.hop) out.originHint = hint;
     return out;
   }

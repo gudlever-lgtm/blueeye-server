@@ -154,11 +154,58 @@ test('nine row buttons become one action and a grouped menu', async (t) => {
   // settings most agents DO use below the fold.
   assert.deepEqual(menu(doc), [
     'Traffic', 'Flows', 'Why online / offline', 'Ping', 'Flow-pipeline self-check', 'Speed test',
-    'Edit', 'SNMP settings…', 'Rebuild from the server source', 'Delete agent',
+    'Edit', 'SNMP settings…', 'Position on map', 'Rebuild from the server source', 'Delete agent',
   ]);
   const items = [...doc.querySelectorAll('.ui-rowmenu button')];
   assert.ok(items[items.length - 1].classList.contains('danger'), 'Delete is not marked destructive');
   assert.equal(doc.querySelectorAll('.ui-rowmenu hr').length, 2, 'the menu is one undifferentiated run');
+});
+
+test('Position on map: paste coordinates, save, and the agent gets its own position', async (t) => {
+  const { doc, window, log } = boot({ t, routes: SESSION({
+    'GET /api/map/config': { tileUrl: '' },
+    'PUT /agents/7/position': { id: 7, latitude: 52.370216, longitude: 4.895168 },
+  }) });
+  await settle();
+  const act = rows(doc).find((tr) => cells(tr)[0] === 'oslo-edge-01').querySelector('.row-act');
+  act.querySelector('[aria-haspopup="menu"]').dispatchEvent(new window.Event('click', { bubbles: true }));
+  [...doc.querySelectorAll('.ui-rowmenu button')].find((b) => b.textContent === 'Position on map').click();
+  await settle(200);
+  const card = doc.querySelector('#modal-card');
+  assert.match(card.querySelector('h3').textContent, /Position of oslo-edge-01/);
+  assert.match(card.textContent, /Map unavailable/, 'no tiles: says so, and the field still works');
+  assert.ok(![...card.querySelectorAll('button')].some((b) => /site\u2019s position/.test(b.textContent)), 'no own position yet: nothing to clear');
+
+  const coords = card.querySelector('input[placeholder="55.6761, 12.5683"]');
+  coords.value = 'Copenhagen';
+  [...card.querySelectorAll('button')].find((b) => b.textContent === 'Save position').click();
+  await settle(50);
+  assert.match(card.querySelector('.error').textContent, /latitude, longitude/, 'a place name is not a coordinate');
+  assert.equal(log.filter((l) => l.key === 'PUT /agents/7/position').length, 0);
+
+  coords.value = '52.370216, 4.895168';
+  [...card.querySelectorAll('button')].find((b) => b.textContent === 'Save position').click();
+  await settle(100);
+  assert.equal(log.filter((l) => l.key === 'PUT /agents/7/position').length, 1);
+});
+
+test('Position on map offers to go back to the site once the agent has its own', async (t) => {
+  const own = AGENTS.map((a) => (a.id === 7 ? { ...a, latitude: 52.37, longitude: 4.89 } : a));
+  const { doc, window, log } = boot({ t, routes: SESSION({
+    'GET /agents': own,
+    'GET /api/map/config': { tileUrl: '' },
+    'PUT /agents/7/position': { id: 7, latitude: null, longitude: null },
+  }) });
+  await settle();
+  const act = rows(doc).find((tr) => cells(tr)[0] === 'oslo-edge-01').querySelector('.row-act');
+  act.querySelector('[aria-haspopup="menu"]').dispatchEvent(new window.Event('click', { bubbles: true }));
+  [...doc.querySelectorAll('.ui-rowmenu button')].find((b) => b.textContent === 'Position on map').click();
+  await settle(200);
+  const card = doc.querySelector('#modal-card');
+  assert.equal(card.querySelector('input[placeholder="55.6761, 12.5683"]').value, '52.37, 4.89');
+  [...card.querySelectorAll('button')].find((b) => /site\u2019s position/.test(b.textContent)).click();
+  await settle(100);
+  assert.equal(log.filter((l) => l.key === 'PUT /agents/7/position').length, 1);
 });
 
 test('Flows is offered only to an agent that has them', async (t) => {

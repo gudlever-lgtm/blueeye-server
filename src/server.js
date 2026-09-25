@@ -129,6 +129,7 @@ const { createGeoProvider } = require('./geo/provider');
 const { createGeoipUpdater } = require('./geo/geoipUpdater');
 const { createCentroids } = require('./geo/centroids');
 const { createCityProvider } = require('./geo/cityProvider');
+const { agentPosition } = require('./geo/agentPosition');
 const { describeLiveHop, createLiveTraces } = require('./analysis/pathGraph');
 const { createGeoEnricher } = require('./geo/enricher');
 const { createFlowPipeline } = require('./geo/flowPipeline');
@@ -1423,8 +1424,7 @@ function start() {
     if (hit && Date.now() - hit.at < 60000) return hit.promise;
     const promise = Promise.resolve()
       .then(() => agentsRepo.findById(agentId))
-      .then((a) => (a && Number.isFinite(a.location_lat) && Number.isFinite(a.location_lng)
-        ? { lat: a.location_lat, lng: a.location_lng } : null))
+      .then((a) => agentPosition(a))
       .catch(() => null);
     liveOrigins.set(agentId, { at: Date.now(), promise });
     if (liveOrigins.size > 1000) liveOrigins.delete(liveOrigins.keys().next().value);

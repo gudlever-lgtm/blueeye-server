@@ -1651,6 +1651,7 @@ function getAgentsPage() {
     windowsUpdate: showWindowsUpdateCommand,
     bulkUpdate: bulkUpdateAgents,
     editSnmp: editAgentSnmp,
+    editPosition: editAgentPosition,
     showResults,
     showFlows: showAgentFlows,
     showConnection,
@@ -5571,7 +5572,7 @@ function pathGraph(graph, pgOpts = {}) {
   mapSection.addEventListener('toggle', () => {
     if (!mapSection.open || mapBuilt) return;
     mapBuilt = true;
-    drawPathMap(mapHost, geoStops, nodes, graph.originHint || null);
+    drawPathMap(mapHost, geoStops, nodes, graph.originHint || null, graph.agentId ?? null);
   });
 
   return el('div', { class: 'pathmap' },
@@ -5683,14 +5684,16 @@ function renderPathStops(layer, stops) {
 
 // Draws the path on its own Leaflet map (the Probes traceroute detail). Reuses the
 // Destinations tile config.
-async function drawPathMap(host, stops, nodes = [], originHint = null) {
+async function drawPathMap(host, stops, nodes = [], originHint = null, agentId = null) {
   if (typeof L === 'undefined') { host.replaceChildren(el('div', { class: 'error' }, 'Map library failed to load.')); return; }
   // The agent looks to run in a cloud data centre, not at its site — say so
   // above the map, since every distance on it is measured from that site.
   if (originHint) {
     host.before(el('p', { class: 'warn-text small pg-origin-hint' }, t('pathmap.cloudOrigin', {
       hop: originHint.hop, ip: originHint.ip, provider: originHint.provider, ms: originHint.rttMs,
-    })));
+    }), agentId != null && canWrite()
+      ? el('button', { type: 'button', class: 'small', onclick: () => editAgentPositionById(agentId) }, t('ag.act.position'))
+      : null));
   }
   const rejected = pathRejectedNote(nodes);
   if (!stops || stops.length < 2) {
@@ -11178,6 +11181,8 @@ function getDestinationsView() {
     el, t, ui, errText, fmtBytes, gotoView,
     state: destinationsViewState,
     isAdmin: () => role === 'admin',
+    canWrite,
+    editAgentPosition: editAgentPositionById,
     hasMapLibrary: () => typeof L !== 'undefined',
     help: () => {
       const info = PAGE_INFO.geo || {};
@@ -11485,6 +11490,138 @@ async function loadSnmpProfiles() {
   } catch {
     return [];
   }
+}
+
+// A point on a map, three ways: click the map (or drag the pin), paste
+// "latitude, longitude" as a map application copies it, or search an address
+// (the configured geocoder). Returns { el, value(), setPoint(), mount() };
+// value() is { lat, lng } or null, and throws on text that is not a pair.
+function mapPointPicker(mapCfg, { lat = null, lng = null } = {}) {
+  const has = Number.isFinite(lat) && Number.isFinite(lng);
+  const coords = el('input', { type: 'text', placeholder: '55.6761, 12.5683', value: has ? `${lat}, ${lng}` : '' });
+  const search = el('input', { type: 'text', placeholder: t('ag.pos.search') });
+  const results = el('div', { class: 'geocode-results' });
+  const mapEl = el('div', { class: 'map picker-map' });
+  let map = null;
+  let marker = null;
+
+  function parse(text) {
+    const s = String(text || '').trim();
+    if (!s) return null;
+    const m = s.match(/^(-?\d+(?:\.\d+)?)\s*[,;\s]\s*(-?\d+(?:\.\d+)?)$/);
+    const la = m ? Number(m[1]) : NaN;
+    const lo = m ? Number(m[2]) : NaN;
+    if (!m || Math.abs(la) > 90 || Math.abs(lo) > 180) throw new Error(t('ag.pos.bad'));
+    return { lat: la, lng: lo };
+  }
+  function placePin(la, lo, recenter) {
+    if (!map) return;
+    if (marker) marker.setLatLng([la, lo]);
+    else {
+      marker = L.marker([la, lo], { draggable: true }).addTo(map);
+      marker.on('dragend', () => { const p = marker.getLatLng(); setPoint(p.lat, p.lng, false); });
+    }
+    if (recenter) map.setView([la, lo], Math.max(map.getZoom(), 11));
+  }
+  function setPoint(la, lo, recenter) {
+    coords.value = `${Number(la).toFixed(6)}, ${Number(lo).toFixed(6)}`;
+    placePin(la, lo, recenter);
+  }
+  // Typing or pasting moves the pin as soon as the text is a valid pair.
+  coords.addEventListener('input', () => {
+    try { const p = parse(coords.value); if (p) placePin(p.lat, p.lng, true); } catch { /* not a pair yet */ }
+  });
+  async function doSearch() {
+    const q = search.value.trim();
+    results.replaceChildren();
+    if (!q) return;
+    results.append(el('p', { class: 'muted' }, t('ag.pos.searching')));
+    try {
+      const list = await api(`/api/geocode/search?q=${encodeURIComponent(q)}`);
+      results.replaceChildren(...(Array.isArray(list) && list.length ? list.map((r) => el('button', {
+        type: 'button', class: 'geocode-hit',
+        onclick: () => { setPoint(Number(r.lat), Number(r.lon), true); results.replaceChildren(); },
+      }, r.display_name)) : [el('p', { class: 'muted' }, t('ag.pos.noResults'))]));
+    } catch (e2) {
+      results.replaceChildren(el('p', { class: e2.status === 503 ? 'muted' : 'error' },
+        e2.status === 503 ? t('ag.pos.noGeocoder') : errText(e2)));
+    }
+  }
+  search.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); doSearch(); } });
+
+  function mount() {
+    if (typeof L === 'undefined' || !mapCfg || !mapCfg.tileUrl) {
+      mapEl.replaceChildren(el('p', { class: 'muted' }, t('ag.pos.noMap')));
+      return;
+    }
+    let p0 = null;
+    try { p0 = parse(coords.value); } catch { p0 = null; }
+    map = createLeafletMap(mapEl, mapCfg, { center: p0 ? [p0.lat, p0.lng] : [50, 10], zoom: p0 ? 11 : 3 });
+    if (!map) return;
+    if (p0) placePin(p0.lat, p0.lng, false);
+    map.on('click', (e) => setPoint(e.latlng.lat, e.latlng.lng, false));
+    setTimeout(() => { try { map.invalidateSize(); } catch { /* closed */ } }, 60);
+  }
+
+  const node = el('div', { class: 'form-grid' },
+    el('label', {}, t('ag.pos.coords'), coords),
+    el('p', { class: 'muted small' }, t('ag.pos.coordsHint')),
+    el('label', {}, t('ag.pos.search'), el('div', { class: 'geocode-row' }, search,
+      el('button', { type: 'button', class: 'small', onclick: doSearch }, t('ag.pos.searchBtn')))),
+    results,
+    mapEl);
+  return { el: node, value: () => parse(coords.value), setPoint, mount };
+}
+
+// The agent's OWN map position (PUT /agents/:id/position, migration 136). For an
+// agent whose site is not where it runs — a cloud data centre, a VPN exit — so
+// the traceroute map measures its hops from the right place. Empty = the site's
+// position again.
+async function editAgentPosition(a) {
+  let mapCfg = {};
+  try { mapCfg = await api('/api/map/config'); } catch { mapCfg = {}; }
+  const own = Number.isFinite(a.latitude) && Number.isFinite(a.longitude);
+  const site = Number.isFinite(a.location_lat) && Number.isFinite(a.location_lng);
+  const picker = mapPointPicker(mapCfg, own ? { lat: a.latitude, lng: a.longitude } : (site ? { lat: a.location_lat, lng: a.location_lng } : {}));
+  const err = el('p', { class: 'error' });
+  const now = own ? t('ag.pos.nowOwn')
+    : site ? t('ag.pos.nowSite', { site: a.location_name || '' })
+      : t('ag.pos.nowNone');
+
+  async function send(body, okText) {
+    err.textContent = '';
+    try {
+      await api(`/agents/${a.id}/position`, { method: 'PUT', body });
+      closeModal(); toast(okText); render();
+    } catch (e2) { err.textContent = errText(e2); }
+  }
+  async function save() {
+    let p;
+    try { p = picker.value(); } catch (e2) { err.textContent = e2.message; return; }
+    if (!p) { err.textContent = t('ag.pos.bad'); return; }
+    await send({ latitude: p.lat, longitude: p.lng }, t('ag.pos.saved'));
+  }
+
+  $('#modal-card').classList.add('wide');
+  $('#modal-card').replaceChildren(
+    el('h3', {}, t('ag.pos.title', { name: a.display_name || a.hostname || `#${a.id}` })),
+    el('p', { class: 'muted' }, t('ag.pos.blurb')),
+    el('p', { class: 'small' }, now),
+    picker.el,
+    err,
+    el('div', { class: 'form-actions' },
+      el('button', { type: 'button', class: 'ghost', onclick: closeModal }, t('common.cancel')),
+      own ? el('button', { type: 'button', class: 'ghost', onclick: () => send({ latitude: null, longitude: null }, t('ag.pos.cleared')) }, t('ag.pos.useSite')) : null,
+      el('button', { type: 'button', onclick: save }, t('ag.pos.save'))));
+  $('#modal').classList.remove('hidden');
+  setTimeout(() => picker.mount(), 50);
+}
+
+// Opens the position dialog from somewhere that only knows the agent's id (the
+// path map's "this agent looks to run in a cloud" note).
+async function editAgentPositionById(id) {
+  try { await editAgentPosition(await api(`/agents/${encodeURIComponent(id)}`)); }
+  catch (e2) { toast(errText(e2), true); }
 }
 
 // SNMP settings for one agent, on their own.

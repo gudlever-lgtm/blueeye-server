@@ -82,6 +82,8 @@ CREATE TABLE IF NOT EXISTS `agents` (
   `status` ENUM('online', 'offline') NOT NULL DEFAULT 'offline',
   `capabilities` JSON NULL DEFAULT NULL,
   `location_id` INT UNSIGNED NULL DEFAULT NULL,
+  `latitude` DECIMAL(9,6) NULL DEFAULT NULL,
+  `longitude` DECIMAL(9,6) NULL DEFAULT NULL,
   `enrollment_code_id` INT UNSIGNED NULL DEFAULT NULL,
   `display_name` VARCHAR(255) NULL DEFAULT NULL,
   `notes` TEXT NULL DEFAULT NULL,

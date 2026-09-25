@@ -297,4 +297,45 @@ function validateAgentManagedInput(body) {
   return Object.keys(errors).length > 0 ? { errors } : { value };
 }
 
-module.exports = { validateAgentManagedInput, validateMonitorConfig, validateCapabilities, MAX_INTERVAL_MS, MONITOR_SOURCES };
+// PUT /agents/:id/position — the agent's own map position.
+//   { latitude, longitude }  both numbers (WGS84, degrees), or
+//   { latitude: null, longitude: null }  to fall back to the site's position.
+// Also accepts `coordinates: "55.6761, 12.5683"` — what a map application
+// copies — so a pasted pair does not have to be split by hand.
+function validateAgentPosition(body) {
+  const input = body && typeof body === 'object' && !Array.isArray(body) ? body : {};
+  const errors = {};
+  // An empty body must not quietly move the agent back to its site: clearing
+  // is `{ latitude: null, longitude: null }`, said out loud.
+  if (!('latitude' in input) && !('longitude' in input) && (input.coordinates === undefined || input.coordinates === null)) {
+    return { errors: { latitude: 'latitude and longitude are required (null for both to use the site\'s position)' } };
+  }
+  let lat = input.latitude;
+  let lng = input.longitude;
+  if (input.coordinates !== undefined && input.coordinates !== null && input.coordinates !== '') {
+    const m = typeof input.coordinates === 'string'
+      ? input.coordinates.trim().match(/^(-?\d+(?:\.\d+)?)\s*[,;\s]\s*(-?\d+(?:\.\d+)?)$/)
+      : null;
+    if (!m) return { errors: { coordinates: 'coordinates must be "latitude, longitude", e.g. "55.6761, 12.5683"' } };
+    lat = m[1];
+    lng = m[2];
+  }
+  const coord = (raw, min, max, field) => {
+    if (raw === undefined || raw === null || raw === '') return null;
+    const n = typeof raw === 'number' ? raw : (typeof raw === 'string' && raw.trim() !== '' ? Number(raw) : NaN);
+    if (!Number.isFinite(n) || n < min || n > max) {
+      errors[field] = `${field} must be a number between ${min} and ${max}`;
+      return null;
+    }
+    return Math.round(n * 1e6) / 1e6;
+  };
+  const latitude = coord(lat, -90, 90, 'latitude');
+  const longitude = coord(lng, -180, 180, 'longitude');
+  if (!errors.latitude && !errors.longitude && (latitude === null) !== (longitude === null)) {
+    errors.latitude = 'latitude and longitude must be given together (or both null)';
+  }
+  if (Object.keys(errors).length) return { errors };
+  return { value: { latitude, longitude } };
+}
+
+module.exports = { validateAgentPosition, validateAgentManagedInput, validateMonitorConfig, validateCapabilities, MAX_INTERVAL_MS, MONITOR_SOURCES };

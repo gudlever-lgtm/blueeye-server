@@ -70,11 +70,16 @@
     // The agent's site is the point every distance is measured from. When the
     // first public hop is a cloud provider a few ms away, the agent most likely
     // runs there, and the map is being measured from the wrong place.
-    function originHintNote(hint) {
+    function originHintNote(hint, agentId) {
       if (!hint) return null;
-      return ui.inlineNote(t('pathmap.cloudOrigin', {
+      var note = ui.inlineNote(t('pathmap.cloudOrigin', {
         hop: hint.hop, ip: hint.ip, provider: hint.provider, ms: hint.rttMs,
       }), 'warn');
+      if (agentId == null || !deps.editAgentPosition || !deps.canWrite || !deps.canWrite()) return note;
+      return el('div', {}, note, el('button', {
+        type: 'button', class: 'small',
+        onclick: function () { deps.editAgentPosition(agentId); },
+      }, t('ag.act.position')));
     }
     // Hops the server left off the map because their reply was too fast for
     // any place it had for them (anycast, mostly).
@@ -459,7 +464,7 @@
         }
         var liveHint = nodes.filter(function (n) { return n.originHint; })[0];
         return [
-          liveHint ? originHintNote(liveHint.originHint) : null,
+          liveHint ? originHintNote(liveHint.originHint, tr.agentId) : null,
           ui.inlineNote(t('dest.path.liveNote', { n: nodes.length, s: secs }), 'info'),
           el('ul', { class: 'path-stops' }, nodes.map(function (n) {
             var where = [n.asnName || (n.asn ? 'AS' + n.asn : null), placeLabel([n]),
@@ -581,7 +586,7 @@
             : null,
           body,
         ].concat(rejectedNotes(graph.nodes)).concat([destShortNote(graph.nodes)]).filter(Boolean);
-        var hint = originHintNote(graph.originHint);
+        var hint = originHintNote(graph.originHint, graph.agentId);
         return hint ? [hint].concat(out) : out;
       }
 

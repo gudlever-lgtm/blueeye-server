@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.198.0 — Give an agent its own position on the map
+
+An agent was always where its site was. For an agent running in a cloud data
+centre or behind a VPN exit that is the wrong place, and the traceroute map
+measures every hop from it.
+
+**Agents → ⋯ → Position on map** sets the agent's own position: click the
+map, drag the pin, search an address, or paste `latitude, longitude` as a map
+application copies it. "Use the site's position" goes back. The path map's
+cloud note ("this agent looks to run at DigitalOcean") has the same button,
+and stops showing once the agent has its own position.
+
+API: `PUT /agents/:id/position` with `{ latitude, longitude }` or
+`{ coordinates: "55.6761, 12.5683" }`, operator or admin; both null clears.
+Migration 136 adds `agents.latitude` / `agents.longitude` (NULL = the site's).
+
 ## 0.197.0 — Path map: place hops by the path, and notice a cloud-hosted agent
 
 A trace from an agent whose site is Copenhagen drew a line to the middle of the

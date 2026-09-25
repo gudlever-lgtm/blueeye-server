@@ -237,9 +237,19 @@ distance is measured from the agent's site. When the first public hop belongs
 to a cloud or hosting provider (DigitalOcean, AWS, Google Cloud, Azure,
 Hetzner, OVH, …) and answers within 5 ms, the agent most likely runs in that
 provider's data centre, or sends its traffic out through one. The graph then
-carries `originHint: { hop, ip, asn, provider, rttMs }` and the map says so:
-set the agent's location to where it actually runs, or every distance on the
-map is measured from the wrong place.
+carries `originHint: { hop, ip, asn, provider, rttMs }` and the map says so,
+with a button to set the agent's position.
+
+**An agent's own position** (migration 136). An agent borrows its site's
+coordinates unless it has its own: **Agents → ⋯ → Position on map** (or the
+button in the note above) opens a map where the position can be clicked,
+dragged, found by address, or pasted as `latitude, longitude` the way a map
+application copies it. `PUT /agents/:id/position` takes `{ latitude,
+longitude }` or `{ coordinates: "55.6761, 12.5683" }`; both null goes back to
+the site's position, and an empty body is refused rather than read as "clear".
+The path map (`src/geo/agentPosition.js`) and the Destinations map
+(`findForGeo`) use the agent's own position when it is set, and the cloud note
+is not shown for an agent that has one — it is the answer to that note.
 
 Each node carries `hostname`, `place` (`{ city, country, precision, source,
 code?, nearHop?, deltaMs? }`), `geoRejected` and `withinKm`; `country`/`asn`

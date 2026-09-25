@@ -131,7 +131,7 @@ test('an empty path still carries the agent origin, so live hops can anchor', as
     .get('/api/probes/path?agentId=9&target=us.cnn.com').set('Authorization', authHeader('viewer'));
   assert.equal(res.status, 200);
   assert.deepEqual(res.body.nodes, []);
-  assert.deepEqual(res.body.origin, { lat: 59.9, lng: 10.7, label: 'oslo-edge-01' });
+  assert.deepEqual(res.body.origin, { lat: 59.9, lng: 10.7, source: 'site', label: 'oslo-edge-01' });
 });
 
 test('GET /api/probes/path is 404 for an unknown agent and 500 when the store fails', async () => {

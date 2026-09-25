@@ -5,7 +5,7 @@ const { asyncHandler } = require('../../middleware/asyncHandler');
 const { requireAuth, requireRole } = require('../../auth/middleware');
 const { ROLES } = require('../../auth/roles');
 const { parseId } = require('../../validation/locationValidation');
-const { validateAgentManagedInput, MAX_INTERVAL_MS } = require('../../validation/agentValidation');
+const { validateAgentPosition, validateAgentManagedInput, MAX_INTERVAL_MS } = require('../../validation/agentValidation');
 const { validateTimeRange } = require('../../validation/resultsValidation');
 const { aggregateFlows } = require('./flows');
 
@@ -150,6 +150,26 @@ function createAgentCrudRouter(ctx) {
       }
 
       const updated = await agentsRepo.updateManaged(id, value);
+      res.json(updated);
+    })
+  );
+
+  // PUT /agents/:id/position { latitude, longitude } | { coordinates: "lat, lng" }
+  // — the agent's OWN map position, for an agent whose site is not where it
+  // runs (a cloud data centre, a VPN exit). Both null = use the site's again.
+  // The traceroute map measures every hop from it. operator or admin.
+  router.put(
+    '/:id/position',
+    requireAuth,
+    requireRole(ROLES.OPERATOR, ROLES.ADMIN),
+    asyncHandler(async (req, res) => {
+      const id = parseId(req.params.id);
+      if (id === null) return invalidId(res);
+      const { value, errors } = validateAgentPosition(req.body);
+      if (errors) return validationError(res, errors);
+      if (!(await agentsRepo.findById(id))) return notFound(res);
+      const updated = await agentsRepo.setPosition(id, value.latitude, value.longitude);
+      if (!updated) return notFound(res);
       res.json(updated);
     })
   );

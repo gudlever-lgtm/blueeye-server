@@ -163,6 +163,8 @@ function makeAgentsRepo(overrides = {}) {
     findForGeo: overrides.findForGeo || (async () => []),
     updateManaged:
       overrides.updateManaged || (async (id, patch) => ({ id, ...patch })),
+    setPosition:
+      overrides.setPosition || (async (id, latitude, longitude) => ({ id, latitude: latitude ?? null, longitude: longitude ?? null })),
     setLocation:
       overrides.setLocation || (async (id, locationId) => ({ id, location_id: locationId ?? null })),
     setCapabilities:

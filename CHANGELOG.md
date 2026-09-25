@@ -1,5 +1,83 @@
 # Changelog
 
+## 0.198.0 — Installers take the signed release, and can prove it is the right one
+
+The install and update scripts fetched the source bundle and compared its
+sha256 against whatever `/enroll/agent-source.json` said at that moment. Two
+requests, two moments: any rebuild between them — a version bump, a
+non-reproducible tar — ended in `checksum mismatch`, on every platform, for
+bytes nobody had touched.
+
+**Signed release first.** `install.sh` and `install.ps1` now ask for
+`/enroll/agent-release.tgz` and fall back to the source bundle only when the
+server has no signed release. The release is one file whose sha256 was signed
+once; there is no second moment to disagree with.
+
+**Verified, not just downloaded.** Both scripts verify the Ed25519 signature
+over the manifest before unpacking: with `node` if the host has it, else
+`openssl`, else the download is marked `unverified` and the script says so
+rather than pretending. The shell verifier is embedded, so there is nothing
+extra to install.
+
+**`X-Release-Manifest` is now usable.** It carried `JSON.stringify` of the
+manifest — insertion order `{version, sha256, size, created_at}` — while the
+signature was made over the canonical form with its keys sorted. Anything that
+verified the header against the signature got "invalid signature" every time.
+The header now carries the bytes that were actually signed.
+
+**Windows pins a release key.** `install.ps1` never stored one; an update had
+no key to check a signature against. It now saves the release key next to the
+agent state on enrolment, the same as the Linux path.
+
+## 0.197.0 — Path map: place hops by the path, and notice a cloud-hosted agent
+
+A trace from an agent whose site is Copenhagen drew a line to the middle of the
+Czech Republic: its first hop was a DigitalOcean router answering in 4 ms, in a
+block registered in CZ. Four replies inside 4 ms are one building.
+
+**Placed by the path itself.** A hop GeoIP cannot place, or can only put at a
+country's centre, is drawn with the last placed hop when its reply is at most
+2 ms behind it — or at the agent when it answered within 5 ms. The map says
+so ("placed with hop 3 — its reply came only 1.2 ms later").
+
+**No more pins on a country's centre that the reply rules out.** Such a hop
+used to be drawn there as "approximate". It is now left for the path to place;
+when nothing can, the note says where it is registered and how close it
+provably is, without calling it anycast.
+
+**"This agent runs at DigitalOcean."** When the first public hop is a cloud or
+hosting provider a few ms away, the map says the agent most likely runs in
+that provider's data centre, not at its site — every distance on the map is
+measured from the site, so it has to be right.
+
+Live traces are placed the same way, hop by hop.
+
+## 0.196.1 — One-click update: name what broke the checksum
+
+Pair with agent **0.43.0**, which is where the actual fix lives: the agent now
+downloads the signed release with `Accept-Encoding: identity`. Node's `fetch`
+otherwise offers `gzip, deflate` and transparently decodes the response, so a
+proxy or CDN that labels the already-gzipped release `Content-Encoding: gzip`
+got it un-gzipped on arrival — the agent hashed the inner tar, never the
+release, and every attempt failed with the same two hashes. An agent pinning a
+cert fingerprint uses the raw HTTPS client and never saw it.
+
+Server side, the other cause is now impossible to hit silently:
+
+* A release is two files — the tarball and the sidecar naming the sha256 that
+  was signed. The store re-hashes the bytes on every download and refuses to
+  serve a pair that disagrees; no agent could install it anyway.
+* `GET /enroll/agent-release.tgz` answers **503** with what is wrong, instead of
+  "no release published", when a published release cannot be served.
+* Boot logs every release whose bytes no longer match its manifest. The
+  re-sign-from-source on startup repairs the current version.
+* `add()` writes the tarball and its sidecar through a temp file + rename, so an
+  interrupted publish cannot leave a half-written pair behind.
+* `/enroll/agent-release(.tgz)` is `Cache-Control: no-store` like the rest of
+  `/enroll`.
+
+See `docs/updates.md`.
+
 ## 0.193.0 — A checksum mismatch now says which side is stale
 
 **"checksum mismatch - refusing to update", on every retry.** The install and

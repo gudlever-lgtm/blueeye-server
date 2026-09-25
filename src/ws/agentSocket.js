@@ -42,7 +42,7 @@ function traceHopPayload(agentId, msg, describe) {
   const wrap = (node) => (node ? { agentId, probeType, target, node } : null);
   let node = null;
   try {
-    node = typeof describe === 'function' ? describe(msg.hop, agentId) : describeLiveHop(msg.hop);
+    node = typeof describe === 'function' ? describe(msg.hop, agentId, { probeType, target }) : describeLiveHop(msg.hop);
   } catch { node = null; }
   // `describe` may look the agent's site up first (the map's speed-of-light
   // check needs it), in which case the payload is a promise.

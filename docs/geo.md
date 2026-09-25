@@ -202,17 +202,54 @@ A slow reply never pulls a hop anywhere — routers answer ICMP from their slow
 path, so a long RTT says nothing about distance. The check needs the agent's
 site coordinates; without them nothing is rejected.
 
-When every candidate is ruled out — typically an anycast address such as a
-public DNS resolver, registered in the US and answering from 3 ms away — the hop
-gets no coordinates and `geoRejected` lists what was ruled out and why. The map
-leaves it off and says so under the map.
+A country centroid is tested as the country it stands for (its centroid less
+the country's size, `COUNTRY_REACH_KM`), only to tell two kinds of failure
+apart. When the country fits the reply time but its centroid does not, the hop
+is **region-only** (`geoRejected[].regionOnly`): not anycast, but not drawn on
+the centroid either — a pin there is a line no packet took. When no part of the
+country fits — typically an anycast address such as a public DNS resolver,
+registered in the US and answering from 3 ms away — it is anycast. Either way
+the hop gets no coordinates from GeoIP, and `withinKm` says how close to the
+agent it provably is.
+
+**Placing hops by the path itself** (`settlePath`). GeoIP answers each hop on
+its own; the path answers them together. After every hop has its own
+candidate, a second pass walks the path in TTL order:
+
+- A hop with its own city (router name or city GeoIP) keeps it and becomes the
+  anchor.
+- A hop that is unplaced, or placed only at a country centroid, is drawn at the
+  last anchor when its fastest reply is at most **2 ms** behind it — or, when
+  the anchor is the agent itself, at most **5 ms** in total (the first public
+  hop carries the access link on top of distance). Its `place` then reads
+  `{ source: 'latency', nearHop, deltaMs }`.
+- A moved hop never becomes an anchor, so a chain of small steps cannot creep
+  a pin across a continent.
+
+Cloud and transit networks are exactly where GeoIP is weakest (a block is
+registered where the company is, not where the rack is) and exactly where
+consecutive hops sit in one building. A DigitalOcean router registered in CZ,
+answering in 4 ms from an agent in Copenhagen, is drawn at the agent — not in
+the middle of the Czech Republic.
+
+**Is the agent where its site says?** (`src/geo/hostingNetworks.js`). Every
+distance is measured from the agent's site. When the first public hop belongs
+to a cloud or hosting provider (DigitalOcean, AWS, Google Cloud, Azure,
+Hetzner, OVH, …) and answers within 5 ms, the agent most likely runs in that
+provider's data centre, or sends its traffic out through one. The graph then
+carries `originHint: { hop, ip, asn, provider, rttMs }` and the map says so:
+set the agent's location to where it actually runs, or every distance on the
+map is measured from the wrong place.
 
 Each node carries `hostname`, `place` (`{ city, country, precision, source,
-code? }`) and `geoRejected`; `country`/`asn` keep their meaning (the GeoIP
-registration). Live hops (`trace-hop`) go through the same function, with the
-agent's site looked up once a minute per agent. The agent looks names up after
-the trace finishes, so a live hop has no name yet and is placed by GeoIP; the
-finished run replaces it with the name-based placement.
+code?, nearHop?, deltaMs? }`), `geoRejected` and `withinKm`; `country`/`asn`
+keep their meaning (the GeoIP registration). Live hops (`trace-hop`) go through
+the same functions: the server keeps each running trace's hops for five minutes
+(`createLiveTraces`), so a live hop is settled with the hops before it exactly
+as the finished path will be, and the agent's site is looked up once a minute
+per agent. The agent looks names up after the trace finishes, so a live hop has
+no name yet and is placed by GeoIP and latency; the finished run replaces it
+with the name-based placement.
 
 ### City table
 

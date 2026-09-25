@@ -28,15 +28,16 @@
   //   param   this view takes a trailing id (/agents/12) reported as `id`
   var VIEWS = {
     changes: { path: '/changes' },
-    fleet: { path: '/fleet' },
+    // Fleet is ONE screen with three column sets over the same rows — the
+    // agents. The tab is which set is shown, not which population: see
+    // docs/fleet-and-sites-consolidation.md.
+    fleet: { path: '/fleet', tabs: ['health', 'drift', 'hardware'], tabKey: 'fleetSet' },
     overview: { path: '/traffic' },
-    map: { path: '/sites' },
+    // Sites is the map AND the register the map is drawn from.
+    map: { path: '/sites', tabs: ['map', 'list'], tabKey: 'sitesTab' },
     geo: { path: '/destinations' },
 
-    agents: { path: '/agents' },
     agent: { path: '/agents', param: true },
-    interfaces: { path: '/interfaces' },
-    nics: { path: '/nics', tabs: ['models', 'agents'], tabKey: 'nicsTab' },
 
     probes: { path: '/probes', tabs: ['run', 'connection', 'burst', 'packages'], tabKey: 'probesTab' },
     transactions: { path: '/transaction-tests', tabs: ['list', 'matrix'], tabKey: 'txTab' },
@@ -73,8 +74,10 @@
       tabKey: 'guideTrack',
     },
 
-    locations: { path: '/locations' },
     location: { path: '/locations', param: true },
+    // Driver/firmware inventory: asset work, so it sits with the other
+    // administration screens rather than in the monitoring menu.
+    nicInventory: { path: '/nic-inventory' },
     enrollment: { path: '/enrollment' },
     discovery: { path: '/discovery' },
     coverage: { path: '/coverage' },
@@ -127,6 +130,20 @@
     kitchenSink: 'admin',
   };
 
+  // Addresses that used to be screens of their own. They are kept working —
+  // links get pasted into tickets and chat, and a 404 on one of those is a
+  // worse outcome than a redirect nobody notices. The client rewrites the bar
+  // to the new address on arrival (history.replaceState), so the old path does
+  // not linger and get copied onwards.
+  var ALIASES = {
+    '/agents': { view: 'fleet', tab: 'drift' },
+    '/interfaces': { view: 'fleet', tab: 'hardware' },
+    '/nics': { view: 'nicInventory' },
+    '/nics/models': { view: 'nicInventory' },
+    '/nics/agents': { view: 'nicInventory' },
+    '/locations': { view: 'map', tab: 'list' },
+  };
+
   function normalise(pathname) {
     var p = String(pathname || '/');
     var q = p.indexOf('?');
@@ -145,6 +162,16 @@
   function match(pathname) {
     var p = normalise(pathname);
     if (p === '/' || p === '/index.html') return { view: HOME, path: VIEWS[HOME].path };
+
+    // A retired address answers as the screen that absorbed it, flagged so the
+    // caller can correct the address bar rather than leave it lying.
+    if (Object.prototype.hasOwnProperty.call(ALIASES, p)) {
+      var al = ALIASES[p];
+      var spec2 = VIEWS[al.view];
+      var out = { view: al.view, path: spec2.path, alias: p };
+      if (spec2.tabs) { out.tabKey = spec2.tabKey; out.tab = al.tab || spec2.tabs[0]; }
+      return out;
+    }
 
     var keys = Object.keys(VIEWS);
     var best = null;
@@ -192,6 +219,7 @@
   function ownsPath(pathname) {
     var p = normalise(pathname);
     if (p === '/' || p === '/index.html') return true;
+    if (Object.prototype.hasOwnProperty.call(ALIASES, p)) return true;
     var keys = Object.keys(VIEWS);
     for (var i = 0; i < keys.length; i++) {
       var base = VIEWS[keys[i]].path;
@@ -202,6 +230,7 @@
 
   var apiObj = {
     VIEWS: VIEWS,
+    ALIASES: ALIASES,
     HOME: HOME,
     NOT_FOUND: NOT_FOUND,
     MIN_ROLE: MIN_ROLE,

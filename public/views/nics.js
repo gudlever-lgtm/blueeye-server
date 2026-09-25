@@ -1,8 +1,14 @@
-// public/views/nics.js — NICs, as a DashboardPage (template B).
+// public/views/nics.js — NIC inventory, as a DashboardPage (template B).
 //
 // The fleet's network cards: which models are deployed, and which of them are
 // running mismatched firmware. Built from the contract's components
 // (public/ui.js, docs/ui-contract.md).
+//
+// Driver and firmware strings change when somebody updates a machine, so this
+// answers "which firmware is deployed where" — asset work. It sits with the
+// other administration screens rather than in the monitoring menu, and its
+// per-agent tab is gone: one agent's cards are a section of the Fleet drawer
+// now (docs/fleet-and-sites-consolidation.md).
 //
 // What this migration changes:
 //   * the Models / Agents switch was a `.seg` segmented control — two buttons
@@ -69,14 +75,13 @@
 
       var page = ui.page();
       var stripHost = el('div', {});
-      var tabsHost = el('div', {});
       var barHost = el('div', {});
       // Two panels in one page slot would otherwise touch — the page's own
       // column gap only separates its direct children.
       var bodyHost = el('div', { class: 'panel-stack' });
       var inv = null;
 
-      var search = el('input', { type: 'search', value: state.q });
+      var search = el('input', { type: 'search', value: state.q, placeholder: t('nic.searchModels') });
       search.addEventListener('input', function () {
         state.q = search.value.trim().toLowerCase();
         drawBody();
@@ -87,7 +92,7 @@
         title: t('nic.title'),
         lead: t('nic.lead'),
         help: { title: info.title, body: info.body },
-      }), stripHost, tabsHost, barHost, bodyHost);
+      }), stripHost, barHost, bodyHost);
 
       function has(v, needle) {
         return String(v == null ? '' : v).toLowerCase().indexOf(needle) >= 0;
@@ -105,13 +110,6 @@
             title: t('nic.stat.driftHint'),
             onclick: function () {
               state.driftOnly = !state.driftOnly;
-              // Drift is a property of a model, so the filter only means
-              // anything on the Models tab.
-              if (state.driftOnly && deps.tab() !== 'models') {
-                deps.setTab('models');
-                drawTabs();
-                drawBar();
-              }
               drawStrip();
               drawBody();
             },
@@ -119,20 +117,7 @@
         ]));
       }
 
-      function drawTabs() {
-        tabsHost.replaceChildren(ui.tabs([['models', t('nic.tab.models')], ['agents', t('nic.tab.agents')]], {
-          active: deps.tab(),
-          ariaLabel: t('nic.groupBy'),
-          onPick: function (key) {
-            deps.setTab(key);
-            drawBar();
-            drawBody();
-          },
-        }));
-      }
-
       function drawBar() {
-        search.placeholder = deps.tab() === 'agents' ? t('nic.searchAgents') : t('nic.searchModels');
         barHost.replaceChildren(ui.toolbar({
           filters: [
             ui.filter(t('nic.search'), search),
@@ -258,88 +243,8 @@
         return out;
       }
 
-      // ---- Agents -----------------------------------------------------------
-      function agentsBody() {
-        var needle = state.q;
-        function nicMatch(n) {
-          return !needle || [n.iface, n.driver, n.driverVersion, n.firmwareVersion, n.busInfo, n.pciId]
-            .some(function (v) { return has(v, needle); });
-        }
-        function agentMatch(a) {
-          return !needle || has(a.name, needle) || has(a.location, needle) || a.nics.some(nicMatch);
-        }
-        var agents = inv.byAgent.filter(agentMatch);
-        if (!agents.length) {
-          return [ui.panel({
-            title: t('nic.agents.title'),
-            children: [ui.emptyState({
-              title: t('nic.noMatch'),
-              body: t('nic.noMatchHint'),
-              action: ui.button('secondary', t('nic.clear'), {
-                onclick: function () { state.q = ''; search.value = ''; drawBar(); drawBody(); },
-              }),
-            })],
-          })];
-        }
-        return [ui.panel({
-          title: t('nic.agents.title'),
-          note: needle
-            ? t('nic.agents.ofTotal', { n: agents.length, total: inv.byAgent.length })
-            : t('nic.agents.count', { n: inv.byAgent.length }),
-          children: [ui.dataTable({
-            columns: [
-              { key: 'agent', label: t('nic.col.agent') },
-              { key: 'location', label: t('nic.col.location'), width: '180px' },
-              { key: 'count', label: t('nic.col.interfaces'), width: '130px', num: true },
-              { key: 'drivers', label: t('nic.col.drivers'), width: '260px' },
-            ],
-            rows: agents.map(function (a) {
-              // When the filter matched a NIC, only the matching ones are the
-              // answer; when it matched the agent, all of them are.
-              var nics = needle && a.nics.some(nicMatch) ? a.nics.filter(nicMatch) : a.nics;
-              return {
-                a: a, nics: nics,
-                cells: {
-                  agent: a.name,
-                  location: a.location ? a.location : ui.meta('–'),
-                  count: String(a.nics.length),
-                  drivers: ui.meta(uniqueDrivers(a.nics).join(', ') || '–'),
-                },
-              };
-            }),
-            onOpen: function (r, tr) { openAgentDrawer(r.a, r.nics, tr); },
-          })],
-        })];
-      }
-
-      function uniqueDrivers(nics) {
-        var seen = {};
-        var out = [];
-        (nics || []).forEach(function (n) {
-          if (!n.driver || seen[n.driver]) return;
-          seen[n.driver] = 1;
-          out.push(n.driver);
-        });
-        return out;
-      }
-
-      // The NIC specs used to be a table stacked under every agent, all the way
-      // down the page. One agent's cards are a detail, so they open as one.
-      function openAgentDrawer(a, nics, tr) {
-        ui.openDrawer({
-          title: a.name,
-          meta: a.location || undefined,
-          row: tr,
-          sections: [ui.drawerSection(t('nic.drawer.cards'), nicTable(nics))],
-          footer: ui.drawerFooter([
-            ui.button('secondary', t('nic.drawer.open'), { onclick: function () { deps.openAgent(a.id); } }),
-          ]),
-        });
-      }
-
       function drawBody() {
-        bodyHost.replaceChildren.apply(bodyHost,
-          (deps.tab() === 'agents' ? agentsBody() : modelsBody()));
+        bodyHost.replaceChildren.apply(bodyHost, modelsBody());
       }
 
       function load() {
@@ -351,7 +256,6 @@
               // Nothing reports NIC data yet: a strip of zeros, a tab strip and
               // a search box are four ways of saying the same nothing.
               stripHost.replaceChildren();
-              tabsHost.replaceChildren();
               barHost.replaceChildren();
               bodyHost.replaceChildren(ui.panel({
                 title: t('nic.models.title'),
@@ -365,13 +269,11 @@
               return;
             }
             drawStrip();
-            drawTabs();
             drawBar();
             drawBody();
           })
           .catch(function (e) {
             stripHost.replaceChildren();
-            tabsHost.replaceChildren();
             barHost.replaceChildren();
             bodyHost.replaceChildren(ui.panel({
               title: t('nic.models.title'),

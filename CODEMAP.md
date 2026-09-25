@@ -362,17 +362,27 @@ A single vanilla-JS SPA. Key building blocks:
   capped at `--page-max`. See docs/design.md.
 - `views.<tab>` — async function per tab returning a node (`changes` (**the landing
   route** — what happened since you last looked; see docs/changes-feed.md),
-  `fleet` (UI label **“Fleet”**, no longer the landing route — still the right
-  screen for bulk operations across agents; compact `networkPath` strip + a fleet-wide **traffic
-  map** (`trafficMapCard`, colored directional flow arrows; arc click → Flows→Map
-  scoped to the site, pin click → the location page) and ends with a gated
-  **“Open issues”** rollup (`fleetIssues()`, events + findings,
-  `dashboard_advanced`) for Professional+),
-  `overview`, `map` (UI label **“Sites”** — locations coloured by agent health),
+  `fleet` (UI label **“Fleet”**, no longer the landing route — **one table of
+  agents with three column sets**: `health` (loss/latency/jitter/targets/speed),
+  `drift` (version + the bulk update, traffic source, data quality) and
+  `hardware` (ports, port faults, link, NIC, firmware drift — all but the NIC
+  figures already in `health.metrics`). A row opens a **drawer** (verdict +
+  evidence, measurements, the port table, NIC cards, identity, the context
+  hand-offs), addressed as `?agent=12`. The Health set also carries the compact
+  `networkPath` strip, the fleet-wide **traffic map** (`trafficMapCard`, colored
+  directional flow arrows; arc click → Flows→Map scoped to the site, pin click →
+  the location page) and the gated **“Open issues”** rollup (`fleetIssues()`,
+  events + findings, `dashboard_advanced`) for Professional+. It absorbed the
+  Agents, Interfaces and NICs screens — see docs/fleet-and-sites-consolidation.md),
+  `overview`, `map` (UI label **“Sites”** — two sub-tabs: `map` (sites coloured by
+  agent health) and `list` (the site register, `public/views/locations.js`, with
+  its create/edit/delete actions — it was a screen of its own under
+  Administration)),
   `geo` (UI label **“Destinations”** — external traffic by country/ASN),
-  `agents`, `interfaces`, `nics` (NIC firmware inventory + drift), `probes` (four sub-tabs:
+  `nicInventory` (UI label **“NIC inventory”**, under Administration — driver/firmware
+  inventory + drift; asset work rather than monitoring), `probes` (four sub-tabs:
   **Run a probe** · **Connection test** — one address, the whole battery, with rounds/Stop/Repeat ·
-  **Burst mode** — one target once a second while the fault is happening · **Test packages**), `flows` (Unified / Bidirectional / **Map** — geographic traffic arrows via `/api/flows/map`), `screening` (**Test area** — admin-only outbound screening), `findings`, `locations`, `enrollment`,
+  **Burst mode** — one target once a second while the fault is happening · **Test packages**), `flows` (Unified / Bidirectional / **Map** — geographic traffic arrows via `/api/flows/map`), `screening` (**Test area** — admin-only outbound screening), `findings`, `enrollment`,
   `docs` (**Documentation** — built-in handbook: getting-started + troubleshooting how-tos for everyone, admin-only setup guides; static, RBAC-gated content),
   `snmpDevice` (**a polled switch** — reached from the device list, a port search hit or a loop
   finding, no tab: a switch has no token, heartbeat or version and does not belong in the rail beside the agents),
@@ -384,9 +394,11 @@ A single vanilla-JS SPA. Key building blocks:
   All maps init via the shared `createLeafletMap`
   (server-configured EU/self-hosted tiles).
 - `render()` — mounts the current view + its `hero()`; stops per-view pollers
-  (`stopOverview`/`stopProbes`/`stopIfaces`/`stopFleet`/`stopAgent`/`stopGeo`) when leaving.
-- Shared renderers `interfaceTable()` / `probeLatestTable()` / `probeDetail()` back both
-  the standalone tabs and the combined agent page. `probeLatestTable()` carries ONE
+  (`stopOverview`/`stopProbes`/`stopFleet`/`stopAgent`/`stopGeo`) when leaving.
+- Shared renderers `interfaceTable()` / `interfaceForecastTable()` / `nicTable()` /
+  `probeLatestTable()` / `probeDetail()` back the Fleet drawer and the combined
+  agent page — `public/views/interfaces.js` and `public/views/nics.js` export the
+  tables, and neither draws a page of its own any more. `probeLatestTable()` carries ONE
   adaptive **Measured** column (`probeMeasured()` — latency+loss for a ping, hop count
   for a trace, packet size + recommended MSS for a path-MTU check) rather than the fixed
   RTT/Loss/Jitter triple that fitted ping and left four of the nine types blank. A row
@@ -498,8 +510,8 @@ A single vanilla-JS SPA. Key building blocks:
 | Device config snapshots / diff / risk | `src/config/` — `diff.js` (uses the `diff` lib), `risk.js` (rule-based ACL/routing/interface=high), `mask.js` (IP + secret masking), `configContext.js` (masked+classified diff) — + `repositories/configSnapshotsRepository.js`; router `src/routes/deviceConfig.js` (`/api/devices/:id/config-history` + `POST /:id/config-snapshots`). Retention in `analysis/retention/` (`RETENTION_CONFIG_SNAPSHOT_DAYS`). UI = agent-page "Config history" card in `public/app.js`. Migration 049. See `docs/event-cases.md` |
 | Probe findings + alerting | `src/analysis/probeFindings.js` (verdict→findings, reuses `health/probeHealth.js`) + `probePipeline.js` (runs on probe-results ingest in `routes/agentReports.js`) |
 | AI assistant (explain + location summary) | `src/analysis/assistant.js` (OpenAI-compatible; opt-in; reads enable/provider/key/model/baseUrl live from the analysis config) + `src/routes/assistant.js`; provider presets (EU: Mistral/Scaleway/OVHcloud/IONOS/Aleph Alpha · US: OpenAI/Anthropic/Gemini/Groq/Together/OpenRouter/Azure · DeepSeek · Ollama self-hosted · custom — every entry region-tagged, admin's choice) = `src/analysis/assistantProviders.js` (`azure`/`custom` need an admin base URL). Runtime config (enable + provider + API key + model + custom endpoint): `settingsService.getAssistant/setAssistant` (`src/services/settings.js`), `PUT /api/settings/assistant`, UI `assistantSettingsCard` in its own **Settings → AI** tab (`settingsAiView`) |
-| Fleet health (overview + verdicts) | `src/health/probeHealth.js` (`computeAgentHealth`/`mergeHealth`/`computeFleet`, median+MAD — folds in interface health), `src/routes/fleet.js`; UI `views.fleet`/`views.agent` |
-| NIC firmware inventory / drift | `src/health/nicInventory.js` (`computeNicInventory`, groups by driver+PCI id, flags firmware outliers) from agent-reported `capabilities.nic`; HTTP `GET /api/fleet/nics` in `src/routes/fleet.js`; UI `views.nics` + per-agent NIC card in `views.agent`. Agent side in blueeye-agent `src/nicInfo.js` (`ethtool -i`) |
+| Fleet health (overview + verdicts) | `src/health/probeHealth.js` (`computeAgentHealth`/`mergeHealth`/`computeFleet`, median+MAD — folds in interface health), `src/routes/fleet.js`; UI `views.fleet` (all three column sets read it) / `views.agent`. `mergeHealth` also writes `ifaceStatus`/`ifaceCount`/`ifaceIssues`/`worstIface` into `health.metrics`, which is what the Hardware set draws |
+| NIC firmware inventory / drift | `src/health/nicInventory.js` (`computeNicInventory`, groups by driver+PCI id, flags firmware outliers) from agent-reported `capabilities.nic`; HTTP `GET /api/fleet/nics` in `src/routes/fleet.js`; UI `views.nicInventory` (Administration) + the NIC section of the Fleet drawer + the per-agent NIC card in `views.agent`. Agent side in blueeye-agent `src/nicInfo.js` (`ethtool -i`) |
 | Interface health | `src/health/interfaceHealth.js` (`computeInterfaceHealth`/`interfaceHealthSummary`); HTTP in `src/routes/interfaces.js` — agent side in blueeye-agent |
 | Agent offline (runtime stale sweep, one finding per offline episode, dead-agent vs network-down verdict) | Pure verdict `src/health/agentOffline.js` (`assessAgentOffline`: site peers, other agents' probes to its IPs, switch port via ARP→FDB→`device_interfaces`/`link.down`, WS connection evidence); job `src/health/agentOfflineMonitor.js` (backgroundJobs in `server.js`; `agentsRepo.sweepStaleOffline`/`peerProbesTowards`; `agentWs.connectedAgentIds`). Metric `agent.offline`; verdict on the changes-feed row and the connection modal (`ag.offline.*`). Config `AGENT_STALE_OFFLINE_SEC`/`AGENT_OFFLINE_*`. See `docs/agent-connection.md` |
 | Agent data-quality (drops/skew/version) | `src/health/dataQuality.js` (`computeDataQuality`); surfaced via `/api/fleet/health` + `/api/fleet/agent/:id` — all signals already sent by the agent |

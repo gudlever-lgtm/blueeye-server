@@ -1,12 +1,14 @@
 'use strict';
 
-// public/views/locations.js — Locations on the UI contract
-// (docs/ui-contract.md).
+// public/views/locations.js — the site register, as the Register tab of Sites
+// (docs/ui-contract.md, docs/fleet-and-sites-consolidation.md).
 //
-// The migration this pins: six buttons in every row's last cell, with Delete
-// one mis-click from Edit, become one hover action and a ⋯ menu; an empty
-// estate offers the button that fixes it; a failed load is an ErrorState rather
-// than a blank page.
+// It used to be a screen of its own under Administration, opposite a map under
+// Monitoring, each carrying a button pointing at the other. It is the same
+// table, hosted by public/views/sites.js — so what this pins is the table's own
+// behaviour: six buttons in a row's last cell are one hover action and a ⋯
+// menu, an empty estate offers the button that fixes it, and a failed load is
+// an ErrorState rather than a blank page.
 
 process.env.NODE_ENV = 'test';
 process.env.JWT_SECRET = 'test-secret-do-not-use-in-prod';
@@ -25,7 +27,7 @@ const LOCS = [
   { id: 2, name: 'Copenhagen DC', description: null, latitude: 55.7, longitude: 12.6 },
 ];
 
-function boot({ t, routes = {}, url = 'http://server.test/locations', role = 'admin' } = {}) {
+function boot({ t, routes = {}, url = 'http://server.test/sites/list', role = 'admin' } = {}) {
   const errors = [];
   const vc = new VirtualConsole();
   vc.on('jsdomError', (e) => errors.push(String((e && e.message) || e)));
@@ -59,21 +61,39 @@ const SESSION = (over = {}) => Object.assign({
   'GET /auth/sso': { methods: [] },
   'GET /license': { plan: 'professional', features: {} },
   'GET /locations': LOCS,
+  'GET /agents': [],
+  'GET /api/map/config': { tileUrl: '' },
+  'GET /api/fleet/health': { summary: {}, agents: [] },
 }, over);
 
 const rows = (doc) => [...doc.querySelectorAll('#view table.dt tbody tr')];
 const headBtns = (doc) => [...doc.querySelectorAll('#view .page-head button')];
 
-test('Locations is a ListPage with one primary action', async (t) => {
-  const { doc, errors } = boot({ t, routes: SESSION() });
+test('the register is a tab of Sites, not a screen of its own', async (t) => {
+  const { doc, errors, window } = boot({ t, routes: SESSION() });
   await settle();
   assert.deepEqual(errors, []);
   assert.ok(doc.querySelector('#view .ui.ui-page'), 'the page is not on the contract');
-  assert.match(doc.querySelector('#view .page-head h1').textContent, /Locations/);
+  assert.match(doc.querySelector('#view .page-head h1').textContent, /Sites/);
   assert.ok(doc.querySelector('#view .page-head .help-btn'), 'no (?) help control');
   assert.equal(doc.querySelectorAll('#view .page-head .btn-primary').length, 1, 'more than one primary');
-  assert.ok(headBtns(doc).some((b) => /New location/.test(b.textContent)));
-  assert.equal(doc.querySelectorAll('#view .section-head').length, 0, 'the old heading block survived');
+  assert.ok(headBtns(doc).some((b) => /New site/.test(b.textContent)));
+  // One screen, two tabs — and neither of them offers a button to the other,
+  // which is what the two screens used to do.
+  const tabs = [...doc.querySelectorAll('#view .subtabs button')];
+  assert.deepEqual(tabs.map((b) => b.textContent.trim()), ['Map', 'Register']);
+  assert.equal(tabs.find((b) => b.getAttribute('aria-selected') === 'true').textContent.trim(), 'Register');
+  assert.equal(doc.querySelectorAll('#view .site-map').length, 0, 'the map was drawn under the register');
+
+  tabs[0].dispatchEvent(new window.Event('click', { bubbles: true }));
+  await settle();
+  assert.equal(window.location.pathname, '/sites/map', 'the tab is not in the address');
+  // The map tab shows the rollup — the same sites, with health instead of
+  // actions. The register's own table, and its row actions, are gone with it.
+  const heads = [...doc.querySelectorAll('#view table.dt thead th')].map((h) => h.textContent.replace(/[↕↑↓]/g, '').trim());
+  assert.ok(heads.includes('Agents online'), 'the map tab lost its rollup');
+  assert.ok(!heads.includes('Description'), 'the register was left under the map');
+  assert.equal(doc.querySelectorAll('#view .row-act').length, 0, 'the register\'s row actions survived the switch');
 });
 
 test('the six row buttons become one action and a menu', async (t) => {
@@ -104,7 +124,7 @@ test('a viewer is offered neither New, nor Edit, nor Delete', async (t) => {
     routes: SESSION({ 'GET /me': { id: 2, email: 'v@y.dk', role: 'viewer', preferences: {} } }),
   });
   await settle();
-  assert.equal(headBtns(doc).filter((b) => /New location/.test(b.textContent)).length, 0);
+  assert.equal(headBtns(doc).filter((b) => /New site/.test(b.textContent)).length, 0);
   const act = rows(doc)[0].querySelector('.row-act');
   assert.equal(act.querySelectorAll('button.on-hover').length, 0, 'a viewer is offered Edit');
   act.querySelector('[aria-haspopup="menu"]').dispatchEvent(new window.Event('click', { bubbles: true }));
@@ -137,7 +157,7 @@ test('an empty estate offers the button that fixes it', async (t) => {
   const state = doc.querySelector('#view .state');
   assert.ok(state, 'no EmptyState');
   assert.match(state.textContent, /No locations yet/);
-  assert.ok([...state.querySelectorAll('button')].some((b) => /New location/.test(b.textContent)),
+  assert.ok([...state.querySelectorAll('button')].some((b) => /New location|New site/.test(b.textContent)),
     'the empty state says there is nothing and offers no way to change that');
   assert.equal(doc.querySelectorAll('#view .empty').length, 0, 'the old grey sentence survived');
 });

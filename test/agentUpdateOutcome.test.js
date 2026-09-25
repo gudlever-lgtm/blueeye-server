@@ -51,7 +51,8 @@ function appWith({ auditRepo, signing = true, verifyOnly = false } = {}) {
     agentSourceStore: makeSourceStore({ sourceVersion: () => '0.27.0' }),
     releaseStore: makeReleaseStore(),
     releaseKeyService: makeReleaseKeyService({ configured: signing, verifyOnly }),
-    probeResultsRepo: { latestByAgent: async () => [], findByAgent: async () => [] },
+    // Fleet draws the rows from /api/fleet/health, so the fake has to answer it.
+    probeResultsRepo: { latestByAgent: async () => [], findByAgent: async () => [], fleetHealth: async () => [] },
     speedtestResultsRepo: { findByAgent: async () => [], latestPerAgent: async () => [], create: async () => 1 },
   });
 }
@@ -92,10 +93,16 @@ async function boot(t, app) {
 const toastText = (doc) => (doc.querySelector('#toast') || {}).textContent || '';
 
 async function clickUpdate(doc) {
-  doc.querySelector('.tabs button[data-view="agents"]').click();
+  // The agent list is the Fleet screen's Drift column set
+  // (docs/fleet-and-sites-consolidation.md).
+  doc.querySelector('.tabs button[data-view="fleet"]').click();
   await tick(350);
-  // Update is a ⋯ menu entry now, with the other actions that change the agent
-  // (see public/views/agents.js) — it used to be one of nine buttons in the row.
+  const drift = [...doc.querySelectorAll('#view .subtabs button')].find((b) => /Drift/.test(b.textContent));
+  assert.ok(drift, 'the Drift column set is missing');
+  drift.dispatchEvent(new doc.defaultView.Event('click', { bubbles: true }));
+  await tick(350);
+  // Update is a ⋯ menu entry, with the other actions that change the agent —
+  // it used to be one of nine buttons in the row.
   const more = doc.querySelector('#view .row-act [aria-haspopup="menu"]');
   assert.ok(more, 'the agents row has no ⋯ menu');
   more.dispatchEvent(new doc.defaultView.Event('click', { bubbles: true }));

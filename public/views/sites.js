@@ -1,9 +1,16 @@
-// public/views/sites.js — Sites, as a ListPage (template A).
+// public/views/sites.js — Sites, as a ListPage (template A) with two tabs.
 //
 // Where the agents are, and how the estate looks from above: a marker per site
 // coloured by the worst agent health at it, and the same rollup as a table for
 // when the map cannot be drawn. Built from the contract's components
 // (public/ui.js, docs/ui-contract.md).
+//
+// The register — the same sites with their create/edit/delete actions — used to
+// be a second screen under Administration, and each of the two carried a button
+// pointing at the other. That is navigation between two halves of one screen,
+// so they are two tabs here: Map and Register. The register's table is still
+// public/views/locations.js; this page hosts it
+// (docs/fleet-and-sites-consolidation.md).
 //
 // What this migration changes:
 //   * the legend dots and the map markers stop carrying hex colours. Both now
@@ -41,20 +48,55 @@
       if (!state.sort) state.sort = { key: 'health', dir: 'desc' };
 
       var root2 = ui.page();
+      var tabsHost = el('div', {});
       var stripHost = el('div', {});
       var mapHost = el('div', {});
       var tableHost = el('div', {});
+      var registerHost = el('div', {});
       var locations = [];
       var agents = [];
       var healthByAgent = {};
+
+      function tab() { return deps.tab() === 'list' ? 'list' : 'map'; }
 
       var info = deps.help();
       root2.append(ui.pageHeader({
         title: t('sites.title'),
         lead: info.lead,
         help: { title: info.title, body: info.body },
-        actions: [ui.button('secondary', t('sites.manage'), { onclick: function () { deps.gotoView('locations'); } })],
-      }), stripHost, mapHost, tableHost);
+        actions: [deps.canWrite()
+          ? ui.button('primary', t('sites.new'), { onclick: function () { deps.newSite(); } })
+          : null],
+      }), tabsHost, stripHost, mapHost, tableHost, registerHost);
+
+      function drawTabs() {
+        tabsHost.replaceChildren(ui.tabs([['map', t('sites.tab.map')], ['list', t('sites.tab.list')]], {
+          active: tab(),
+          ariaLabel: t('sites.tabsLabel'),
+          onPick: function (key) {
+            if (key === tab()) return;
+            deps.setTab(key);
+            draw();
+          },
+        }));
+      }
+
+      // The register is the same records with the actions on them, so it is
+      // read fresh when the tab is opened rather than kept in step with the
+      // map's 30 s poll.
+      var registerDrawn = false;
+      function drawRegister() {
+        if (tab() !== 'list') {
+          registerHost.replaceChildren();
+          registerDrawn = false;
+          return;
+        }
+        // Built once per visit to the tab: rebuilding it on the map's poll
+        // would re-read the records and take the reader's place with it.
+        if (registerDrawn) return;
+        registerDrawn = true;
+        registerHost.replaceChildren(deps.registerBody());
+      }
 
       // ---- rollup -----------------------------------------------------------
       // One entry per site: how many agents, how many online, and the worst
@@ -147,7 +189,7 @@
             children: [ui.emptyState({
               title: t('sites.noCoords'),
               body: t('sites.noCoordsHint'),
-              action: ui.button('secondary', t('sites.manage'), { onclick: function () { deps.gotoView('locations'); } }),
+              action: ui.button('secondary', t('sites.manage'), { onclick: function () { deps.setTab('list'); draw(); } }),
             })],
           }));
           return;
@@ -194,7 +236,9 @@
             children: [ui.emptyState({
               title: t('sites.none'),
               body: t('sites.noneHint'),
-              action: ui.button('secondary', t('sites.manage'), { onclick: function () { deps.gotoView('locations'); } }),
+              action: deps.canWrite()
+                ? ui.button('primary', t('sites.new'), { onclick: function () { deps.newSite(); } })
+                : null,
             })],
           }));
           return;
@@ -241,7 +285,25 @@
         }));
       }
 
-      function draw() { drawStrip(); drawMap(); drawTable(); }
+      function draw() {
+        deps.syncUrl();
+        drawTabs();
+        var onMap = tab() === 'map';
+        if (onMap) {
+          drawStrip();
+          drawMap();
+          drawTable();
+        } else {
+          // Emptied rather than hidden: a Leaflet instance nobody can see still
+          // holds its tiles, and a hidden table is still a table to anything
+          // walking the page.
+          deps.dropMap();
+          stripHost.replaceChildren();
+          mapHost.replaceChildren();
+          tableHost.replaceChildren();
+        }
+        drawRegister();
+      }
 
       function load(first) {
         return deps.fetchAll()
@@ -249,8 +311,10 @@
             locations = d.locations || [];
             agents = d.agents || [];
             healthByAgent = d.healthByAgent || {};
+            // A poll on the Register tab keeps the data current for when the
+            // reader goes back to the map, and redraws nothing under them.
             if (first) draw();
-            else { drawStrip(); drawTable(); deps.redrawMarkers(rollup()); }
+            else if (tab() === 'map') { drawStrip(); drawTable(); deps.redrawMarkers(rollup()); }
           })
           .catch(function (e) {
             if (!first) return; // a failed poll keeps the last good render

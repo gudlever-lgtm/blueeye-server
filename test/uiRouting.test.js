@@ -213,7 +213,9 @@ test('boot: a sub-tab and a filter both survive a reload, because both are in th
   const { doc, window } = bootAt('http://server.test/fleet?severity=CRIT&site=vest', { t, routes: SESSION('admin') });
   await settle();
   assert.equal(doc.querySelector('.tabs button.active').dataset.view, 'fleet');
-  assert.equal(window.location.pathname, '/fleet', 'the path was rewritten');
+  // Fleet names its column set in the path, the way Settings and Probes name
+  // their sub-tab, so a bare /fleet settles on the default set.
+  assert.equal(window.location.pathname, '/fleet/health', 'the path was rewritten');
   const q = new window.URLSearchParams(window.location.search);
   assert.equal(q.get('severity'), 'CRIT', 'the filter was dropped from the URL');
   assert.equal(q.get('site'), 'vest', 'the filter was dropped from the URL');
@@ -237,7 +239,7 @@ test('boot: navigating pushes history, and Back returns to the previous screen',
   const fleetBtn = doc.querySelector('.tabs button[data-view="fleet"]');
   fleetBtn.dispatchEvent(new window.Event('click', { bubbles: true }));
   await settle();
-  assert.equal(window.location.pathname, '/fleet');
+  assert.equal(window.location.pathname, '/fleet/health');
   window.history.back();
   await settle();
   assert.equal(window.location.pathname, '/changes', 'Back did not return to Changes');

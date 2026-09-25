@@ -286,13 +286,15 @@
     }
     // A button that opens one of the dashboard's own screens. The label is passed
     // in rather than built from the view key, so every string stays a literal.
-    function viewButton(viewKey, label) {
+    // `tab` names a sub-tab where the screen has them — Fleet's column sets,
+    // the Sites register — so a guide step lands on the thing it just described.
+    function viewButton(viewKey, label, tab) {
       if (!openView) return null;
       // canOpenView mirrors the nav: hidden by role, or locked by licence.
       var why = typeof ctx.viewBlockedReason === 'function' ? ctx.viewBlockedReason(viewKey) : null;
       if (why === 'role') return unavailable(label, t('guide.needsOperator'));
       if (why === 'licence') return unavailable(label, t('guide.needsLicence'));
-      return el('button', { class: 'ghost small', onclick: function () { openView(viewKey); } },
+      return el('button', { class: 'ghost small', onclick: function () { openView(viewKey, tab || null); } },
         t('guide.openTab', { tab: label }));
     }
     // Every Settings tab a guide links to is administrator-only, so for anybody
@@ -827,7 +829,7 @@
             locationsStatus(),
             createSiteAction(),
             note(t('guide.mon.sites.note')),
-            actions(viewButton('locations', t('nav.view.locations')), viewButton('map', t('nav.view.map'))),
+            actions(viewButton('map', t('nav.view.map'), 'list')),
           ];
         },
       },
@@ -875,7 +877,7 @@
             para(t('guide.fleet.intro.order')),
             agentsStatus(),
             note(t('guide.fleet.intro.note')),
-            actions(viewButton('agents', t('nav.view.agents'))),
+            actions(viewButton('fleet', t('nav.view.fleet'), 'drift')),
           ];
         },
       },
@@ -912,7 +914,7 @@
             ]),
             agentsStatus(),
             note(t('guide.fleet.agents.note')),
-            actions(viewButton('agents', t('nav.view.agents'))),
+            actions(viewButton('fleet', t('nav.view.fleet'), 'drift')),
           ];
         },
       },
@@ -935,7 +937,7 @@
               [t('guide.fleet.iface.r3.f'), t('guide.fleet.iface.r3.v'), t('guide.fleet.iface.r3.w')],
             ]),
             note(t('guide.fleet.iface.note')),
-            actions(viewButton('interfaces', t('nav.view.interfaces')), viewButton('delta', t('nav.view.delta'))),
+            actions(viewButton('fleet', t('nav.view.fleet'), 'hardware'), viewButton('delta', t('nav.view.delta'))),
           ];
         },
       },
@@ -950,7 +952,7 @@
               [t('guide.fleet.nics.r2.f'), t('guide.fleet.nics.r2.v'), t('guide.fleet.nics.r2.w')],
             ]),
             note(t('guide.fleet.nics.note')),
-            actions(viewButton('nics', t('nav.view.nics'))),
+            actions(viewButton('nicInventory', t('nav.view.nicInventory'))),
           ];
         },
       },
@@ -963,7 +965,7 @@
             todo([t('guide.fleet.updates.do1'), t('guide.fleet.updates.do2'), t('guide.fleet.updates.do3')]),
             versionStatus(),
             watch(t('guide.fleet.updates.watch')),
-            actions(settingsTabButton('updates', t('guide.fleet.updates.btn')), viewButton('agents', t('nav.view.agents'))),
+            actions(settingsTabButton('updates', t('guide.fleet.updates.btn')), viewButton('fleet', t('nav.view.fleet'), 'drift')),
           ];
         },
       },

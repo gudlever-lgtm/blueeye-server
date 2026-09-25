@@ -1,8 +1,15 @@
-// public/views/locations.js — Locations, as a ListPage (template A).
+// public/views/locations.js — the site register: the Register tab of Sites.
 //
-// The sites the estate is organised by: a row per location, what it is called,
-// what it is for, and everything you can do with it. Built from the contract's
+// The sites the estate is organised by: a row per site, what it is called, what
+// it is for, and everything you can do with it. Built from the contract's
 // components (public/ui.js, docs/ui-contract.md).
+//
+// It used to be a screen of its own under Administration, opposite a map under
+// Monitoring, each carrying a button pointing at the other. Two halves of one
+// screen that knew it — so this is the half with the records in it, hosted by
+// public/views/sites.js (docs/fleet-and-sites-consolidation.md). It exports a
+// BODY rather than a page: the header, the tabs and the help belong to the
+// screen, and only one of them may own those.
 //
 // What this migration changes:
 //   * SIX buttons in every row's last cell — Open, Traffic, History, AI status,
@@ -28,19 +35,10 @@
     var t = deps.t;
     var ui = deps.ui;
 
-    function view() {
-      var page = ui.page();
+    // Returns the node straight away and fills it when the read lands: the
+    // screen that hosts it is already on the page, so it must not wait.
+    function body() {
       var host = el('div', {});
-
-      var info = deps.help();
-      page.append(ui.pageHeader({
-        title: t('loc.title'),
-        lead: t('loc.lead'),
-        help: { title: info.title, body: info.body },
-        actions: [deps.canWrite()
-          ? ui.button('primary', t('loc.new'), { onclick: function () { deps.edit(); } })
-          : null],
-      }), host);
 
       function rowMenu(l) {
         return [
@@ -114,10 +112,11 @@
           });
       }
 
-      return load().then(function () { return page; });
+      load();
+      return host;
     }
 
-    return { view: view };
+    return { body: body };
   }
 
   var apiObj = { create: create };

@@ -196,7 +196,7 @@ test('the filter is mirrored into the URL, so a narrowed view is a link', async 
   await settle();
   cards(doc)[1].dispatchEvent(new window.Event('click', { bubbles: true }));
   await settle();
-  assert.equal(window.location.pathname, '/fleet');
+  assert.equal(window.location.pathname, '/fleet/health');
   assert.equal(new window.URLSearchParams(window.location.search).get('severity'), 'CRIT');
 });
 
@@ -264,5 +264,5 @@ test('open issues: probe outages render, and each offers its NIS2 draft to an op
   await settle();
   assert.ok(log.some((x) => x.key === 'GET /api/reports/nis2-draft/42'));
   assert.match(doc.querySelector('#view .fleet-issues pre').textContent, /Incident reference: #42/);
-  assert.equal(window.location.pathname, '/fleet', 'the button did not also open the agent row');
+  assert.equal(window.location.pathname, '/fleet/health', 'the button did not also open the agent row');
 });

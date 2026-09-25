@@ -38,7 +38,7 @@ function appWith({ sent = [], packages = [], existing = [] } = {}) {
       create: async (p) => { const row = { id: packages.length + 100, ...p }; packages.push(row); return row; },
       update: async (id, p) => { packages.push({ id, ...p }); return { id, ...p }; },
     }),
-    probeResultsRepo: { latestByAgent: async () => [], findByAgent: async () => [] },
+    probeResultsRepo: { latestByAgent: async () => [], findByAgent: async () => [], fleetHealth: async () => [] },
     speedtestResultsRepo: { findByAgent: async () => [], latestPerAgent: async () => [], create: async () => 1 },
   });
 }
@@ -214,10 +214,13 @@ test('a viewer gets neither Repeat nor a round count on the probe tab', async (t
 test('the speed-test dialog can put the same test on a schedule', async (t) => {
   const packages = [];
   const { doc } = await boot(t, { app: appWith({ packages }) });
-  doc.querySelector('.tabs button[data-view="agents"]').click();
+  // The agent list is the Fleet screen's Drift column set
+  // (docs/fleet-and-sites-consolidation.md).
+  doc.querySelector('.tabs button[data-view="fleet"]').click();
   await tick(300);
-  // The speed test is a ⋯ menu entry now, with the other per-agent checks
-  // (see public/views/agents.js).
+  byText(doc, '#view .subtabs button', /^Drift$/).dispatchEvent(new doc.defaultView.Event('click', { bubbles: true }));
+  await tick(300);
+  // The speed test is a ⋯ menu entry, with the other per-agent checks.
   doc.querySelector('#view .row-act [aria-haspopup="menu"]')
     .dispatchEvent(new doc.defaultView.Event('click', { bubbles: true }));
   const speedBtn = byText(doc, '.ui-rowmenu button', /^Speed test$/);

@@ -1241,18 +1241,26 @@ the agent page, where the detail lives.
 
 `agentHealthCell` and `agentHealthRank` are gone from `app.js`: two copies of
 the same rule, one for the cell and one for the sort, on a screen that no longer
-draws either.
+draws either. The screen itself followed them — Agents is the **Drift** column
+set on Fleet, over the same rows as the measurements, because the two screens
+were one table with two different definitions of health
+(docs/fleet-and-sites-consolidation.md).
 
 
-**Interfaces** is a ListPage, and its table is **exported as well as drawn**:
-the agent detail page renders the same interfaces, and two copies of one table
-would drift. `app.js`'s `interfaceTable()` reads it off the view module now,
-and `IFACE_RANK`, `ifaceStatusBadge` and `ifaceLinkText` are gone with the copy
-they served.
+**Interfaces** was a ListPage, and its table was **exported as well as drawn**:
+the agent detail page rendered the same interfaces, and two copies of one table
+would drift. `app.js`'s `interfaceTable()` reads it off the view module, and
+`IFACE_RANK`, `ifaceStatusBadge` and `ifaceLinkText` are gone with the copy they
+served.
 
-`.history-controls` is a Toolbar. `source: proc · measured 14:02` was a grey
-span at the end of that control row; it is the panel's note, beside the table it
-describes.
+The screen itself is gone now too. It was fleet-wide in the menu and per-agent
+behind a dropdown, so it could not answer the question a fleet-wide screen
+exists for — which ports in the estate are dropping frames. That is the Hardware
+column set on Fleet; the port table is a section of the Fleet drawer and a fold
+on the agent page, and the capacity forecast is on the agent page, where two
+weeks of history is not read on a click
+(docs/fleet-and-sites-consolidation.md). The module exports the two tables and
+draws no page.
 
 The status chip was `.badge online|warn|error|down|grace` reading OK / WARN /
 ERR / DOWN / IDLE — a fifth vocabulary for severity. It is a Badge on the app's
@@ -1277,9 +1285,12 @@ this agent reports — and it now offers the button that changes the setting.
 screen.
 
 The Models / Agents switch was a `.seg` segmented control — two buttons with an
-`.on` class, which is exactly the "buttons as tabs" the contract forbids. It is
-SubTabs, and the choice is in the URL (`/nics/agents`), so a link to the agent
-inventory opens the agent inventory.
+`.on` class, which is exactly the "buttons as tabs" the contract forbids. It
+became SubTabs with the choice in the URL, and then the Agents half went
+altogether: one agent's cards are a section of the Fleet drawer, one click from
+the same answer (docs/fleet-and-sites-consolidation.md). The screen itself moved
+to Administration, at `/nic-inventory` — driver and firmware strings are asset
+data, not monitoring.
 
 The machines running a given firmware were `.chip ghost small` buttons: chips
 carrying an action **and** a host name, which the contract forbids twice over.

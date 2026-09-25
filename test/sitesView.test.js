@@ -243,6 +243,6 @@ test('leaving the view stops the poll and drops the redraw closure', async (t) =
   const fleetBtn = doc.querySelector('[data-view="fleet"]');
   fleetBtn.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
   await settle();
-  assert.equal(window.location.pathname, '/fleet');
+  assert.equal(window.location.pathname, '/fleet/health');
   assert.equal(doc.querySelectorAll('#view .site-map').length, 0, 'the map survived the view switch');
 });

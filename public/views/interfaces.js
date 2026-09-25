@@ -1,8 +1,17 @@
-// public/views/interfaces.js — Interfaces, as a ListPage (template A).
+// public/views/interfaces.js — the interface tables. Not a screen.
 //
 // Health per interface on one agent: link, utilisation, throughput, errors and
 // discards, worst first. Built from the contract's components (public/ui.js,
 // docs/ui-contract.md).
+//
+// Interfaces used to be a fleet screen that could only ever show ONE agent,
+// behind a dropdown — so it could not answer the question a fleet-wide screen
+// exists for, and it duplicated the agent page's own fold. The per-agent
+// summary is the Hardware column set on Fleet now, the port table is a section
+// of the Fleet drawer and a fold on the agent page, and the capacity forecast
+// is on the agent page (docs/fleet-and-sites-consolidation.md).
+//
+// So this module exports the two tables and draws no page of its own.
 //
 // What this migration changes:
 //   * `.history-controls` — a loose label, a Refresh and a status span in one
@@ -212,121 +221,7 @@
       });
     }
 
-    function view() {
-      var state = deps.state;
-      var page = ui.page();
-      var barHost = el('div', {});
-      var tableHost = el('div', {});
-      var forecastHost = el('div', {});
-      var agents = [];
-
-      var info = deps.help();
-      page.append(ui.pageHeader({
-        title: t('iface.title'),
-        lead: t('iface.lead'),
-        help: { title: info.title, body: info.body },
-      }), barHost, tableHost, forecastHost);
-
-      function drawBar() {
-        var sel = ui.select({
-          label: t('iface.agent'),
-          value: state.agentId,
-          options: agents.map(function (a) { return [String(a.id), a.display_name || a.hostname]; }),
-          onchange: function (e) { state.agentId = e.target.value; load(); loadForecast(); },
-        });
-        barHost.replaceChildren(ui.toolbar({
-          filters: [ui.filter(t('iface.agent'), sel)],
-          actions: [ui.button('secondary', t('iface.refresh'), { onclick: function () { load(); loadForecast(); } })],
-        }));
-      }
-
-      // The forecast is a SEPARATE read from the 5-second table poll: it reads
-      // two weeks of history, and re-running that every five seconds would be
-      // an expensive answer to a question whose answer moves in days. It loads
-      // when the agent changes, and on an explicit Refresh — not on the poll.
-      function loadForecast() {
-        if (!state.agentId || !deps.fetchForecast) return Promise.resolve();
-        forecastHost.replaceChildren(ui.panel({ title: t('fc.title'), children: [ui.loadingState(3)] }));
-        return deps.fetchForecast(state.agentId)
-          .then(function (d) {
-            var usable = (d.interfaces || []).filter(function (f) { return f.ok; });
-            forecastHost.replaceChildren(ui.panel({
-              title: t('fc.title'),
-              note: t('fc.note', { days: d.windowDays }),
-              children: [usable.length
-                ? forecastTable(usable)
-                : ui.emptyState({ title: t('fc.none'), body: t('fc.noneHint') })],
-            }));
-          })
-          .catch(function (e) {
-            // A failed forecast must not take the interface table with it —
-            // the current state is the more urgent of the two.
-            forecastHost.replaceChildren(ui.panel({
-              title: t('fc.title'),
-              children: [ui.errorState({
-                title: t('fc.err.title'), body: deps.errText(e),
-                detail: 'GET /api/forecast/interfaces', onRetry: loadForecast,
-              })],
-            }));
-          });
-      }
-
-      function load() {
-        if (!state.agentId) return Promise.resolve();
-        return deps.fetchInterfaces(state.agentId)
-          .then(function (d) {
-            drawBar();
-            tableHost.replaceChildren(ui.panel({
-              title: t('iface.panel'),
-              note: d.ts
-                ? t('iface.measured', { source: d.source, at: ui.fmt.clock(d.ts) })
-                : t('iface.neverMeasured'),
-              children: [table(d.interfaces, d.source)],
-            }));
-          })
-          .catch(function (e) {
-            drawBar();
-            tableHost.replaceChildren(ui.panel({
-              title: t('iface.panel'),
-              children: [ui.errorState({
-                title: t('iface.err.title'), body: deps.errText(e),
-                detail: 'GET /api/interfaces', onRetry: load,
-              })],
-            }));
-          });
-      }
-
-      tableHost.replaceChildren(ui.panel({ title: t('iface.panel'), children: [ui.loadingState(5)] }));
-      return deps.fetchAgents()
-        .then(function (list) {
-          agents = list || [];
-          if (!agents.length) {
-            // No estate at all: an agent picker with nothing in it, above a
-            // table that can never fill, is three panels saying one thing.
-            barHost.replaceChildren();
-            forecastHost.replaceChildren();
-            tableHost.replaceChildren(ui.panel({
-              title: t('iface.panel'),
-              children: [ui.emptyState({
-                icon: '◎', title: t('iface.noAgents'), body: t('iface.noAgentsHint'),
-                action: deps.openAgents
-                  ? ui.button('secondary', t('iface.noAgentsGo'), { onclick: deps.openAgents })
-                  : null,
-              })],
-            }));
-            return;
-          }
-          if (!state.agentId || !agents.some(function (a) { return String(a.id) === String(state.agentId); })) {
-            state.agentId = String(agents[0].id);
-          }
-          drawBar();
-          loadForecast();
-          return load().then(function () { deps.startPolling(load); });
-        })
-        .then(function () { return page; });
-    }
-
-    return { view: view, table: table };
+    return { table: table, forecastTable: forecastTable };
   }
 
   var apiObj = { create: create };

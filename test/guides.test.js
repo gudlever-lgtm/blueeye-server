@@ -484,7 +484,7 @@ test('a step never offers a screen the reader cannot open', async (t) => {
   assert.equal(doc.querySelectorAll('#view .guide-actions button').length, 0, 'a viewer was offered an admin Settings tab');
 
   await openGuide(doc, 'diagnostics');
-  await click([...doc.querySelectorAll('#view .guide-stepper-btn')][4], 150); // → When it is a real outage
+  await click([...doc.querySelectorAll('#view .guide-stepper-btn')][5], 150); // → When it is a real outage
   labels = [...doc.querySelectorAll('#view .guide-actions button')].map((b) => b.textContent);
   assert.deepEqual(labels, ['Open Troubleshooting'], `a viewer was offered an operator-only screen: ${labels.join(' | ')}`);
   const refused = [...doc.querySelectorAll('#view .guide-unavailable')].map((n) => n.textContent);
@@ -495,7 +495,7 @@ test('a step never offers a screen the reader cannot open', async (t) => {
 test('an admin is offered those same screens as buttons', async (t) => {
   const { doc } = await boot(t, { ...fullRoutes(), ...GENERAL_ROUTES }, 'admin');
   await openGuide(doc, 'diagnostics');
-  await click([...doc.querySelectorAll('#view .guide-stepper-btn')][4], 150);
+  await click([...doc.querySelectorAll('#view .guide-stepper-btn')][5], 150);
   assert.equal(doc.querySelectorAll('#view .guide-unavailable').length, 0, 'an admin was refused a screen');
   assert.equal(doc.querySelectorAll('#view .guide-actions button').length, 2);
 });

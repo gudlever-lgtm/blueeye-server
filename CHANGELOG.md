@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.205.0 — About, Documentation and the Guides catch up with the week
+
+The in-app text had fallen behind the code. Three gaps, closed:
+
+- **About** jumped from 0.185.0 to one entry for the Fleet/Sites
+  consolidation, and that entry carried the version its branch had rather than
+  the one it landed on. Sixteen entries now cover 0.186.0 → 0.204.2 — signed
+  releases and installers, the agent's own position, the path map's hop
+  placement, the always-updatable fleet, trace history, the agent test
+  catalogue, the Changes page's Acknowledge and Mute — and the consolidation
+  reads 0.203.1, which is where it merged.
+- **Documentation** has a twenty-fourth article, *Update the fleet*
+  (`/docs/fleet-updates`, admin): what Settings → Updates offers, updating one
+  agent, the queue for an agent that is not connected, the batch rollout, the
+  agents that ask for their own update inside their own maintenance window,
+  which runtimes can be pushed to at all, and a table of the four refusals with
+  what to do about each. Written through the catalogue (`docs.fu.*`), so it
+  reads in Danish too.
+- **The Guides** were retargeted at the folded Fleet screen when it landed, but
+  their text was not: Fleet → Updates described one-at-a-time pushes only, and
+  Diagnostics had nothing on the path map. Updates now covers the queue, the
+  rollout and automatic updates; Diagnostics has a new step, *The path map, and
+  the runs behind it*, on what each marker's confidence means and how to read
+  History and compare two runs.
+
+No behaviour changes.
+
 ## 0.204.2 — What an agent can run, and running a saved test on chosen agents
 
 **The agent page says what the host can run, before you click.** A new Tests
@@ -20,6 +47,30 @@ runs one package on that agent alone. The override applies to that run only —
 the package's saved targets are never written back, and the run it records is
 marked ad-hoc so a subset run does not read as a broken schedule on a package
 aimed at the whole fleet.
+
+## 0.203.1 — One screen for the agents, one for the sites
+
+The estate was spread over six screens that described two things. **Fleet**
+listed every agent with a health verdict; **Agents** listed the same agents with
+a different one, worked out in the browser from how long ago each had reported.
+**Interfaces** sat in the fleet menu but could only ever show one agent, behind a
+dropdown, so it could not answer which ports in the estate are dropping frames.
+**Sites** drew the locations on a map and **Locations** was the same records with
+the buttons that change them, each screen carrying a link to the other.
+
+- **One Fleet screen.** The same rows of agents throughout, with a switch for
+  what you want to know about them: the measurements, the deployment (version,
+  source, data quality), or the ports and NICs. Your filter, your search and your
+  sort survive the switch, because the rows never change.
+- **The agent opens beside the list** — why it has the verdict it has, the
+  evidence behind it, every port with its errors and discards, its NIC cards and
+  what the machine is — without losing your place.
+- **Sites is one screen** with the map and the register as two tabs. The NIC
+  firmware inventory moved to Administration, where asset data belongs.
+
+`/agents`, `/interfaces`, `/locations` and `/nics` keep working as addresses and
+open the screen that now answers them. See
+[docs/fleet-and-sites-consolidation.md](docs/fleet-and-sites-consolidation.md).
 
 ## 0.202.0 — Trace history: every run kept, openable and comparable
 

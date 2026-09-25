@@ -962,8 +962,16 @@
         body: function () {
           return [
             lead(t('guide.fleet.updates.lead')),
-            todo([t('guide.fleet.updates.do1'), t('guide.fleet.updates.do2'), t('guide.fleet.updates.do3')]),
+            todo([t('guide.fleet.updates.do1'), t('guide.fleet.updates.do2'), t('guide.fleet.updates.do3'),
+              t('guide.fleet.updates.do4')]),
             versionStatus(),
+            el('h4', { class: 'guide-h4' }, t('guide.fleet.updates.reachTitle')),
+            table([t('guide.fleet.updates.caseCol'), t('guide.col.means')], [
+              [t('guide.fleet.updates.c1.f'), t('guide.fleet.updates.c1.v')],
+              [t('guide.fleet.updates.c2.f'), t('guide.fleet.updates.c2.v')],
+              [t('guide.fleet.updates.c3.f'), t('guide.fleet.updates.c3.v')],
+            ]),
+            note(t('guide.fleet.updates.note')),
             watch(t('guide.fleet.updates.watch')),
             actions(settingsTabButton('updates', t('guide.fleet.updates.btn')), viewButton('fleet', t('nav.view.fleet'), 'drift')),
           ];
@@ -1022,6 +1030,29 @@
             runProbeAction(),
             note(t('guide.diag.probes.note')),
             actions(viewButton('probes', t('nav.view.probes'))),
+          ];
+        },
+      },
+      {
+        id: 'path',
+        title: function () { return t('guide.diag.step.path'); },
+        body: function () {
+          return [
+            lead(t('guide.diag.path.lead')),
+            todo([t('guide.diag.path.do1'), t('guide.diag.path.do2'), t('guide.diag.path.do3')]),
+            el('h4', { class: 'guide-h4' }, t('guide.diag.path.placedTitle')),
+            table([t('guide.diag.path.markerCol'), t('guide.col.means')], [
+              [t('guide.diag.path.m1.f'), t('guide.diag.path.m1.v')],
+              [t('guide.diag.path.m2.f'), t('guide.diag.path.m2.v')],
+              [t('guide.diag.path.m3.f'), t('guide.diag.path.m3.v')],
+            ]),
+            values([
+              [t('guide.diag.path.r1.f'), t('guide.diag.path.r1.v'), t('guide.diag.path.r1.w')],
+              [t('guide.diag.path.r2.f'), t('guide.diag.path.r2.v'), t('guide.diag.path.r2.w')],
+            ]),
+            watch(t('guide.diag.path.watch')),
+            note(t('guide.diag.path.note')),
+            actions(viewButton('pathLocation', t('nav.view.pathLocation'))),
           ];
         },
       },

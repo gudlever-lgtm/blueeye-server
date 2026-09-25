@@ -1,7 +1,7 @@
 'use strict';
 
 // public/views/docs.js — Documentation, as a ListPage (template A)
-// (docs/ui-contract.md). A shell migration: the twenty-three article bodies
+// (docs/ui-contract.md). A shell migration: the twenty-four article bodies
 // stay in app.js.
 //
 // The migration this pins: twenty-three `.small ghost` buttons in a left rail

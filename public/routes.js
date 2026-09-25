@@ -104,7 +104,7 @@
       'site-unhealthy', 'latency-loss', 'interface', 'findings', 'situations',
       'dependencies', 'blast-radius', 'topology-changes', 'flow-baselines', 'adhoc',
       'assurance-worker', 'discovery', 'servicenow', 'cmdb', 'alerting', 'sso', 'auth-lockout',
-      'enroll-key', 'retention',
+      'enroll-key', 'fleet-updates', 'retention',
       ],
       tabKey: 'docsTopic',
     },

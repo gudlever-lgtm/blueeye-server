@@ -13208,6 +13208,55 @@ const DOCS = [
           docsExpect('With a signing key present you can add agents and push signed upgrades. Delete it and you cannot add new agents or upgrade existing ones from the server until you generate a new one — so treat deletion as deliberate.'),
         ],
       },
+      // Written through the catalogue (docs.fu.*), like the agent-offline
+      // article: new UI text goes through t(), and the person updating a fleet
+      // of Danish hosts is not the one to hand English to.
+      {
+        id: 'fleet-updates', get title() { return t('docs.fu.title'); }, body: () => [
+          docsLead(t('docs.fu.lead')),
+
+          el('h4', {}, t('docs.fu.offerTitle')),
+          el('p', {}, [settingsLink('updates', t('docs.fu.settingsUpdates')), t('docs.fu.offerBody')]),
+
+          el('h4', {}, t('docs.fu.oneTitle')),
+          docsSteps([
+            [t('docs.fu.one1a'), viewLink('fleet', t('nav.view.fleet')), t('docs.fu.one1b')],
+            t('docs.fu.one2'),
+            t('docs.fu.one3'),
+          ]),
+          el('p', {}, t('docs.fu.queued')),
+
+          el('h4', {}, t('docs.fu.rolloutTitle')),
+          el('p', {}, [t('docs.fu.rolloutA'), settingsLink('updates', t('docs.fu.settingsUpdates')), t('docs.fu.rolloutB'),
+            settingsLink('agents', t('docs.fu.settingsAgents')), t('docs.fu.rolloutC')]),
+          docsSteps([t('docs.fu.roll1'), t('docs.fu.roll2'), t('docs.fu.roll3')]),
+          el('p', { class: 'muted' }, t('docs.fu.rollNote')),
+
+          el('h4', {}, t('docs.fu.askTitle')),
+          el('p', {}, [t('docs.fu.askA'), settingsLink('agents', t('docs.fu.settingsAgents')), t('docs.fu.askB')]),
+          el('p', { class: 'muted' }, t('docs.fu.askNote')),
+
+          el('h4', {}, t('docs.fu.pushTitle')),
+          docsTable([t('docs.fu.colReports'), t('docs.fu.colPushed'), t('docs.fu.colHow')], [
+            [el('code', {}, 'systemd'), t('docs.fu.yes'), t('docs.fu.pSystemd')],
+            [el('code', {}, 'windows-service'), t('docs.fu.yes'), t('docs.fu.pWindows')],
+            [el('code', {}, 'launchd'), t('docs.fu.yes'), t('docs.fu.pLaunchd')],
+            [el('code', {}, 'docker'), t('docs.fu.no'), t('docs.fu.pDocker')],
+            [el('code', {}, 'unmanaged'), t('docs.fu.no'), t('docs.fu.pUnmanaged')],
+          ]),
+          el('p', { class: 'muted' }, t('docs.fu.pushNote')),
+
+          el('h4', {}, t('docs.fu.refusedTitle')),
+          docsTable([t('docs.fu.colSee'), t('docs.fu.colMeans'), t('docs.fu.colDo')], [
+            [t('docs.fu.r1f'), t('docs.fu.r1v'), t('docs.fu.r1w')],
+            [t('docs.fu.r2f'), t('docs.fu.r2v'), t('docs.fu.r2w')],
+            [t('docs.fu.r3f'), t('docs.fu.r3v'), t('docs.fu.r3w')],
+            [t('docs.fu.r4f'), t('docs.fu.r4v'), [t('docs.fu.r4wa'), settingsLink('agentkey', t('docs.fu.settingsAgentKey')), t('docs.fu.r4wb')]],
+          ]),
+
+          docsExpect(t('docs.fu.expect')),
+        ],
+      },
       {
         id: 'retention', title: 'Data retention & storage', body: () => [
           docsLead('Control how long raw measurements are kept and how they roll up, plus where data is stored.'),
@@ -13221,7 +13270,7 @@ const DOCS = [
 ];
 
 // ---- Documentation (SHELL MIGRATED — see public/views/docs.js)
-// The twenty-three article bodies stay here; the page they sit on is the
+// The twenty-four article bodies stay here; the page they sit on is the
 // contract's.
 let docsPage = null;
 function getDocsPage() {
@@ -19314,7 +19363,7 @@ function crumbTabLabel(view, tab) {
   // Settings' twenty-two section labels already live in SETTINGS_GROUPS, so
   // they are read from there rather than copied into both catalogues.
   if (view === 'settings') return settingsLabel(tab);
-  // Same for the twenty-three article titles: DOCS already carries them, and a
+  // Same for the twenty-four article titles: DOCS already carries them, and a
   // breadcrumb reading "Documentation / agent-offline" names the id, not the
   // article.
   if (view === 'docs') return docsLabel(tab);

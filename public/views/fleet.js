@@ -270,9 +270,19 @@
       // One verdict, offline included. Fleet used to carry a STATUS column
       // beside this one, and an offline agent read OFFLINE and STALE side by
       // side — mergeConnection() has already folded connection state in.
+      // An ACKNOWLEDGED verdict still reads CRIT — the fault has not gone away,
+      // somebody is on it. So the badge is untouched and the acknowledgement is
+      // a second, neutral marker beside it: the row never looks healthier than
+      // it is, and the shift can see at a glance which of the red rows are
+      // already claimed.
+      function ackOf(a) { return (a && a.health && a.health.ack) || null; }
+
       function healthCell(a) {
-        if (!a.online) return ui.badge('neutral', t('fleet.offline'));
-        return deps.healthBadgeUi(a.health);
+        var badge = a.online ? deps.healthBadgeUi(a.health) : ui.badge('neutral', t('fleet.offline'));
+        var ack = ackOf(a);
+        if (!ack) return badge;
+        return el('span', { class: 'dw-ver', title: t('fleet.ack.byAt', { by: ack.by || t('fleet.ack.someone'), at: ui.fmt.short(ack.at) }) },
+          badge, ui.badge('neutral', t('fleet.ack.badge')));
       }
 
       // The version is what "Update outdated (3)" in the header is about.
@@ -280,14 +290,16 @@
         var adm = adminOf(a);
         var v = adm && adm.capabilities && adm.capabilities.agentVersion;
         if (!v) return ui.meta('–');
-        if (!deps.isBehind(adm, deps.updateTarget(adm, versions))) return ui.meta('v' + v);
+        var target = deps.updateTarget(adm, versions);
+        if (!deps.isBehind(adm, target)) return ui.meta('v' + v);
         // An installer-only agent is not stuck and not one click from fixed, so
         // its badge says which — grey, not amber, because nothing here will do
         // it for you.
         var oneClick = deps.selfUpdatable(adm) || deps.isWindows(adm);
         return el('span', {},
           ui.meta('v' + v), ' ',
-          ui.badge(oneClick ? 'warn' : 'neutral', oneClick ? t('ag.update') : t('ag.updateInstaller')));
+          el('span', { title: oneClick ? t('ag.update.hint', { v: target }) : t('ag.updateInstaller.hint') },
+            ui.badge(oneClick ? 'warn' : 'neutral', oneClick ? t('ag.update') : t('ag.updateInstaller'))));
       }
 
       function sourceCell(a) {
@@ -562,8 +574,14 @@
       function verdictBlock(a) {
         var h = a.health || {};
         var ev = Array.isArray(h.evidence) ? h.evidence.slice(0, 5) : [];
+        var ack = ackOf(a);
         return el('div', {},
           el('p', {}, h.reason || t('fleet.dw.noVerdict')),
+          ack
+            ? el('p', { class: 'meta-xs' },
+              t('fleet.ack.byAt', { by: ack.by || t('fleet.ack.someone'), at: ui.fmt.short(ack.at) })
+              + (ack.note ? ' — ' + ack.note : ''))
+            : null,
           ev.length
             ? el('ul', { class: 'dw-evidence' }, ev.map(function (e) {
               var bits = Object.keys(e)
@@ -574,11 +592,44 @@
             : null);
       }
 
+      // The drawer's version row carries the ACTION, not just the badge. An
+      // amber "update" chip beside a version reads as a button and was not one:
+      // the only way to act on it was the ⋯ menu in the row underneath the open
+      // drawer, which is the one place the reader is not looking. An agent the
+      // server cannot push to (Docker, bare process) still gets no button —
+      // its badge says "installer", and the title says why.
+      function updateAction(adm) {
+        if (!adm || !deps.canDelete()) return null;
+        var target = deps.updateTarget(adm, versions);
+        if (!deps.isBehind(adm, target)) return null;
+        if (deps.selfUpdatable(adm)) {
+          return ui.button('secondary', t('ag.act.update', { v: target }), {
+            size: 'xs',
+            onclick: function () { deps.update(adm, target); },
+          });
+        }
+        // A Windows agent is not stuck: it updates in place from a one-liner
+        // this dialog hands over.
+        if (deps.isWindows(adm)) {
+          return ui.button('secondary', t('agentUpdate.win.button'), {
+            size: 'xs',
+            onclick: function () { deps.windowsUpdate(adm, target); },
+          });
+        }
+        return null;
+      }
+
+      function versionRow(a, adm) {
+        var act = updateAction(adm);
+        if (!act) return versionCell(a);
+        return el('span', { class: 'dw-ver' }, versionCell(a), ' ', act);
+      }
+
       function identityBlock(a) {
         var adm = adminOf(a);
         return ui.keyValues([
           adm ? [t('fleet.dw.platform'), (adm.platform || '?') + ' / ' + (adm.arch || '?')] : null,
-          adm ? [t('ag.col.version'), versionCell(a)] : null,
+          adm ? [t('ag.col.version'), versionRow(a, adm)] : null,
           adm ? [t('ag.col.source'), sourceCell(a)] : null,
           [t('fleet.col.location'), a.locationName || '–'],
           [t('fleet.dw.lastReport'), a.lastReportAt ? ui.fmt.short(a.lastReportAt) : '–'],
@@ -597,7 +648,9 @@
               el('div', { class: 'meta-xs' }, d.ts
                 ? t('iface.measured', { source: d.source, at: ui.fmt.clock(d.ts) })
                 : t('iface.neverMeasured')),
-              deps.interfaceTable(d.interfaces, d.source));
+              // The admin record goes with it: on a flow source the table is
+              // empty by design, and its button changes THIS agent's source.
+              deps.interfaceTable(d.interfaces, d.source, adminOf(a)));
           }, function (e) {
             // A failed port read must not take the drawer with it: the verdict
             // and the measurements above are still true and still useful.
@@ -616,21 +669,69 @@
           host);
       }
 
+      // A verdict worth claiming. `ok` needs no acknowledgement and `unknown`
+      // (an agent that has never reported) must not be clearable — the server
+      // refuses both, and offering the button would only earn a 409.
+      var ACKABLE = { warn: 1, bad: 1, down: 1, stale: 1 };
+
+      // "Somebody is on this." It does NOT clear the fault: the verdict is
+      // recomputed from live measurements and goes green when they do. What it
+      // clears is the question "has anyone looked at this red row", which until
+      // now the screen had no way to answer — so every shift re-diagnosed the
+      // same known problem.
+      function ackButton(a, onChanged) {
+        if (!deps.canWrite() || !deps.ackHealth || !deps.unackHealth) return null;
+        var status = (a.health && a.health.status) || '';
+        if (!ackOf(a) && !ACKABLE[status]) return null;
+        var btn = ui.button('secondary', ackOf(a) ? t('fleet.ack.clear') : t('fleet.ack.do'), {
+          title: ackOf(a) ? t('fleet.ack.clearHint') : t('fleet.ack.doHint'),
+          onclick: function () {
+            btn.disabled = true;
+            var undo = !!ackOf(a);
+            var p = undo ? deps.unackHealth(a.agentId) : deps.ackHealth(a.agentId);
+            p.then(function (health) {
+              // The POST answers with the verdict as stored, so the drawer shows
+              // what the server actually holds rather than what it hoped for. An
+              // undo has no body, so the marker is dropped locally.
+              if (health) a.health = health;
+              else if (a.health) { var h = {}; Object.keys(a.health).forEach(function (k) { if (k !== 'ack') h[k] = a.health[k]; }); a.health = h; }
+            }).catch(function () { /* app.js has already said what went wrong */ })
+              .then(function () {
+                btn.disabled = false;
+                btn.textContent = ackOf(a) ? t('fleet.ack.clear') : t('fleet.ack.do');
+                btn.title = ackOf(a) ? t('fleet.ack.clearHint') : t('fleet.ack.doHint');
+                if (onChanged) onChanged();
+              });
+          },
+        });
+        return btn;
+      }
+
       function openRowDrawer(a, tr) {
         var adm = adminOf(a);
         var nics = nicsOf(a);
         deps.setDrawerAgent(a.agentId);
         var ctx = deps.contextActions ? deps.contextActions({ agentId: Number(a.agentId) }) : null;
+        // The two places the acknowledgement shows are patched in place rather
+        // than reopening the drawer: reopening would throw away the reader's
+        // scroll position and re-read the port table for nothing.
+        var statusHost = el('span', {}, healthCell(a));
+        var verdictHost = el('div', {}, verdictBlock(a));
+        var ack = ackButton(a, function () {
+          statusHost.replaceChildren(healthCell(a));
+          verdictHost.replaceChildren(verdictBlock(a));
+          drawTable();
+        });
         ui.openDrawer({
           title: a.displayName,
-          status: healthCell(a),
+          status: statusHost,
           meta: [a.hostname, a.locationName || null,
             a.lastReportAt ? t('fleet.dw.seenAt', { at: ui.fmt.short(a.lastReportAt) }) : null]
             .filter(Boolean).join(' · '),
           row: tr || null,
           onClose: function () { deps.setDrawerAgent(null); },
           sections: [
-            ui.drawerSection(t('fleet.dw.verdict'), verdictBlock(a)),
+            ui.drawerSection(t('fleet.dw.verdict'), verdictHost),
             ui.drawerSection(t('fleet.dw.measurements'), measurementBlock(a)),
             ui.drawerSection(t('fleet.dw.ports') + (metricsOf(a).ifaceCount ? ' (' + metricsOf(a).ifaceCount + ')' : ''),
               portsSection(a)),
@@ -641,7 +742,7 @@
             ctx ? ui.drawerSection(t('ctx.label'), ctx) : null,
           ],
           footer: ui.drawerFooter(
-            [ui.button('secondary', t('fleet.dw.open'), { onclick: function () { deps.openAgent(a.agentId); } })],
+            [ui.button('secondary', t('fleet.dw.open'), { onclick: function () { deps.openAgent(a.agentId); } }), ack],
             adm && deps.canWrite()
               ? [ui.button('primary', t('ag.act.run'), { onclick: function () { deps.runTest(adm); } })]
               : []),

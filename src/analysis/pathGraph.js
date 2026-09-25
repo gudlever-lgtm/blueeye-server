@@ -1,6 +1,7 @@
 'use strict';
 
-const { locateHop } = require('../geo/hopLocation');
+const { locateHop, settlePath } = require('../geo/hopLocation');
+const { cloudOrigin } = require('../geo/hostingNetworks');
 
 // Turns a set of traceroute probe results (repeated runs to one target) into a
 // directed, weighted path graph — the model behind the dashboard's path map.
@@ -184,13 +185,9 @@ function buildPathGraph(results, { geoProvider = null, cityProvider = null, cent
       hostname: geo.hostname,
       place: geo.place,
       geoRejected: geo.rejected,
-      // 'exact' | 'approximate' | null. `approximate` means the hop IS drawn,
-      // but on a country centroid the reply time says it cannot literally be
-      // standing on — the country is feasible, the pin is a guess. The map
-      // marks it rather than dropping it, because a path with a hole in it
-      // reads as a broken trace (src/geo/hopLocation.js).
+      // 'exact' when the hop is drawn, null when it is not. A pin the reply
+      // time rules out is never drawn as a guess any more (src/geo/hopLocation.js).
       placeCertainty: geo.place ? (geo.place.certainty || 'exact') : null,
-      placeOffByKm: geo.place && Number.isFinite(geo.place.offByKm) ? geo.place.offByKm : null,
       // Nothing could be placed, but the reply time still bounds it: the
       // responder is provably inside this radius of the agent.
       withinKm: Number.isFinite(geo.withinKm) ? geo.withinKm : null,
@@ -205,6 +202,17 @@ function buildPathGraph(results, { geoProvider = null, cityProvider = null, cent
       explain: reason,
     });
   }
+
+  // Second pass: place what GeoIP could not by the path itself — a reply only a
+  // millisecond or two behind a placed hop came from the same place.
+  settlePath(nodes.filter((n) => n.kind !== 'source').map((n) => ({
+    hop: n.hop, rttMs: n.ip && fastest.has(n.ip) ? fastest.get(n.ip) : n.rttMs, node: n,
+  })), { origin: geoOrigin });
+  for (const n of nodes) if (n.kind !== 'source') n.placeCertainty = n.place ? (n.place.certainty || 'exact') : null;
+
+  // Is the agent where its site says? A first public hop inside a cloud
+  // provider, a few ms away, says it runs in that provider's data centre.
+  const originHint = cloudOrigin(nodes, { fastestOf: (n) => (n.ip && fastest.has(n.ip) ? fastest.get(n.ip) : n.rttMs) });
 
   // Links between consecutive nodes: the downstream loss drives the colour, the
   // RTT delta (clamped at 0 — RTT can wobble below the previous hop) the weight.
@@ -233,7 +241,7 @@ function buildPathGraph(results, { geoProvider = null, cityProvider = null, cent
 
   const branches = buildBranches(runs, byPos, maxPos, { ...geoDeps, names, fastest });
 
-  return { ...meta, worstHopIndex, nodes, links, branches };
+  return { ...meta, worstHopIndex, nodes, links, branches, originHint };
 }
 
 // ECMP / multipath inference, from the runs already stored. Load-balancers make
@@ -496,12 +504,46 @@ function describeLiveHop(h, { geoProvider = null, cityProvider = null, centroids
     kind: 'hop', hop, ip, label: ip || '* * *',
     country: geo.country, asn: geo.asn, asnName: geo.asnName, lat: geo.lat, lng: geo.lng, private: geo.private,
     hostname: geo.hostname, place: geo.place, geoRejected: geo.rejected,
+    withinKm: Number.isFinite(geo.withinKm) ? geo.withinKm : null,
+    fastestMs: num(h.minMs) ?? rttMs,
     rttMs, lossPct, jitterMs, responded, runs: 1, unresponsive, severity, explain: reason,
   };
 }
 
+// The hops of the traces that are running right now, so each new live hop is
+// placed with the ones before it (settlePath) exactly as the finished path will
+// be. Keyed per agent + probe type + target; a hop 1 or a trace idle for five
+// minutes starts over. Holds the hops as described, BEFORE settling, and
+// settles a fresh copy each time: a hop moved next to a city must not turn
+// into a city anchor itself on the next pass.
+function createLiveTraces({ ttlMs = 5 * 60 * 1000, maxTraces = 500, now = () => Date.now() } = {}) {
+  const traces = new Map();
+  const clone = (n) => ({ ...n, place: n.place ? { ...n.place } : null });
+
+  function settle(key, node, origin = null) {
+    if (!node) return null;
+    let t = traces.get(key);
+    if (!t || node.hop === 1 || now() - t.at > ttlMs) {
+      t = { at: now(), raw: new Map() };
+      traces.delete(key);
+      traces.set(key, t);
+      if (traces.size > maxTraces) traces.delete(traces.keys().next().value);
+    }
+    t.at = now();
+    t.raw.set(node.hop, clone(node));
+    const copies = [...t.raw.values()].map(clone);
+    settlePath(copies.map((n) => ({ hop: n.hop, rttMs: n.fastestMs, node: n })), { origin });
+    const out = copies.find((n) => n.hop === node.hop);
+    const hint = cloudOrigin(copies.sort((a, b) => a.hop - b.hop), { fastestOf: (n) => n.fastestMs });
+    if (hint && hint.hop === out.hop) out.originHint = hint;
+    return out;
+  }
+
+  return { settle, get size() { return traces.size; } };
+}
+
 module.exports = {
-  buildPathGraph, describeLiveHop, PATH_PROBE_TYPES, buildBranches, hopMembers, ecmpAnalysis,
+  buildPathGraph, describeLiveHop, createLiveTraces, PATH_PROBE_TYPES, buildBranches, hopMembers, ecmpAnalysis,
   THRESHOLDS: T, ECMP_MIN_SIGHTINGS, ECMP_LOSS_RISE_PCT,
   SEVERITY_RANK, WORST_MIN_RANK,
 };

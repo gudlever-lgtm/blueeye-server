@@ -129,7 +129,7 @@ const { createGeoProvider } = require('./geo/provider');
 const { createGeoipUpdater } = require('./geo/geoipUpdater');
 const { createCentroids } = require('./geo/centroids');
 const { createCityProvider } = require('./geo/cityProvider');
-const { describeLiveHop } = require('./analysis/pathGraph');
+const { describeLiveHop, createLiveTraces } = require('./analysis/pathGraph');
 const { createGeoEnricher } = require('./geo/enricher');
 const { createFlowPipeline } = require('./geo/flowPipeline');
 const { loadAlertingConfig } = require('./analysis/alerting/config');
@@ -1417,6 +1417,7 @@ function start() {
   // to 40 hops, and they should not each cost a query. Every hop of one trace
   // waits on the same promise, so they reach the dashboard in order.
   const liveOrigins = new Map();
+  const liveTraces = createLiveTraces();
   function liveTraceOrigin(agentId) {
     const hit = liveOrigins.get(agentId);
     if (hit && Date.now() - hit.at < 60000) return hit.promise;
@@ -1486,9 +1487,13 @@ function start() {
     notifyDashboard,
     // Live traceroute hops, geolocated the same way as the finished path.
     // The agent's site anchors the speed-of-light check (src/geo/hopLocation.js).
-    describeTraceHop: async (hop, agentId) => describeLiveHop(hop, {
-      geoProvider, cityProvider, centroids, origin: await liveTraceOrigin(agentId),
-    }),
+    // Each hop is settled with the hops before it in the same trace
+    // (createLiveTraces), so the live path is placed like the finished one.
+    describeTraceHop: async (hop, agentId, { probeType = '', target = '' } = {}) => {
+      const origin = await liveTraceOrigin(agentId);
+      const node = describeLiveHop(hop, { geoProvider, cityProvider, centroids, origin });
+      return liveTraces.settle(`${agentId}|${probeType}|${target}`, node, origin);
+    },
     // Transaction-test channel: config push on connect/change + result ingest +
     // threshold findings. The assistant supplies an optional Danish diagnosis,
     // appended to the deterministic one.

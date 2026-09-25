@@ -139,16 +139,17 @@ test('a name the RTT rules out falls back to city GeoIP, then the country', () =
   // is Stockholm (~520 km). Both are CITIES — precise claims — so both are
   // rejected outright.
   const g = locateHop({ ip: '62.115.1.1', hostname: 'ffm-bb2-link.ip.twelve99.net', rttMs: 1 }, { geoProvider, cityProvider, centroids, origin: CPH });
-  assert.deepEqual(g.rejected.map((r) => r.source), ['rdns', 'geoip-city']);
 
-  // The country centroid is NOT rejected with them, and that is the point of
-  // testing a region as a region: "somewhere in DE" is feasible from Copenhagen
-  // in 1 ms, because the German border is a couple of hundred km away even
-  // though the centroid is 680. The hop is drawn there and marked as a guess —
-  // dropping it would leave a hole in the path, which reads as a broken trace.
-  assert.equal(g.place.source, 'geoip-country');
-  assert.equal(g.place.certainty, 'approximate');
-  assert.ok(Number.isFinite(g.lat));
+  // The country (SE) fits the reply time as a region, but its centroid does
+  // not. That is not drawn as a guess any more — a pin 700 km from anywhere the
+  // reply allows is a line no packet took. It is marked regionOnly (not
+  // anycast) and left for the path pass (settlePath) to place.
+  assert.deepEqual(g.rejected.map((r) => r.source), ['rdns', 'geoip-city', 'geoip-country']);
+  assert.equal(g.rejected[2].regionOnly, true);
+  assert.equal(g.rejected[0].regionOnly, undefined, 'a city is a point, never a region');
+  assert.equal(g.place, null);
+  assert.equal(g.lat, null);
+  assert.equal(g.withinKm, 250);
 
   // 8 ms: Frankfurt fits as a point, and an exact candidate always wins.
   const ok = locateHop({ ip: '62.115.1.1', hostname: 'ffm-bb2-link.ip.twelve99.net', rttMs: 8 }, { geoProvider, cityProvider, centroids, origin: CPH });
@@ -337,8 +338,10 @@ test('buildPathGraph places hops by router name and carries the hostname', () =>
   assert.equal(h2.place.city, 'Copenhagen');
   assert.equal(h2.hostname, 'kbn-bb6-link.ip.twelve99.net');
   assert.equal(h3.place.precision, 'country');
-  assert.equal(h4.lat, null, 'anycast 8.8.8.8 at 3 ms is not drawn in the US');
+  // Anycast 8.8.8.8 is never drawn in the US; answering 1.5 ms after hop 2, it
+  // is drawn where hop 2 is.
   assert.equal(h4.geoRejected[0].country, 'US');
+  assert.deepEqual(h4.place, { city: 'Copenhagen', country: 'DK', precision: 'city', source: 'latency', certainty: 'exact', nearHop: 2, deltaMs: 1.5 });
   // The ECMP branches get the same placement.
   const b2 = g.branches.hops.find((h) => h.hop === 2).ips[0];
   assert.equal(b2.place.city, 'Copenhagen');
@@ -350,7 +353,9 @@ test('buildPathGraph uses the fastest reply across runs for the check', () => {
     run('2026-09-01T11:00:00Z', [{ hop: 1, ip: '8.8.8.8', rttMs: 4, minMs: 3 }]),
   ];
   const g = buildPathGraph(runs, { geoProvider, centroids, origin: CPH });
-  assert.equal(g.nodes[1].lat, null, 'one fast reply is enough to rule the US out');
+  assert.equal(g.nodes[1].geoRejected[0].country, 'US', 'one fast reply is enough to rule the US out');
+  assert.equal(g.nodes[1].place.source, 'latency', 'and 3 ms from the agent puts it at the agent');
+  assert.equal(g.nodes[1].place.nearHop, 0);
 });
 
 test('live hops get the same placement, and the async describe keeps the frame', async () => {
@@ -409,8 +414,10 @@ test('GET /api/probes/path returns the placement per hop (200)', async () => {
   assert.equal(h1.private, true);
   assert.deepEqual(h2.place, { city: 'Copenhagen', country: 'DK', precision: 'city', source: 'rdns', code: 'cph', certainty: 'exact' });
   assert.equal(h2.hostname, 'ae3.cph-bb1.telia.net');
-  assert.equal(h3.lat, null);
   assert.equal(h3.geoRejected[0].source, 'geoip-country');
+  assert.equal(h3.place.source, 'latency');
+  assert.equal(h3.lat, CPH.lat);
+  assert.equal(res.body.originHint, null, 'Telia is not a cloud provider');
 });
 
 test('GET /api/probes/path is 404 for an unknown agent', async () => {

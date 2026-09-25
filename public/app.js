@@ -5571,7 +5571,7 @@ function pathGraph(graph, pgOpts = {}) {
   mapSection.addEventListener('toggle', () => {
     if (!mapSection.open || mapBuilt) return;
     mapBuilt = true;
-    drawPathMap(mapHost, geoStops, nodes);
+    drawPathMap(mapHost, geoStops, nodes, graph.originHint || null);
   });
 
   return el('div', { class: 'pathmap' },
@@ -5612,6 +5612,11 @@ function pathGeoStops(nodes) {
 // city GeoIP did, or only the country is known. See src/geo/hopLocation.js.
 function pathPlaceNote(place) {
   if (!place) return '';
+  if (place.source === 'latency') {
+    return place.nearHop === 0
+      ? t('pathmap.place.latencyAgent', { ms: place.deltaMs })
+      : t('pathmap.place.latencyHop', { hop: place.nearHop, ms: place.deltaMs });
+  }
   if (place.source === 'rdns') return t('pathmap.place.rdns', { code: place.code || '' });
   if (place.source === 'geoip-city') return t('pathmap.place.geoipCity');
   return t('pathmap.place.country');
@@ -5645,7 +5650,11 @@ function pathRejectedNote(nodes) {
     if (n.lat != null || !Array.isArray(n.geoRejected) || !n.geoRejected.length) continue;
     const r = n.geoRejected[n.geoRejected.length - 1];
     const where = [r.city, r.country].filter(Boolean).join(', ') || '?';
-    out.push(el('li', {}, t('pathmap.rejected', { hop: n.hop, ip: n.ip || '*', where, km: r.distanceKm, max: r.maxKm })));
+    // regionOnly: the country fits the reply time, only its middle does not —
+    // not anycast, just nowhere that could honestly be pinned.
+    out.push(el('li', {}, r.regionOnly
+      ? t('pathmap.unplacedNear', { hop: n.hop, ip: n.ip || '*', where, within: n.withinKm })
+      : t('pathmap.rejected', { hop: n.hop, ip: n.ip || '*', where, km: r.distanceKm, max: r.maxKm })));
   }
   return out.length ? el('ul', { class: 'muted small pg-rejected' }, ...out) : null;
 }
@@ -5674,8 +5683,15 @@ function renderPathStops(layer, stops) {
 
 // Draws the path on its own Leaflet map (the Probes traceroute detail). Reuses the
 // Destinations tile config.
-async function drawPathMap(host, stops, nodes = []) {
+async function drawPathMap(host, stops, nodes = [], originHint = null) {
   if (typeof L === 'undefined') { host.replaceChildren(el('div', { class: 'error' }, 'Map library failed to load.')); return; }
+  // The agent looks to run in a cloud data centre, not at its site — say so
+  // above the map, since every distance on it is measured from that site.
+  if (originHint) {
+    host.before(el('p', { class: 'warn-text small pg-origin-hint' }, t('pathmap.cloudOrigin', {
+      hop: originHint.hop, ip: originHint.ip, provider: originHint.provider, ms: originHint.rttMs,
+    })));
+  }
   const rejected = pathRejectedNote(nodes);
   if (!stops || stops.length < 2) {
     host.replaceChildren(el('div', { class: 'empty' }, t('pathmap.empty')), rejected || '');

@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.197.0 — Path map: place hops by the path, and notice a cloud-hosted agent
+
+A trace from an agent whose site is Copenhagen drew a line to the middle of the
+Czech Republic: its first hop was a DigitalOcean router answering in 4 ms, in a
+block registered in CZ. Four replies inside 4 ms are one building.
+
+**Placed by the path itself.** A hop GeoIP cannot place, or can only put at a
+country's centre, is drawn with the last placed hop when its reply is at most
+2 ms behind it — or at the agent when it answered within 5 ms. The map says
+so ("placed with hop 3 — its reply came only 1.2 ms later").
+
+**No more pins on a country's centre that the reply rules out.** Such a hop
+used to be drawn there as "approximate". It is now left for the path to place;
+when nothing can, the note says where it is registered and how close it
+provably is, without calling it anycast.
+
+**"This agent runs at DigitalOcean."** When the first public hop is a cloud or
+hosting provider a few ms away, the map says the agent most likely runs in
+that provider's data centre, not at its site — every distance on the map is
+measured from the site, so it has to be right.
+
+Live traces are placed the same way, hop by hop.
+
 ## 0.196.1 — One-click update: name what broke the checksum
 
 Pair with agent **0.43.0**, which is where the actual fix lives: the agent now

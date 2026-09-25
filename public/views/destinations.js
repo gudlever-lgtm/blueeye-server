@@ -48,29 +48,33 @@
     function placeLabel(nodes) {
       for (var i = 0; i < nodes.length; i += 1) {
         var p = nodes[i].place;
+        if (p && p.source === 'latency' && p.nearHop === 0) return t('pathmap.place.agentSite');
         if (p) return [p.city, p.country].filter(Boolean).join(', ');
       }
       return nodes.length ? (nodes[0].country || null) : null;
     }
-    // How the place was found (router name / city GeoIP / country only), and —
-    // when the pin is a guess the reply time does not quite support — that it is
-    // one. An approximate hop is still DRAWN: dropping it leaves a hole in the
-    // path, and a path with a hole in it reads as a broken trace. It just has to
-    // say so wherever it is shown.
+    // How the place was found: the router's name, city GeoIP, the country only —
+    // or the path itself, when the reply came back within a millisecond or two
+    // of a hop that is placed (src/geo/hopLocation.js, settlePath).
     function placeSource(p) {
       if (!p) return null;
-      var how = p.source === 'rdns' ? t('pathmap.place.rdns', { code: p.code || '' })
+      if (p.source === 'latency') {
+        return p.nearHop === 0
+          ? t('pathmap.place.latencyAgent', { ms: p.deltaMs })
+          : t('pathmap.place.latencyHop', { hop: p.nearHop, ms: p.deltaMs });
+      }
+      return p.source === 'rdns' ? t('pathmap.place.rdns', { code: p.code || '' })
         : p.source === 'geoip-city' ? t('pathmap.place.geoipCity')
           : t('pathmap.place.country');
-      if (p.certainty !== 'approximate') return how;
-      return how + ' · ' + (Number.isFinite(p.offByKm) && p.offByKm > 0
-        ? t('pathmap.place.approxBy', { km: p.offByKm })
-        : t('pathmap.place.approx'));
     }
-    // True when any hop behind a stop is only approximately placed, so the stop
-    // row can carry the same warning the drawer does.
-    function stopIsApprox(nodes) {
-      return (nodes || []).some(function (n) { return n.place && n.place.certainty === 'approximate'; });
+    // The agent's site is the point every distance is measured from. When the
+    // first public hop is a cloud provider a few ms away, the agent most likely
+    // runs there, and the map is being measured from the wrong place.
+    function originHintNote(hint) {
+      if (!hint) return null;
+      return ui.inlineNote(t('pathmap.cloudOrigin', {
+        hop: hint.hop, ip: hint.ip, provider: hint.provider, ms: hint.rttMs,
+      }), 'warn');
     }
     // Hops the server left off the map because their reply was too fast for
     // any place it had for them (anycast, mostly).
@@ -89,6 +93,13 @@
       }).map(function (n) {
         var r = n.geoRejected[n.geoRejected.length - 1];
         var where = [r.city, r.country].filter(Boolean).join(', ') || '?';
+        // The country fits the reply time, only its middle does not. Not
+        // anycast: just nowhere in it that could honestly be pinned.
+        if (r.regionOnly) {
+          return ui.inlineNote(t('pathmap.unplacedNear', {
+            hop: n.hop, ip: n.ip || '*', where: where, within: n.withinKm,
+          }), 'info');
+        }
         if (n.kind === 'dest') {
           return ui.inlineNote(t('pathmap.rejectedDest', {
             hop: n.hop, ip: n.ip || '*', where: where, km: r.distanceKm, max: r.maxKm,
@@ -446,7 +457,9 @@
         if (!nodes.length) {
           return [ui.inlineNote(t('dest.path.liveWaiting', { target: tr.target }), 'info'), ui.loadingState(3)];
         }
+        var liveHint = nodes.filter(function (n) { return n.originHint; })[0];
         return [
+          liveHint ? originHintNote(liveHint.originHint) : null,
           ui.inlineNote(t('dest.path.liveNote', { n: nodes.length, s: secs }), 'info'),
           el('ul', { class: 'path-stops' }, nodes.map(function (n) {
             var where = [n.asnName || (n.asn ? 'AS' + n.asn : null), placeLabel([n]),
@@ -458,7 +471,7 @@
               where ? ui.metaXs(where) : null,
               typeof n.rttMs === 'number' ? ui.metaXs(Math.round(n.rttMs) + ' ms') : null);
           })),
-        ];
+        ].filter(Boolean);
       }
 
       // A finished path: its stops, each opening the hops it covers.
@@ -498,14 +511,10 @@
           if (nets.length) bits.push(nets.slice(0, 2).join(', ') + (nets.length > 2 ? ' +' + (nets.length - 2) : ''));
           if (rtt !== null) bits.push(Math.round(rtt) + ' ms');
 
-          var approx = !isSrc && stopIsApprox(s.nodes);
           var li = el('li', { class: isSrc ? null : 'is-clickable', tabindex: isSrc ? null : '0',
             role: isSrc ? null : 'button' },
           el('span', { class: 'ui-legend-dot sev-' + (s.severity || 'ok') }),
           el('span', {}, String(place)),
-          // A pin the reply time does not quite support is still shown — it just
-          // never passes for a measured one.
-          approx ? ui.metaXs(t('pathmap.place.approxTag')) : null,
           bits.length ? ui.metaXs(bits.join(' · ')) : null,
           ui.metaXs(hopLabel));
           if (!isSrc) {
@@ -556,7 +565,7 @@
           ? el('ul', { class: 'path-stops' }, stops.map(stopRow))
           : ui.emptyState({ icon: '↯', title: t('dest.path.noStops'), body: t('dest.path.noStopsHint') });
 
-        return [
+        var out = [
           worst && (RANK[worst.severity] || 0) >= WORST_MIN_RANK
             ? ui.inlineNote(t('dest.path.worst', { hop: worst.hop, why: worst.explain || '' }),
               worst.severity === 'bad' ? 'crit' : 'warn')
@@ -572,6 +581,8 @@
             : null,
           body,
         ].concat(rejectedNotes(graph.nodes)).concat([destShortNote(graph.nodes)]).filter(Boolean);
+        var hint = originHintNote(graph.originHint);
+        return hint ? [hint].concat(out) : out;
       }
 
       // Mounted ONCE. A period change redraws the markers and retitles the

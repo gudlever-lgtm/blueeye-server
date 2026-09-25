@@ -90,13 +90,15 @@ test('a genuinely bad hop is still named', () => {
   assert.equal(g.worstHopIndex, bad.index, 'the silent hop must not hide a real one');
 });
 
-// --- approximate placement --------------------------------------------------
+// --- region-only placement --------------------------------------------------
 //
 // A country centroid stands for a country, not a spot in it. Testing it as a
 // point called ordinary transit routers anycast: a DE-registered hop seen from
 // Denmark in 2.77 ms was measured against the middle of Germany (465 km, just
-// over its 437 km budget) and dropped, although Hamburg is 272 km away and
-// comfortably inside the same budget.
+// over its 437 km budget), although Hamburg is 272 km away and comfortably
+// inside the same budget. Such a hop is not anycast — but its centroid is not
+// a place it can be drawn either. It is marked regionOnly, and the path pass
+// places it next to its neighbours (see the settlePath tests).
 
 const { locateHop, countryReachKm, DEFAULT_COUNTRY_REACH_KM } = require('../src/geo/hopLocation');
 
@@ -105,13 +107,14 @@ const centroidsFor = (table) => ({ get: (c) => table[c] || null });
 const CENTROIDS = centroidsFor({ DE: { lat: 51.2, lng: 10.4 }, US: { lat: 39.8, lng: -98.6 }, FI: { lat: 64.9, lng: 26 } });
 const geoFor = (country) => ({ lookup: () => ({ country, asn: 1, asnName: 'X' }) });
 
-test('a near miss on a country centroid is placed, and marked approximate', () => {
+test('a near miss on a country centroid is region-only: not drawn, not called anycast', () => {
   const hop = locateHop({ ip: '213.239.240.33', rttMs: 2.77 }, { geoProvider: geoFor('DE'), centroids: CENTROIDS, origin: DK_AGENT });
   assert.equal(hop.country, 'DE');
-  assert.ok(Number.isFinite(hop.lat), 'it is drawn rather than dropped — a hole in the path reads as a broken trace');
-  assert.equal(hop.place.certainty, 'approximate');
-  assert.ok(hop.place.offByKm > 0, 'and says how far past the budget the pin sits');
-  assert.equal(hop.rejected, null, 'a feasible country is not a rejection');
+  assert.equal(hop.lat, null, 'the centroid is 465 km away; the reply allows 437 — no pin there');
+  assert.equal(hop.place, null);
+  assert.equal(hop.rejected.length, 1);
+  assert.equal(hop.rejected[0].regionOnly, true, 'the country fits, so this is not anycast');
+  assert.equal(hop.withinKm, 427);
 });
 
 test('an order-of-magnitude miss is still refused, and reports what IS known', () => {

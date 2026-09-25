@@ -126,7 +126,7 @@ src/
 ├── geo/               # flow extraction + offline GeoIP/ASN enrichment + storage
 │   ├── extractFlows.js enricher.js provider.js privateIp.js flowPipeline.js
 │   ├── centroids.js countryCentroids.json
-│   └── hopLocation.js hostnameHints.js networkPlaces.js cityProvider.js
+│   └── hopLocation.js hostnameHints.js networkPlaces.js cityProvider.js hostingNetworks.js
 │                      # traceroute hops on the map: router name → city GeoIP →
 │                      # country, each checked against the hop's RTT
 ├── flows/             # traffic-type categories (DNS/Facebook…) — categories.js
@@ -448,7 +448,7 @@ A single vanilla-JS SPA. Key building blocks:
 | Data retention | `src/analysis/retention/*` (editable via Settings→Retention) |
 | Storage backends (MySQL + optional TimescaleDB) status | `settingsService.getTsdb()` (read-only, env-driven — the pg pool is boot-time infra, no `setTsdb`) exposed on `GET /api/settings`; live sizes on `GET /system/storage` (`services/systemInfo.js`). **UI: Settings → Database** (`settingsDatabaseView`) with status + how-to. Configure via `TSDB_*` env (`src/config.js`) + `deploy/install-timescale.sh`; see `docs/storage-split-audit.md` |
 | Geo/ASN enrichment | `src/geo/enricher.js`, `provider.js`; flows in `flowsRepository.js` |
-| Where a traceroute hop lands on the map | `src/geo/hopLocation.js` (`locateHop`: router PTR name → city GeoIP → country centroid, each checked against the fastest RTT — ~100 km per ms; an impossible placement goes to `geoRejected`), `hostnameHints.js` + the curated code table `networkPlaces.js` (add a city/code there), `cityProvider.js` (DB-IP City Lite in typed arrays; built by `geoipBuild.buildCityFromSource`, the updater and `scripts/build-geoip.js --city`). Hostnames come from agent 0.40+ (`hop.hostname`). See `docs/geo.md` → "Traceroute hops" |
+| Where a traceroute hop lands on the map | `src/geo/hopLocation.js` (`locateHop`: router PTR name → city GeoIP → country centroid, each checked against the fastest RTT — ~100 km per ms; an impossible placement goes to `geoRejected`, `regionOnly` when only the country fits; then `settlePath` draws unplaced/country-only hops with the last placed hop when their reply is ≤ 2 ms behind it, ≤ 5 ms from the agent), `hostingNetworks.js` (`cloudOrigin` → `originHint` when the first public hop is a cloud provider a few ms away: the agent's site is probably wrong), live hops settled per running trace by `createLiveTraces` (`src/analysis/pathGraph.js`), `hostnameHints.js` + the curated code table `networkPlaces.js` (add a city/code there), `cityProvider.js` (DB-IP City Lite in typed arrays; built by `geoipBuild.buildCityFromSource`, the updater and `scripts/build-geoip.js --city`). Hostnames come from agent 0.40+ (`hop.hostname`). See `docs/geo.md` → "Traceroute hops" |
 | Traffic-type categories | `src/flows/categories.js` (editable via Settings→Traffic types) |
 | Flow/conversation explorer | `flowsRepository.exploreFlows` + `src/routes/flows.js` (`/explore`); UI `views.flows` |
 | Traffic map (colored flow arrows) | `flowsRepository.mapFlows` + `src/routes/flows.js` (`/map`, classifies via `src/flows/categories.js`, places via `src/geo/centroids.js`); UI shared helpers `drawTrafficMap`/`trafficMapCard`/`trafficLegendChips` in `public/app.js` — used by Flows→Map mode, the Overview (below the compact `networkPath`) and `views.location` |

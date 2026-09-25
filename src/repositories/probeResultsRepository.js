@@ -270,7 +270,65 @@ function createProbeResultsRepository(db) {
     return rows.map(fromRow);
   }
 
-  return { createMany, findByAgent, metricRows, latestByAgent, fleetHealth, availability, recentRuns };
+  // Every run of ONE probe (agent, type, target), newest-first, for the run
+  // list. Paged rather than capped: a trace on a five-minute schedule is nearly
+  // 900 runs a month, and "the newest 50" is a list, not a history.
+  //
+  // The rows carry their hops — the caller needs them to tell one route from
+  // another — but the list endpoint drops them again before answering, so the
+  // hop arrays never leave the server for a list.
+  async function listRuns({ agentId, type, target, from = null, to = null, limit = 50, offset = 0 }) {
+    const where = ['agent_id = ?', 'type = ?', 'target = ?'];
+    const params = [agentId, type, target];
+    if (from) { where.push('ts >= ?'); params.push(from); }
+    if (to) { where.push('ts <= ?'); params.push(to); }
+    const lim = Number.isInteger(limit) && limit > 0 && limit <= 200 ? limit : 50;
+    const off = Number.isInteger(offset) && offset > 0 ? Math.min(offset, 100000) : 0;
+    params.push(lim, off);
+    const [rows] = await pool.query(
+      `SELECT * FROM probe_results WHERE ${where.join(' AND ')} ORDER BY ts DESC, id DESC LIMIT ? OFFSET ?`,
+      params
+    );
+    return rows.map(fromRow);
+  }
+
+  // How many runs that list has in total, so the UI can page without guessing.
+  async function countRuns({ agentId, type, target, from = null, to = null }) {
+    const where = ['agent_id = ?', 'type = ?', 'target = ?'];
+    const params = [agentId, type, target];
+    if (from) { where.push('ts >= ?'); params.push(from); }
+    if (to) { where.push('ts <= ?'); params.push(to); }
+    const [rows] = await pool.query(`SELECT COUNT(*) AS n FROM probe_results WHERE ${where.join(' AND ')}`, params);
+    return Number(rows[0] && rows[0].n) || 0;
+  }
+
+  // One stored run, with its hops. `agentId` scopes it: a run id from another
+  // agent must read as absent, not as somebody else's path.
+  async function findRunById(id, { agentId = null } = {}) {
+    const where = ['id = ?'];
+    const params = [id];
+    if (agentId != null) { where.push('agent_id = ?'); params.push(agentId); }
+    const [rows] = await pool.query(`SELECT * FROM probe_results WHERE ${where.join(' AND ')} LIMIT 1`, params);
+    return rows[0] ? fromRow(rows[0]) : null;
+  }
+
+  // The run immediately before this one for the same probe — what a comparison
+  // defaults to, because "what changed since last time" is the question asked
+  // far more often than any particular pair.
+  async function previousRun({ agentId, type, target, beforeTs, beforeId }) {
+    const [rows] = await pool.query(
+      `SELECT * FROM probe_results
+        WHERE agent_id = ? AND type = ? AND target = ? AND (ts < ? OR (ts = ? AND id < ?))
+        ORDER BY ts DESC, id DESC LIMIT 1`,
+      [agentId, type, target, beforeTs, beforeTs, beforeId]
+    );
+    return rows[0] ? fromRow(rows[0]) : null;
+  }
+
+  return {
+    createMany, findByAgent, metricRows, latestByAgent, fleetHealth, availability, recentRuns,
+    listRuns, countRuns, findRunById, previousRun,
+  };
 }
 
 module.exports = { createProbeResultsRepository, DIAGNOSTIC_TYPES, COLUMNS, toRow, fromRow };

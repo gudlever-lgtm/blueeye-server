@@ -11259,6 +11259,28 @@ function getDestinationsView() {
     // run is only requested when there is none. While a run is in flight,
     // `onLive(nodes)` is called with every hop the agent streams, and the same
     // hops are drawn on the map as they arrive.
+    // ---- trace history (every stored run of one path) --------------------
+    // The graph on the map is a median over the newest runs; these read the
+    // runs themselves, which is what answers "why was it slow on Tuesday".
+    fetchPathRuns: async (agentId, target, { limit = 40, offset = 0 } = {}) => {
+      const probeType = pathTargetTypes.get(target) || 'traceroute';
+      const qs = `agentId=${encodeURIComponent(agentId)}&target=${encodeURIComponent(target)}`
+        + `&probeType=${encodeURIComponent(probeType)}&limit=${limit}&offset=${offset}`;
+      return api(`/api/probes/path/runs?${qs}`);
+    },
+    // ONE stored run, as its own path graph — not blended with its neighbours.
+    fetchPathRun: async (agentId, runId) => api(`/api/probes/path?agentId=${encodeURIComponent(agentId)}&runId=${encodeURIComponent(runId)}`),
+    fetchPathCompare: async (agentId, runId, againstRunId = null) => {
+      const qs = `agentId=${encodeURIComponent(agentId)}&runId=${encodeURIComponent(runId)}`
+        + (againstRunId ? `&againstRunId=${encodeURIComponent(againstRunId)}` : '');
+      return api(`/api/probes/path/compare?${qs}`);
+    },
+    // Puts a stored run on the map under its trace's own layer, so opening a
+    // run from the history moves the drawn path to that run.
+    drawStoredRun: (agentId, target, graph) => {
+      const probeType = pathTargetTypes.get(target) || 'traceroute';
+      return drawGeoPath(traceKey(agentId, probeType, target), graph, { fit: true });
+    },
     showPath: async (agentId, target, { fresh = false, onLive = null } = {}) => {
       if (!geoState.map) return null;
       const probeType = pathTargetTypes.get(target) || 'traceroute';

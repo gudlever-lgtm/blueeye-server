@@ -1516,6 +1516,12 @@ function makeProbeResultsRepo(overrides = {}) {
     fleetHealth: overrides.fleetHealth || (async () => []),
     availability: overrides.availability || (async () => []),
     recentRuns: overrides.recentRuns || (async () => []),
+    // Trace history. The defaults are empty, so a route that reads them is
+    // exercised by the gate sweeps without a test having to wire them.
+    listRuns: overrides.listRuns || (async () => []),
+    countRuns: overrides.countRuns || (async () => 0),
+    findRunById: overrides.findRunById || (async () => null),
+    previousRun: overrides.previousRun || (async () => null),
   };
 }
 

@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.202.0 — Trace history: every run kept, openable and comparable
+
+The path map showed one graph: the median of the newest runs. That answers "is
+this path healthy now" and hides everything else — a single bad run, or a route
+that changed and changed back.
+
+Every run was already stored with all its hops (and kept 400 days). Now it can
+be read:
+
+- **History** in the trace panel lists every run — time, hops, round-trip,
+  loss — and marks the ones that **took a different route** from the run
+  before. A run that failed says why instead of showing an empty row.
+- Clicking a run draws **that run** on the map and says so, rather than the
+  usual median.
+- Under it, what changed since the previous run: the hops that came or went,
+  the end-to-end difference, and the hop where the extra time appeared. An
+  inserted hop reads as one new hop, not as every hop after it having moved.
+
+New endpoints: `GET /api/probes/path/runs`, `GET /api/probes/path?runId=` and
+`GET /api/probes/path/compare`.
+
 ## 0.201.0 — An agent that stays connected, and a fleet that can always be updated
 
 Two questions this release answers properly: how does an agent always have a way

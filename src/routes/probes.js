@@ -7,6 +7,7 @@ const { ROLES } = require('../auth/roles');
 const { validateTimeRange } = require('../validation/resultsValidation');
 const { parseId } = require('../validation/locationValidation');
 const { buildPathGraph, PATH_PROBE_TYPES } = require('../analysis/pathGraph');
+const { summarise, withRouteChanges, diffRuns } = require('../analysis/pathHistory');
 const { agentPosition } = require('../geo/agentPosition');
 const { asGraphFromNodes } = require('../analysis/asPath');
 const { METRICS, getMetric, bucketMetric } = require('../analysis/pathTimeseries');
@@ -74,9 +75,20 @@ function createProbesRouter({ probeResultsRepo, agentsRepo, geoProvider = null, 
     const samples = Math.max(1, Math.min(50, Number.parseInt(req.query.samples, 10) || 10));
     const probeType = pathProbeType(req.query.probeType);
     const rows = await probeResultsRepo.findByAgent({ agentId, from: range.from, to: range.to, type: probeType, limit: 500 });
-    const target = req.query.target ? String(req.query.target).slice(0, 255) : latestTarget(rows, probeType);
-    // Newest `samples` runs for that target (rows arrive oldest-first).
-    const runs = rows.filter((r) => r.target === target).slice(-samples);
+    let target = req.query.target ? String(req.query.target).slice(0, 255) : latestTarget(rows, probeType);
+    // Newest `samples` runs for that target (rows arrive oldest-first), or the
+    // ONE stored run asked for: a history is only worth keeping if a run in it
+    // can be opened as it was, rather than as part of a median.
+    const runId = req.query.runId ? parseId(req.query.runId) : null;
+    let runs;
+    if (runId !== null) {
+      const one = await probeResultsRepo.findRunById(runId, { agentId });
+      if (!one || !PATH_PROBE_TYPES.includes(one.type)) return res.status(404).json({ error: 'Run not found' });
+      runs = [one];
+      target = one.target;
+    } else {
+      runs = rows.filter((r) => r.target === target).slice(-samples);
+    }
     // The agent's own position when set, else its site's (src/geo/agentPosition.js).
     const pos = agentPosition(agent);
     const origin = {
@@ -88,13 +100,95 @@ function createProbesRouter({ probeResultsRepo, agentsRepo, geoProvider = null, 
     const graph = buildPathGraph(runs, { geoProvider, cityProvider, centroids, target, origin });
     // `origin` rides along even when there are no runs yet, so a live trace
     // can anchor its first hops to the agent's site before anything is stored.
-    res.json({ agentId, probeType, origin, ...graph, asGraph: asGraphFromNodes(graph.nodes) });
+    res.json({ agentId, probeType, runId, origin, ...graph, asGraph: asGraphFromNodes(graph.nodes) });
   }));
 
   // GET /api/probes/path/metrics — the metric catalogue for the timeline's
   // selector (extensible list, per the spec). No agent needed; viewer+.
   router.get('/path/metrics', requireAuth, reader, asyncHandler(async (_req, res) => {
     res.json({ metrics: METRICS.map((m) => ({ id: m.id, label: m.label, unit: m.unit, render: m.render })) });
+  }));
+
+  // GET /api/probes/path/runs?agentId=&target=&probeType=&from=&to=&limit=&offset=
+  // Every stored run of one traced path, newest-first, one row each — the
+  // history behind the aggregated graph. Each row says whether that run took a
+  // DIFFERENT route from the run before it in time, which is the thing a reader
+  // scans a trace history for. viewer+.
+  router.get('/path/runs', requireAuth, reader, asyncHandler(async (req, res) => {
+    const agentId = parseId(req.query.agentId);
+    if (agentId === null) return res.status(400).json({ error: 'agentId is required (positive integer)' });
+    const { value: range, errors } = validateTimeRange(req.query);
+    if (errors) return res.status(400).json({ error: 'Validation failed', details: errors });
+    const agent = await agentsRepo.findById(agentId);
+    if (!agent) return res.status(404).json({ error: 'Agent not found' });
+    const probeType = pathProbeType(req.query.probeType);
+    let target = req.query.target ? String(req.query.target).slice(0, 255) : null;
+    if (!target) {
+      const recent = await probeResultsRepo.findByAgent({ agentId, from: range.from, to: range.to, type: probeType, limit: 500 });
+      target = latestTarget(recent, probeType);
+    }
+    if (!target) return res.json({ agentId, probeType, target: null, total: 0, limit: 0, offset: 0, runs: [] });
+    const limit = Math.max(1, Math.min(200, Number.parseInt(req.query.limit, 10) || 50));
+    const offset = Math.max(0, Number.parseInt(req.query.offset, 10) || 0);
+    const q = { agentId, type: probeType, target, from: range.from, to: range.to };
+    const [rows, total] = await Promise.all([
+      probeResultsRepo.listRuns({ ...q, limit, offset }),
+      probeResultsRepo.countRuns(q),
+    ]);
+    // The page's own oldest run has no predecessor INSIDE the page, so the one
+    // before it is fetched: otherwise the first row of every page but the last
+    // would read as "no change" whether or not it was one.
+    const oldest = rows.length ? rows[rows.length - 1] : null;
+    const prior = oldest
+      ? await probeResultsRepo.previousRun({ agentId, type: probeType, target, beforeTs: oldest.ts, beforeId: oldest.id })
+      : null;
+    // The page's own ids decide what is returned: the extra run is context, and
+    // an id set says so whether or not the store handed back one already here.
+    const pageIds = new Set(rows.map((r) => r.id));
+    const withContext = prior && !pageIds.has(prior.id) ? [prior, ...rows] : rows;
+    const runs = withRouteChanges(withContext).filter((r) => pageIds.has(r.id));
+    res.json({ agentId, probeType, target, total, limit, offset, runs });
+  }));
+
+  // GET /api/probes/path/compare?agentId=&runId=&againstRunId=
+  // Two stored runs of the same path, hop by hop. Without `againstRunId` the
+  // run before `runId` is used, because "what changed since last time" is the
+  // question asked far more often than any particular pair. viewer+.
+  router.get('/path/compare', requireAuth, reader, asyncHandler(async (req, res) => {
+    const agentId = parseId(req.query.agentId);
+    if (agentId === null) return res.status(400).json({ error: 'agentId is required (positive integer)' });
+    const runId = parseId(req.query.runId);
+    if (runId === null) return res.status(400).json({ error: 'runId is required (positive integer)' });
+    if (!(await agentsRepo.findById(agentId))) return res.status(404).json({ error: 'Agent not found' });
+    const after = await probeResultsRepo.findRunById(runId, { agentId });
+    if (!after || !PATH_PROBE_TYPES.includes(after.type)) return res.status(404).json({ error: 'Run not found' });
+
+    let before;
+    if (req.query.againstRunId) {
+      const otherId = parseId(req.query.againstRunId);
+      if (otherId === null) return res.status(400).json({ error: 'againstRunId must be a positive integer' });
+      before = await probeResultsRepo.findRunById(otherId, { agentId });
+      if (!before) return res.status(404).json({ error: 'Run not found' });
+      // Comparing two different paths would produce a diff in which every hop
+      // changed, which says nothing about either of them.
+      if (before.target !== after.target || before.type !== after.type) {
+        return res.status(400).json({ error: 'Both runs must be the same probe to the same target' });
+      }
+    } else {
+      before = await probeResultsRepo.previousRun({ agentId, type: after.type, target: after.target, beforeTs: after.ts, beforeId: after.id });
+      if (!before) return res.json({ agentId, target: after.target, probeType: after.type, before: null, after: summarise(after), diff: null });
+    }
+    // Oldest first, whichever way round they were asked for: "changed" only
+    // means anything in one direction.
+    const [older, newer] = new Date(before.ts) <= new Date(after.ts) ? [before, after] : [after, before];
+    res.json({
+      agentId,
+      target: newer.target,
+      probeType: newer.type,
+      before: summarise(older),
+      after: summarise(newer),
+      diff: diffRuns(older, newer),
+    });
   }));
 
   // GET /api/probes/path/timeseries?agentId=&target=&metric=&overlay=&bucket=&from=&to=

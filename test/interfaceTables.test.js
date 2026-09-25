@@ -134,10 +134,10 @@ test('the Hardware set summarises the ports, and the drawer has the list', async
   // The set says how many, how many are faulted and which is worst — the fleet
   // payload already carries all three (mergeHealth writes them into metrics).
   const head = [...doc.querySelectorAll('#view table.dt thead th')].map((h) => h.textContent.replace(/[↕↑↓]/g, '').trim());
-  assert.deepEqual(head, ['Agent', 'Health', 'Ports', 'Port faults', 'Link', 'NIC', 'Firmware', 'Location', 'Last seen', '']);
+  assert.deepEqual(head, ['Agent', 'Health', 'Version', 'Ports', 'Port faults', 'Link', 'NIC', 'Firmware', 'Location', 'Last seen', '']);
   const cells = [...doc.querySelectorAll('#view table.dt tbody tr td')].map((td) => td.textContent.trim());
-  assert.equal(cells[2], '4', 'the port count is not the one the server sent');
-  assert.match(cells[3], /^3\s*eth1$/, 'the fault count does not name the worst port');
+  assert.equal(cells[3], '4', 'the port count is not the one the server sent');
+  assert.match(cells[4], /^3\s*eth1$/, 'the fault count does not name the worst port');
 
   assert.ok(ports, 'the drawer has no Ports section');
   assert.equal(portRows(ports).length, 4);

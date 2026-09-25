@@ -378,8 +378,14 @@
       // A Windows agent is not stuck: it gets a one-liner that updates it in
       // place, rather than being told to reinstall.
       function updateEntry(adm, target, behind) {
-        if (!deps.selfUpdatable(adm) && deps.isWindows(adm) && behind) {
-          return { label: t('agentUpdate.win.button'), onclick: function () { deps.windowsUpdate(adm, target); } };
+        if (!deps.selfUpdatable(adm) && deps.isWindows(adm)) {
+          // Offered whether or not the agent is behind: the one-liner reinstalls
+          // in place and keeps the enrollment, and an operator who wants to
+          // re-run it on a healthy host had no way to get at it from here.
+          return {
+            label: behind ? t('agentUpdate.win.button') : t('ag.act.winReinstall'),
+            onclick: function () { deps.windowsUpdate(adm, target); },
+          };
         }
         if (!deps.selfUpdatable(adm)) return null;
         return {
@@ -430,9 +436,14 @@
       }
 
       // ---- columns per set --------------------------------------------------
+      // Version sits with the fixed columns rather than in the Drift set: it is
+      // the one deployment fact people look for on every screenful (and the
+      // update badge rides on it), and hiding it behind a column set meant the
+      // reader had to go looking for a column that used to be right there.
       var FIXED_LEFT = [
         { key: 'agent', label: t('fleet.col.agent'), width: '210px', sortable: true },
         { key: 'health', label: t('fleet.col.health'), width: '120px', sortable: true },
+        { key: 'version', label: t('ag.col.version'), width: '168px', sortable: true },
       ];
       function fixedRight() {
         return [
@@ -453,7 +464,6 @@
         },
         drift: function () {
           return [
-            { key: 'version', label: t('ag.col.version'), width: '168px', sortable: true },
             { key: 'source', label: t('ag.col.source'), width: '150px', sortable: true },
             { key: 'quality', label: t('fleet.col.quality'), sortable: true },
           ];
@@ -601,7 +611,9 @@
       function updateAction(adm) {
         if (!adm || !deps.canDelete()) return null;
         var target = deps.updateTarget(adm, versions);
-        if (!deps.isBehind(adm, target)) return null;
+        var behind = deps.isBehind(adm, target);
+        // A Windows agent gets its button either way — see updateEntry().
+        if (!behind && !(deps.isWindows(adm) && !deps.selfUpdatable(adm))) return null;
         if (deps.selfUpdatable(adm)) {
           return ui.button('secondary', t('ag.act.update', { v: target }), {
             size: 'xs',
@@ -611,7 +623,7 @@
         // A Windows agent is not stuck: it updates in place from a one-liner
         // this dialog hands over.
         if (deps.isWindows(adm)) {
-          return ui.button('secondary', t('agentUpdate.win.button'), {
+          return ui.button('secondary', behind ? t('agentUpdate.win.button') : t('ag.act.winReinstall'), {
             size: 'xs',
             onclick: function () { deps.windowsUpdate(adm, target); },
           });

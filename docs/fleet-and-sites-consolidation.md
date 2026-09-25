@@ -107,6 +107,7 @@ them.*
 |---|---|---|---|
 | AGENT | flex | `displayName` + `hostname` beneath | ⚠ marks poor data quality (`quality.status`), title carries the reason |
 | HEALTH | 120px | `health.status` | one verdict, offline included as a tone |
+| VERSION | 168px | `capabilities.agentVersion` | carries the update badge; fixed rather than Drift-only, because it is read on every set |
 | SITE | 140px | `locationName` | |
 | LAST SEEN | 128px | `lastReportAt` | the agent's last report, not the last probe |
 | ⋯ | 116px | — | operator/admin only; primary action is Run test |
@@ -123,10 +124,11 @@ right now".
 
 ### Set 2 — Drift
 
-`VERSION · SOURCE · DATA QUALITY`, from `GET /agents`.
+`SOURCE · DATA QUALITY`, from `GET /agents`. VERSION started here and is a fixed
+column now — it was the one thing readers went looking for on the Health set and
+could not find. Its sort puts agents that are behind first, which is the only
+reason to sort on a version.
 
-* VERSION carries the update badge; sorting puts agents that are behind first,
-  which is the only reason to sort on a version.
 * SOURCE is `monitor_config.source` (+ SNMP host).
 * DATA QUALITY promotes `quality.reason` from a ⚠ with a tooltip to a column.
 

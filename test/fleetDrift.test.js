@@ -114,11 +114,13 @@ test('the fixed columns stay put, and only the middle changes with the set', asy
   // Agent and Health lead, Location / Last seen / the action column close, and
   // the set decides what is said in between.
   assert.deepEqual(heads(doc), ['Agent', 'Health', 'Version', 'Source', 'Data quality', 'Location', 'Last seen', '']);
+  // Version is fixed, not part of the Drift set: it is the deployment fact
+  // people read on every set, so switching sets must not take it away.
 
   const tab = (key) => [...doc.querySelectorAll('#view .subtabs button')].find((b) => b.dataset.key === key || b.textContent.trim() === key);
   tab('Health').dispatchEvent(new window.Event('click', { bubbles: true }));
   await settle(80);
-  assert.deepEqual(heads(doc), ['Agent', 'Health', 'Loss', 'Latency', 'Jitter', 'Targets', 'Speed', 'Location', 'Last seen', '']);
+  assert.deepEqual(heads(doc), ['Agent', 'Health', 'Version', 'Loss', 'Latency', 'Jitter', 'Targets', 'Speed', 'Location', 'Last seen', '']);
 });
 
 test('health is the server\'s verdict, the same on every set', async (t) => {
@@ -292,6 +294,23 @@ test('Edit agent: an unchanged position is not re-sent; an emptied one goes back
   await e2.submit();
   assert.deepEqual(e2.puts().map((l) => l.key), ['PUT /agents/7', 'PUT /agents/7/position']);
   assert.deepEqual(e2.puts()[1].body, { latitude: null, longitude: null });
+});
+
+test('an up-to-date Windows agent still gets its update-in-place one-liner', async (t) => {
+  // It used to get an entry only while it was BEHIND: a Windows host on the
+  // current version had no way to reach the installer command from here, so the
+  // menu simply lost its upgrade action once the agent caught up.
+  const current = SESSION({
+    'GET /agents': AGENTS.map((a) => (a.id === 9
+      ? Object.assign({}, a, { capabilities: Object.assign({}, a.capabilities, { agentVersion: '0.42.0' }) })
+      : a)),
+  });
+  const { doc, window } = boot({ t, routes: current });
+  await settle();
+  const win = rows(doc).find((tr) => cells(tr)[0] === 'sto-branch-07');
+  win.querySelector('[aria-haspopup="menu"]').dispatchEvent(new window.Event('click', { bubbles: true }));
+  assert.ok(menu(doc).includes('Update in place (installer)'), `no installer entry — got: ${menu(doc).join(' | ')}`);
+  assert.ok(!menu(doc).includes('Update'), 'an up-to-date agent is offered a plain "Update"');
 });
 
 test('Flows is offered only to an agent that has them', async (t) => {

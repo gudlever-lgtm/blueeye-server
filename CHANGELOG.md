@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.196.1 — One-click update: name what broke the checksum
+
+Pair with agent **0.43.0**, which is where the actual fix lives: the agent now
+downloads the signed release with `Accept-Encoding: identity`. Node's `fetch`
+otherwise offers `gzip, deflate` and transparently decodes the response, so a
+proxy or CDN that labels the already-gzipped release `Content-Encoding: gzip`
+got it un-gzipped on arrival — the agent hashed the inner tar, never the
+release, and every attempt failed with the same two hashes. An agent pinning a
+cert fingerprint uses the raw HTTPS client and never saw it.
+
+Server side, the other cause is now impossible to hit silently:
+
+* A release is two files — the tarball and the sidecar naming the sha256 that
+  was signed. The store re-hashes the bytes on every download and refuses to
+  serve a pair that disagrees; no agent could install it anyway.
+* `GET /enroll/agent-release.tgz` answers **503** with what is wrong, instead of
+  "no release published", when a published release cannot be served.
+* Boot logs every release whose bytes no longer match its manifest. The
+  re-sign-from-source on startup repairs the current version.
+* `add()` writes the tarball and its sidecar through a temp file + rename, so an
+  interrupted publish cannot leave a half-written pair behind.
+* `/enroll/agent-release(.tgz)` is `Cache-Control: no-store` like the rest of
+  `/enroll`.
+
+See `docs/updates.md`.
+
 ## 0.193.0 — A checksum mismatch now says which side is stale
 
 **"checksum mismatch - refusing to update", on every retry.** The install and

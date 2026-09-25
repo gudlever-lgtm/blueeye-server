@@ -125,6 +125,48 @@ Two things have to be true for a one-click update to land on a pinned agent:
    Each unsigned push is recorded in the system log as `agent.update-unsigned`
    with the reason, so the cause outlives the toast.
 
+### "checksum mismatch — refusing to install"
+
+The signature verified; the bytes did not. The manifest travels in the headers
+of the **same response** as the tarball, so the two cannot drift apart in time —
+which leaves exactly two causes, and the agent now names the one it sees.
+
+**The bytes were altered in transit.** The agent asks for the release with
+`Accept-Encoding: identity`, because Node's `fetch` otherwise offers
+`gzip, deflate` and transparently *decodes* whatever comes back. A proxy or CDN
+that labels this already-gzipped tarball `Content-Encoding: gzip` gets it
+silently un-gzipped on arrival: the agent hashes the inner tar, never the
+release, and every attempt fails with the same pair of hashes. (An agent pinning
+a cert fingerprint uses the raw HTTPS client, which never negotiated an
+encoding — which is why this bites some hosts and not others.) The message says
+so:
+
+```
+checksum mismatch (manifest 3b0a…, got fde6…) — refusing to install — the server
+sent the right release, so the bytes were altered between it and this host; what
+arrived is an UNCOMPRESSED tar, so something on the way decompressed it — a proxy
+or CDN adding Content-Encoding to an already-gzipped file
+```
+
+The fix is in front of the server: stop the proxy compressing (or re-labelling)
+`application/gzip`.
+
+**The server is serving a release that is not the one it signed.** A release is
+two files — the tarball and the `.release.json` sidecar naming the sha256 that
+was signed. If they drift apart, no agent can ever install that release. The
+store now re-hashes the bytes on every download and refuses to serve a pair that
+disagrees, `GET /enroll/agent-release.tgz` answers **503** with what is wrong
+instead of pretending nothing is published, and the server says it once at boot:
+
+```
+releases: agent 0.42.1 cannot be served — sha256 does not match the signed manifest.
+```
+
+A restart re-signs the current version from the agent source, which repairs it;
+anything still listed needs a re-upload (`POST /agents/releases`). Writes go
+through a temp file and a rename, so an interrupted publish can no longer leave
+a half-written pair behind.
+
 ### Who decides which key an agent accepts
 
 Not this server. The key an agent verifies releases and privileged commands

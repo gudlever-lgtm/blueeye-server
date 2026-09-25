@@ -53,6 +53,32 @@ test('GET /enroll/agent-release(.tgz) returns 404 when no release is published',
   assert.equal((await request(app).get('/enroll/agent-release')).status, 404);
 });
 
+// A release that is indexed but whose bytes the store will not hand over (they
+// no longer match the signed manifest) is NOT "nothing published". Saying that
+// would leave the operator with agents that all report a checksum mismatch and
+// a server that claims to have no release at all.
+test('GET /enroll/agent-release.tgz 503s when the stored release cannot be served', async () => {
+  const store = makeReleaseStore({
+    latest: () => ({ version: '0.4.0', sha256: 'sha256-0.4.0', size: 3, signature: 'sig', manifest: { version: '0.4.0' } }),
+    get: () => null, // the store refused it: bytes do not match the manifest
+  });
+  const res = await request(makeApp({ releaseStore: store })).get('/enroll/agent-release.tgz');
+  assert.equal(res.status, 503);
+  assert.match(res.body.error, /0\.4\.0/);
+  assert.match(res.body.error, /do not match the manifest/);
+  assert.match(res.body.hint, /Restart the server|re-upload/i);
+});
+
+// Anything that caches a release response hands some hosts an old tarball with
+// an old manifest — which verifies, and installs the wrong version.
+test('GET /enroll/agent-release(.tgz) forbids caching', async () => {
+  const app = makeApp({ releaseStore: storeWith('0.4.0') });
+  const tgz = await request(app).get('/enroll/agent-release.tgz');
+  assert.match(tgz.headers['cache-control'], /no-store/);
+  const meta = await request(app).get('/enroll/agent-release');
+  assert.match(meta.headers['cache-control'], /no-store/);
+});
+
 // ---- GET /system/version prefers the signed release ------------------------
 
 test('GET /system/version reports the signed release version when one is published', async () => {

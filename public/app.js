@@ -3921,18 +3921,28 @@ function getEventsPage() {
     },
     // Status, severity and device narrow the QUERY: the server keys events by
     // device. Location does not, so the view filters it client-side.
+    // The bulk policy (cap + whether "all matching" is offered) rides along
+    // with the rows: Settings is admin-only, so an operator has no other way to
+    // read a cap the page has to respect.
     fetchEvents: async ({ status, severity, device }) => {
       const qs = new URLSearchParams();
       if (status) qs.set('status', status);
       if (severity) qs.set('severity', severity);
       if (device) qs.set('device', String(device).trim());
       const r = await api(`/api/events${qs.toString() ? `?${qs}` : ''}`);
-      return r.events || [];
+      return { events: r.events || [], bulkMax: r.bulkMax, bulkAll: r.bulkAll };
     },
     // One transition, many events. The server applies the same state machine
     // per event and answers with a per-event outcome, so the page can name the
     // ones that did not move rather than just counting them.
     bulkStatus: (ids, status) => api('/api/events/bulk-status', { method: 'POST', body: { ids, status } }),
+    // The same transition, scoped by FILTER rather than by id — one statement
+    // and one audit row, so it is not capped and it reaches the events the
+    // list itself never showed.
+    bulkStatusAll: (filters, status) => api('/api/events/bulk-status', {
+      method: 'POST',
+      body: { all: true, status, filters: { status: filters.status, severity: filters.severity, device: filters.device } },
+    }),
   });
   return eventsPage;
 }
@@ -12560,7 +12570,7 @@ let guideTrack = null;
 // tab is [key, label, adminOnly]; non-admins only ever see the personal section.
 const SETTINGS_GROUPS = [
   ['Access & security', [['users', 'Users', true], ['auth', 'Authentication', true], ['apitokens', 'API tokens', true], ['agentkey', 'Agent key', true]]],
-  ['Detection & alerts', [['analyse', 'Analysis', true], ['alerting', 'Alerting', true], ['severity', 'Severity rules', true], ['thresholds', () => t('thr.tab'), true], ['runbooks', 'Runbooks', true], ['integrations', 'ITSM', true], ['cmdb', 'CMDB', true], ['ai', 'AI', true], ['maintenance', 'Maintenance', true]]],
+  ['Detection & alerts', [['analyse', 'Analysis', true], ['alerting', 'Alerting', true], ['severity', 'Severity rules', true], ['thresholds', () => t('thr.tab'), true], ['runbooks', 'Runbooks', true], ['events', () => t('set.tab.events'), true], ['integrations', 'ITSM', true], ['cmdb', 'CMDB', true], ['ai', 'AI', true], ['maintenance', 'Maintenance', true]]],
   ['Data', [['database', 'Database', true], ['retention', 'Retention', true], ['types', 'Traffic types', true], ['map', 'Map', true]]],
   ['System', [['setup', 'Setup', true], ['updates', 'Updates', true], ['agents', 'Agents', true], ['snmp', 'SNMP devices', true], ['snmpcommunities', 'SNMP communities', true], ['screening', 'Test Settings', true], ['assurance', 'Service Assurance', true]]],
   ['Personal', [['appearance', 'Appearance', false], ['license', 'License', false]]],
@@ -13279,6 +13289,7 @@ const SETTINGS_SECTIONS = {
   updates: settingsUpdatesView,
   agentkey: settingsAgentKeyView,
   agents: settingsAgentsView,
+  events: settingsEventsView,
   setup: settingsSetupView,
   snmp: settingsSnmpDevicesView,
   snmpcommunities: settingsSnmpCommunitiesView,
@@ -14618,6 +14629,33 @@ async function settingsSnmpCommunitiesView() {
 
   await refresh();
   return host;
+}
+
+// Settings → Events. What a bulk action on the Events page may do: how many
+// events one selection may carry, and whether the filter-scoped form ("move
+// everything matching these filters") is offered at all.
+//
+// The cap is here rather than hardcoded because it is a statement about THIS
+// server: each id in a bulk request costs a read, a guarded write and an audit
+// row, and what that adds up to depends on the database behind it. The screen
+// that made this necessary had 989 events selected against a cap of 500.
+async function settingsEventsView() {
+  const data = await api('/api/settings');
+  return el('div', { class: 'settings-grid' }, eventsBulkCard(data.events));
+}
+
+function eventsBulkCard(e) {
+  return settingsFormCard({
+    title: t('set.events.title'),
+    values: e || { bulkMax: 500, bulkAll: true },
+    endpoint: '/api/settings/events',
+    fields: [
+      { key: 'bulkMax', label: t('set.events.bulkMax'), type: 'number', min: 1, max: 5000, step: 1,
+        hint: t('set.events.bulkMax.hint') },
+      { key: 'bulkAll', label: t('set.events.bulkAll'), type: 'checkbox',
+        hint: t('set.events.bulkAll.hint') },
+    ],
+  });
 }
 
 async function settingsAgentsView() {

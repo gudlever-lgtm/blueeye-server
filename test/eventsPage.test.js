@@ -239,3 +239,78 @@ test('a row that is part of a situation says so, and the link opens the situatio
   assert.match(window.location.pathname, /5/);
   assert.doesNotMatch(window.location.pathname, /^\/events$/);
 });
+
+// ---- bulk actions: the cap, and the way past it -----------------------------
+// The cap is a bound on the request's WORK, not a guess at what an operator
+// might select — so the page has to know it BEFORE the click. It used to find
+// out by being refused: 989 selected against a cap of 500, and a 400 after the
+// fact. The list reports the policy, and the page draws it.
+
+const tick = (doc, i) => [...doc.querySelectorAll('#view table.dt tbody input[type=checkbox]')][i];
+const bulkBtn = (doc, re) => [...doc.querySelectorAll('#view .panel-ui .toolbar-ui .btn')]
+  .find((b) => re.test(b.textContent));
+
+test('a selection over the cap disables the id buttons and says what to do instead', async (t) => {
+  const { doc, window } = boot({ t, routes: SESSION({
+    'GET /api/events': { events: EVENTS, bulkMax: 1, bulkAll: true },
+  }) });
+  await settle();
+  // Two OPEN-or-investigating rows is already over a cap of 1. Pick the two
+  // that share a status so the bar offers a single next step.
+  const boxes = [...doc.querySelectorAll('#view table.dt tbody input[type=checkbox]')];
+  boxes[0].click();
+  boxes[0].dispatchEvent(new window.Event('change', { bubbles: true }));
+  await settle();
+  assert.ok(bulkBtn(doc, /Mark 1 as/), 'one selected is under the cap and offered');
+
+  tick(doc, 1).click();
+  tick(doc, 1).dispatchEvent(new window.Event('change', { bubbles: true }));
+  await settle();
+  const note = [...doc.querySelectorAll('#view .inline-note')].map((n) => n.textContent).join(' ');
+  assert.match(note, /at most 1 events/);
+});
+
+test('"all matching" is offered with a status filter, and POSTs the filter — not 989 ids', async (t) => {
+  const posted = [];
+  const { doc, window, log } = boot({ t, routes: SESSION({
+    'GET /api/events': { events: EVENTS, bulkMax: 500, bulkAll: true },
+    'POST /api/events/bulk-status': { moved: 1000, all: true },
+  }) });
+  const realFetch = window.fetch;
+  window.fetch = async (u, opts = {}) => {
+    if (String(u).indexOf('bulk-status') !== -1) posted.push(JSON.parse(opts.body));
+    return realFetch(u, opts);
+  };
+  window.confirm = () => true;
+  await settle();
+
+  // Without a status filter there is no single next step for "everything
+  // matching", so the action is not offered.
+  tick(doc, 0).click();
+  tick(doc, 0).dispatchEvent(new window.Event('change', { bubbles: true }));
+  await settle();
+  assert.ok(!bulkBtn(doc, /all matching/i), 'offered with a mixed-status scope');
+
+  // Filter to one status, select, and it appears.
+  const sel = control(doc, 'Status');
+  sel.value = 'open';
+  sel.dispatchEvent(new window.Event('change', { bubbles: true }));
+  await settle();
+  // The selection survives the reload (the row is still on screen), so the bar
+  // is still up — what changed is that the scope now has ONE next step.
+  // One button per legal next step, same as the id form: an open event can be
+  // picked up (investigating) or dismissed (resolved).
+  const allBtns = [...doc.querySelectorAll('#view .panel-ui .toolbar-ui .btn')]
+    .filter((b) => /all matching/i.test(b.textContent));
+  assert.equal(allBtns.length, 2, 'no "all matching" action with a single-status filter');
+  const all = allBtns.find((b) => /resolved/i.test(b.textContent));
+
+  all.dispatchEvent(new window.Event('click', { bubbles: true }));
+  await settle();
+  assert.equal(posted.length, 1);
+  assert.equal(posted[0].all, true);
+  assert.equal(posted[0].status, 'resolved');
+  assert.equal(posted[0].filters.status, 'open');
+  assert.ok(!posted[0].ids, 'the filter form still sent ids');
+  assert.ok(log.length > 0);
+});

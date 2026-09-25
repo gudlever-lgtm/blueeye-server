@@ -466,6 +466,48 @@ function createSettingsService({ settingsRepo, config, liveAnalysis = null, live
     return merged;
   }
 
+  // ---- Events (Settings → Events) -----------------------------------------
+  // Bulk actions on the Events page. `bulkMax` is how many ids ONE bulk
+  // transition may carry: each id costs a read, a guarded write and an audit
+  // row, so the number bounds the request's work — it is not a guess at what an
+  // operator might select. 500 is the historical default.
+  //
+  // `bulkAll` decides whether the filter-scoped form exists at all: "move
+  // everything matching what I am looking at", one statement, one audit row,
+  // no cap. That is the only way to clear a thousand-event backlog, and it is
+  // also the one action that can move rows nobody scrolled past — so a site
+  // that does not want it can turn it off, and the API then refuses it.
+  const EVENTS_DEFAULTS = { bulkMax: 500, bulkAll: true };
+
+  function validateEvents(patch) {
+    const p = patch && typeof patch === 'object' ? patch : {};
+    const errors = {};
+    const value = {};
+    num(p, 'bulkMax', 1, 5000, true, errors, value);
+    bool(p, 'bulkAll', value);
+    return { errors: Object.keys(errors).length ? errors : null, value };
+  }
+
+  async function getEvents() {
+    const override = await loadOverride('events');
+    const o = override && typeof override === 'object' ? override : {};
+    const base = { ...EVENTS_DEFAULTS, ...o };
+    // A stored value out of range reads as the default rather than as itself:
+    // the cap is a safety bound, and a corrupted row must not widen it.
+    const max = Number.isInteger(base.bulkMax) && base.bulkMax >= 1 && base.bulkMax <= 5000
+      ? base.bulkMax
+      : EVENTS_DEFAULTS.bulkMax;
+    return { bulkMax: max, bulkAll: !!base.bulkAll };
+  }
+
+  async function setEvents(patch) {
+    const { errors, value } = validateEvents(patch || {});
+    if (errors) throw badRequest('invalid event settings', errors);
+    const merged = { ...(await getEvents()), ...value };
+    await settingsRepo.set('events', merged);
+    return merged;
+  }
+
   // ---- Throughput health thresholds (Settings → Analysis) -----------------
   // Flags an agent on the Overview when its latest speed test falls below these
   // Mbps floors. Disabled by default — "too slow" depends on the link, so
@@ -1267,6 +1309,7 @@ function createSettingsService({ settingsRepo, config, liveAnalysis = null, live
     getSecurity, setSecurity, validateSecurity,
     getThroughput, setThroughput, validateThroughput,
     getAgents, setAgents, validateAgents, getDefaultMonitorConfig,
+    getEvents, setEvents, validateEvents,
     getAssistant, getAssistantSafe, setAssistant, validateAssistant,
     getAlerting, getAlertingSafe, setAlerting, validateAlerting,
     getTsdb,

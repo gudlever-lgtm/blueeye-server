@@ -1798,6 +1798,30 @@ function makeEventCasesRepo(overrides = {}) {
       if (to === 'open') { r.resolved_at = null; r.closed_by = null; }
       return true;
     }),
+    // Mirrors updateStatusWhere: ONE guarded transition over every row matching
+    // the filters. The legal `from` set is part of the match, so a row that
+    // moved since the filter was read is missed rather than moved illegally.
+    updateStatusWhere: overrides.updateStatusWhere || (async ({
+      toStatus, fromStatuses = [], severity = null, hostId = null, from = null, to = null,
+      closedBy = null, at = null,
+    }) => {
+      const froms = (Array.isArray(fromStatuses) ? fromStatuses : []).filter(Boolean);
+      if (!toStatus || !froms.length) return 0;
+      let n = 0;
+      for (const r of rows) {
+        if (!froms.includes(r.status)) continue;
+        if (severity && r.severity !== severity) continue;
+        if (hostId && r.host_id !== hostId) continue;
+        if (from != null && new Date(r.last_event_at) < new Date(from)) continue;
+        if (to != null && new Date(r.first_event_at) > new Date(to)) continue;
+        r.status = toStatus;
+        if (toStatus === 'resolved') r.resolved_at = at;
+        if (toStatus === 'closed') r.closed_by = closedBy;
+        if (toStatus === 'open') { r.resolved_at = null; r.closed_by = null; }
+        n += 1;
+      }
+      return n;
+    }),
     listResolvedClosed: overrides.listResolvedClosed || (async ({ excludeId = null, limit = 100, statuses = ['resolved', 'closed'] } = {}) => rows
       .filter((r) => (Array.isArray(statuses) && statuses.length ? statuses : ['resolved', 'closed']).includes(r.status) && (excludeId == null || r.id !== Number(excludeId)))
       .sort((a, b) => new Date(b.last_event_at) - new Date(a.last_event_at) || b.id - a.id)

@@ -442,7 +442,7 @@ function createApiRouter({
   // /api/events is the only path: the deprecated /api/incidents alias was
   // removed with the rest of the incident vocabulary (migration 077).
   if (eventCasesRepo && findingStore) {
-    router.use('/api/events', createEventsRouter({ eventCasesRepo, findingStore, auditLogger, auditEventsRepo, auditLogRepo, configSnapshotsRepo, agentsRepo, assistant, featureGate, askCache: createAskCache(), remediationPlaybooksRepo, blastRadiusService, eventNotesRepo, logger }));
+    router.use('/api/events', createEventsRouter({ eventCasesRepo, findingStore, auditLogger, auditEventsRepo, auditLogRepo, configSnapshotsRepo, agentsRepo, assistant, featureGate, askCache: createAskCache(), remediationPlaybooksRepo, blastRadiusService, eventNotesRepo, settingsService, logger }));
   }
   if (eventClustersRepo) {
     const clusterTimelineService = createEventClusterTimelineService({

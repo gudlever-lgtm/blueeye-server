@@ -63,6 +63,11 @@
       var bulkHost = el('div', {});
       var tableHost = el('div', {});
       var loaded = [];
+      // The bulk policy an admin set (Settings → Events), as the list reports
+      // it. Until the first load answers, the historical default stands — the
+      // page must never offer an action the API will refuse, and a cap the
+      // reader only discovers by being refused is the bug this fixes.
+      var policy = { bulkMax: 500, bulkAll: false };
       if (!Array.isArray(state.picked)) state.picked = [];
 
       var info = deps.help();
@@ -95,15 +100,50 @@
         // dismissed — and naming both beats a dropdown nobody reads.
         var targets = from.length === 1 ? (LEGAL_NEXT[from[0]] || []) : [];
 
+        // Over the cap the id form cannot be used at all, so its buttons are
+        // disabled rather than left to fail: a selection of 989 against a cap
+        // of 500 used to be a 400 discovered after the click.
+        var over = picked.length > policy.bulkMax;
+
+        // The filter-scoped form moves EVERYTHING the current filters match,
+        // which is the only way past the cap — and the only way to clear a
+        // backlog longer than the list itself. Two conditions, both about
+        // honesty rather than permission:
+        //   * a status filter, so "all matching" has ONE next step;
+        //   * no location filter, because that one narrows the rows here and
+        //     not the server's match, so "all matching" would move more than
+        //     the reader is looking at.
+        var allTargets = policy.bulkAll && state.filters.status && !state.filters.location
+          ? (LEGAL_NEXT[state.filters.status] || [])
+          : [];
+
         var note = el('span', { class: 'meta' });
         var acts = targets.map(function (to, i) {
-          return ui.button(i === targets.length - 1 ? 'primary' : 'secondary',
+          return ui.button(i === targets.length - 1 && !allTargets.length ? 'primary' : 'secondary',
             t('events.bulkMove', { n: picked.length, status: t('events.status.' + to) }),
             { onclick: function () { run(to); } });
         });
+        acts.forEach(function (b) { if (over) b.disabled = true; });
+
+        var allActs = allTargets.map(function (to, i) {
+          return ui.button(i === allTargets.length - 1 ? 'primary' : 'secondary',
+            t('events.bulkAllMove', { status: t('events.status.' + to) }),
+            { onclick: function () { runAll(to); } });
+        });
+
+        function busy(on) {
+          acts.forEach(function (b) { b.disabled = on || over; });
+          allActs.forEach(function (b) { b.disabled = on; });
+        }
+
+        function failed(e) {
+          note.className = 'inline-note is-crit';
+          note.textContent = deps.errText(e);
+          busy(false);
+        }
 
         function run(status) {
-          acts.forEach(function (b) { b.disabled = true; });
+          busy(true);
           note.className = 'meta';
           note.textContent = t('events.bulkWorking');
           deps.bulkStatus(picked.map(Number), status)
@@ -123,22 +163,46 @@
               state.picked = [];
               load();
             })
-            .catch(function (e) {
-              note.className = 'inline-note is-crit';
-              note.textContent = deps.errText(e);
-              acts.forEach(function (b) { b.disabled = false; });
-            });
+            .catch(failed);
+        }
+
+        // "All matching" reaches rows nobody scrolled past, so it asks first —
+        // and it asks in terms of the filters, which is what it actually acts on.
+        function runAll(status) {
+          var ask = t('events.bulkAllConfirm', { status: t('events.status.' + status) });
+          if (typeof window !== 'undefined' && typeof window.confirm === 'function' && !window.confirm(ask)) return;
+          busy(true);
+          note.className = 'meta';
+          note.textContent = t('events.bulkWorking');
+          deps.bulkStatusAll({
+            status: state.filters.status,
+            severity: state.filters.severity,
+            device: state.filters.device,
+          }, status)
+            .then(function (r) {
+              note.className = 'meta';
+              note.textContent = t('events.bulkAllDone', { n: r.moved });
+              state.picked = [];
+              load();
+            })
+            .catch(failed);
         }
 
         bulkHost.replaceChildren(ui.panel({
           children: [el('div', { class: 'panel-body' },
             ui.toolbar({
               filters: [ui.filter('', ui.meta(t('events.bulkSelected', { n: picked.length })))],
-              actions: acts.concat([ui.button('secondary', t('events.bulkClear'), {
+              actions: acts.concat(allActs).concat([ui.button('secondary', t('events.bulkClear'), {
                 onclick: function () { state.picked = []; draw(); },
               })]),
             }),
             targets.length ? null : ui.inlineNote(t('events.bulkMixed'), 'info'),
+            // Why the id buttons are dead, and what to do instead. The hint
+            // depends on which of the two conditions is missing, because "use
+            // all matching" is useless advice when it is not on offer.
+            over ? ui.inlineNote(allTargets.length
+              ? t('events.bulkOverLimit', { n: policy.bulkMax })
+              : t('events.bulkOverLimitNarrow', { n: policy.bulkMax }), 'warn') : null,
             note)],
         }));
       }
@@ -355,7 +419,14 @@
           severity: state.filters.severity,
           device: state.filters.device,
         })
-          .then(function (list) {
+          .then(function (res) {
+            var list = Array.isArray(res) ? res : (res.events || []);
+            if (res && !Array.isArray(res)) {
+              policy = {
+                bulkMax: typeof res.bulkMax === 'number' && res.bulkMax > 0 ? res.bulkMax : policy.bulkMax,
+                bulkAll: res.bulkAll === true,
+              };
+            }
             loaded = list;
             drawStrip();
             draw();

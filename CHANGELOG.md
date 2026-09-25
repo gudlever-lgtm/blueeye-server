@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.200.0 — The path map draws every hop it can place, and says how sure it is
+
+Hops were being stacked onto the agent. Anything within a few milliseconds
+was moved there, so a trace whose first seven hops answered in 1-6 ms drew one
+dot and seven rows reading "At the agent's site" — the location found for each
+address was thrown away.
+
+**Every hop GeoIP can place is now drawn where it places it**, and the reply
+time labels the marker instead of vetoing it:
+
+- *approximate* — a country centroid the reply rules out as a point, while the
+  country itself is reachable. The marker stands for the country.
+- *registered here, answers from closer* — the reply is far too fast for
+  anywhere in that country. Drawn where the address is registered, with the
+  radius the reply time actually proves.
+
+Only a hop GeoIP can place **nowhere** is drawn with a neighbour, and a hop
+that has a position of its own is never moved.
+
+For city-level positions rather than country centroids, load the city database
+under Settings → Map → City-level data.
+
 ## 0.199.1 — Set an agent's position in Edit agent too
 
 **Edit agent** now has the agent's own position as a text field: paste

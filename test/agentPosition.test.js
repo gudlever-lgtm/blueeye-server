@@ -170,7 +170,10 @@ test('GET /api/probes/path measures from the agent position, and stops asking ab
   assert.equal(res.status, 200);
   assert.deepEqual([res.body.origin.lat, res.body.origin.lng, res.body.origin.source], [52.3702, 4.8952, 'agent']);
   assert.equal(res.body.nodes[0].lat, 52.3702, 'the path starts at the agent, not its site');
-  assert.equal(res.body.nodes[1].lat, 52.3702, 'a 1 ms hop is drawn at the agent');
+  // The hop itself is drawn where its address is registered; the agent
+  // position is what the reply time is measured against.
+  assert.equal(res.body.nodes[1].place.country, 'CZ');
+  assert.equal(res.body.nodes[1].place.certainty, 'approximate', 'the Czech border is reachable in 1 ms, its middle is not');
   assert.equal(res.body.originHint, null, 'an own position answers the cloud hint');
 });
 

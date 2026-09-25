@@ -13,41 +13,28 @@ const { placeFromHostname, cleanHostname } = require('./hostnameHints');
 //                    nothing. Often the operator's head office, not the router.
 //   3. geoip-country the country centroid — what every hop used before.
 //
-// THE SPEED OF LIGHT CHECK. Light in fibre covers about 200 km per millisecond,
-// so a reply that took R ms round trip came from at most R x 100 km away. A
-// candidate further from the agent than that is physically impossible and is
-// skipped for the next source. The bound only ever rejects: a slow reply (a
-// router that answers ICMP from its slow path) says nothing about distance,
-// so a long RTT never pulls a hop anywhere. It needs the agent's site
-// coordinates; without them nothing can be checked and nothing is rejected.
+// THE SPEED OF LIGHT IS A NOTE, NOT A FILTER. Light in fibre covers about
+// 200 km per millisecond, so a reply that took R ms round trip came from at
+// most R x 100 km away. That is worth SAYING about a placement, and it used to
+// decide whether the hop was drawn at all — which threw away the only thing
+// known about most hops. A path drawn with holes in it, or with every near hop
+// stacked on the agent, tells an operator less than one that draws what the
+// address says and marks how sure it is.
 //
-// A COUNTRY CENTROID IS A REGION, NOT A POINT, and testing it as a point was a
-// bug that called ordinary transit routers anycast. A hop registered in DE, seen
-// from Denmark in 2.9 ms, was measured against the middle of Germany — 465 km,
-// just over its 437 km budget — and dropped off the map as "usually an anycast
-// address". But the centroid was never a claim about where the router is: only
-// the COUNTRY came from GeoIP. Hamburg is 272 km from that agent and comfortably
-// inside the same budget, so "somewhere in DE" is entirely feasible. A
-// country-precision candidate is therefore tested against the nearest part of
-// the country it stands for (its centroid less the country's own reach).
+// So every hop that can be placed IS placed, and `place.certainty` says how
+// well the reply time supports it:
 //
-// FEASIBLE AS A COUNTRY IS NOT A PLACE. A hop that fits the country but not its
-// centroid used to be drawn on the centroid anyway, marked approximate. That
-// drew a DigitalOcean router answering in 4 ms from Copenhagen in the middle of
-// the Czech Republic, 680 km away, because its block is registered there — a
-// line across the map that no packet took. Such a hop now gets no coordinates
-// here (`rejected[].regionOnly`, plus `withinKm`), and settlePath() below
-// places it by what the path itself says: a reply only a millisecond or two
-// behind a hop that IS placed came from the same place.
+//   'exact'        the position is inside what the reply time allows (or there
+//                  is no agent position / no RTT, so nothing can be checked).
+//   'approximate'  a country centroid the reply rules out as a point, while the
+//                  country itself is feasible — the marker stands for the
+//                  country, not a spot in it.
+//   'registration' the reply came back far too fast for anywhere in that
+//                  country: an anycast address, or a block registered a
+//                  continent away from the rack. Drawn where it is registered,
+//                  said plainly, with `withinKm` for what IS known.
 //
-// When a candidate fails by a margin no country's size can explain — a public
-// resolver registered in the US answering from 3 ms away, 7 491 km against a
-// 724 km budget — it is `impossible`, and that is different in kind. The hop
-// gets NO coordinates: drawing it in Kansas, even in a dashed circle, would put
-// a mark 7 000 km from anywhere the responder can be. What IS known is reported
-// instead, as `withinKm`: the responder is provably inside that radius of the
-// agent, which is the only true thing there is to say about where it is.
-//
+// Private addresses are never looked up (docs/geo.md).
 // Private addresses are never looked up (docs/geo.md).
 
 const KM_PER_MS_RTT = 100;
@@ -104,7 +91,7 @@ function feasible(origin, point, rttMs, reachKm = 0) {
 
 const EMPTY = Object.freeze({
   country: null, asn: null, asnName: null, lat: null, lng: null, private: false,
-  hostname: null, place: null, rejected: null, withinKm: null,
+  hostname: null, place: null, rejected: null, withinKm: null, alternatives: null,
 });
 
 //   locateHop({ ip, hostname, rttMs }, { geoProvider, cityProvider, centroids, origin })
@@ -141,36 +128,30 @@ function locateHop({ ip = null, hostname = null, rttMs = null } = {}, {
   const centroid = out.country && centroids ? centroids.get(out.country) : null;
   if (centroid) candidates.push({ city: null, country: out.country, lat: centroid.lat, lng: centroid.lng, precision: 'country', source: 'geoip-country' });
 
-  const rejected = [];
-  for (const c of candidates) {
-    // A country centroid stands for the whole country, so it is tested against
-    // the nearest part of it. A city is a point and is tested as one.
+  // The best candidate available is the one drawn. The reply time only decides
+  // how the marker is LABELLED — never whether it appears.
+  const c = candidates[0];
+  if (c) {
     const reachKm = c.precision === 'country' ? countryReachKm(c.country) : 0;
     const asPoint = feasible(origin, c, rttMs);
-    if (asPoint === false) {
-      // `regionOnly`: the country is feasible, the point is not. Not anycast —
-      // just not somewhere a pin can honestly go. settlePath() may still place
-      // it next to a neighbour; otherwise the map says what is known.
-      const regionOnly = reachKm > 0 && feasible(origin, c, rttMs, reachKm) === true;
-      rejected.push({
-        source: c.source, city: c.city, country: c.country,
-        distanceKm: Math.round(haversineKm(origin, c)), maxKm: Math.round(maxDistanceKm(rttMs)),
-        reachKm: reachKm || undefined,
-        regionOnly: regionOnly || undefined,
-      });
-      continue;
-    }
+    const asRegion = reachKm > 0 ? feasible(origin, c, rttMs, reachKm) : asPoint;
+    const certainty = asPoint !== false ? 'exact' : (asRegion !== false ? 'approximate' : 'registration');
     out.lat = c.lat;
     out.lng = c.lng;
-    out.place = { city: c.city, country: c.country, precision: c.precision, source: c.source, certainty: 'exact' };
+    out.place = { city: c.city, country: c.country, precision: c.precision, source: c.source, certainty };
     if (c.code) out.place.code = c.code;
-    break;
-  }
-  if (rejected.length) out.rejected = rejected;
-  // Nothing could be placed, but the reply time still bounds where the
-  // responder is. That bound is the only true statement left about its
-  // location, so it is reported rather than thrown away.
-  if (out.lat == null && rejected.length && Number.isFinite(rttMs)) {
+    if (certainty !== 'exact') {
+      out.place.offByKm = Math.max(0, Math.round(haversineKm(origin, c) - maxDistanceKm(rttMs)));
+      // What the reply time proves on its own, whatever the address says.
+      out.withinKm = Math.round(maxDistanceKm(rttMs));
+    }
+    // The candidates NOT drawn, so the drawer can show what else was on offer
+    // (the rDNS city behind a GeoIP country, say) without a second lookup.
+    if (candidates.length > 1) {
+      out.alternatives = candidates.slice(1).map((a) => ({ city: a.city, country: a.country, source: a.source }));
+    }
+  } else if (Number.isFinite(rttMs) && origin) {
+    // Nothing to place it by, but the reply time still bounds it.
     out.withinKm = Math.round(maxDistanceKm(rttMs));
   }
   return out;
@@ -188,20 +169,15 @@ function locateHop({ ip = null, hostname = null, rttMs = null } = {}, {
 // settlePath(items, { origin }) walks the hops in TTL order. `items` are
 //   { hop, rttMs, node }   rttMs = the fastest reply seen; node = the hop's
 //                          record (lat, lng, place, withinKm, private, ip)
-// and it changes `node` in place:
 //
-//   * A hop with its own CITY placement (router name or city GeoIP, already
-//     checked against the RTT) keeps it and becomes the new anchor.
-//   * A hop that is unplaced, or placed only at a country centroid, is moved
-//     to the last anchor when its reply is at most NEAR_MS behind it — or, for
-//     the agent itself (anchor 0), at most LOCAL_MS in total. Its place says so:
-//     { source: 'latency', nearHop, deltaMs }.
-//   * A moved hop never becomes an anchor itself, so a chain of 1.9 ms steps
-//     cannot creep a pin across a continent.
+// It only fills in hops that GeoIP could place NOWHERE — no router name, no
+// city, no country. Such a hop used to leave a hole in the path; when its reply
+// came back within a millisecond or two of a hop that IS placed, it stands in
+// the same place, and drawing it there beats drawing nothing.
 //
-// LOCAL_MS is larger than NEAR_MS because the first public hop carries the
-// access link (DSL, cable, 4G) on top of distance. 5 ms still bounds it to
-// ~650 km, and it only ever moves a hop GeoIP could not place better.
+// It never moves a hop that has a position of its own. Overriding the address's
+// own answer with "near the previous hop" collapsed whole paths onto the agent
+// and hid what the data actually said.
 const NEAR_MS = 2;
 const LOCAL_MS = 5;
 
@@ -214,10 +190,10 @@ function settlePath(items, { origin = null } = {}) {
   for (const { hop, rttMs, node } of sorted) {
     if (!node.ip || node.private) continue;
     const r = typeof rttMs === 'number' && Number.isFinite(rttMs) ? rttMs : null;
-    const p = node.place;
-    const strong = node.lat != null && p && p.precision === 'city';
-    if (strong) {
-      anchor = { hop, rttMs: r, lat: node.lat, lng: node.lng, city: p.city, country: p.country, precision: 'city' };
+    // A hop with a position of its own keeps it, and becomes the anchor for the
+    // unplaced hops behind it.
+    if (node.lat != null && node.place) {
+      anchor = { hop, rttMs: r, lat: node.lat, lng: node.lng, city: node.place.city, country: node.place.country, precision: node.place.precision };
       continue;
     }
     if (!anchor || r == null || anchor.rttMs == null) continue;

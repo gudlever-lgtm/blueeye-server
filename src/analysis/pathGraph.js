@@ -184,7 +184,8 @@ function buildPathGraph(results, { geoProvider = null, cityProvider = null, cent
       private: geo.private,
       hostname: geo.hostname,
       place: geo.place,
-      geoRejected: geo.rejected,
+      // What else GeoIP had for this address, when more than one source answered.
+      alternatives: geo.alternatives || null,
       // 'exact' when the hop is drawn, null when it is not. A pin the reply
       // time rules out is never drawn as a guess any more (src/geo/hopLocation.js).
       placeCertainty: geo.place ? (geo.place.certainty || 'exact') : null,
@@ -506,7 +507,7 @@ function describeLiveHop(h, { geoProvider = null, cityProvider = null, centroids
   return {
     kind: 'hop', hop, ip, label: ip || '* * *',
     country: geo.country, asn: geo.asn, asnName: geo.asnName, lat: geo.lat, lng: geo.lng, private: geo.private,
-    hostname: geo.hostname, place: geo.place, geoRejected: geo.rejected,
+    hostname: geo.hostname, place: geo.place, alternatives: geo.alternatives || null,
     withinKm: Number.isFinite(geo.withinKm) ? geo.withinKm : null,
     fastestMs: num(h.minMs) ?? rttMs,
     rttMs, lossPct, jitterMs, responded, runs: 1, unresponsive, severity, explain: reason,

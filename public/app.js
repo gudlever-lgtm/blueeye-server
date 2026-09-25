@@ -5613,14 +5613,14 @@ function pathGeoStops(nodes) {
 // city GeoIP did, or only the country is known. See src/geo/hopLocation.js.
 function pathPlaceNote(place) {
   if (!place) return '';
-  if (place.source === 'latency') {
-    return place.nearHop === 0
-      ? t('pathmap.place.latencyAgent', { ms: place.deltaMs })
-      : t('pathmap.place.latencyHop', { hop: place.nearHop, ms: place.deltaMs });
-  }
-  if (place.source === 'rdns') return t('pathmap.place.rdns', { code: place.code || '' });
-  if (place.source === 'geoip-city') return t('pathmap.place.geoipCity');
-  return t('pathmap.place.country');
+  const how = place.source === 'latency'
+    ? (place.nearHop === 0 ? t('pathmap.place.latencyAgent', { ms: place.deltaMs }) : t('pathmap.place.latencyHop', { hop: place.nearHop, ms: place.deltaMs }))
+    : place.source === 'rdns' ? t('pathmap.place.rdns', { code: place.code || '' })
+      : place.source === 'geoip-city' ? t('pathmap.place.geoipCity')
+        : t('pathmap.place.country');
+  if (place.certainty === 'approximate') return `${how} · ${t('pathmap.place.approx')}`;
+  if (place.certainty === 'registration') return `${how} · ${t('pathmap.place.registration')}`;
+  return how;
 }
 
 // Popup HTML for one map stop (esc-escaped — IPs/ASN/hostnames come from GeoIP
@@ -5642,20 +5642,18 @@ function pathStopPopup(s, i, total) {
   return `<div class="pg-pop"><strong>${head}${place}</strong>${note}${lines}</div>`;
 }
 
-// The hops the map left out because their round-trip time rules out every place
-// GeoIP or the router name suggested (anycast, mostly). Listed under the map so
-// a path that "ends early" says why. null when there are none.
+// Hops the reply time says answer from much closer than their address is
+// registered — anycast, or a block registered a continent from the rack. They
+// ARE drawn, where they are registered; this says what is really known, under
+// the map. null when there are none.
 function pathRejectedNote(nodes) {
   const out = [];
   for (const n of nodes || []) {
-    if (n.lat != null || !Array.isArray(n.geoRejected) || !n.geoRejected.length) continue;
-    const r = n.geoRejected[n.geoRejected.length - 1];
-    const where = [r.city, r.country].filter(Boolean).join(', ') || '?';
-    // regionOnly: the country fits the reply time, only its middle does not —
-    // not anycast, just nowhere that could honestly be pinned.
-    out.push(el('li', {}, r.regionOnly
-      ? t('pathmap.unplacedNear', { hop: n.hop, ip: n.ip || '*', where, within: n.withinKm })
-      : t('pathmap.rejected', { hop: n.hop, ip: n.ip || '*', where, km: r.distanceKm, max: r.maxKm })));
+    if (!n.place || n.place.certainty !== 'registration' || !Number.isFinite(n.withinKm)) continue;
+    const where = [n.place.city, n.place.country].filter(Boolean).join(', ') || '?';
+    out.push(el('li', {}, t('pathmap.registeredFar', {
+      hop: n.hop, ip: n.ip || '*', where, km: n.place.offByKm, within: n.withinKm,
+    })));
   }
   return out.length ? el('ul', { class: 'muted small pg-rejected' }, ...out) : null;
 }
@@ -5673,7 +5671,7 @@ function renderPathStops(layer, stops) {
     const isSrc = s.nodes.some((n) => n.kind === 'source');
     // A stop known only to the country is drawn hollow-ish with a dashed ring:
     // it marks the country, not a place in it.
-    const rough = !isSrc && !s.nodes.some((n) => n.place && n.place.precision === 'city');
+    const rough = !isSrc && !s.nodes.some((n) => n.place && n.place.precision === 'city' && n.place.certainty === 'exact');
     L.circleMarker([s.lat, s.lng], {
       radius: isSrc ? 9 : 7, weight: 2, color: '#fff', dashArray: rough ? '3 3' : null,
       fillColor: isSrc ? '#38bdf8' : pgColor(s.severity), fillOpacity: rough ? 0.45 : 0.95,

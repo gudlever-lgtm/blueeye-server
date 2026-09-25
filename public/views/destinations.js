@@ -53,19 +53,28 @@
       }
       return nodes.length ? (nodes[0].country || null) : null;
     }
-    // How the place was found: the router's name, city GeoIP, the country only —
-    // or the path itself, when the reply came back within a millisecond or two
-    // of a hop that is placed (src/geo/hopLocation.js, settlePath).
+    // How the place was found, and how well the reply time supports it. Every
+    // hop that can be placed IS drawn; this is the label that keeps it honest.
     function placeSource(p) {
       if (!p) return null;
-      if (p.source === 'latency') {
-        return p.nearHop === 0
-          ? t('pathmap.place.latencyAgent', { ms: p.deltaMs })
-          : t('pathmap.place.latencyHop', { hop: p.nearHop, ms: p.deltaMs });
-      }
-      return p.source === 'rdns' ? t('pathmap.place.rdns', { code: p.code || '' })
-        : p.source === 'geoip-city' ? t('pathmap.place.geoipCity')
-          : t('pathmap.place.country');
+      var how = p.source === 'latency'
+        ? (p.nearHop === 0 ? t('pathmap.place.latencyAgent', { ms: p.deltaMs }) : t('pathmap.place.latencyHop', { hop: p.nearHop, ms: p.deltaMs }))
+        : p.source === 'rdns' ? t('pathmap.place.rdns', { code: p.code || '' })
+          : p.source === 'geoip-city' ? t('pathmap.place.geoipCity')
+            : t('pathmap.place.country');
+      if (p.certainty === 'approximate') return how + ' \u00b7 ' + t('pathmap.place.approx');
+      if (p.certainty === 'registration') return how + ' \u00b7 ' + t('pathmap.place.registration');
+      return how;
+    }
+    // A short tag for the stop row: "approximate" or "registered here".
+    function certaintyTag(nodes) {
+      var worst = null;
+      (nodes || []).forEach(function (n) {
+        if (!n.place) return;
+        if (n.place.certainty === 'registration') worst = 'registration';
+        else if (n.place.certainty === 'approximate' && worst !== 'registration') worst = 'approximate';
+      });
+      return worst ? t(worst === 'registration' ? 'pathmap.tag.registration' : 'pathmap.tag.approx') : null;
     }
     // The agent's site is the point every distance is measured from. When the
     // first public hop is a cloud provider a few ms away, the agent most likely
@@ -81,38 +90,17 @@
         onclick: function () { deps.editAgentPosition(agentId); },
       }, t('ag.act.position')));
     }
-    // Hops the server left off the map because their reply was too fast for
-    // any place it had for them (anycast, mostly).
-    //
-    // THE DESTINATION IS A SEPARATE CASE, and the one that matters. When a
-    // transit hop is left off, the line on the map still ends where the path
-    // ends. When the DESTINATION is left off, the line ends at the last transit
-    // hop that could be placed — and a reader takes that hop for the endpoint.
-    // "us.cnn.com" drawn as ending at a Danish transit router reads as a broken
-    // trace, when in fact the trace completed and the answer is the interesting
-    // one: the content came off a CDN edge close enough that the traffic never
-    // left the region. The note has to say that, not just why the dot is absent.
+    // A hop the reply time says answers from much closer than its address is
+    // registered: anycast, or a block registered a continent from the rack. It
+    // IS on the map, where it is registered; this says what is really known.
     function rejectedNotes(nodes) {
       return (nodes || []).filter(function (n) {
-        return n.lat == null && Array.isArray(n.geoRejected) && n.geoRejected.length;
+        return n.place && n.place.certainty === 'registration' && Number.isFinite(n.withinKm);
       }).map(function (n) {
-        var r = n.geoRejected[n.geoRejected.length - 1];
-        var where = [r.city, r.country].filter(Boolean).join(', ') || '?';
-        // The country fits the reply time, only its middle does not. Not
-        // anycast: just nowhere in it that could honestly be pinned.
-        if (r.regionOnly) {
-          return ui.inlineNote(t('pathmap.unplacedNear', {
-            hop: n.hop, ip: n.ip || '*', where: where, within: n.withinKm,
-          }), 'info');
-        }
-        if (n.kind === 'dest') {
-          return ui.inlineNote(t('pathmap.rejectedDest', {
-            hop: n.hop, ip: n.ip || '*', where: where, km: r.distanceKm, max: r.maxKm,
-          }), 'info');
-        }
-        return ui.inlineNote(t(Number.isFinite(n.withinKm) ? 'pathmap.rejectedWithin' : 'pathmap.rejected', {
-          hop: n.hop, ip: n.ip || '*', where: where, km: r.distanceKm, max: r.maxKm,
-          within: n.withinKm,
+        return ui.inlineNote(t('pathmap.registeredFar', {
+          hop: n.hop, ip: n.ip || '*',
+          where: [n.place.city, n.place.country].filter(Boolean).join(', ') || '?',
+          km: n.place.offByKm, within: n.withinKm,
         }), 'info');
       });
     }
@@ -124,7 +112,7 @@
     function destShortNote(nodes) {
       var dest = (nodes || []).filter(function (n) { return n.kind === 'dest'; })[0];
       if (!dest || dest.lat != null) return null;
-      if (Array.isArray(dest.geoRejected) && dest.geoRejected.length) return null;
+      if (dest.place) return null;
       return ui.inlineNote(t('pathmap.destUnplaced', { hop: dest.hop, ip: dest.ip || '*' }), 'info');
     }
 
@@ -520,6 +508,8 @@
             role: isSrc ? null : 'button' },
           el('span', { class: 'ui-legend-dot sev-' + (s.severity || 'ok') }),
           el('span', {}, String(place)),
+          // Drawn either way; the tag says how well the reply time backs it.
+          isSrc ? null : (function () { var c = certaintyTag(s.nodes); return c ? ui.metaXs(c) : null; }()),
           bits.length ? ui.metaXs(bits.join(' · ')) : null,
           ui.metaXs(hopLabel));
           if (!isSrc) {

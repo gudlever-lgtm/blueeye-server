@@ -619,3 +619,57 @@ test('a trace_hop frame is relayed to the dashboard as trace-hop, with the agent
     }
   });
 });
+
+// ---- Teardown ---------------------------------------------------------------
+// close() terminates every socket at once, and each socket's 'close' handler
+// used to start two DB writes on the way out. server.js teardown() closes the
+// pool as soon as the HTTP server drains, so those writes raced it and landed
+// on a closed pool ("Pool is closed") — twice per shutdown with an agent
+// connected, and CI's route sweep failed on the error lines.
+
+test('a teardown writes nothing on the way out — the pool may already be gone', async () => {
+  const tracker = makeStatusTracker();
+  const agentsRepo = makeAgentsRepo({ setStatus: tracker.setStatus });
+  const events = [];
+  const auditEventsRepo = { record: async (e) => { events.push(e); } };
+
+  const app = makeApp({ agentTokensRepo: validRepo(), agentsRepo });
+  const server = http.createServer(app);
+  const handle = attachAgentWebSocket({ server, agentTokensRepo: validRepo(), agentsRepo, auditEventsRepo });
+  await new Promise((resolve) => server.listen(0, resolve));
+  const port = server.address().port;
+  try {
+    const client = new WebSocket(`ws://127.0.0.1:${port}/ws/agent`, {
+      headers: { Authorization: 'Bearer good' },
+    });
+    await withTimeout(waitOpen(client), 4000, 'did not open');
+    await withTimeout(tracker.waitFor('online'), 4000, 'online not set');
+
+    handle.close();
+    // Any write the handler starts is queued by now; give it a turn to land.
+    await new Promise((resolve) => setTimeout(resolve, 100));
+
+    assert.ok(!tracker.calls.some((c) => c.status === 'offline'),
+      'a teardown wrote agent status — that write races the pool close');
+    assert.ok(!events.some((e) => e.action === 'agent.offline'),
+      'a teardown wrote an audit row — that write races the pool close');
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test('an ordinary disconnect still marks the agent offline after a teardown flag exists', async () => {
+  // The guard is teardown-only: a normal close must be unaffected.
+  const tracker = makeStatusTracker();
+  const agentsRepo = makeAgentsRepo({ setStatus: tracker.setStatus });
+
+  await withWsServer({ agentTokensRepo: validRepo(), agentsRepo }, async ({ port }) => {
+    const client = new WebSocket(`ws://127.0.0.1:${port}/ws/agent`, {
+      headers: { Authorization: 'Bearer good' },
+    });
+    await withTimeout(waitOpen(client), 4000, 'did not open');
+    await withTimeout(tracker.waitFor('online'), 4000, 'online not set');
+    client.close();
+    await withTimeout(tracker.waitFor('offline'), 4000, 'offline not set');
+  });
+});

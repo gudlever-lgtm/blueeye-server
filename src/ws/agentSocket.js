@@ -110,6 +110,15 @@ function attachAgentWebSocket({
   // to 100 MB, which any token holder could use to pressure memory on JSON.parse.
   const wss = new WebSocketServer({ noServer: true, maxPayload: 1024 * 1024 });
 
+  // Set by close() — the server is tearing down. Every socket is terminated at
+  // once there, and each one's 'close' handler would then start a DB write that
+  // races the pool's own close in server.js teardown(): the HTTP server drains,
+  // db.close() runs, and the writes land on a closed pool ("Pool is closed").
+  // The status those writes set is not lost by skipping them: a server that is
+  // stopping has no live agents, and the offline sweep re-establishes it on the
+  // next boot from last_seen.
+  let closing = false;
+
   // Liveness UPDATEs are throttled per socket: agents heartbeat every ~15s, so
   // writing last_seen on every pong/frame is mostly redundant churn on a row the
   // dashboard reads. One write per minute is enough to drive online/offline.
@@ -409,6 +418,10 @@ function attachAgentWebSocket({
     ws.on('close', (code) => {
       ws._session.disconnectedAt = new Date().toISOString();
       ws._session.closeCode = Number.isInteger(code) ? code : null;
+      // A teardown closes every socket at once; nothing below it may touch the
+      // database (see `closing`). The in-memory session above is still stamped,
+      // so a diagnostic read during shutdown stays accurate.
+      if (closing) return;
       // Same stale-close race the per-socket _session guards against above,
       // but for the PERSISTENT status: after a network flap the agent's new
       // socket is already open when the half-dead one is finally reaped —
@@ -750,6 +763,9 @@ function attachAgentWebSocket({
   }
 
   function close() {
+    // Before terminate(), not after: terminate() makes each socket emit 'close'
+    // synchronously, and the handler reads this flag.
+    closing = true;
     clearInterval(interval);
     for (const { timer } of pending.values()) clearTimeout(timer);
     pending.clear();

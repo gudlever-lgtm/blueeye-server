@@ -88,7 +88,7 @@ function attachAgentWebSocket({
   // How long the same (agent, test, condition) is held back while it persists
   // (≤ the event-case activity window — ../eventCases/activityWindow.js).
   transactionRefireMs = TRANSACTION_REFIRE_MS,
-  // Commands left for an agent that was not connected (migration 136). Delivered
+  // Commands left for an agent that was not connected (migration 137). Delivered
   // on connect, signed at delivery — a signature carries `issuedAt` and the agent
   // refuses one more than five minutes off its clock, so signing at enqueue time
   // would guarantee a refusal.

@@ -7,6 +7,7 @@ const { ROLES } = require('../auth/roles');
 const { validateTimeRange } = require('../validation/resultsValidation');
 const { parseId } = require('../validation/locationValidation');
 const { buildPathGraph, PATH_PROBE_TYPES } = require('../analysis/pathGraph');
+const { agentPosition } = require('../geo/agentPosition');
 const { asGraphFromNodes } = require('../analysis/asPath');
 const { METRICS, getMetric, bucketMetric } = require('../analysis/pathTimeseries');
 
@@ -76,9 +77,12 @@ function createProbesRouter({ probeResultsRepo, agentsRepo, geoProvider = null, 
     const target = req.query.target ? String(req.query.target).slice(0, 255) : latestTarget(rows, probeType);
     // Newest `samples` runs for that target (rows arrive oldest-first).
     const runs = rows.filter((r) => r.target === target).slice(-samples);
+    // The agent's own position when set, else its site's (src/geo/agentPosition.js).
+    const pos = agentPosition(agent);
     const origin = {
-      lat: agent.location_lat ?? null,
-      lng: agent.location_lng ?? null,
+      lat: pos ? pos.lat : null,
+      lng: pos ? pos.lng : null,
+      source: pos ? pos.source : null,
       label: agent.display_name || agent.hostname || 'Agent',
     };
     const graph = buildPathGraph(runs, { geoProvider, cityProvider, centroids, target, origin });

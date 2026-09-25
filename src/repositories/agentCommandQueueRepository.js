@@ -1,7 +1,7 @@
 'use strict';
 
 // Data access for `agent_command_queue` — the commands waiting for an agent that
-// is not connected right now (migration 136).
+// is not connected right now (migration 137).
 //
 // The queue exists for one reason: an update that can only be delivered while the
 // operator is watching is an update an intermittently-connected fleet never gets.

@@ -5,6 +5,7 @@
 const SELECT_AGENT = `
   SELECT a.id, a.hostname, a.platform, a.arch, a.last_seen, a.status, a.capabilities,
          a.location_id, l.name AS location_name, l.latitude AS location_lat, l.longitude AS location_lng,
+         a.latitude, a.longitude,
          a.display_name, a.notes, a.meta, a.monitor_config, a.created_at, a.updated_at,
          (SELECT MAX(r.created_at) FROM results r WHERE r.agent_id = a.id) AS last_report_at
   FROM agents a
@@ -38,6 +39,9 @@ function mapRow(row) {
     location_name: row.location_name ?? null,
     location_lat: row.location_lat != null ? Number(row.location_lat) : null,
     location_lng: row.location_lng != null ? Number(row.location_lng) : null,
+    // The agent's OWN position (migration 136); null = use the site's.
+    latitude: row.latitude != null ? Number(row.latitude) : null,
+    longitude: row.longitude != null ? Number(row.longitude) : null,
     display_name: row.display_name,
     notes: row.notes,
     meta: parseJson(row.meta),
@@ -77,7 +81,8 @@ function createAgentsRepository(db) {
     if (hostId) { where.push('a.id = ?'); params.push(hostId); }
     const clause = where.length ? `WHERE ${where.join(' AND ')}` : '';
     const [rows] = await pool.query(
-      `SELECT a.id AS hostId, a.status, a.location_id AS locationId, l.name AS siteName, l.latitude AS lat, l.longitude AS lng
+      `SELECT a.id AS hostId, a.status, a.location_id AS locationId, l.name AS siteName,
+              COALESCE(a.latitude, l.latitude) AS lat, COALESCE(a.longitude, l.longitude) AS lng
        FROM agents a LEFT JOIN locations l ON l.id = a.location_id
        ${clause} ORDER BY a.id`,
       params
@@ -112,6 +117,14 @@ function createAgentsRepository(db) {
         id,
       ]
     );
+    return findById(id);
+  }
+
+  // Sets ONLY the agent's own map position (both null = back to the site's).
+  // Returns the refreshed row, or null when the agent does not exist.
+  async function setPosition(id, latitude, longitude) {
+    const [res] = await pool.query('UPDATE agents SET latitude = ?, longitude = ? WHERE id = ?', [latitude ?? null, longitude ?? null, id]);
+    if (res && res.affectedRows === 0) return null;
     return findById(id);
   }
 
@@ -277,6 +290,7 @@ function createAgentsRepository(db) {
     count,
     findForGeo,
     updateManaged,
+    setPosition,
     setLocation,
     setCapabilities,
     insertSnmpDevice,

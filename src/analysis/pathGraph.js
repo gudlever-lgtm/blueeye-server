@@ -184,7 +184,8 @@ function buildPathGraph(results, { geoProvider = null, cityProvider = null, cent
       private: geo.private,
       hostname: geo.hostname,
       place: geo.place,
-      geoRejected: geo.rejected,
+      // What else GeoIP had for this address, when more than one source answered.
+      alternatives: geo.alternatives || null,
       // 'exact' when the hop is drawn, null when it is not. A pin the reply
       // time rules out is never drawn as a guess any more (src/geo/hopLocation.js).
       placeCertainty: geo.place ? (geo.place.certainty || 'exact') : null,
@@ -212,7 +213,10 @@ function buildPathGraph(results, { geoProvider = null, cityProvider = null, cent
 
   // Is the agent where its site says? A first public hop inside a cloud
   // provider, a few ms away, says it runs in that provider's data centre.
-  const originHint = cloudOrigin(nodes, { fastestOf: (n) => (n.ip && fastest.has(n.ip) ? fastest.get(n.ip) : n.rttMs) });
+  // Not asked once the agent has its own position: that IS the answer to it.
+  const originHint = origin && origin.source === 'agent'
+    ? null
+    : cloudOrigin(nodes, { fastestOf: (n) => (n.ip && fastest.has(n.ip) ? fastest.get(n.ip) : n.rttMs) });
 
   // Links between consecutive nodes: the downstream loss drives the colour, the
   // RTT delta (clamped at 0 — RTT can wobble below the previous hop) the weight.
@@ -503,7 +507,7 @@ function describeLiveHop(h, { geoProvider = null, cityProvider = null, centroids
   return {
     kind: 'hop', hop, ip, label: ip || '* * *',
     country: geo.country, asn: geo.asn, asnName: geo.asnName, lat: geo.lat, lng: geo.lng, private: geo.private,
-    hostname: geo.hostname, place: geo.place, geoRejected: geo.rejected,
+    hostname: geo.hostname, place: geo.place, alternatives: geo.alternatives || null,
     withinKm: Number.isFinite(geo.withinKm) ? geo.withinKm : null,
     fastestMs: num(h.minMs) ?? rttMs,
     rttMs, lossPct, jitterMs, responded, runs: 1, unresponsive, severity, explain: reason,
@@ -534,7 +538,9 @@ function createLiveTraces({ ttlMs = 5 * 60 * 1000, maxTraces = 500, now = () => 
     const copies = [...t.raw.values()].map(clone);
     settlePath(copies.map((n) => ({ hop: n.hop, rttMs: n.fastestMs, node: n })), { origin });
     const out = copies.find((n) => n.hop === node.hop);
-    const hint = cloudOrigin(copies.sort((a, b) => a.hop - b.hop), { fastestOf: (n) => n.fastestMs });
+    const hint = origin && origin.source === 'agent'
+      ? null
+      : cloudOrigin(copies.sort((a, b) => a.hop - b.hop), { fastestOf: (n) => n.fastestMs });
     if (hint && hint.hop === out.hop) out.originHint = hint;
     return out;
   }

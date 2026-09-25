@@ -1,4 +1,4 @@
--- 136 — commands waiting for an agent that is not connected right now.
+-- 137 — commands waiting for an agent that is not connected right now.
 --
 -- Every privileged push (update, install-tool, run-test …) went out over the
 -- live socket or not at all: `sendCommand` returned 0 and the route answered

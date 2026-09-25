@@ -794,6 +794,29 @@ const newAgent = async (pool, hostname, cols = {}) => {
 const ago = (ms) => new Date(Date.now() - ms);
 const DAY = 86400000;
 
+check('agents: an own position (migration 136) wins over the site, and clears back to it', async (pool) => {
+  const repo = repoOf('agentsRepository', 'createAgentsRepository')({ pool });
+  const [loc] = await pool.query("INSERT INTO locations (name, latitude, longitude) VALUES ('be-pos-site', 55.676100, 12.568300)");
+  const id = await newAgent(pool, 'be-pos', { location_id: loc.insertId });
+
+  let a = await repo.findById(id);
+  assert.strictEqual(a.latitude, null);
+  assert.strictEqual(a.location_lat, 55.6761);
+
+  a = await repo.setPosition(id, 52.370216, 4.895168);
+  assert.strictEqual(a.latitude, 52.370216, 'DECIMAL(9,6) lost precision');
+  assert.strictEqual(a.longitude, 4.895168);
+  assert.strictEqual(a.location_lat, 55.6761, 'the site keeps its own position');
+  let geo = (await repo.findForGeo(id))[0];
+  assert.strictEqual(geo.lat, 52.370216, 'findForGeo must prefer the agent position');
+
+  a = await repo.setPosition(id, null, null);
+  assert.strictEqual(a.latitude, null);
+  geo = (await repo.findForGeo(id))[0];
+  assert.strictEqual(geo.lat, 55.6761, 'cleared: back to the site position');
+  assert.strictEqual(await repo.setPosition(987654321, 1, 1), null, 'an unknown agent is null, not a row');
+});
+
 check('agents: the offline sweep flips only the stale, spares live sockets, and peers are read', async (pool) => {
   const repo = repoOf('agentsRepository', 'createAgentsRepository')({ pool });
   const stale = await newAgent(pool, 'be-stale', { status: 'online', last_seen: ago(600000) });

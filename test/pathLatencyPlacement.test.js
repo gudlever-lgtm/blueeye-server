@@ -45,19 +45,22 @@ const run = (hops) => ({ type: 'traceroute', target: 'us.cnn.com', ts: '2026-09-
 
 // ---- the reported case -----------------------------------------------------
 
-test('the reported trace: every DigitalOcean hop is drawn at the agent, none in CZ or CA', () => {
+test('the reported trace: every hop is drawn where its address is registered, and says how sure', () => {
   const g = buildPathGraph([run(SCREENSHOT)], { geoProvider, centroids, origin: { ...CPH, label: 'Localhost agent test' } });
   const hops = g.nodes.filter((n) => n.kind !== 'source' && n.ip);
   assert.equal(hops.length, 4);
-  for (const n of hops) {
-    assert.equal(n.lat, CPH.lat, `hop ${n.hop} is drawn at the agent`);
-    assert.equal(n.lng, CPH.lng);
-    assert.equal(n.place.source, 'latency');
-    assert.equal(n.place.nearHop, 0);
-  }
-  assert.equal(hops[0].country, 'CZ', 'the registration is still reported as GeoIP has it');
-  assert.equal(hops[0].geoRejected[0].regionOnly, true, 'CZ fits the reply time as a country, not as its centroid');
-  assert.equal(hops[1].geoRejected[0].regionOnly, undefined, 'no part of Canada is 3 ms from Copenhagen');
+  // Every hop that GeoIP can place IS on the map. Collapsing them onto the
+  // agent — which is what the reply times alone would say — threw away the
+  // only thing known about each address.
+  for (const n of hops) assert.ok(Number.isFinite(n.lat), `hop ${n.hop} is on the map`);
+  assert.equal(hops[0].place.country, 'CZ');
+  assert.equal(hops[1].place.country, 'CA');
+  // ...and every one is labelled. The Czech border IS within 4 ms of
+  // Copenhagen even though the centroid is not, so that marker stands for the
+  // country. Canada in 3 ms is not a place at all — that is a registration.
+  assert.equal(hops[0].place.certainty, 'approximate');
+  for (const n of hops.slice(1)) assert.equal(n.place.certainty, 'registration', `hop ${n.hop}`);
+  for (const n of hops) assert.ok(n.withinKm > 0, 'what the reply time proves on its own');
 });
 
 test('the reported trace says the agent looks to run at DigitalOcean', () => {
@@ -69,10 +72,8 @@ test('the same trace streamed live is placed the same way, hop by hop', () => {
   const live = createLiveTraces();
   const out = SCREENSHOT.map((h) => live.settle('9|traceroute|us.cnn.com',
     describeLiveHop(h, { geoProvider, centroids, origin: CPH }), CPH));
-  for (const n of out.slice(0, 4)) {
-    assert.equal(n.lat, CPH.lat, `live hop ${n.hop}`);
-    assert.equal(n.place.source, 'latency');
-  }
+  assert.deepEqual(out.slice(0, 4).map((n) => n.place.country), ['CZ', 'CA', 'CA', 'CA']);
+  assert.deepEqual(out.slice(0, 4).map((n) => n.place.certainty), ['approximate', 'registration', 'registration', 'registration']);
   assert.equal(out[0].originHint.provider, 'DigitalOcean', 'the hint rides on the hop that gives it away');
   assert.equal(out[1].originHint, undefined);
   assert.equal(out[4].lat, null, 'a silent hop stays unplaced');
@@ -82,40 +83,49 @@ test('the same trace streamed live is placed the same way, hop by hop', () => {
 
 const node = (hop, ip, extra = {}) => ({ hop, ip, private: false, lat: null, lng: null, place: null, withinKm: 300, ...extra });
 
-test('a weak hop close behind a city anchor is drawn at the anchor', () => {
+test('settlePath fills a hop GeoIP could not place at all, and never moves one it could', () => {
   const fra = node(3, '1.1.1.3', { lat: 50.11, lng: 8.68, place: { city: 'Frankfurt', country: 'DE', precision: 'city', source: 'rdns', certainty: 'exact' } });
-  const weak = node(4, '1.1.1.4', { lat: 51, lng: 10, place: { city: null, country: 'DE', precision: 'country', source: 'geoip-country', certainty: 'exact' } });
+  // This one HAS an answer of its own (a country centroid). It keeps it: its
+  // address says something, and overriding that with "near the last hop"
+  // collapsed whole paths onto one dot.
+  const own = node(4, '1.1.1.4', { lat: 51, lng: 10, place: { city: null, country: 'DE', precision: 'country', source: 'geoip-country', certainty: 'exact' } });
   const unplaced = node(5, '1.1.1.5');
-  settlePath([{ hop: 3, rttMs: 12, node: fra }, { hop: 4, rttMs: 13.2, node: weak }, { hop: 5, rttMs: 13.9, node: unplaced }], { origin: CPH });
-  assert.deepEqual(weak.place, { city: 'Frankfurt', country: 'DE', precision: 'city', source: 'latency', certainty: 'exact', nearHop: 3, deltaMs: 1.2 });
-  assert.equal(weak.lat, 50.11);
-  assert.equal(unplaced.place.nearHop, 3);
+  settlePath([{ hop: 3, rttMs: 12, node: fra }, { hop: 4, rttMs: 13.2, node: own }, { hop: 5, rttMs: 13.9, node: unplaced }], { origin: CPH });
+  assert.equal(own.place.source, 'geoip-country', 'its own placement survived');
+  assert.equal(own.lat, 51);
+  // The one with nothing at all is drawn with its neighbour rather than left
+  // as a hole in the path.
+  assert.equal(unplaced.place.source, 'latency');
+  assert.equal(unplaced.place.nearHop, 4, 'the nearest placed hop before it');
+  assert.equal(unplaced.lat, 51);
   assert.equal(unplaced.withinKm, null, 'placed, so the radius note no longer applies');
 });
 
-test('a hop further behind than NEAR_MS keeps its own placement', () => {
+test('an unplaced hop further behind than NEAR_MS is left unplaced', () => {
   const fra = node(3, '1.1.1.3', { lat: 50.11, lng: 8.68, place: { city: 'Frankfurt', country: 'DE', precision: 'city', source: 'rdns', certainty: 'exact' } });
-  const us = node(4, '1.1.1.4', { lat: 39.8, lng: -98.6, place: { city: null, country: 'US', precision: 'country', source: 'geoip-country', certainty: 'exact' } });
-  settlePath([{ hop: 3, rttMs: 12, node: fra }, { hop: 4, rttMs: 12 + NEAR_MS + 80, node: us }], { origin: CPH });
-  assert.equal(us.place.source, 'geoip-country');
-  assert.equal(us.lat, 39.8);
+  const far = node(4, '1.1.1.4');
+  settlePath([{ hop: 3, rttMs: 12, node: fra }, { hop: 4, rttMs: 12 + NEAR_MS + 80, node: far }], { origin: CPH });
+  assert.equal(far.place, null, '80 ms later is not the same building');
+  assert.equal(far.lat, null);
 });
 
-test('a hop with its own city placement keeps it and becomes the next anchor', () => {
+test('a placed hop becomes the anchor for the unplaced ones behind it', () => {
   const a = node(2, '1.1.1.2', { lat: 55.68, lng: 12.57, place: { city: 'Copenhagen', country: 'DK', precision: 'city', source: 'rdns', certainty: 'exact' } });
   const b = node(3, '1.1.1.3', { lat: 53.55, lng: 9.99, place: { city: 'Hamburg', country: 'DE', precision: 'city', source: 'geoip-city', certainty: 'exact' } });
   const c = node(4, '1.1.1.4');
   settlePath([{ hop: 2, rttMs: 1, node: a }, { hop: 3, rttMs: 1.5, node: b }, { hop: 4, rttMs: 2, node: c }], { origin: CPH });
   assert.equal(b.place.city, 'Hamburg', 'its own city wins, even close behind another');
+  assert.equal(b.place.source, 'geoip-city');
   assert.equal(c.place.nearHop, 3, 'and the next weak hop follows it');
 });
 
-test('a moved hop is never an anchor, so small steps cannot creep across a map', () => {
+test('a filled-in hop is never an anchor, so small steps cannot creep across a map', () => {
   const a = node(1, '1.1.1.1', { lat: 50.11, lng: 8.68, place: { city: 'Frankfurt', country: 'DE', precision: 'city', source: 'rdns', certainty: 'exact' } });
-  const steps = [2, 3, 4, 5].map((h) => node(h, `1.1.1.${h}`));
-  settlePath([{ hop: 1, rttMs: 20, node: a }, ...steps.map((n, i) => ({ hop: n.hop, rttMs: 20 + 1.9 * (i + 1), node: n }))], { origin: CPH });
-  assert.equal(steps[0].place.nearHop, 1, '1.9 ms behind: placed');
+  const steps = [2, 3, 4].map((h) => node(h, `1.1.1.${h}`));
+  settlePath([{ hop: 1, rttMs: 20, node: a }, { hop: 2, rttMs: 21.9, node: steps[0] }, { hop: 3, rttMs: 23.8, node: steps[1] }, { hop: 4, rttMs: 40, node: steps[2] }], { origin: CPH });
+  assert.equal(steps[0].place.nearHop, 1, '1.9 ms behind a real placement: filled in');
   assert.equal(steps[1].place, null, '3.8 ms behind the only real anchor: not placed');
+  assert.equal(steps[2].place, null);
 });
 
 test('hops within LOCAL_MS of the agent are drawn at its site; further ones are not', () => {
@@ -179,7 +189,7 @@ test('live traces restart on hop 1, expire, and stay bounded', () => {
   assert.equal(live.size, 2, 'the oldest trace is dropped');
   clock = 5000;
   const late = live.settle('c', d(2, '80.1.1.1', 30), CPH);
-  assert.equal(late.place.source, 'geoip-country', 'the stale hops are gone, so nothing to place it by');
+  assert.equal(late.place.source, 'geoip-country');
   assert.equal(live.settle('c', null, CPH), null);
 });
 
@@ -194,7 +204,8 @@ test('GET /api/probes/path carries originHint and the latency placement (200)', 
   })).get('/api/probes/path?agentId=9&target=us.cnn.com').set('Authorization', authHeader('viewer'));
   assert.equal(res.status, 200);
   assert.equal(res.body.originHint.provider, 'DigitalOcean');
-  assert.equal(res.body.nodes[1].place.source, 'latency');
+  assert.equal(res.body.nodes[1].place.country, 'CZ', 'drawn where the address is registered');
+  assert.equal(res.body.nodes[1].place.certainty, 'approximate');
 });
 
 test('GET /api/probes/path is 404 for an unknown agent and 400 without one', async () => {

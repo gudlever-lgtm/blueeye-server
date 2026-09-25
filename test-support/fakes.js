@@ -163,6 +163,8 @@ function makeAgentsRepo(overrides = {}) {
     findForGeo: overrides.findForGeo || (async () => []),
     updateManaged:
       overrides.updateManaged || (async (id, patch) => ({ id, ...patch })),
+    setPosition:
+      overrides.setPosition || (async (id, latitude, longitude) => ({ id, latitude: latitude ?? null, longitude: longitude ?? null })),
     setLocation:
       overrides.setLocation || (async (id, locationId) => ({ id, location_id: locationId ?? null })),
     setCapabilities:
@@ -3199,7 +3201,7 @@ function makeEvidenceSnapshotsRepo(overrides = {}) {
 
 // A real settings service backed by an in-memory store, so PUT validation and
 // the effective-map overlay behave exactly as in production.
-// In-memory stand-in for agent_command_queue (migration 136). One entry per
+// In-memory stand-in for agent_command_queue (migration 137). One entry per
 // (agent, kind), take() claims and removes — the same contract the SQL has, which
 // is what the delivery-on-connect logic depends on.
 function makeCommandQueue(overrides = {}) {
@@ -4183,7 +4185,7 @@ function makeApp(overrides = {}) {
     agentSourceStore,
     // Commands left for an agent that was not connected. `null` exercises a
     // deployment without the queue (an offline agent then answers 409, as it did
-    // before migration 136).
+    // before migration 137).
     agentCommandQueue,
     // Left unset by default so the router builds the REAL service over these
     // stores, with the on-demand signed-release mint wired in — the same thing

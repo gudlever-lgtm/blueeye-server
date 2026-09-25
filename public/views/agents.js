@@ -125,6 +125,7 @@
           // here rather than in the middle of the Edit form where it pushed the
           // settings most agents DO use below the fold.
           deps.canWrite() ? { label: t('ag.act.snmp'), onclick: function () { deps.editSnmp(a); } } : null,
+          deps.canWrite() && deps.editPosition ? { label: t('ag.act.position'), onclick: function () { deps.editPosition(a); } } : null,
           deps.canDelete() ? updateEntry(a, target, behind) : null,
           deps.canDelete() ? '-' : null,
           deps.canDelete() ? { label: t('ag.act.delete'), danger: true, onclick: function () { deps.remove(a); } } : null,

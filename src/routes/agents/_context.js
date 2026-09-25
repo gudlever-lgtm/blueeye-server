@@ -27,7 +27,7 @@ function createAgentsContext({
   // themselves, inside which local-time window, and how many a fleet rollout
   // moves at once.
   settingsService = null,
-  // Commands left for an agent that is not connected (migration 136). Optional:
+  // Commands left for an agent that is not connected (migration 137). Optional:
   // without it an offline agent still answers 409, as it always did.
   commandQueue = null,
   // Where the "what do we push, and can it be signed" decision lives now, shared

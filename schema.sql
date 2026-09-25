@@ -82,6 +82,8 @@ CREATE TABLE IF NOT EXISTS `agents` (
   `status` ENUM('online', 'offline') NOT NULL DEFAULT 'offline',
   `capabilities` JSON NULL DEFAULT NULL,
   `location_id` INT UNSIGNED NULL DEFAULT NULL,
+  `latitude` DECIMAL(9,6) NULL DEFAULT NULL,
+  `longitude` DECIMAL(9,6) NULL DEFAULT NULL,
   `enrollment_code_id` INT UNSIGNED NULL DEFAULT NULL,
   `display_name` VARCHAR(255) NULL DEFAULT NULL,
   `notes` TEXT NULL DEFAULT NULL,
@@ -3542,7 +3544,7 @@ CREATE TABLE IF NOT EXISTS `transaction_captures` (
   INDEX idx_txc_created (created_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
--- 136 — commands waiting for an agent that is not connected right now.
+-- 137 — commands waiting for an agent that is not connected right now.
 --
 -- Every privileged push (update, install-tool, run-test …) went out over the
 -- live socket or not at all: `sendCommand` returned 0 and the route answered

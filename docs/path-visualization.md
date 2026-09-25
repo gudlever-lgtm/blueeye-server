@@ -92,10 +92,11 @@ through circle markers, with a per-stop popup (hops · hostname · ASN · latenc
 loss). Consecutive hops placed in the same city stack on one stop (hops known only to their country
 still stack on the country centroid, drawn hollow with a dashed ring). The popup
 names the city, how it was found (router name, city GeoIP, country only) and each
-hop's hostname. A hop GeoIP cannot place but whose reply came within 2 ms of a
-placed hop (5 ms of the agent) is drawn with that hop (`place.source:
-'latency'`); the rest of the hops the RTT check rules out are listed under the
-map instead of drawn in the wrong place. When the first public hop is a cloud
+hop's hostname. Every hop GeoIP can place is drawn where it places it, marked
+`approximate` or `registration` when the reply time does not support the pin
+(the ones marked `registration` are listed under the map too); a hop GeoIP can
+place nowhere is drawn with a neighbour whose reply came within 2 ms of it
+(5 ms of the agent), as `place.source: 'latency'`. When the first public hop is a cloud
 provider a few ms away, a note above the map says the agent looks to run there
 rather than at its site (`originHint`). See [geo.md](geo.md) → "Traceroute
 hops". When there aren't at least two

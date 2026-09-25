@@ -131,6 +131,7 @@ const { createGeoProvider } = require('./geo/provider');
 const { createGeoipUpdater } = require('./geo/geoipUpdater');
 const { createCentroids } = require('./geo/centroids');
 const { createCityProvider } = require('./geo/cityProvider');
+const { agentPosition } = require('./geo/agentPosition');
 const { describeLiveHop, createLiveTraces } = require('./analysis/pathGraph');
 const { createGeoEnricher } = require('./geo/enricher');
 const { createFlowPipeline } = require('./geo/flowPipeline');
@@ -500,7 +501,7 @@ function start() {
   const agentReleaseKeyRepo = createAgentReleaseKeyRepository(db);
   const releaseKeyService = createReleaseKeyService({ repo: agentReleaseKeyRepo, secretBox, logger });
 
-  // Commands left for an agent that is not connected right now (migration 136),
+  // Commands left for an agent that is not connected right now (migration 137),
   // and the one place that decides WHAT an update pushes. Both are shared by the
   // three things that can now start an update — an admin's click, a fleet
   // rollout, and an agent that noticed on its own that it is behind — so they
@@ -1461,8 +1462,7 @@ function start() {
     if (hit && Date.now() - hit.at < 60000) return hit.promise;
     const promise = Promise.resolve()
       .then(() => agentsRepo.findById(agentId))
-      .then((a) => (a && Number.isFinite(a.location_lat) && Number.isFinite(a.location_lng)
-        ? { lat: a.location_lat, lng: a.location_lng } : null))
+      .then((a) => agentPosition(a))
       .catch(() => null);
     liveOrigins.set(agentId, { at: Date.now(), promise });
     if (liveOrigins.size > 1000) liveOrigins.delete(liveOrigins.keys().next().value);

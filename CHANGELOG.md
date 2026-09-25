@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.198.0 — An agent that stays connected, and a fleet that can always be updated
+## 0.201.0 — An agent that stays connected, and a fleet that can always be updated
 
 Two questions this release answers properly: how does an agent always have a way
 back to the server, and how does an agent that is rarely online ever get updated.
@@ -51,6 +51,78 @@ travelled to a host and back is not a decision this server made.
 — which was the largest remaining hole in "can always be updated". Pair with
 agent **0.44.2**.
 
+## 0.200.0 — The path map draws every hop it can place, and says how sure it is
+
+Hops were being stacked onto the agent. Anything within a few milliseconds
+was moved there, so a trace whose first seven hops answered in 1-6 ms drew one
+dot and seven rows reading "At the agent's site" — the location found for each
+address was thrown away.
+
+**Every hop GeoIP can place is now drawn where it places it**, and the reply
+time labels the marker instead of vetoing it:
+
+- *approximate* — a country centroid the reply rules out as a point, while the
+  country itself is reachable. The marker stands for the country.
+- *registered here, answers from closer* — the reply is far too fast for
+  anywhere in that country. Drawn where the address is registered, with the
+  radius the reply time actually proves.
+
+Only a hop GeoIP can place **nowhere** is drawn with a neighbour, and a hop
+that has a position of its own is never moved.
+
+For city-level positions rather than country centroids, load the city database
+under Settings → Map → City-level data.
+
+## 0.199.1 — Set an agent's position in Edit agent too
+
+**Edit agent** now has the agent's own position as a text field: paste
+`latitude, longitude` (e.g. `55.6761, 12.5683`), or leave it empty to use the
+site's position. A mistyped value is refused before anything in the form is
+saved. Picking the position on a map is still ⋯ → Position on map.
+
+## 0.199.0 — Give an agent its own position on the map
+
+An agent was always where its site was. For an agent running in a cloud data
+centre or behind a VPN exit that is the wrong place, and the traceroute map
+measures every hop from it.
+
+**Agents → ⋯ → Position on map** sets the agent's own position: click the
+map, drag the pin, search an address, or paste `latitude, longitude` as a map
+application copies it. "Use the site's position" goes back. The path map's
+cloud note ("this agent looks to run at DigitalOcean") has the same button,
+and stops showing once the agent has its own position.
+
+API: `PUT /agents/:id/position` with `{ latitude, longitude }` or
+`{ coordinates: "55.6761, 12.5683" }`, operator or admin; both null clears.
+Migration 136 adds `agents.latitude` / `agents.longitude` (NULL = the site's).
+## 0.198.0 — Installers take the signed release, and can prove it is the right one
+
+The install and update scripts fetched the source bundle and compared its
+sha256 against whatever `/enroll/agent-source.json` said at that moment. Two
+requests, two moments: any rebuild between them — a version bump, a
+non-reproducible tar — ended in `checksum mismatch`, on every platform, for
+bytes nobody had touched.
+
+**Signed release first.** `install.sh` and `install.ps1` now ask for
+`/enroll/agent-release.tgz` and fall back to the source bundle only when the
+server has no signed release. The release is one file whose sha256 was signed
+once; there is no second moment to disagree with.
+
+**Verified, not just downloaded.** Both scripts verify the Ed25519 signature
+over the manifest before unpacking: with `node` if the host has it, else
+`openssl`, else the download is marked `unverified` and the script says so
+rather than pretending. The shell verifier is embedded, so there is nothing
+extra to install.
+
+**`X-Release-Manifest` is now usable.** It carried `JSON.stringify` of the
+manifest — insertion order `{version, sha256, size, created_at}` — while the
+signature was made over the canonical form with its keys sorted. Anything that
+verified the header against the signature got "invalid signature" every time.
+The header now carries the bytes that were actually signed.
+
+**Windows pins a release key.** `install.ps1` never stored one; an update had
+no key to check a signature against. It now saves the release key next to the
+agent state on enrolment, the same as the Linux path.
 
 ## 0.197.0 — Path map: place hops by the path, and notice a cloud-hosted agent
 

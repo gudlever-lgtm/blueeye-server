@@ -113,7 +113,7 @@ All three are addressed, and none of them turns on by itself.
 ### The queue
 
 `POST /agents/:id/update` on an offline agent now answers `202 { queued: true }`
-and leaves the command in `agent_command_queue` (migration 136). The WebSocket
+and leaves the command in `agent_command_queue` (migration 137). The WebSocket
 hub delivers it the moment that agent next dials in, and the audit row the click
 opened is the row the outcome lands on.
 

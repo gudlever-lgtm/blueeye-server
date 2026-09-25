@@ -7,6 +7,7 @@ const { createUsersRouter } = require('./users');
 const { createMeRouter } = require('./me');
 const { createLocationsRouter } = require('./locations');
 const { createAgentsRouter } = require('./agents');
+const { createAgentUpdateService } = require('../services/agentUpdateService');
 const { createAgentEnrollRouter } = require('./agentEnroll');
 const { createAgentReportsRouter } = require('./agentReports');
 const { createEnrollmentCodesRouter } = require('./enrollmentCodes');
@@ -121,6 +122,8 @@ function createApiRouter({
   enrollmentCodesRepo,
   enrollmentStore,
   agentTokensRepo,
+  agentCommandQueue,
+  agentUpdateService,
   resultsRepo,
   probeResultsRepo,
   probeOutagesRepo,
@@ -773,14 +776,27 @@ function createApiRouter({
   //   - POST /results          — agent token
   //   - POST /enroll           — unauthenticated
   // Requests fall through routers that have no matching route.
-  router.use('/agents', createAgentsRouter({ agentsRepo, locationsRepo, resultsRepo, agentCommander, agentSourceStore, releaseStore, releasePublicKey, releaseKeyService, licenseManager, publishRelease: () => publishSignedReleaseFromSource({ sourceStore: agentSourceStore, releaseStore, releaseKeyService }), auditRepo, auditEventsRepo, auditLogger, integrationTrigger: integrationsDispatcher, commandSigner, logger, reconnect: agentReconnect }));
+  // One update service for the two routers that need it — the same decision
+  // ("what do we push, and can it be signed") the fleet rollout and an agent's
+  // own request go through. Built here rather than per router so they cannot
+  // drift; the real server injects its own, shared with the WebSocket hub.
+  const agentUpdates = agentUpdateService || createAgentUpdateService({
+    releaseStore,
+    agentSourceStore,
+    publishRelease: () => publishSignedReleaseFromSource({ sourceStore: agentSourceStore, releaseStore, releaseKeyService }),
+    releaseKeyService,
+    commandQueue: agentCommandQueue,
+    logger,
+  });
+
+  router.use('/agents', createAgentsRouter({ agentsRepo, locationsRepo, resultsRepo, agentCommander, agentSourceStore, commandQueue: agentCommandQueue, updateService: agentUpdates, settingsService, releaseStore, releasePublicKey, releaseKeyService, licenseManager, publishRelease: () => publishSignedReleaseFromSource({ sourceStore: agentSourceStore, releaseStore, releaseKeyService }), auditRepo, auditEventsRepo, auditLogger, integrationTrigger: integrationsDispatcher, commandSigner, logger, reconnect: agentReconnect }));
   router.use('/audit', createAuditRouter({ auditRepo }));
   // Unified, server-wide audit trail (Reporting → Audit) — admin only.
   if (auditEventsRepo) router.use('/api/audit', createAuditEventsRouter({ auditEventsRepo, auditLogRepo, featureGate, usersRepo }));
   // Unified audit log (license feature `audit_log`) + API tokens (`api_access`).
   if (auditLogRepo) router.use('/api/audit-log', createAuditLogRouter({ auditLogRepo, featureGate, planService }));
   if (apiTokensRepo) router.use('/api/api-tokens', createApiTokensRouter({ apiTokensRepo, featureGate, planService, auditLogger }));
-  router.use('/agents', createAgentReportsRouter({ agentAuth, resultsRepo, resultsTsdbRepo, probeResultsTsdbRepo, agentsRepo, auditEventsRepo, analysisPipeline, flowPipeline, probeResultsRepo, probePipeline, probeOutageService, installToolService, lldpNeighborsRepo, topologyChangeService, hostConnectionsRepo, arpEntriesRepo, deviceEventIngest, snmpDevicesRepo, snmpTopologyIngest, snmpCounterIngest, sflowCounterIngest, interfaceStateService, discoveredDevicesRepo, snmpProfilesRepo, auditLogger, notifyDashboard, logger }));
+  router.use('/agents', createAgentReportsRouter({ agentAuth, resultsRepo, resultsTsdbRepo, probeResultsTsdbRepo, agentsRepo, auditEventsRepo, analysisPipeline, flowPipeline, probeResultsRepo, probePipeline, probeOutageService, installToolService, lldpNeighborsRepo, topologyChangeService, hostConnectionsRepo, arpEntriesRepo, deviceEventIngest, snmpDevicesRepo, snmpTopologyIngest, snmpCounterIngest, sflowCounterIngest, interfaceStateService, discoveredDevicesRepo, snmpProfilesRepo, auditLogger, notifyDashboard, updateService: agentUpdates, settingsService, logger }));
   router.use('/agents', createAgentEnrollRouter({ enrollmentStore, notifyDashboard, integrationTrigger: integrationsDispatcher, auditEventsRepo, settingsService, rateLimit: enrollRateLimiter }));
 
   return router;

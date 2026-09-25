@@ -91,16 +91,45 @@ async function boot(t, app) {
 
 const toastText = (doc) => (doc.querySelector('#toast') || {}).textContent || '';
 
+// Waits for a condition instead of guessing how long a render takes. A fixed
+// delay here failed intermittently under a loaded full suite: the agents view had
+// not replaced the previous one yet, so the ⋯ menu found below was the Changes
+// page's (Open details / Open host / Mute this rule) and the assertion read as
+// "Update is missing" when the view simply had not arrived.
+async function waitFor(pred, ms, message) {
+  const until = Date.now() + ms;
+  while (!pred()) {
+    if (Date.now() > until) throw new Error(message);
+    // eslint-disable-next-line no-await-in-loop
+    await tick(25);
+  }
+  return pred();
+}
+
 async function clickUpdate(doc) {
   doc.querySelector('.tabs button[data-view="agents"]').click();
-  await tick(350);
   // Update is a ⋯ menu entry now, with the other actions that change the agent
   // (see public/views/agents.js) — it used to be one of nine buttons in the row.
-  const more = doc.querySelector('#view .row-act [aria-haspopup="menu"]');
+  // Wait for the AGENTS page, by its own heading — not for "a row menu exists",
+  // which the page we came from also has.
+  await waitFor(
+    () => /Agents/.test((doc.querySelector('#view h1') || {}).textContent || ''),
+    5000,
+    `the agents view never rendered — #view h1 is "${(doc.querySelector('#view h1') || {}).textContent || ''}"`
+  );
+  const more = await waitFor(
+    () => doc.querySelector('#view .row-act [aria-haspopup="menu"]'),
+    5000,
+    'the agents view rendered no row with a ⋯ menu'
+  );
   assert.ok(more, 'the agents row has no ⋯ menu');
   more.dispatchEvent(new doc.defaultView.Event('click', { bubbles: true }));
-  const item = [...doc.querySelectorAll('.ui-rowmenu button')].find((b) => /^Update to v/.test(b.textContent.trim()));
-  assert.ok(item, `no Update entry — found: ${[...doc.querySelectorAll('.ui-rowmenu button')].map((b) => b.textContent).join(' | ')}`);
+  const item = await waitFor(
+    () => [...doc.querySelectorAll('.ui-rowmenu button')].find((b) => /^Update to v/.test(b.textContent.trim())),
+    2000,
+    `no Update entry — found: ${[...doc.querySelectorAll('.ui-rowmenu button')].map((b) => b.textContent).join(' | ')}`
+  );
+  assert.ok(item, 'the ⋯ menu has no Update entry');
   item.click();
   await tick(350);
 }

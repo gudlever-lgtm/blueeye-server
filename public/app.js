@@ -1754,12 +1754,17 @@ function agentIsBehind(a, current) {
 // must be updated by re-running the host installer. An agent that never reported
 // a managed-state (a very old agent, pre-capabilities.managed) is treated as
 // updatable so we don't hide an action we're merely unsure about.
+// Which runtimes accept a pushed update. This follows what the AGENT reports,
+// not its platform: a Windows agent installed as a service reports
+// 'windows-service' and can be restarted onto new code, and a macOS agent under
+// launchd reports 'launchd'. A Windows host running an agent too old to report
+// either still says 'unmanaged', so it keeps the installer affordance — which is
+// the right answer for it, and the reason this is not a platform check any more.
+const SELF_UPDATABLE_RUNTIMES = ['systemd', 'windows-service', 'launchd'];
+
 function agentSelfUpdatable(a) {
-  // A Windows agent never self-updates whatever it reports as `managed`: the agent
-  // only accepts the pushed update under systemd, which Windows can't be.
-  if (agentIsWindows(a)) return false;
-  const managed = a && a.capabilities && a.capabilities.managed;
-  return managed !== 'docker' && managed !== 'unmanaged';
+  const managed = String((a && a.capabilities && a.capabilities.managed) || '').toLowerCase();
+  return SELF_UPDATABLE_RUNTIMES.includes(managed);
 }
 
 // Windows hosts (the agent reports process.platform, i.e. 'win32'). They update
@@ -13709,11 +13714,51 @@ async function settingsUpdatesView() {
     stat('Up to date', offered ? String(withVer.length - behind.length) : '–'),
     stat('Behind', offered ? String(behind.length) : '–')));
 
+  // ONE rollout for everything that is behind, instead of one click per agent.
+  // Paced (a batch at a time, so a bad release costs a batch) and honest about
+  // the agents that are not connected — those have the update queued and take it
+  // the moment they next dial in, which is the whole reason a laptop fleet is
+  // updatable at all.
+  const selfUpdatableBehindNow = behind.filter((a) => agentSelfUpdatable(a));
+  if (canDelete() && selfUpdatableBehindNow.length > 1) {
+    root.append(el('h4', {}, t('fleetUpdate.heading')));
+    root.append(el('p', { class: 'muted' }, t('fleetUpdate.intro', { count: selfUpdatableBehindNow.length })));
+    const rollout = el('button', { class: 'small' }, t('fleetUpdate.run'));
+    const dry = el('button', { class: 'small ghost' }, t('fleetUpdate.preview'));
+    const outcome = el('div', { class: 'muted' });
+    const describe = (r) => Object.entries(r.counts || {}).map(([k, v]) => `${v} ${k}`).join(', ') || '—';
+    dry.addEventListener('click', async () => {
+      dry.disabled = true;
+      try {
+        const r = await api('/agents/updates/fleet', { method: 'POST', body: { dryRun: true } });
+        outcome.textContent = r.wouldUpdate.length
+          ? t('fleetUpdate.wouldUpdate', {
+            count: r.wouldUpdate.length, behind: r.behind, names: r.wouldUpdate.map((a) => a.hostname || a.id).join(', '),
+          })
+          : t('fleetUpdate.nothing');
+      } catch (err) { toast(err.message, true); } finally { dry.disabled = false; }
+    });
+    rollout.addEventListener('click', async () => {
+      rollout.disabled = true; rollout.textContent = t('fleetUpdate.running');
+      try {
+        const r = await api('/agents/updates/fleet', { method: 'POST', body: {} });
+        outcome.textContent = t('fleetUpdate.moved', {
+          count: r.moved, version: r.targetVersion, counts: describe(r), remaining: r.remaining,
+        });
+        toast(t('fleetUpdate.toast', { counts: describe(r), remaining: r.remaining }));
+        if (!r.remaining) render();
+      } catch (err) { toast(err.message, true); } finally {
+        rollout.disabled = false; rollout.textContent = t('fleetUpdate.run');
+      }
+    });
+    root.append(el('div', { class: 'row-actions' }, rollout, dry), outcome);
+  }
+
   if (behind.length) {
     root.append(el('h4', {}, 'Agents needing an update'));
     if (installerOnly.length) {
       root.append(el('p', { class: 'muted' },
-        `${installerOnly.length} of these can't self-update from here (Docker/unmanaged/Windows) — update those by re-running the installer on the host.`));
+        `${installerOnly.length} of these can't be updated from here (Docker, or an unmanaged process nothing would restart) — update those by re-running the installer, or rebuilding the image, on the host.`));
     }
     const cols = canDelete() ? ['Agent', 'Installed', 'Target', 'Update via', ''] : ['Agent', 'Installed', 'Target', 'Update via'];
     root.append(el('table', {},
@@ -13726,7 +13771,7 @@ async function settingsUpdatesView() {
           el('td', {}, el('span', { class: 'badge warn' }, `v${a.capabilities.agentVersion}`)),
           el('td', {}, el('span', { class: 'badge active' }, `v${target}`)),
           el('td', {}, selfUpdatable
-            ? el('span', { class: 'muted', title: 'systemd — one-click Update rebuilds from the server source and restarts' }, 'one-click')
+            ? el('span', { class: 'muted', title: 'The agent\'s service manager can restart it onto new code — one-click Update installs the release and restarts it' }, 'one-click')
             : el('span', { class: 'muted', title: agentUpdateHint(a) }, 'host installer')),
           canDelete() ? el('td', {}, selfUpdatable
             ? el('div', { class: 'row-actions' }, el('button', { class: 'small', onclick: () => updateAgent(a, target) }, 'Update'))
@@ -13740,9 +13785,10 @@ async function settingsUpdatesView() {
   root.append(el('h4', {}, 'How to update'));
   root.append(el('ul', {},
     el('li', {}, el('strong', {}, 'Server: '), 'on the server host run ', el('code', {}, './scripts/deploy.sh'), ' (git pull + rebuild).'),
-    el('li', {}, el('strong', {}, 'Agents (systemd): '), 'click ', el('strong', {}, 'Update'), ' above (or on the Agents tab) — the server tells the agent to rebuild from the published source and restart.'),
+    el('li', {}, el('strong', {}, 'Agents (systemd, Windows service, launchd): '), 'click ', el('strong', {}, 'Update'), ' above (or on the Agents tab), or roll the whole fleet out in batches — the server hands the agent the signed release and its service manager restarts it onto it. An agent that is offline has the update queued and takes it on its next connection.'),
     el('li', {}, el('strong', {}, 'Agents (Docker): '), 're-run the install one-liner from ', el('strong', {}, 'Enrollment'), ' on that host (a container rebuilds on the host, not from here).'),
-    el('li', {}, el('strong', {}, 'Agents (Windows / unmanaged): '), 're-run the installer on the host — these aren\'t service-managed the way systemd agents are, so the server can\'t rebuild-and-restart them remotely. Their row shows an ', el('strong', {}, 'installer'), ' badge instead of a one-click Update.')));
+    el('li', {}, el('strong', {}, 'Agents (unmanaged): '), 'nothing on the host would restart the process, so there is nothing for the server to restart it onto — re-run the installer, which also makes it service-managed and updatable from here.'),
+    el('li', {}, el('strong', {}, 'Hands-off: '), 'turn on ', settingsLink('agents', t('fleetUpdate.policyLink')), ' and agents ask for their own update when they connect, inside the window you set.')));
   return root;
 }
 
@@ -14461,7 +14507,8 @@ async function settingsAgentsView() {
   const data = await api('/api/settings');
   return el('div', { class: 'settings-grid' },
     agentDefaultsCard(data.agents),
-    agentsSettingsCard(data.agents));
+    agentsSettingsCard(data.agents),
+    agentUpdatePolicyCard(data.agents));
 }
 
 // Default traffic source stamped on each agent as it enrolls (Settings → Agents).
@@ -14489,6 +14536,27 @@ function agentsSettingsCard(a) {
     endpoint: '/api/settings/agents',
     fields: [
       { key: 'autoInstallTools', label: 'Auto-install missing tools', type: 'checkbox', hint: 'When on, a probe that fails because a tool is missing on the host (e.g. "traceroute not installed") makes the server push an install to that agent automatically. The agent only ever installs tools on its own allowlist (traceroute / mtr / tcptraceroute), never an arbitrary package. Off = install manually from the Probes page. Either way the request + outcome is recorded under Reporting → Audit.' },
+    ],
+  });
+}
+
+// Whether agents may update THEMSELVES, and inside which window (Settings →
+// Agents). Off by default, because it decides whether this server pushes code to
+// a customer's hosts without anyone clicking. On, it is what makes a fleet of two
+// hundred agents updatable — including the hosts that are only online for a few
+// minutes a day, which ask for their own update when they connect.
+function agentUpdatePolicyCard(a) {
+  return settingsFormCard({
+    title: 'Automatic agent updates',
+    values: a || { autoUpdate: false, autoUpdateWindow: '', autoUpdateBatch: 10 },
+    endpoint: '/api/settings/agents',
+    fields: [
+      { key: 'autoUpdate', label: 'Let agents update themselves', type: 'checkbox',
+        hint: 'When on, an agent that reads its config and finds a newer version published here asks for the update itself, and the server sends it. That is what reaches a host which is only online for a few minutes at a time — a one-click Update has to coincide with the connection. Off = updates only happen when someone clicks Update (which now also queues for an offline agent).' },
+      { key: 'autoUpdateWindow', label: 'Only inside this window (agent local time)', type: 'text', maxlength: 11,
+        hint: 'HH:MM-HH:MM, e.g. 02:00-04:00. Empty = any time. Evaluated by the agent in its OWN local time, so one window works across time zones, and it may wrap midnight (22:00-04:00). An update restarts the agent, and a monitoring agent restarting mid-afternoon is its own kind of outage.' },
+      { key: 'autoUpdateBatch', label: 'Fleet rollout batch size', type: 'number', min: 1, max: 500, step: 1,
+        hint: 'How many agents one fleet rollout moves at a time (Settings → Updates). A bad release then costs a batch rather than the fleet — run it with 1 first as a canary, look, then continue.' },
     ],
   });
 }

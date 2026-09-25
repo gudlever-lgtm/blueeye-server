@@ -4,6 +4,7 @@ const express = require('express');
 const { createAgentsContext } = require('./_context');
 const { createAgentReleasesRouter } = require('./releases');
 const { createAgentCommandsRouter } = require('./commands');
+const { createFleetUpdateRouter } = require('./fleetUpdate');
 const { createAgentCrudRouter } = require('./crud');
 const { aggregateFlows } = require('./flows');
 
@@ -24,6 +25,7 @@ const { aggregateFlows } = require('./flows');
 //              rekey, install-tool, probes. These change a customer's host, and
 //              they are why the audit trail and the command signer exist.
 //   releases   the signed artefacts those commands install.
+//   fleet      the same update, selected and paced across many agents at once.
 //
 // Reading the update path used to mean scrolling past the flow aggregator.
 //
@@ -37,6 +39,9 @@ function createAgentsRouter(deps) {
   const ctx = createAgentsContext(deps);
 
   router.use(createAgentReleasesRouter(ctx));
+  // Literal '/updates/fleet', so it goes ahead of anything that could read
+  // 'updates' as an :id — the same reason /releases is first.
+  router.use(createFleetUpdateRouter(ctx));
   router.use(createAgentCommandsRouter(ctx));
   router.use(createAgentCrudRouter(ctx));
 

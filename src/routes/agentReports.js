@@ -19,7 +19,12 @@ const { withoutSflowDetail } = require('../devices/sflowCounterIngest');
 //
 // Paths use the `/me/...` prefix so they don't collide with the user-JWT agents
 // router's `/:id` routes mounted under the same /agents path.
-function createAgentReportsRouter({ agentAuth, resultsRepo, resultsTsdbRepo = null, probeResultsTsdbRepo = null, agentsRepo, auditEventsRepo = null, analysisPipeline = null, flowPipeline = null, probeResultsRepo = null, probePipeline = null, probeOutageService = null, installToolService = null, lldpNeighborsRepo = null, topologyChangeService = null, hostConnectionsRepo = null, arpEntriesRepo = null, deviceEventIngest = null, snmpDevicesRepo = null, snmpTopologyIngest = null, snmpCounterIngest = null, sflowCounterIngest = null, interfaceStateService = null, discoveredDevicesRepo = null, snmpProfilesRepo = null, auditLogger = null, notifyDashboard = null, logger = null }) {
+function createAgentReportsRouter({ agentAuth, resultsRepo, resultsTsdbRepo = null, probeResultsTsdbRepo = null, agentsRepo, auditEventsRepo = null, analysisPipeline = null, flowPipeline = null, probeResultsRepo = null, probePipeline = null, probeOutageService = null, installToolService = null, lldpNeighborsRepo = null, topologyChangeService = null, hostConnectionsRepo = null, arpEntriesRepo = null, deviceEventIngest = null, snmpDevicesRepo = null, snmpTopologyIngest = null, snmpCounterIngest = null, sflowCounterIngest = null, interfaceStateService = null, discoveredDevicesRepo = null, snmpProfilesRepo = null, auditLogger = null, notifyDashboard = null,
+  // The agent version this server offers, and the auto-update policy that says
+  // whether an agent may act on it. Both optional: without them /me/config omits
+  // the `updates` key and behaves exactly as it did.
+  updateService = null, settingsService = null,
+  logger = null }) {
   const router = express.Router();
 
   // Each probe-results POST re-reads the agent's recent rows for probe-finding
@@ -379,6 +384,37 @@ function createAgentReportsRouter({ agentAuth, resultsRepo, resultsTsdbRepo = nu
           }
         } catch (err) {
           if (logger) logger.warn(`snmp targets unavailable for agent ${agent.id}: ${err && err.message}`);
+        }
+      }
+      // What version this server offers, and whether this agent may go and get
+      // it. Until now an update was pure push: the agent never knew it was
+      // behind, so an agent that is online for ten minutes a day could only be
+      // updated by someone timing a click to the connection. With this it can
+      // ask, on its own, on the config read it already makes.
+      //
+      // The flag is a PERMISSION, not an instruction. The agent asks; the server
+      // re-checks the policy before it sends anything, because a flag that has
+      // travelled to a host and back is not a decision this server made.
+      //
+      // Omitted entirely when nothing is offered, so an agent too old to read it
+      // sees exactly the body it saw before.
+      if (updateService) {
+        try {
+          const offered = updateService.offeredVersion();
+          if (offered) {
+            const policy = settingsService && typeof settingsService.getAgents === 'function'
+              ? await settingsService.getAgents()
+              : { autoUpdate: false, autoUpdateWindow: '' };
+            body.updates = {
+              agentVersion: offered,
+              auto: !!policy.autoUpdate,
+              // Evaluated by the AGENT, in its own local time — a fleet across
+              // three time zones cannot have '02:00' decided here.
+              window: policy.autoUpdateWindow || '',
+            };
+          }
+        } catch (err) {
+          if (logger) logger.warn(`update offer unavailable for agent ${agent.id}: ${err && err.message}`);
         }
       }
       res.json(body);

@@ -1,5 +1,56 @@
 # Changelog
 
+## 0.201.0 — An agent that stays connected, and a fleet that can always be updated
+
+Two questions this release answers properly: how does an agent always have a way
+back to the server, and how does an agent that is rarely online ever get updated.
+
+**A dead connection is noticed in 45 seconds instead of 15 minutes.** The agent's
+heartbeat was a send, and a send says nothing about whether anything is still
+listening. It now also sends a WebSocket ping and re-dials when nothing comes
+back. A half-open TCP connection — an expired NAT entry, a firewall that stopped
+forwarding, a load balancer that went away — used to leave a green badge on an
+agent that was taking no commands until the kernel gave up retransmitting.
+
+**A refused token no longer kills the fleet.** A 401 was terminal: the agent
+exited, systemd hit its start limit and gave up, and the unit stayed dead until
+someone logged into the host. A revoked token deserves that; a server restored
+from backup, a re-provisioned server or a half-finished token rotation does not,
+and those take every agent at once. The agent now pauses and re-dials every
+15 minutes, and resumes when the token works again. It still never re-enrolls by
+itself. The diagnosis's `auth-rejected` state says so.
+
+**More than one way in.** Several server URLs can be configured and are tried in
+order when a connection cannot be established; REST follows the live channel, so
+a failover moves the whole agent. Certificate pinning now takes a LIST, so the
+next certificate's fingerprint can be added before a renewal instead of locking
+every pinned agent out of the only channel that could fix it.
+
+**Measurements survive a short outage.** A failed submit is spooled and re-sent
+oldest-first on the next attempt that gets through, bounded and oldest-dropped.
+What is waiting shows in Diagnose — the difference between "this agent stopped
+measuring" and "this agent cannot reach me".
+
+**An update for an offline agent is queued**, not refused, and delivered the
+moment it dials in (migration 136). Stored unsigned and signed at delivery,
+because the agent refuses a signature more than five minutes off its clock.
+
+**A fleet rollout** (`/agents/updates/fleet`, Settings → Updates) selects the
+agents actually behind and moves one batch at a time, with a per-agent audit row.
+Run it with a batch of one as a canary, look, then continue.
+
+**Agents can ask for their own update.** `GET /agents/me/config` now states the
+offered version and whether the policy allows it; with Settings → Agents →
+Automatic agent updates on (off by default), an agent that finds itself behind
+asks, inside a maintenance window it evaluates in its own local time. That is
+what reaches a laptop that is online for ten minutes a day. The server re-checks
+everything the agent claimed, and rate-limits it, because a permission that has
+travelled to a host and back is not a decision this server made.
+
+**Windows services and launchd jobs can be updated from here**, not only systemd
+— which was the largest remaining hole in "can always be updated". Pair with
+agent **0.44.2**.
+
 ## 0.200.0 — The path map draws every hop it can place, and says how sure it is
 
 Hops were being stacked onto the agent. Anything within a few milliseconds

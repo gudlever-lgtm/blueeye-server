@@ -181,13 +181,18 @@ test('POST /agents/:id/update reports a Docker agent declining', async () => {
   assert.equal(res.body.reason, 'docker-managed');
 });
 
-test('POST /agents/:id/update returns 409 when the agent is not connected', async () => {
+test('POST /agents/:id/update QUEUES for an agent that is not connected', async () => {
+  // It used to answer 409 and stop there, which made an agent that is online for
+  // ten minutes a day effectively un-updatable: the click had to coincide with
+  // the connection. See test/agentUpdateQueue.test.js for the queue itself.
   const agentsRepo = makeAgentsRepo({ findById: async () => ({ id: 5 }) });
   const agentCommander = makeAgentCommander({ sendCommandAndWait: async () => ({ delivered: 0, acked: false, reply: null }) });
   const res = await request(makeApp({ agentsRepo, agentCommander }))
     .post('/agents/5/update')
     .set('Authorization', admin());
-  assert.equal(res.status, 409);
+  assert.equal(res.status, 202);
+  assert.equal(res.body.connected, false);
+  assert.equal(res.body.queued, true);
 });
 
 test('POST /agents/:id/update returns 503 when the server has no source published', async () => {

@@ -88,6 +88,22 @@ function attachAgentWebSocket({
   // How long the same (agent, test, condition) is held back while it persists
   // (≤ the event-case activity window — ../eventCases/activityWindow.js).
   transactionRefireMs = TRANSACTION_REFIRE_MS,
+  // Commands left for an agent that was not connected (migration 137). Delivered
+  // on connect, signed at delivery — a signature carries `issuedAt` and the agent
+  // refuses one more than five minutes off its clock, so signing at enqueue time
+  // would guarantee a refusal.
+  commandQueue = null,
+  signCommand = (_agentId, command) => command,
+  // An agent that has read the offered version out of its config and found itself
+  // behind asks for its own update here. Both optional: without them the frame is
+  // ignored, which is what an older server does anyway.
+  updateService = null,
+  agentUpdatePolicy = null,
+  // Completing the audit row for a queued update needs the same repo the routes
+  // use; `auditRepo` above already covers it.
+  // How long between two self-requested updates from the same agent. A reconnect
+  // loop must not become an update loop.
+  updateRequestCooldownMs = 30 * 60 * 1000,
 }) {
   const authenticator = createAgentAuthenticator({ agentTokensRepo });
   // Cap inbound frames at 1 MB (aligns with the Express body limit). ws defaults
@@ -242,6 +258,11 @@ function attachAgentWebSocket({
     // them immediately (and reloads on every reconnect). Best-effort.
     pushTransactionConfig(agent.agentId).catch((err) => logger.error('transaction_config push on connect failed:', err));
 
+    // Anything that was waiting for this agent. This is the whole point of the
+    // queue: an agent that is online for ten minutes a day is now updatable,
+    // where before the click had to coincide with the connection.
+    deliverQueued(ws, agent.agentId).catch((err) => logger.error('queued command delivery failed:', err));
+
     ws.on('pong', () => {
       ws.isAlive = true;
       maybeTouchLastSeen(ws, agent.agentId);
@@ -256,6 +277,12 @@ function attachAgentWebSocket({
       let msg = null;
       try { msg = JSON.parse(data.toString()); } catch { return; }
       if (!msg || typeof msg !== 'object') return;
+      // The agent asking for its own update. Re-checked against the policy and
+      // rate-limited server-side; see handleUpdateRequest.
+      if (msg.type === 'update-request') {
+        handleUpdateRequest(ws, agent.agentId, msg).catch((err) => logger.error('update-request failed:', err));
+        return;
+      }
       if ((msg.type === 'ack' || msg.type === 'command-result') && msg.id != null) {
         const waiter = pending.get(msg.id);
         if (waiter) {
@@ -405,6 +432,108 @@ function attachAgentWebSocket({
 
   // Heartbeat: ping every client; drop any that didn't answer the last ping.
   const interval = startHeartbeat(wss, heartbeatMs);
+
+  // Hands an agent everything that was queued for it while it was away.
+  //
+  // Claimed as it is read (the repository deletes in the same transaction), so
+  // two sockets for the same agent cannot both deliver the same command. Signed
+  // HERE rather than at enqueue time: a command signature carries `issuedAt` and
+  // the agent refuses one more than five minutes off its clock, so a signature
+  // made when the operator clicked would be dead by the time the host dialled in.
+  //
+  // A command that cannot be written to the socket is put back — the agent
+  // disconnecting between the claim and the write is exactly the case the queue
+  // exists for, and losing the update there would be the old bug with extra
+  // steps.
+  async function deliverQueued(ws, agentId) {
+    if (!commandQueue || typeof commandQueue.take !== 'function') return 0;
+    let rows = [];
+    try {
+      rows = await commandQueue.take(agentId);
+    } catch (err) {
+      logger.error(`agent ${agentId}: could not read the command queue: ${err.message}`);
+      return 0;
+    }
+    let sent = 0;
+    for (const row of rows) {
+      if (!row.command) continue;
+      const id = `q${Date.now().toString(36)}-${(seq += 1)}`;
+      const command = { ...row.command, id };
+      if (row.auditId != null && command.auditId == null) command.auditId = row.auditId;
+      const ok = ws.readyState === ws.OPEN && safeSend(ws, { type: 'command', command: signCommand(agentId, command) });
+      if (ok) {
+        sent += 1;
+        logger.info(`agent ${agentId}: delivered queued '${row.kind}' command on connect.`);
+      } else {
+        try {
+          await commandQueue.enqueue(agentId, row.command, { auditId: row.auditId });
+          logger.warn(`agent ${agentId}: socket closed before the queued '${row.kind}' command went out; it stays queued.`);
+        } catch (err) {
+          logger.error(`agent ${agentId}: lost queued '${row.kind}' command (re-queue failed: ${err.message}).`);
+        }
+      }
+    }
+    return sent;
+  }
+
+  // When each agent last had a self-requested update sent to it. A reconnect loop
+  // must not turn into an update loop, and the agent cannot be trusted to
+  // rate-limit itself — it is the thing that might be misbehaving.
+  const lastSelfUpdate = new Map(); // agentId -> ms epoch
+
+  // An agent has read the offered version out of its config, found itself behind,
+  // and is asking for the update. Everything it says is re-checked here: the
+  // policy flag it saw travelled to a host and back, so it is not a decision this
+  // server can take its word for.
+  async function handleUpdateRequest(ws, agentId, msg) {
+    if (!updateService || typeof updateService.resolvePayload !== 'function') return;
+    const reply = (accepted, reason) => safeSend(ws, { type: 'update-request-result', accepted, reason: reason || null });
+
+    let policy = { autoUpdate: false };
+    if (typeof agentUpdatePolicy === 'function') {
+      try { policy = (await agentUpdatePolicy()) || policy; } catch { /* treated as off */ }
+    }
+    if (!policy.autoUpdate) return reply(false, 'auto-update-disabled');
+
+    const last = lastSelfUpdate.get(String(agentId)) || 0;
+    if (Date.now() - last < updateRequestCooldownMs) return reply(false, 'cooldown');
+
+    // Trust the version we hold, not the one in the frame.
+    const current = msg && msg.currentVersion ? String(msg.currentVersion).slice(0, 40) : '';
+    if (!current || !updateService.isBehind(current)) return reply(false, 'not-behind');
+
+    const payload = await updateService.resolvePayload({ log: logger });
+    if (!payload.ok) return reply(false, 'no-source');
+
+    const command = { ...payload.command };
+    if (auditRepo && typeof auditRepo.record === 'function') {
+      // No actor: nobody clicked. An upgrade row with null actor columns is the
+      // server acting on its own policy, which is exactly what happened — the
+      // hostname is filled in so the row still names the host it changed.
+      let hostname = null;
+      try {
+        const agent = agentsRepo && typeof agentsRepo.findById === 'function' ? await agentsRepo.findById(agentId) : null;
+        hostname = (agent && agent.hostname) || null;
+      } catch { /* a label is never a reason to skip the update */ }
+      try {
+        const auditId = await auditRepo.record({
+          agentId,
+          agentHostname: hostname,
+          action: 'upgrade',
+          targetVersion: payload.targetVersion,
+        });
+        if (auditId) command.auditId = auditId;
+      } catch (err) {
+        logger.warn(`agent ${agentId}: audit record(upgrade, self-requested) failed (${err.message})`);
+      }
+    }
+    const id = `a${Date.now().toString(36)}-${(seq += 1)}`;
+    const ok = safeSend(ws, { type: 'command', command: signCommand(agentId, { ...command, id }) });
+    if (!ok) return reply(false, 'send-failed');
+    lastSelfUpdate.set(String(agentId), Date.now());
+    logger.info(`agent ${agentId}: self-requested update from v${current} to v${payload.targetVersion} sent.`);
+    return reply(true, null);
+  }
 
   // server -> agent: send a command to every live connection of an agent.
   // Returns how many sockets received it.

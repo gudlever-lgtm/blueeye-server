@@ -207,3 +207,88 @@ test('a viewer sees the page; nothing on it is an operator action', async (t) =>
   assert.ok(doc.querySelector('#view .ui.ui-page'), 'a viewer cannot read the traffic');
   assert.equal(cards(doc).length, 4);
 });
+
+// ---- Why a row reads no bandwidth ------------------------------------------
+// A flow-sourced agent used to show a permanent 0 B/s: the collectors reported
+// byte counts and no rate at all. They report rates now (agent 0.45.1), and
+// where there is still nothing to show the table says which of the four
+// reasons it is, rather than printing a zero and leaving the reader to guess.
+
+const cellsOf = (doc) => rows(doc).map((r) => [...r.querySelectorAll('td')].map((c) => c.textContent.trim()));
+
+test('an agent that never reported says so instead of reading 0 B/s', async (t) => {
+  const { doc } = boot({ t, routes: SESSION({ 'GET /agents/9/results': [] }) });
+  await settle();
+  const row = cellsOf(doc).find((c) => /sto-branch-07/.test(c[0]));
+  assert.equal(row[2], '–', 'a rate nobody can source is still printed as a number');
+  assert.match(row[4], /Never reported/);
+});
+
+test('a flow source with nothing exporting to it names that, not zero', async (t) => {
+  const { doc } = boot({
+    t,
+    routes: SESSION({
+      'GET /agents/9/results': [{ payload: { traffic: { source: 'sflow', datagrams: 0, totals: { bytes: 0, bytesPerSec: 0 } } } }],
+    }),
+  });
+  await settle();
+  const row = cellsOf(doc).find((c) => /sto-branch-07/.test(c[0]));
+  assert.match(row[4], /Nothing is exporting/);
+});
+
+test('a switch exporting sFlow shows its rate and says the direction is unknown', async (t) => {
+  const { doc } = boot({
+    t,
+    routes: SESSION({
+      'GET /agents/9/results': [{
+        payload: {
+          traffic: {
+            source: 'sflow', datagrams: 120,
+            totals: { bytes: 6000000, bytesPerSec: 100000, rxBytesPerSec: 0, txBytesPerSec: 0, unattributedBytes: 6000000 },
+          },
+        },
+      }],
+    }),
+  });
+  await settle();
+  const row = cellsOf(doc).find((c) => /sto-branch-07/.test(c[0]));
+  assert.match(row[4], /direction unknown/);
+  assert.match(row[4], /\d[\d.]*\s?[kKM]B\/s/, 'the rate it CAN measure is not shown');
+});
+
+test('an agent below 0.45.1 on a flow source is named as too old, not as idle', async (t) => {
+  const { doc } = boot({
+    t,
+    routes: SESSION({
+      // No rate fields at all — the pre-0.45.1 flow snapshot.
+      'GET /agents/9/results': [{ payload: { traffic: { source: 'sflow', datagrams: 120, totals: { bytes: 6000000, packets: 40, flows: 9 } } } }],
+    }),
+  });
+  await settle();
+  const row = cellsOf(doc).find((c) => /sto-branch-07/.test(c[0]));
+  assert.match(row[4], /too old/);
+});
+
+test('a result older than five minutes is not current bandwidth', async (t) => {
+  const { doc } = boot({
+    t,
+    routes: SESSION({
+      'GET /agents/9/results': [{
+        created_at: new Date(Date.now() - 45 * 60 * 1000).toISOString(),
+        payload: { traffic: { source: 'proc', totals: { rxBytesPerSec: 900000, txBytesPerSec: 900000 } } },
+      }],
+    }),
+  });
+  await settle();
+  const row = cellsOf(doc).find((c) => /sto-branch-07/.test(c[0]));
+  assert.equal(row[2], '–', 'a 45-minute-old reading is still shown as current');
+  assert.match(row[4], /Last reported/);
+});
+
+test('an agent that is reporting fine carries no note', async (t) => {
+  const { doc } = boot({ t, routes: SESSION() });
+  await settle();
+  const row = cellsOf(doc).find((c) => /oslo-edge-01/.test(c[0]));
+  assert.match(row[2], /MB\/s$/);
+  assert.equal(row[4], '', 'a healthy row was given a reason it does not need');
+});

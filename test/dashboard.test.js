@@ -39,14 +39,14 @@ test('dashboard exposes settings (users+license) tab, auto-refresh and traffic c
   assert.match(js, /views\.users/); // user-admin view (now reused inside settings)
   assert.match(js, /trafficChart/); // traffic-over-time chart
   assert.match(js, /setAutoRefresh/); // auto-refresh logic
-  assert.match(js, /agentSourceCell/); // per-agent traffic source
+  assert.match(js, /fetchNics/); // the Hardware column set's inventory read
   assert.match(js, /monitor_config/); // source selection sent to the API
   assert.match(js, /showLocationTraffic/); // live per-location correlated traffic
   assert.match(js, /\/traffic/); // calls the location traffic endpoint
   assert.match(js, /newAgent/); // operator "+ New agent" (enrollment code)
-  // Agent health is derived from the last report on the screen that shows it
-  // (public/views/agents.js) — app.js kept two copies of the rule, one for the
-  // cell and one for the sort.
+  // Agent health is the server's verdict, on every screen that shows it
+  // (docs/fleet-and-sites-consolidation.md) — app.js used to keep two copies of
+  // a second, browser-side rule, one for the cell and one for the sort.
   assert.doesNotMatch(js, /function agentHealthCell/);
   assert.match(js, /function openDrawer/); // slide-in info drawer
   assert.match(js, /PAGE_INFO/); // per-page hero/info content

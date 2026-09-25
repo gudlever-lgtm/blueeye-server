@@ -1,11 +1,17 @@
 'use strict';
 
-// public/views/nics.js — NICs on the UI contract (docs/ui-contract.md).
+// public/views/nics.js — the NIC inventory on the UI contract
+// (docs/ui-contract.md).
 //
-// The migration this pins: the segmented control becomes SubTabs with the
-// choice in the URL, the host-name chips become HostLinks, the grey summary
-// line becomes a StatStrip that filters, and one table per agent stacked down
-// the page becomes one table plus a Drawer.
+// Driver and firmware strings change when somebody updates a machine, so this
+// answers "which firmware is deployed where" — asset work, and it sits under
+// Administration for that reason. Its per-agent tab is gone: one agent's cards
+// are a section of the Fleet drawer now
+// (docs/fleet-and-sites-consolidation.md).
+//
+// What this pins: the host-name chips are HostLinks, the grey summary line is a
+// StatStrip that filters, and the drift table says which firmware is the
+// outlier.
 
 process.env.NODE_ENV = 'test';
 process.env.JWT_SECRET = 'test-secret-do-not-use-in-prod';
@@ -40,7 +46,7 @@ const INV = {
   ],
 };
 
-function boot({ t, routes = {}, url = 'http://server.test/nics', role = 'admin' } = {}) {
+function boot({ t, routes = {}, url = 'http://server.test/nic-inventory', role = 'admin' } = {}) {
   const errors = [];
   const vc = new VirtualConsole();
   vc.on('jsdomError', (e) => errors.push(String((e && e.message) || e)));
@@ -82,7 +88,7 @@ const panels = (doc) => [...doc.querySelectorAll('#view .panel-ui')];
 const panelBy = (doc, re) => panels(doc).find((p) => re.test((p.querySelector('h2') || {}).textContent || ''));
 const rowsIn = (panel) => [...panel.querySelectorAll('table.dt tbody tr')];
 
-test('the Models / Agents switch is SubTabs, not a segmented control', async (t) => {
+test('the inventory is one page on the contract, with no tab strip left', async (t) => {
   const { doc, errors } = boot({ t, routes: SESSION() });
   await settle();
   assert.deepEqual(errors, []);
@@ -91,25 +97,9 @@ test('the Models / Agents switch is SubTabs, not a segmented control', async (t)
   assert.ok(doc.querySelector('#view .page-head .help-btn'), 'no (?) help control');
   assert.equal(doc.querySelectorAll('#view .seg, #view .seg-btn').length, 0, 'the segmented control survived');
   assert.equal(doc.querySelectorAll('#view .nics-controls, #view .section-head').length, 0, 'the old chrome survived');
-  assert.deepEqual(tabs(doc).map((b) => b.dataset.tab), ['models', 'agents']);
-  assert.equal(tabs(doc).find((b) => b.getAttribute('aria-selected') === 'true').dataset.tab, 'models');
-});
-
-test('the tab is in the URL, and a deep link opens it', async (t) => {
-  const { doc, window } = boot({ t, routes: SESSION() });
-  await settle();
-  tabs(doc).find((b) => b.dataset.tab === 'agents').dispatchEvent(new window.Event('click', { bubbles: true }));
-  await settle(50);
-  assert.equal(window.location.pathname, '/nics/agents');
-  // The crumb names the same position as the URL. A tab switch redraws in
-  // place, so it used to move the address and leave the crumb on whichever tab
-  // was open at the last full render — the reader's two signposts disagreeing.
-  assert.match(doc.querySelector('#crumb').textContent, /Agents/, 'the crumb did not follow the tab switch');
-
-  const deep = boot({ t, url: 'http://server.test/nics/agents', routes: SESSION() });
-  await settle();
-  assert.equal(tabs(deep.doc).find((b) => b.getAttribute('aria-selected') === 'true').dataset.tab, 'agents');
-  assert.match(deep.doc.querySelector('#crumb').textContent, /Agents/, 'the crumb printed the raw tab key');
+  // The per-agent tab was a second way to ask "what is in this machine", one
+  // click from the same answer in the Fleet drawer.
+  assert.equal(tabs(doc).length, 0, 'the per-agent tab survived');
 });
 
 test('the summary line is a StatStrip, and the drift count filters', async (t) => {
@@ -126,16 +116,6 @@ test('the summary line is a StatStrip, and the drift count filters', async (t) =
   assert.equal(stats(doc)[2].getAttribute('aria-pressed'), 'true');
   assert.ok(panelBy(doc, /Firmware drift/));
   assert.ok(!panelBy(doc, /NIC models/), 'the whole inventory is still there under the drift filter');
-});
-
-test('the drift filter forces the tab that can answer it', async (t) => {
-  const { doc, window } = boot({ t, url: 'http://server.test/nics/agents', routes: SESSION() });
-  await settle();
-  // Drift is a property of a model, so the filter means nothing on Agents.
-  stats(doc)[2].dispatchEvent(new window.Event('click', { bubbles: true }));
-  await settle(50);
-  assert.equal(tabs(doc).find((b) => b.getAttribute('aria-selected') === 'true').dataset.tab, 'models');
-  assert.equal(window.location.pathname, '/nics/models');
 });
 
 test('the agents on a firmware are HostLinks, not chips', async (t) => {
@@ -173,37 +153,6 @@ test('a model with drift is flagged in the inventory too', async (t) => {
   // on this screen. A DataTable's <col width> is the contract's one exemption.
   const inline = [...doc.querySelectorAll('#view [style]')].filter((n) => n.tagName !== 'COL');
   assert.deepEqual(inline.map((n) => n.getAttribute('style')), []);
-});
-
-test('the Agents tab is one table, and the cards open in a Drawer', async (t) => {
-  const { doc, window } = boot({ t, url: 'http://server.test/nics/agents', routes: SESSION() });
-  await settle();
-  // It used to be one table per agent, each with its own heading, stacked.
-  assert.equal(panels(doc).length, 1);
-  const rows = rowsIn(panels(doc)[0]);
-  assert.equal(rows.length, 2);
-  assert.match(rows[0].textContent, /oslo-edge-01/);
-  assert.match(rows[0].textContent, /Oslo HQ/);
-
-  rows[0].dispatchEvent(new window.Event('click', { bubbles: true }));
-  const drawer = doc.querySelector('.ui-drawer');
-  assert.ok(drawer, 'the row opened nothing');
-  assert.match(drawer.querySelector('h2').textContent, /oslo-edge-01/);
-  assert.equal(drawer.querySelectorAll('table.dt tbody tr').length, 2, 'the agent\'s cards are missing');
-  assert.match(drawer.textContent, /0000:3b:00\.0/);
-  assert.ok([...drawer.querySelectorAll('button')].some((b) => /Open the agent/.test(b.textContent)));
-});
-
-test('a filter that matches a card shows only that card', async (t) => {
-  const { doc, window } = boot({ t, url: 'http://server.test/nics/agents', routes: SESSION() });
-  await settle();
-  const q = doc.querySelector('#view .toolbar-ui input[type=search]');
-  q.value = 'bnxt';
-  q.dispatchEvent(new window.Event('input', { bubbles: true }));
-  await settle(50);
-  const rows = rowsIn(panels(doc)[0]);
-  assert.equal(rows.length, 1);
-  assert.match(rows[0].textContent, /sto-branch-07/);
 });
 
 test('nothing reporting yet is one state, not a strip of zeros', async (t) => {

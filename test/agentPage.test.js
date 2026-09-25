@@ -236,6 +236,8 @@ test('the record marks itself in the rail and in the breadcrumb', async (t) => {
   await settle();
   const marked = doc.querySelector('.tabs button.active');
   assert.ok(marked, 'nothing in the sidebar says where the reader is');
-  assert.equal(marked.dataset.view, 'agents');
-  assert.match(doc.querySelector('#crumb').textContent, /Fleet.*Agents.*#7/);
+  // The agent's own page marks Fleet: the list it came from is a column set
+  // there now (docs/fleet-and-sites-consolidation.md).
+  assert.equal(marked.dataset.view, 'fleet');
+  assert.match(doc.querySelector('#crumb').textContent, /Monitoring.*Fleet.*#7/);
 });

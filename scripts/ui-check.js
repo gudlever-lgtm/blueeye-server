@@ -69,14 +69,13 @@ const MIGRATED = [
   'views/situations.js',
   'views/reporting.js',
   'views/guides.js',
-  'views/locations.js',
   'views/enrollment.js',
   'views/discovery.js',
   'views/systemLogs.js',
   'views/userLogs.js',
   'views/settings.js',
-  'views/agents.js',
-  'views/interfaces.js',
+  // views/agents.js was deleted with the Agents screen: its table is the Drift
+  // column set on Fleet (docs/fleet-and-sites-consolidation.md).
   'views/nics.js',
   'views/event.js',
   'views/situation.js',
@@ -102,6 +101,12 @@ const SECTIONS = [
   'thresholdsPanel.js',
   'slaReports.js',
   'nis2Evidence.js',
+  // The site register: a tab of Sites, which owns the header
+  // (docs/fleet-and-sites-consolidation.md).
+  'views/locations.js',
+  // The port table and the capacity forecast: a section of the Fleet drawer and
+  // a fold on the agent page. Neither is a page, and neither draws one.
+  'views/interfaces.js',
 ];
 
 // Classes the contract replaced. A migrated file may not use them.

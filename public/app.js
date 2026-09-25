@@ -875,10 +875,10 @@ function showSigningKeySetupPrompt() {
 // Labels mirror the top nav. A link whose target tab is hidden (licence/role)
 // degrades to plain text, so the help never offers a dead end.
 const VIEW_LABELS = {
-  fleet: 'Fleet', overview: 'Traffic', map: 'Sites', geo: 'Destinations', agents: 'Agents',
-  interfaces: 'Interfaces', probes: 'Probes', tests: 'Tests', flows: 'Flows',
-  findings: 'Analysis', reporting: 'Reporting', locations: 'Locations', enrollment: 'Enrollment', settings: 'Settings',
-  docs: 'Documentation', investigation: 'Investigate', troubleshooting: 'Troubleshooting', diagnose: 'Diagnose', deviceLog: 'Device log', nics: 'NICs', events: 'Events',
+  fleet: 'Fleet', overview: 'Traffic', map: 'Sites', geo: 'Destinations',
+  probes: 'Probes', tests: 'Tests', flows: 'Flows',
+  findings: 'Analysis', reporting: 'Reporting', enrollment: 'Enrollment', settings: 'Settings',
+  docs: 'Documentation', investigation: 'Investigate', troubleshooting: 'Troubleshooting', diagnose: 'Diagnose', deviceLog: 'Device log', nicInventory: 'NIC inventory', events: 'Events',
   serviceAssurance: 'Service Assurance', guide: 'Guides',
   logs: 'System Logs', userLogs: 'User Logs',
 };
@@ -896,11 +896,15 @@ function conceptGlossary() {
       })));
 }
 
-function gotoView(viewKey) {
+// `tab` opens a screen on one of its sub-tabs — Fleet on a column set, Sites on
+// the register. A link that says the port health is on Fleet should land on the
+// set that shows it, not on whichever one the reader left open.
+function gotoView(viewKey, tab = null) {
   closeDrawer();
   // Probes and Tests share one view now; a 'tests' link opens the packages sub-tab.
   if (viewKey === 'tests') { probesTab = 'packages'; viewKey = 'probes'; }
   else if (viewKey === 'probes') { probesTab = 'run'; }
+  if (tab) setRouteTab(viewKey, tab);
   currentView = viewKey;
   render();
 }
@@ -987,10 +991,10 @@ function viewBlockedReason(viewKey) {
   if (tab.classList.contains('hidden')) return 'role';
   return null;
 }
-function viewLink(viewKey, label) {
+function viewLink(viewKey, label, tab = null) {
   const text = label || VIEW_LABELS[viewKey] || viewKey;
   if (viewBlockedReason(viewKey)) return document.createTextNode(text);
-  return el('a', { href: '#', class: 'drawer-link', onclick: (e) => { e.preventDefault(); gotoView(viewKey); } }, text);
+  return el('a', { href: '#', class: 'drawer-link', onclick: (e) => { e.preventDefault(); gotoView(viewKey, tab); } }, text);
 }
 // Deep-link into a specific Settings sub-tab (Analysis, Retention, Traffic types…).
 function settingsLink(tab, label) {
@@ -1126,7 +1130,15 @@ const PAGE_INFO = {
     body: () => [
       el('p', {}, 'The landing page collects all agents with a single health stamp, so you immediately see where something is wrong. Rows are sorted worst-first and refresh continuously. Click an agent to drill into its measurements.'),
       el('h4', {}, 'Filtering with the metric cards'),
-      el('p', {}, 'The four metric cards are active filters — click a card (anywhere on it, or focus it and press Enter/Space) to narrow the grid. ', el('strong', {}, 'Kritiske'), ' and ', el('strong', {}, 'Advarsler'), ' filter to critical / warning agents (both can be on at once), ', el('strong', {}, 'Offline'), ' to disconnected agents; filters stack with AND and a count line ("3 af 47 agenter") appears above the table. ', el('strong', {}, 'Fleet health'), ' does not filter — it sorts the grid by health score, worst-first. A chip row above the cards shows every active filter (✕ to drop one, "Ryd alle" to clear); the filter is mirrored into the URL, so a filtered view can be shared as a link (e.g. ', el('code', {}, '?severity=CRIT&site=vest'), ') and opens pre-filtered.'),
+      el('p', {}, 'The four metric cards are active filters — click a card (anywhere on it, or focus it and press Enter/Space) to narrow the grid. ', el('strong', {}, 'Critical'), ' and ', el('strong', {}, 'Warning'), ' filter to critical / warning agents (both can be on at once), ', el('strong', {}, 'Offline'), ' to disconnected agents; filters stack with AND and a count line appears above the table. ', el('strong', {}, 'Fleet health'), ' does not filter — it sorts the grid by health score, worst-first. The site selector, the search box and the cards all narrow the SAME rows, and they hold across the column sets, so a site chosen here is still chosen after a switch. The filter is mirrored into the URL, so a filtered view can be shared as a link (e.g. ', el('code', {}, '?severity=CRIT&site=vest'), ') and opens pre-filtered.'),
+      el('h4', {}, 'The three column sets'),
+      el('p', {}, 'One table of agents; the set decides what is said about them. The rows, the filter and the sort do not change when you switch, so you keep your place.'),
+      el('ul', {},
+        el('li', {}, el('strong', {}, 'Health '), '— the measurements: loss, latency, jitter, targets reached and the last speed test. This set also carries the KPI strip, the network path and the open-issues rollup.'),
+        el('li', {}, el('strong', {}, 'Drift '), '— the deployment: agent version (with the update badge and the bulk "Update outdated" action), traffic source (proc, SNMP, NetFlow or sFlow), and data quality with the reason in full.'),
+        el('li', {}, el('strong', {}, 'Hardware '), '— ports and NICs per agent: how many ports, how many are faulted and which one is worst, the worst link state, the NIC count and whether this agent is the firmware outlier among identical cards. The set is hidden when nothing in the estate reports either.')),
+      el('h4', {}, 'The drawer'),
+      el('p', {}, 'Clicking a row opens the agent beside the list rather than navigating away: the verdict in plain language with the evidence behind it, the measurements, the full port table (utilisation, errors, discards, link state — with its own Refresh), the NIC cards, and what the agent is. The address follows it (', el('code', {}, '?agent=12'), '), so the drawer can be linked to. Everything deeper — config history, the CMDB asset, dependencies, the activity timeline — is one button away on the agent page.'),
       el('h4', {}, 'Two independent verdicts'),
       el('ul', {},
         el('li', {}, el('strong', {}, 'Health '), '— is the monitored network OK right now? Driven by active reachability, loss, latency, jitter and interface/link state.'),
@@ -1149,14 +1161,14 @@ const PAGE_INFO = {
       el('p', {}, 'Above the list, a strip of live KPIs (latency, loss, jitter, active agents, monitored paths, alerts) and a network-path diagram (Origin → ISP → Cloud → SaaS) summarise the selected scope at a glance. The diagram is data-driven: the origin node names the site (or the whole fleet) and its online agents, and each segment\'s colour, label and hover tooltip come from that scope\'s own probe metrics — worst packet loss on the local access link, median RTT and jitter on the WAN uplink, and target reachability on the SaaS leg (the SaaS node shows the real count of monitored targets). A segment turns amber at a warning threshold and red when critical. Both the KPIs and the path summarise ', el('strong', {}, 'all'), ' agents by default; use the ', el('strong', {}, 'Location'), ' selector to scope them to a single site — which recomputes every segment and drops the fleet-only "Branch" origin, so the picture changes with your selection.'),
       el('h4', {}, 'Open issues (Professional+)'),
       el('p', {}, 'On Professional licences and above, the page ends with an ', el('strong', {}, 'Open issues'), ' rollup: the currently-active ', el('strong', {}, 'probe outages'), ' (derived from the probe thresholds — click one to drill into the affected agent) beside the most recent unacknowledged analysis ', viewLink('findings', 'findings'), ', each with its explanation. It is composed from data the server already holds — no new collection — and is gated by the ', el('strong', {}, 'dashboard_advanced'), ' licence feature; below Professional the rollup is simply omitted and the rest of the page is unchanged.'),
-      el('p', { class: 'muted' }, 'Health is based on active probes — run a few per agent on ', viewLink('probes'), ' (or schedule them fleet-wide via ', viewLink('tests'), ') for a complete picture; the interface signal comes from ', viewLink('interfaces'), '. Metadata only: targets and timings, never packet contents.'),
+      el('p', { class: 'muted' }, 'Health is based on active probes — run a few per agent on ', viewLink('probes'), ' (or schedule them fleet-wide via ', viewLink('tests'), ') for a complete picture; the interface signal is the Hardware set on ', viewLink('fleet', 'Fleet', 'hardware'), '. Metadata only: targets and timings, never packet contents.'),
     ],
   },
   location: {
     hero: 'Everything for one site in one place: its agents with health verdicts, a scoped health summary, and the site\'s data flows on a map — click any flow to inspect it in Flows.',
     title: 'Location — site drill-down',
     body: () => [
-      el('p', {}, 'The combined page for one location. Reached by clicking a location on the ', viewLink('locations', 'Locations'), ' list, the site name on an agent page, or a site pin on a traffic map.'),
+      el('p', {}, 'The combined page for one location. Reached by clicking a location on the ', viewLink('map', 'Sites', 'list'), ' register, the site name on an agent page, or a site pin on a traffic map.'),
       el('ul', {},
         el('li', {}, el('strong', {}, 'Health summary'), ' — the Overview KPI cards scoped to just this site\'s agents: online count, median latency/jitter, worst packet loss, monitored targets and alerts.'),
         el('li', {}, el('strong', {}, 'Agents'), ' — every agent at the site with connection state, health verdict, loss/latency/jitter, throughput, agent version and last-seen. Click a row for the agent\'s own page.'),
@@ -1178,7 +1190,7 @@ const PAGE_INFO = {
         el('li', {}, el('strong', {}, 'Probes: '), 'run ping/TCP/DNS/traceroute/path-MTU against a target. Each result says what IT measured — latency and loss for a ping, hop count for a trace, packet size for a path-MTU check — and clicking the row opens its detail in place: history, path map, or per-hop verdict.'),
         el('li', {}, el('strong', {}, 'Interfaces: '), 'per-interface utilization, errors, discards and link status from the latest measurement. A virtual/idle port that is simply down (docker0, veth…, tunnels) shows a neutral IDLE — only a real link down reads DOWN.'),
         el('li', {}, el('strong', {}, 'Traffic: '), 'current bandwidth — most useful here when you are already investigating a specific agent.')),
-      el('p', { class: 'muted' }, 'Return to the fleet overview with “← Overview”. Fleet-wide views of the same data sources: ', viewLink('probes'), ' · ', viewLink('interfaces'), ' · ', viewLink('overview', 'Traffic'), '.'),
+      el('p', { class: 'muted' }, 'Return to the fleet overview with “← Overview”. Fleet-wide views of the same data sources: ', viewLink('probes'), ' · ', viewLink('fleet', 'Fleet', 'hardware'), ' · ', viewLink('overview', 'Traffic'), '.'),
     ],
   },
   overview: {
@@ -1207,57 +1219,9 @@ const PAGE_INFO = {
     body: () => [
       el('p', {}, 'Each location with coordinates is a marker, coloured by the worst health verdict among its agents (green = healthy, amber = warning, red = critical, grey = unknown/offline) — the same verdict as ', viewLink('fleet', 'Overview'), '. The page refreshes itself so the colours stay live.'),
       el('p', {}, 'Click a marker for the site\'s agents and how many are online; click an agent in the popup to open it.'),
-      el('p', { class: 'muted' }, 'Add coordinates per location under ', viewLink('locations'), ' (Edit). Map tiles come from the server\'s configured (EU/self-hosted) source. If the map is missing, the library could not be reached — a list is shown instead.'),
-    ],
-  },
-  agents: {
-    hero: 'Monitor the agents that report traffic to this server.',
-    title: 'Agents',
-    body: () => [
-      el('p', {}, 'Agents are installed on customer machines and report network traffic to the server.'),
-      el('h4', {}, 'Status & health'),
-      el('ul', {},
-        el('li', {}, 'Status: online/offline based on the WebSocket connection. Click the badge for a connection diagnosis — why the agent is offline, the evidence behind it, and a “Force reconnect” for connected agents (connections are agent-initiated, so an offline agent is revived from its own host).'),
-        el('li', {}, 'Health: “healthy” = online and reported within 5 min., “delayed” = online but stale report, “down” = offline.'),
-        el('li', {}, 'Last reported: the time of the agent\'s most recent traffic measurement.')),
-      el('h4', {}, 'Actions'),
-      el('ul', {},
-        el('li', {}, '”+ New agent” (operator+) opens ', viewLink('enrollment'), ', where you generate a code and a ready-to-run install one-liner.'),
-        el('li', {}, '”Run test” asks the agent to measure immediately; “Traffic” shows the measurements.'),
-        el('li', {}, '”Edit” sets name, location, notes and traffic source (proc, SNMP, NetFlow or sFlow).'),
-        el('li', {}, '”Upgrade” (admin) rebuilds a systemd-managed agent from the server\'s published source and restarts it — always available for a manual re-deploy; it shows as a highlighted “Update” when the agent is behind.'),
-        el('li', {}, 'A ', el('strong', {}, 'Windows'), ' agent can\'t be upgraded from the server (it runs as a scheduled task). When it is behind, “Update” hands you a PowerShell one-liner to run on that host: it updates the installed agent in place, keeps its token and identity, and never enrolls a second agent — no re-install.'),
-        el('li', {}, 'Docker/unmanaged agents can\'t self-update either: their version line shows an “update · installer” badge (and an “Installer” button) — update those by re-running the installer on the host.')),
-      el('p', { class: 'muted' }, 'Group agents by site under ', viewLink('locations'), '; see them all with a single health verdict on ', viewLink('fleet', 'Overview'), '.'),
-    ],
-  },
-  interfaces: {
-    hero: 'Interface health per agent: utilization, errors, discards, link status and speed.',
-    title: 'Interfaces',
-    body: () => [
-      el('p', {}, 'Shows each agent\'s network interfaces based on the latest measurement — what network/firewall engineers look at when something is wrong physically or on a link.'),
-      el('h4', {}, 'Columns'),
-      el('ul', {},
-        el('li', {}, el('strong', {}, 'Status: '), 'DOWN (a real link is down), ERR (input/output errors or ≥90% utilized), WARN (discards or ≥75% utilized), IDLE (a virtual/idle port — docker0, veth…, VPN tunnels — that is down only because nothing is using it, which is normal), OK.'),
-        el('li', {}, el('strong', {}, 'Utilization: '), 'rate against link speed (only when speed is known).'),
-        el('li', {}, el('strong', {}, 'Errors/s and Discards/s: '), 'CRC/input errors and dropped packets (congestion) respectively.')),
-      el('p', { class: 'muted' }, 'Data comes from the agent\'s traffic source: /proc/net/dev (host) or SNMP IF-MIB (device). Errors/discards/link status require an updated agent. An IDLE virtual interface never escalates an agent to CRITICAL — only a real link going down does. Interface state also feeds the health verdict on ', viewLink('fleet', 'Overview'), '.'),
-    ],
-  },
-  nics: {
-    hero: 'NIC driver & firmware inventory across the fleet — with automatic firmware-drift detection.',
-    title: 'NICs — firmware drift',
-    body: () => [
-      el('p', {}, 'Each Linux agent reports its physical network cards (driver, driver version, firmware version, bus) using ', el('code', {}, 'ethtool -i'), '. This page groups identical NIC models across all agents and highlights when units that should be identical are running ', el('strong', {}, 'different firmware'), ' — the classic “out of 50 access points, 3 are on an odd firmware and only those misbehave” situation.'),
-      el('h4', {}, 'Firmware drift'),
-      el('ul', {},
-        el('li', {}, el('strong', {}, 'Majority '), '— the firmware most units of a model run; treated as the baseline.'),
-        el('li', {}, el('strong', {}, 'Outlier '), '— any unit on a different firmware than the majority of the same model. Click a unit to open its agent page.')),
-      el('h4', {}, 'Group by'),
-      el('ul', {},
-        el('li', {}, el('strong', {}, 'Models '), '— aggregate identical NICs across the fleet, drift first. Best for spotting firmware mismatches.'),
-        el('li', {}, el('strong', {}, 'Agents '), '— list every agent reporting NIC data with its per-interface specs (driver, driver version, firmware, bus).')),
-      el('p', { class: 'muted' }, 'Models are keyed by driver + PCI/USB id, so a Wi-Fi card is never compared against an Ethernet NIC. Metadata only — driver/firmware strings and hardware ids, never MAC or payload. Needs an agent new enough to collect NIC info on a Linux host; older agents simply show nothing here. Per-agent details are also on the ', viewLink('agents', 'agent'), ' page.'),
+      el('h4', {}, 'Map and register'),
+      el('p', {}, 'The ', el('strong', {}, 'Register'), ' tab is the same sites as records: create one, rename it, give it coordinates or a description, see its live traffic, or delete it. It used to be a separate screen under Administration, and each of the two carried a button pointing at the other.'),
+      el('p', { class: 'muted' }, 'Add coordinates per site on the register tab of ', viewLink('map', 'Sites', 'list'), ' (Edit). Map tiles come from the server\'s configured (EU/self-hosted) source. If the map is missing, the library could not be reached — a list is shown instead.'),
     ],
   },
   probes: {
@@ -1368,16 +1332,6 @@ const PAGE_INFO = {
       el('p', { class: 'muted' }, 'New findings appear live via WebSocket and can also be fetched via REST.'),
     ],
   },
-  locations: {
-    hero: 'Group agents into locations and see correlated live traffic per location.',
-    title: 'Locations',
-    body: () => [
-      el('p', {}, 'A location groups multiple agents (e.g. an office or a site).'),
-      el('h4', {}, 'Live traffic'),
-      el('p', {}, '”Traffic” opens a live panel that sums all agent traffic in the location and updates every 3 seconds — useful for seeing overall load and spotting problems.'),
-      el('p', { class: 'muted' }, 'Give a location coordinates here to place it on the ', viewLink('map', 'Sites map'), '; the fleet-wide live picture is on ', viewLink('overview', 'Traffic'), '.'),
-    ],
-  },
   enrollment: {
     hero: 'Add an agent with a single command — the code, server address and checksum are already set.',
     title: 'Enrollment',
@@ -1401,7 +1355,7 @@ const PAGE_INFO = {
         el('li', {}, el('strong', {}, 'used: '), 'fully redeemed — an agent enrolled with it. Shown for a consumed code even after its time runs out.'),
         el('li', {}, el('strong', {}, 'expired: '), 'ran out of time WITHOUT being used up.')),
       el('p', { class: 'muted' }, 'The code only opens the install window. Each agent it enrols gets its own permanent token that stays valid until the agent is deleted (or its token revoked) — so an agent stays online regardless of whether its code later reads "used" or "expired". The Agents column shows each enrolled agent’s live online/offline state; click one to open it.'),
-      el('p', { class: 'muted' }, 'Once enrolled, agents appear under ', viewLink('agents'), ' and on ', viewLink('fleet', 'Overview'), '.'),
+      el('p', { class: 'muted' }, 'Once enrolled, agents appear on ', viewLink('fleet', 'Fleet'), '.'),
     ],
   },
   users: {
@@ -1416,7 +1370,7 @@ const PAGE_INFO = {
       el('p', {}, 'The last admin cannot be deleted or demoted.'),
       el('h4', {}, 'Password policy'),
       el('p', {}, `New and reset passwords must be at least ${PW_MIN_LENGTH} characters and use at least ${PW_MIN_CLASSES} of the four character classes (lowercase, uppercase, digit, symbol). The create/reset dialog shows a live strength bar and ticks each rule as it is met; the server enforces the same policy.`),
-      el('p', { class: 'muted' }, 'Operators manage those resources under ', viewLink('agents'), ', ', viewLink('locations'), ' and ', viewLink('enrollment'), '.'),
+      el('p', { class: 'muted' }, 'Operators manage those resources on ', viewLink('fleet', 'Fleet', 'drift'), ', ', viewLink('map', 'Sites', 'list'), ' and ', viewLink('enrollment'), '.'),
     ],
   },
   license: {
@@ -1482,15 +1436,12 @@ const CONTRACT_VIEWS = new Map([
   ['clusters', 'situations'],
   ['reporting', 'reporting'],
   ['guide', 'guides'],
-  ['locations', 'locations'],
   ['enrollment', 'enrollment'],
   ['discovery', 'discovery'],
   ['logs', 'systemLogs'],
   ['userLogs', 'userLogs'],
   ['settings', 'settings'],
-  ['agents', 'agents'],
-  ['interfaces', 'interfaces'],
-  ['nics', 'nics'],
+  ['nicInventory', 'nics'],
   ['event', 'event'],
   ['cluster', 'situation'],
   ['agent', 'agent'],
@@ -1603,129 +1554,12 @@ views.screening = async (opts) => {
   return getScreeningPage().view();
 };
 
-// ---- Agents (MIGRATED — see public/views/agents.js)
-// The panels the row menu opens (traffic, flows, ping, the flow-pipeline
-// self-check, the speed test, the edit form and the three update flows) stay
-// here — each is a modal with its own machinery.
-let agentsPage = null;
-const agentsPageState = {};
-function getAgentsPage() {
-  if (agentsPage) return agentsPage;
-  if (typeof window === 'undefined' || !window.AgentsPage || !ui) return null;
-  agentsPage = window.AgentsPage.create({
-    el, t, ui, errText,
-    state: agentsPageState,
-    canWrite, canDelete,
-    help: () => ({ title: t('ag.info.title'), body: () => [
-      el('p', {}, t('ag.info.p1')),
-      el('p', {}, t('ag.info.p2')),
-      el('p', { class: 'muted' }, t('ag.info.p3')),
-    ] }),
-    fetchAll: async () => {
-      const [agents, locations, ver] = await Promise.all([
-        api('/agents'), api('/locations'), api('/system/version').catch(() => null),
-      ]);
-      locationCache = locations;
-      // Two served versions: `offered` is what a systemd one-click Update pushes
-      // (a signed release, else the source bundle); `source` is what
-      // installer-based agents can reach. They diverge when a signed release is
-      // newer than the packaged source, so each agent is judged against the one
-      // IT can actually reach — an installer-only agent on the newest
-      // installable build is not flagged as forever behind.
-      const offered = ver && ver.agent ? ver.agent : null;
-      return { agents, versions: { offered, source: (ver && ver.agentSource) || offered } };
-    },
-    // Version arithmetic stays in app.js, where the update flows read it too.
-    selfUpdatable: agentSelfUpdatable,
-    isWindows: agentIsWindows,
-    isBehind: agentIsBehind,
-    updateTarget: agentUpdateTarget,
-    versionLine: agentVersionLine,
-    sourceCell: agentSourceCell,
-    open: openAgent,
-    newAgent,
-    runTest,
-    edit: editAgent,
-    remove: deleteAgent,
-    update: updateAgent,
-    windowsUpdate: showWindowsUpdateCommand,
-    bulkUpdate: bulkUpdateAgents,
-    editSnmp: editAgentSnmp,
-    editPosition: editAgentPosition,
-    showResults,
-    showFlows: showAgentFlows,
-    showConnection,
-    ping: pingAgent,
-    diagnose: diagnoseAgent,
-    speedtest: showSpeedtest,
-  });
-  return agentsPage;
-}
-
-views.agents = async () => {
-  const v = getAgentsPage();
-  if (!v) return el('div', { class: 'empty error' }, t('ag.err.title'));
-  return v.view();
-};
-
-// Small "v<x>" line under the platform, with an "update" badge when the agent is
-// behind the version the server currently serves. Version comes from the agent's
-// reported capabilities (capabilities.agentVersion). Only systemd agents can be
-// upgraded with one click from here — for Docker/unmanaged/Windows agents the
-// badge is neutral and says the update comes from the host installer, so the
-// flag doesn't imply an action that would just silently decline.
-function agentVersionLine(a, current) {
-  const v = a.capabilities && a.capabilities.agentVersion;
-  if (!v) return null;
-  if (!agentIsBehind(a, current)) return el('div', { class: 'muted' }, `v${v}`);
-  if (agentSelfUpdatable(a)) {
-    return el('div', { class: 'muted' }, `v${v} `,
-      el('span', { class: 'badge warn', title: `Current agent version is ${current}` }, 'update'));
-  }
-  // A Windows agent isn't stuck: the Update button hands out a one-liner that
-  // updates it in place, so its badge points at that rather than at a reinstall.
-  if (agentIsWindows(a)) {
-    return el('div', { class: 'muted' }, `v${v} `,
-      el('span', { class: 'badge warn', title: t('agentUpdate.win.badgeTitle', { version: current }) }, t('agentUpdate.win.badge')));
-  }
-  return el('div', { class: 'muted' }, `v${v} `,
-    el('span', { class: 'badge neutral', title: `${agentUpdateHint(a)} (current version is ${current})` }, 'update · installer'));
-}
-
-// The row-actions button for pushing an agent onto the current version. Solid
-// "Update" when a systemd agent is behind; a subtle "Upgrade" (manual re-deploy)
-// when it's already current. Docker/unmanaged/Windows agents can't self-update
-// from here, so we don't push a command that would just decline: a behind Windows
-// agent gets an "Update" that hands over the update-in-place one-liner for its
-// host, and any other non-self-updatable one gets an "installer" affordance whose
-// click explains where the update comes from instead.
-function agentUpdateButton(a, current, behind) {
-  if (!agentSelfUpdatable(a) && agentIsWindows(a) && behind) {
-    return el('button', {
-      class: 'small',
-      onclick: () => showWindowsUpdateCommand(a, current),
-      title: t('agentUpdate.win.buttonTitle'),
-    }, t('agentUpdate.win.button'));
-  }
-  if (agentSelfUpdatable(a)) {
-    return el('button', {
-      // Always available to admins as a manual upgrade link; emphasised (solid)
-      // when the agent is behind the published version, otherwise a subtle ghost
-      // link that re-deploys the current server source.
-      class: behind ? 'small' : 'small ghost',
-      onclick: () => updateAgent(a, current),
-      title: behind
-        ? `Update this agent to v${current} — rebuild from the server source and restart`
-        : 'Manually rebuild this agent from the server source and restart it',
-    }, behind ? 'Update' : 'Upgrade');
-  }
-  if (!behind) return null; // up-to-date + can't self-update from here → no action
-  return el('button', {
-    class: 'small ghost',
-    onclick: () => updateAgent(a, current),
-    title: agentUpdateHint(a),
-  }, 'Installer');
-}
+// Agents used to be a screen of its own. It is the Fleet screen's Drift column
+// set now — the two were the same table with two different definitions of
+// health (docs/fleet-and-sites-consolidation.md). The panels the row menu opens
+// (traffic, flows, ping, the flow-pipeline self-check, the speed test, the edit
+// form and the three update flows) stay here — each is a modal with its own
+// machinery, and Fleet calls them through its deps.
 
 // Compare dotted versions: <0 if a<b, 0 if equal, >0 if a>b. Ignores any
 // pre-release/build suffix; non-numeric segments count as 0.
@@ -5048,8 +4882,6 @@ const probeState = { timer: null };
 function stopProbes() { if (probeState.timer) { clearInterval(probeState.timer); probeState.timer = null; } }
 
 // Interfaces polling state.
-const ifaceState = { timer: null };
-function stopIfaces() { if (ifaceState.timer) { clearInterval(ifaceState.timer); ifaceState.timer = null; } }
 
 // ---- Shared probe + interface renderers -----------------------------------
 // Used by the per-agent tabs (Interfaces, Probes) AND the combined agent page,
@@ -7818,41 +7650,29 @@ function getInterfacesPage() {
   interfacesPage = window.InterfacesPage.create({
     el, t, ui, errText, usageBar, fmtBytes, fmtUnit, viewLink,
     state: interfacesPageState,
-    help: () => ({ title: t('iface.info.title'), body: () => [
-      el('p', {}, t('iface.info.p1')),
-      el('p', {}, t('iface.info.p2')),
-      el('p', { class: 'muted' }, t('iface.info.p3')),
-    ] }),
-    fetchAgents: () => api('/agents').catch(() => []),
-    fetchInterfaces: (id) => api(`/api/interfaces?agentId=${encodeURIComponent(id)}`),
-    // Capacity forecast for the same agent's links. Read separately from the
-    // 5-second table poll — see the note in public/views/interfaces.js.
-    fetchForecast: (id) => api(`/api/forecast/interfaces?agentId=${encodeURIComponent(id)}`),
-    openAgents: () => gotoView('agents'),
-    startPolling: (fn) => {
-      stopIfaces();
-      ifaceState.timer = setInterval(() => {
-        if (currentView !== 'interfaces') { stopIfaces(); return; }
-        if (!modalOpen()) fn();
-      }, 5000);
-    },
+    // "This agent is on a flow source" ends in changing that source, which is
+    // an Edit on the Drift set.
+    openAgents: () => gotoView('fleet', 'drift'),
   });
   return interfacesPage;
 }
 
-// The agent detail page draws the same interfaces; it reads the table from the
-// view module rather than keeping a second copy.
+// The interface table has two readers — the agent page's fold and the Fleet
+// drawer — so it is asked for here rather than copied into either.
 function interfaceTable(interfaces, source = null) {
   const v = getInterfacesPage();
   if (!v) return el('div', { class: 'empty error' }, t('iface.err.title'));
   return v.table(interfaces, source);
 }
 
-views.interfaces = async () => {
+// The capacity forecast: where each link will be in a fortnight. It reads two
+// weeks of history, so it belongs on the agent page rather than in a drawer
+// that opens on a click.
+function interfaceForecastTable(list) {
   const v = getInterfacesPage();
-  if (!v) return el('div', { class: 'empty error' }, t('iface.err.title'));
-  return v.view();
-};
+  if (!v) return null;
+  return v.forecastTable(list);
+}
 
 // Active probes: trigger ping/tcp/dns/traceroute from an agent and watch the
 // results (RTT/loss over time + traceroute path). The agent runs the probe and
@@ -9448,6 +9268,11 @@ async function exportChangesCsv() {
 const fleetState = { timer: null };
 function stopFleet() { if (fleetState.timer) { clearInterval(fleetState.timer); fleetState.timer = null; } }
 
+// Which column set Fleet is showing, and which agent's drawer is open. Both are
+// in the address (/fleet/drift, ?agent=12), so a link opens on the same thing.
+let fleetSet = 'health';
+let fleetDrawerAgentId = null;
+
 // Shared Overview filter state. Kept at module scope (not inside views.fleet) so
 // it survives a view switch and the 10 s poll, and is seeded from the URL query
 // string on load so a shared deep-link (…?severity=CRIT&site=vest) renders
@@ -9472,6 +9297,12 @@ function syncFleetUrl() {
     const q = new URLSearchParams(window.location.search || '');
     FLEET_PARAM_KEYS.forEach((k) => q.delete(k));
     new URLSearchParams(FleetFilter.toQuery(fleetFilter)).forEach((v, k) => q.set(k, v));
+    // The open drawer rides in the same address as the filter: ?agent=12 opens
+    // Fleet on that agent, and closing it takes the parameter back out.
+    if (currentView === 'fleet') {
+      if (fleetDrawerAgentId != null) q.set('agent', String(fleetDrawerAgentId));
+      else q.delete('agent');
+    }
     const qs = q.toString();
     window.history.replaceState(null, '', window.location.pathname + (qs ? `?${qs}` : '') + window.location.hash);
   } catch { /* non-browser / restricted */ }
@@ -9779,6 +9610,56 @@ function getFleetView() {
     summaryTotal,
     latencyText,
     throughputText,
+    canWrite, canDelete,
+    // Which column set is shown. It is in the address, so a link names the set.
+    tab: () => fleetSet,
+    setTab: (k) => { fleetSet = k; },
+    // The open drawer is part of the address too (?agent=12), so a reload or a
+    // pasted link opens on the same agent.
+    drawerAgent: () => fleetDrawerAgentId,
+    setDrawerAgent: (id) => { fleetDrawerAgentId = id; syncFleetUrl(); },
+    // The deployment read behind the Drift set, and the inventory behind
+    // Hardware. Both are read once per view entry — a version, a traffic source
+    // and a NIC firmware move in days, so they stay out of the 10 s poll.
+    fetchAgents: async () => {
+      const [agents, locations, ver] = await Promise.all([
+        api('/agents'), api('/locations').catch(() => null), api('/system/version').catch(() => null),
+      ]);
+      if (locations) locationCache = locations;
+      // Two served versions: `offered` is what a systemd one-click Update pushes
+      // (a signed release, else the source bundle); `source` is what
+      // installer-based agents can reach. They diverge when a signed release is
+      // newer than the packaged source, so each agent is judged against the one
+      // IT can actually reach.
+      const offered = ver && ver.agent ? ver.agent : null;
+      return { agents, versions: { offered, source: (ver && ver.agentSource) || offered } };
+    },
+    fetchNics: () => api('/api/fleet/nics'),
+    // The drawer's own read, and the only one it makes.
+    fetchInterfaces: (id) => api(`/api/interfaces?agentId=${encodeURIComponent(id)}`),
+    interfaceTable,
+    nicTable,
+    contextActions,
+    // Version arithmetic stays in app.js, where the update flows read it too.
+    selfUpdatable: agentSelfUpdatable,
+    isWindows: agentIsWindows,
+    isBehind: agentIsBehind,
+    updateTarget: agentUpdateTarget,
+    newAgent,
+    runTest,
+    edit: editAgent,
+    remove: deleteAgent,
+    update: updateAgent,
+    windowsUpdate: showWindowsUpdateCommand,
+    bulkUpdate: bulkUpdateAgents,
+    editSnmp: editAgentSnmp,
+    editPosition: editAgentPosition,
+    showResults,
+    showFlows: showAgentFlows,
+    showConnection,
+    ping: pingAgent,
+    diagnose: diagnoseAgent,
+    speedtest: showSpeedtest,
     // The health verdict as a contract Badge rather than the legacy .badge.
     healthBadgeUi: (h) => {
       const [cls, label] = HEALTH_BADGE[(h && h.status) || 'unknown'] || HEALTH_BADGE.unknown;
@@ -9834,6 +9715,9 @@ function getFleetView() {
 views.fleet = async () => {
   const v = getFleetView();
   if (!v) return el('div', { class: 'empty error' }, t('fleet.err.title'));
+  // A link can name the agent whose drawer opens, and a hand-off from Diagnose
+  // or an event carries the same ?agent parameter.
+  fleetDrawerAgentId = contextFromUrl().agentId;
   return v.view();
 };
 
@@ -10455,6 +10339,33 @@ function agentDetailFolds(id, agent) {
     ifaceHost.replaceChildren(interfaceTable(data.interfaces, data.source));
   }
 
+  // ---- Capacity forecast ----
+  // Where each link will be in a fortnight. Read ONCE when the page is built,
+  // not on the interface poll: it reads two weeks of history, and the answer
+  // moves in days. It lives here rather than in the Fleet drawer for the same
+  // reason — a drawer opens on a click.
+  const forecastHost = el('div', {});
+  async function loadForecast() {
+    let d;
+    try {
+      d = await api(`/api/forecast/interfaces?agentId=${encodeURIComponent(id)}`);
+    } catch (e) {
+      // A failed forecast must not take the interface table with it: the
+      // current state is the more urgent of the two.
+      forecastHost.replaceChildren(ui.errorState({
+        title: t('fc.err.title'), body: errText(e),
+        detail: 'GET /api/forecast/interfaces', onRetry: loadForecast,
+      }));
+      return;
+    }
+    const usable = (d.interfaces || []).filter((f) => f.ok);
+    forecastHost.replaceChildren(
+      el('div', { class: 'meta-xs' }, t('fc.note', { days: d.windowDays })),
+      usable.length
+        ? interfaceForecastTable(usable)
+        : ui.emptyState({ title: t('fc.none'), body: t('fc.noneHint') }));
+  }
+
   // ---- Recent traffic (bandwidth over the last measurements) ----
   const trafficHost = el('div', { class: 'overview-chart' });
   async function refreshTraffic() {
@@ -10484,10 +10395,13 @@ function agentDetailFolds(id, agent) {
 
   const folds = [
     el('details', { class: 'sec', open: true }, el('summary', {}, 'Probes ', el('span', { class: 'muted' }, '· ping · TCP · DNS · traceroute · cURL')), probeForm, probePauseNote, probeLatestHost),
-    el('details', { class: 'sec', open: true }, el('summary', {}, 'Interfaces ', ifaceStatus), ifaceHost),
+    el('details', { class: 'sec', open: true }, el('summary', {}, 'Interfaces ', ifaceStatus), ifaceHost,
+      el('h4', {}, t('fc.title')), forecastHost),
     el('details', { class: 'sec' }, el('summary', {}, 'NIC firmware ', nicSummary), nicTable(nics)),
     el('details', { class: 'sec' }, el('summary', {}, 'Traffic ', el('span', { class: 'muted' }, '· recent bandwidth')), trafficHost),
   ];
+  // The forecast is not in the poller: it is read once, with the page.
+  loadForecast();
   agentDetailRefresh = async (host) => {
     healthHost = host || healthHost;
     await Promise.all([refreshHealth(), refreshProbes(), refreshIfaces(), refreshTraffic()]);
@@ -10518,15 +10432,12 @@ function agentDetailStart(healthHost) {
 // detail page — two copies of it would drift.
 let nicsPage = null;
 const nicsPageState = {};
-let nicsTab = 'models'; // 'models' | 'agents'
 function getNicsPage() {
   if (nicsPage) return nicsPage;
   if (typeof window === 'undefined' || !window.NicsPage || !ui) return null;
   nicsPage = window.NicsPage.create({
     el, t, ui, errText,
     state: nicsPageState,
-    tab: () => nicsTab,
-    setTab: (k) => { nicsTab = k; syncAddress(); },
     help: () => ({ title: t('nic.info.title'), body: () => [
       el('p', {}, t('nic.info.p1')),
       el('p', {}, t('nic.info.p2')),
@@ -10538,14 +10449,14 @@ function getNicsPage() {
   return nicsPage;
 }
 
-// The agent detail page lists the same cards.
+// The agent page's NIC fold and the Fleet drawer list the same cards.
 function nicTable(nics) {
   const v = getNicsPage();
   if (!v) return el('div', { class: 'empty error' }, t('nic.err.title'));
   return v.nicTable(nics);
 }
 
-views.nics = async () => {
+views.nicInventory = async () => {
   const v = getNicsPage();
   if (!v) return el('div', { class: 'empty error' }, t('nic.err.title'));
   return v.view();
@@ -10998,7 +10909,21 @@ function getSitesView() {
     el, t, ui, errText, openAgent, openLocation, gotoView,
     state: sitesViewState,
     worstHealthStatus,
+    canWrite,
     hasMapLibrary: () => typeof L !== 'undefined',
+    // Which half of the screen is showing — it is in the address, so a link can
+    // name the register.
+    tab: () => sitesTab,
+    setTab: (k) => { sitesTab = k; },
+    syncUrl: () => syncAddress(),
+    newSite: () => editLocation(),
+    dropMap: () => stopMap(),
+    // The register's table, built by public/views/locations.js. Two copies of
+    // it — one here, one on a screen of its own — is what this change removes.
+    registerBody: () => {
+      const v = getLocationsPage();
+      return v ? v.body() : el('div', { class: 'empty error' }, t('loc.err.title'));
+    },
     help: () => {
       const info = PAGE_INFO.map || {};
       return { lead: info.hero || '', title: info.title || t('sites.title'), body: info.body || (() => []) };
@@ -11035,6 +10960,9 @@ views.map = async () => {
   if (!v) return el('div', { class: 'empty error' }, t('sites.err.title'));
   return v.view();
 };
+
+// Which half of Sites is showing: the map, or the register behind it.
+let sitesTab = 'map';
 
 // ---- Destinations map (internal sites + external destinations + selection) ----
 const geoState = { map: null, ext: null, hosts: null, rect: null, dests: [], internalHosts: [], sinceIso: '',
@@ -11489,22 +11417,6 @@ function hsflowdBadgeClass(state) {
   return 'badge'; // inactive / not_installed / unknown
 }
 
-// Cell showing the selected traffic source + what the agent reports it can do,
-// plus the live hsflowd exporter state when the agent has reported one (the
-// result of enabling/disabling "Local hsflowd exporter").
-function agentSourceCell(a) {
-  const mc = a.monitor_config || {};
-  const source = mc.source || 'proc';
-  const caps = a.capabilities && Array.isArray(a.capabilities.sources) ? a.capabilities.sources : null;
-  const detail = source === 'snmp' && mc.snmp ? ` (${mc.snmp.host})` : '';
-  const hs = a.hsflowd && a.hsflowd.state ? a.hsflowd : null;
-  return el('div', {},
-    el('span', { class: 'badge' }, source + detail),
-    caps ? el('div', { class: 'muted', title: 'Agent capabilities' }, `can: ${caps.join(', ')}`) : null,
-    hs ? el('div', { class: 'muted', title: hs.detail || (hs.at ? `reported ${hs.at}` : '') },
-      'hsflowd: ', el('span', { class: hsflowdBadgeClass(hs.state) }, hs.state)) : null);
-}
-
 // The named SNMP communities (Settings -> SNMP communities), for the picker in
 // Edit agent. Admin-only on the server, so an operator simply gets none and
 // keeps the literal-community field they have always had.
@@ -11941,7 +11853,11 @@ views.location = async () => {
   return v.view();
 };
 
-// ---- Locations (MIGRATED — see public/views/locations.js)
+// ---- The site register (see public/views/locations.js) ---------------------
+// Not a screen any more: it is the Register tab of Sites, which hosts this
+// table (docs/fleet-and-sites-consolidation.md). The three panels the row
+// actions open (live traffic, history, the AI summary) are modals with their
+// own polling and charts, passed in whole.
 let locationsPage = null;
 function getLocationsPage() {
   if (locationsPage) return locationsPage;
@@ -11950,16 +11866,10 @@ function getLocationsPage() {
     el, t, ui,
     canWrite, canDelete,
     hasAssistant: () => featureEnabled('assistant'),
-    help: () => ({ title: t('loc.info.title'), body: () => [
-      el('p', {}, t('loc.info.p1')),
-      el('p', {}, t('loc.info.p2')),
-      el('p', { class: 'muted' }, t('loc.info.p3')),
-    ] }),
     fetchAll: () => api('/locations'),
     open: openLocation,
     edit: editLocation,
     remove: deleteLocation,
-    // Three modals with their own polling and charts, passed in whole.
     traffic: showLocationTraffic,
     history: showLocationHistory,
     summary: showLocationSummary,
@@ -11967,12 +11877,6 @@ function getLocationsPage() {
   });
   return locationsPage;
 }
-
-views.locations = async () => {
-  const v = getLocationsPage();
-  if (!v) return el('div', { class: 'empty error' }, t('loc.err.title'));
-  return v.view();
-};
 
 // AI status: a brief, plain-language "what's going on at this location?" summary
 // from the opt-in assistant (per-agent health verdicts + recent findings). One
@@ -12615,7 +12519,7 @@ const DOCS = [
           el('p', {}, 'Everything is ', el('strong', {}, 'metadata only'), ' (ports, ASNs, timings, the 5-tuple) — never packet payload or deep inspection. Private (RFC1918) addresses are never geolocated. Analysis runs locally with explainable robust statistics (median + MAD), so every finding carries an explanation and its evidence — there is no cloud and no black-box ML.'),
           el('h4', {}, 'The moving parts'),
           el('ul', {},
-            el('li', {}, el('strong', {}, 'Agents '), '— enrolled with a one-time code, then report over a WebSocket + REST. See ', viewLink('agents', 'Agents'), ' and ', viewLink('enrollment', 'Enrollment'), '.'),
+            el('li', {}, el('strong', {}, 'Agents '), '— enrolled with a one-time code, then report over a WebSocket + REST. See ', viewLink('fleet', 'Fleet'), ' and ', viewLink('enrollment', 'Enrollment'), '.'),
             el('li', {}, el('strong', {}, 'This server '), '— stores measurements, derives health/findings/events, and is where you manage the fleet.'),
             el('li', {}, el('strong', {}, 'Integrations '), '— optional outbound links to ITSM/IPAM/CMDB (e.g. ServiceNow), alert channels and SSO — all configured in Settings (admin).')),
           docsExpect('Once an agent is enrolled and connected it turns green on the ', viewLink('fleet', 'Overview'), ' within a minute, and its traffic/probe data starts filling the ', viewLink('overview', 'Traffic'), ' and ', viewLink('probes', 'Probes'), ' pages.'),
@@ -12626,7 +12530,7 @@ const DOCS = [
           docsLead('The left rail is grouped by job. Here is where each thing lives.'),
           docsTable(['Group', 'Use it for'], [
             [viewLink('fleet', 'Monitoring'), 'Overview (fleet health at a glance), Traffic, Sites (map) and Destinations (external traffic by country/ASN).'],
-            [el('strong', {}, 'Fleet'), ['Per-', viewLink('agents', 'Agent'), ' drill-down, ', viewLink('interfaces', 'Interfaces'), ' health and NIC firmware inventory.']],
+            [el('strong', {}, 'Fleet'), ['One table of agents with three column sets, and a drawer per agent: measurements, deployment, ports and NICs.']],
             [el('strong', {}, 'Diagnostics'), ['Ad-hoc ', viewLink('probes', 'Probes & Tests'), ', ', viewLink('flows', 'Flows'), ', Topology, ', viewLink('troubleshooting', 'Troubleshooting'), ', the ', viewLink('investigation', 'Investigate'), ' investigator — and this Documentation.']],
             [el('strong', {}, 'Insights'), ['Anomaly ', viewLink('findings', 'Analysis'), ', ', viewLink('events', 'Events'), ', ', viewLink('clusters', 'Situations'), ' (one event across many agents) and ', viewLink('reporting', 'Reporting'), ' (incl. NIS2).']],
             [el('strong', {}, 'Administration'), ['Locations, Enrollment, Logs and ', viewLink('settings', 'Settings'), '.']],
@@ -12805,9 +12709,9 @@ const DOCS = [
         id: 'interface', title: 'Investigate an interface', body: () => [
           docsLead('Errors, discards, saturation or a flapping link on a monitored interface.'),
           docsSteps([
-            ['Open ', viewLink('interfaces', 'Interfaces'), ' (or the Interfaces card on the agent page). Rows are health-rated on utilisation, errors, discards and link state.'],
+            ['Open the Hardware set on ', viewLink('fleet', 'Fleet', 'hardware'), ', then a row for its ports. Rows are health-rated on utilisation, errors, discards and link state.'],
             'Read the four signals separately: high utilisation = capacity/QoS; rising errors = physical layer (cabling, SFP, duplex mismatch); discards = buffer/queue pressure; link down/flap = physical or driver.',
-            ['Cross-check the NIC: the ', viewLink('nics', 'NICs'), ' page flags firmware/driver outliers — a single NIC on old firmware among identical peers is a strong lead.'],
+            ['Cross-check the NIC: ', viewLink('nicInventory', 'NICs'), ' flags firmware/driver outliers — a single NIC on old firmware among identical peers is a strong lead.'],
             ['Correlate with time: interface anomalies raise ', viewLink('findings', 'findings'), ' with a normal-range band and event markers, so you can line up the errors against a change or a traffic spike.'],
           ]),
           docsExpect('Errors and discards should sit at ~0 on a healthy link. A steady error rate that scales with traffic is classic duplex/cabling; bursty discards under load are congestion. Link flaps almost always mean a physical or driver fault — check the NIC firmware first.'),
@@ -18288,7 +18192,7 @@ function mountGuides() {
     viewBlockedReason,
     // Every step can open the screen it is describing. A plain view, a Service
     // Assurance sub-tab, a Settings sub-tab, or a handbook article.
-    openView: (viewKey) => gotoView(viewKey),
+    openView: (viewKey, tab) => gotoView(viewKey, tab || null),
     openTab: (tab) => { serviceAssuranceTab = tab; currentView = 'serviceAssurance'; render(); },
     openSettings: (tab) => { settingsTab = tab; currentView = 'settings'; render(); },
     openDocs: (topic) => gotoDocs(topic),
@@ -18892,8 +18796,11 @@ const Routes = (typeof window !== 'undefined' && window.AppRoutes) || null;
 // A record's own page has no rail entry — it is reached from the list. Without
 // this the sidebar marks nothing (no "you are here" anywhere on the screen) and
 // the crumb prints the raw view key at the reader: "event / #11".
+// A record's own page marks the list it came from. Agents and the site register
+// are column sets and tabs now, so both point at the screen that absorbed them
+// (docs/fleet-and-sites-consolidation.md).
 const DETAIL_OF = {
-  agent: 'agents', location: 'locations', event: 'events', cluster: 'clusters',
+  agent: 'fleet', location: 'map', event: 'events', cluster: 'clusters',
 };
 // Three Settings sections that also answer at an address of their own
 // (/users, /license, /test-settings). The rail has no entry for them — they are
@@ -18922,7 +18829,8 @@ function routeTabFor(view) {
     case 'serviceAssurance': return serviceAssuranceTab;
     case 'settings': return settingsTab;
     case 'guide': return guideTrack;
-    case 'nics': return nicsTab;
+    case 'fleet': return fleetSet;
+    case 'map': return sitesTab;
     case 'reporting': return reportingState.section;
     case 'docs': return docsTopic;
     default: return null;
@@ -18947,7 +18855,8 @@ function setRouteTab(view, tab) {
   else if (view === 'serviceAssurance') serviceAssuranceTab = tab;
   else if (view === 'settings') settingsTab = tab;
   else if (view === 'guide') guideTrack = tab;
-  else if (view === 'nics') nicsTab = tab;
+  else if (view === 'fleet') fleetSet = tab;
+  else if (view === 'map') sitesTab = tab;
   else if (view === 'reporting') reportingState.section = tab;
   else if (view === 'docs') docsTopic = tab;
 }
@@ -19030,7 +18939,7 @@ function syncLocation() {
 // — and puts it in the address (?agent=12&target=10.0.0.1&window=60), so the
 // link can be sent to a colleague and opens on the same thing.
 const CONTEXT_KEYS = ['agent', 'target', 'window'];
-const CONTEXT_VIEWS = new Set(['diagnose', 'investigation', 'deviceLog', 'probes', 'troubleshooting']);
+const CONTEXT_VIEWS = new Set(['diagnose', 'investigation', 'deviceLog', 'probes', 'troubleshooting', 'fleet']);
 // Owned by the path chart on ONE record (an event, a probe row). Carried to
 // the next screen they replaced that screen's own window with a stale one.
 const EPHEMERAL_KEYS = ['from', 'to', 'metric', 'overlay'];
@@ -19346,7 +19255,6 @@ function focusLoginField() {
 const VIEW_RESOURCES = [
   { view: 'overview', stop: () => stopOverview() },
   { view: 'probes', stop: () => stopProbes() },
-  { view: 'interfaces', stop: () => stopIfaces() },
   { view: 'fleet', stop: () => stopFleet() },
   { view: 'agent', stop: () => stopAgent() },
   // The Leaflet maps are torn down when their view is left; they rebuild on entry.
@@ -19601,7 +19509,7 @@ async function renderSsoOptions() {
   host.classList.remove('hidden');
 }
 renderSsoOptions();
-$('#logout').addEventListener('click', () => { setAutoRefresh(false); stopOverview(); stopFleet(); stopAgent(); stopProbes(); stopIfaces(); stopMap(); stopGeo(); stopTopoMap(); stopTrafficMaps(); $('#autorefresh').checked = false; logout(); });
+$('#logout').addEventListener('click', () => { setAutoRefresh(false); stopOverview(); stopFleet(); stopAgent(); stopProbes(); stopMap(); stopGeo(); stopTopoMap(); stopTrafficMaps(); $('#autorefresh').checked = false; logout(); });
 // Refresh row: the main action does a real, full page reload (not a soft
 // re-render), so it always reflects the freshest server state.
 $('#refresh').addEventListener('click', () => window.location.reload());

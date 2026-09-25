@@ -236,6 +236,8 @@ test('the record marks itself in the rail and in the breadcrumb', async (t) => {
   await settle();
   const marked = doc.querySelector('.tabs button.active');
   assert.ok(marked, 'nothing in the sidebar says where the reader is');
-  assert.equal(marked.dataset.view, 'locations');
-  assert.match(doc.querySelector('#crumb').textContent, /Administration.*Locations.*#1/);
+  // The site's own page marks Sites: the register it came from is a tab there
+  // now (docs/fleet-and-sites-consolidation.md).
+  assert.equal(marked.dataset.view, 'map');
+  assert.match(doc.querySelector('#crumb').textContent, /Monitoring.*Sites.*#1/);
 });

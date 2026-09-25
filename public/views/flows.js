@@ -157,6 +157,25 @@
         });
       }
 
+      // When the source IS right, the hint can only say "nothing arrived" —
+      // the reason is on the agent, not in the database. So the empty state
+      // offers to go and ask it: POST /agents/:id/diagnose is read-only and
+      // viewer+, and its verdict names which link in the chain is broken
+      // (collector not listening / nothing exporting to it / datagrams with no
+      // flow samples). One click, on the screen that raised the question.
+      function noFlowsAction() {
+        var id = state.agentId;
+        if (!id || !deps.diagnose) return null;
+        var agent = null;
+        for (var i = 0; i < agents.length; i += 1) {
+          if (String(agents[i].id) === String(id)) { agent = agents[i]; break; }
+        }
+        if (!agent) return null;
+        var source = String((agent.monitor_config && agent.monitor_config.source) || 'proc');
+        if (source !== 'netflow' && source !== 'sflow') return null;
+        return ui.button('secondary', t('flows.diagnose'), { onclick: function () { deps.diagnose(agent); } });
+      }
+
       function drawToolbar() {
         var filters = [ui.filter(t('flows.agent'), ui.select({
           label: t('flows.agent'), value: state.agentId || '',
@@ -390,7 +409,7 @@
                 refresh();
               },
             })
-            : ui.emptyState({ kind: 'nodata', title: t('flows.noFlows'), body: noFlowsHint() })],
+            : ui.emptyState({ kind: 'nodata', title: t('flows.noFlows'), body: noFlowsHint(), action: noFlowsAction() })],
         }));
 
         panels.push(ui.panelGrid(
@@ -461,7 +480,7 @@
           kids.push(el('div', { class: 'panel-body' },
             deps.chart(pts, { markers: markers, onBrush: applyZoom })));
         } else {
-          kids.push(ui.emptyState({ kind: 'nodata', title: t('flows.noFlows'), body: noFlowsHint() }));
+          kids.push(ui.emptyState({ kind: 'nodata', title: t('flows.noFlows'), body: noFlowsHint(), action: noFlowsAction() }));
         }
         if (data.topTalkers && data.topTalkers.length) {
           kids.push(el('div', { class: 'panel-body' }, ui.metaXs(t('flows.talkers'))));

@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.203.3 — What an agent can run, and running a saved test on chosen agents
+## 0.204.2 — What an agent can run, and running a saved test on chosen agents
 
 **The agent page says what the host can run, before you click.** A new Tests
 fold reads the agent's own capabilities report, so a test it cannot run is named

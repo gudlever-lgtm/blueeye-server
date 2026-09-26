@@ -484,7 +484,7 @@ test('a step never offers a screen the reader cannot open', async (t) => {
   assert.equal(doc.querySelectorAll('#view .guide-actions button').length, 0, 'a viewer was offered an admin Settings tab');
 
   await openGuide(doc, 'diagnostics');
-  await click([...doc.querySelectorAll('#view .guide-stepper-btn')][5], 150); // → When it is a real outage
+  await click([...doc.querySelectorAll('#view .guide-stepper-btn')][6], 150); // → When it is a real outage
   labels = [...doc.querySelectorAll('#view .guide-actions button')].map((b) => b.textContent);
   assert.deepEqual(labels, ['Open Troubleshooting'], `a viewer was offered an operator-only screen: ${labels.join(' | ')}`);
   const refused = [...doc.querySelectorAll('#view .guide-unavailable')].map((n) => n.textContent);
@@ -495,7 +495,7 @@ test('a step never offers a screen the reader cannot open', async (t) => {
 test('an admin is offered those same screens as buttons', async (t) => {
   const { doc } = await boot(t, { ...fullRoutes(), ...GENERAL_ROUTES }, 'admin');
   await openGuide(doc, 'diagnostics');
-  await click([...doc.querySelectorAll('#view .guide-stepper-btn')][5], 150);
+  await click([...doc.querySelectorAll('#view .guide-stepper-btn')][6], 150);
   assert.equal(doc.querySelectorAll('#view .guide-unavailable').length, 0, 'an admin was refused a screen');
   assert.equal(doc.querySelectorAll('#view .guide-actions button').length, 2);
 });
@@ -659,7 +659,7 @@ test('the Diagnostics step runs a ping from the agent the reader picks', async (
   const { doc, calls } = await boot(t, withAction({
     'POST /agents/2/probe': { status: 202, body: { queued: true } },
   }));
-  const a = await openAction(doc, 'diagnostics', 1);
+  const a = await openAction(doc, 'diagnostics', 2);
   a.inputs[0].value = '2';          // the offline agent, deliberately: the picker offers every agent
   a.inputs[1].value = '1.1.1.1';
   await click(a.button, 150);
@@ -670,7 +670,7 @@ test('the Diagnostics step runs a ping from the agent the reader picks', async (
 test('with no agents at all, the probe card says so instead of offering an empty picker', async (t) => {
   const { doc } = await boot(t, withAction({ 'GET /agents': [] }));
   await openGuide(doc, 'diagnostics');
-  await click([...doc.querySelectorAll('#view .guide-stepper-btn')][1], 150);
+  await click([...doc.querySelectorAll('#view .guide-stepper-btn')][2], 150);
   const card = doc.querySelector('#view .guide-action-blocked');
   assert.ok(card, 'no card at all');
   assert.equal(card.querySelector('.guide-action-go'), null, 'an empty picker was offered anyway');
@@ -723,7 +723,7 @@ test('Service Assurance: the mail check is created from the guide, as an operato
 test('an action never offers a button the reader’s role cannot press', async (t) => {
   // Sites and the probe are operator+; the Service Assurance writes are admin.
   const viewer = await boot(t, withAction(), 'viewer');
-  for (const [track, step] of [['monitoring', 4], ['fleet', 1], ['diagnostics', 1], ['assurance', 2], ['assurance', 3]]) {
+  for (const [track, step] of [['monitoring', 4], ['fleet', 1], ['diagnostics', 2], ['assurance', 2], ['assurance', 3]]) {
     await openGuide(viewer.doc, track);
     await click([...viewer.doc.querySelectorAll('#view .guide-stepper-btn')][step], 120);
     const go = viewer.doc.querySelector('#view .guide-action-go');
@@ -740,7 +740,7 @@ test('an action never offers a button the reader’s role cannot press', async (
   // And the admin gets all five.
   const admin = await boot(t, withAction(), 'admin');
   let offered = 0;
-  for (const [track, step] of [['monitoring', 4], ['fleet', 1], ['diagnostics', 1], ['assurance', 2], ['assurance', 3]]) {
+  for (const [track, step] of [['monitoring', 4], ['fleet', 1], ['diagnostics', 2], ['assurance', 2], ['assurance', 3]]) {
     await openGuide(admin.doc, track);
     await click([...admin.doc.querySelectorAll('#view .guide-stepper-btn')][step], 120);
     if (admin.doc.querySelector('#view .guide-action-go')) offered += 1;

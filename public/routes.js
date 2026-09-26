@@ -101,7 +101,7 @@
       path: '/docs',
       tabs: [
       'what-is', 'tour', 'assurance', 'assurance-monitors', 'agent-offline',
-      'site-unhealthy', 'latency-loss', 'interface', 'findings', 'situations',
+      'site-unhealthy', 'ladder', 'latency-loss', 'interface', 'findings', 'situations',
       'dependencies', 'blast-radius', 'topology-changes', 'flow-baselines', 'adhoc',
       'assurance-worker', 'discovery', 'servicenow', 'cmdb', 'alerting', 'sso', 'auth-lockout',
       'enroll-key', 'fleet-updates', 'retention',

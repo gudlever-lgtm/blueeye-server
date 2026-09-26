@@ -7315,6 +7315,10 @@ function getDiagnoseView() {
     },
     runTests: async (sessionId, body) => api(`/api/diagnose/${sessionId}/run`, { method: 'POST', body }),
     evaluate: async (sessionId) => api(`/api/diagnose/${sessionId}/evaluate`, { method: 'POST', body: {} }),
+    // The guided walk-through — the same session as an ordered list of steps.
+    // A read, so a viewer gets it too; what they cannot do is press the buttons
+    // on it, which is the same line the plan already draws.
+    fetchWalkthrough: async (sessionId) => api(`/api/diagnose/${sessionId}/walkthrough`),
     // One package per agent: a test package pushes every item to every target,
     // so a single package would run each reverse test from the wrong end.
     repeat: (rows, st, chipEl) => {

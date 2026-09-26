@@ -1,0 +1,30 @@
+-- 139 — device_interfaces.mtu: the MTU a switch port was configured with.
+--
+-- WHY THIS COLUMN EXISTS, when `path_mtu` (096) already measures MTU.
+--
+-- They answer different questions, and the pair is what makes an MTU fault
+-- addressable. `path_mtu` measures what a PATH carries end to end: it finds the
+-- ceiling, proves large packets vanish while small ones pass, and says whether
+-- any router admits to the limit. What it cannot say is WHICH device is
+-- configured wrong — its answer is a hop number, and a hop is a router, not a
+-- port. This column is the other half: what each port was told to carry, read
+-- from IF-MIB `ifMtu` (RFC 2863, 1.3.6.1.2.1.2.2.1.4) on every topology poll.
+--
+-- Put the two together and the classic fault becomes one row: two ports that
+-- LLDP says are cabled to each other, configured with different MTUs. One end
+-- at 9216 and the other at 1500 is a link that forwards small frames perfectly
+-- and drops every jumbo, which is exactly the shape of "ping works, the
+-- application times out" — and it is fixed by changing one setting on one named
+-- port, not by measuring the path again.
+--
+-- NULL is the normal absent value and 0 is never stored: a device that does not
+-- implement the column, or a port it did not answer for, must not look like a
+-- port configured with an MTU of zero. The mismatch rule compares two ends and
+-- a fabricated 0 on a silent port would make every such link a finding.
+--
+-- INT UNSIGNED rather than SMALLINT: ifMtu is an Integer32 and jumbo ports
+-- legitimately report 9216 today, while some platforms report larger values for
+-- their internal interfaces. A width chosen to just fit today's hardware is the
+-- kind of thing that silently truncates on the next generation.
+ALTER TABLE `device_interfaces`
+  ADD COLUMN `mtu` INT UNSIGNED NULL DEFAULT NULL AFTER `speed_mbps`;

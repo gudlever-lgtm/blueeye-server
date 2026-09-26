@@ -477,6 +477,21 @@
 .ui .diag-run-status { display: flex; align-items: center; flex-wrap: wrap; gap: var(--s-3);
   margin-top: var(--s-2); }
 .ui .run-count { width: 64px; text-align: right; }
+/* The guided walk-through: one step per row, the current one pulled out of the
+   list by a left rule rather than by colour, so it reads the same in both
+   themes and for a reader who cannot tell the two apart. */
+.ui .diag-step { display: flex; gap: var(--s-3); padding: var(--s-3) 0;
+  border-top: 1px solid var(--hairline); }
+.ui .diag-step:first-child { border-top: 0; }
+.ui .diag-step-n { flex: 0 0 2.25rem; font-variant-numeric: tabular-nums;
+  font-size: var(--fs-xs); color: var(--muted); padding-top: var(--s-1); }
+.ui .diag-step-main { flex: 1 1 auto; min-width: 0; }
+.ui .diag-step-head { display: flex; align-items: center; gap: var(--s-2); flex-wrap: wrap; }
+.ui .diag-step-now { border-left: 2px solid var(--muted); padding-left: var(--s-3);
+  margin-left: calc(var(--s-3) * -1); }
+.ui .diag-step-done .diag-step-main { opacity: 0.75; }
+.ui .diag-step-actions { display: flex; gap: var(--s-2); flex-wrap: wrap;
+  margin-top: var(--s-2); }
 
 
 /* ---- Troubleshooting (public/views/troubleshooting.js) --------------------
@@ -597,12 +612,12 @@
   padding: var(--s-1) var(--s-2); border: 1px solid var(--border); border-radius: 999px;
   background: var(--accent-weak); color: var(--fg); font: inherit; font-size: var(--fs-xs); cursor: pointer; }
 .ui .ms-pick:hover { border-color: var(--accent); }
-.ui .ms-pick .ms-x { color: var(--fg-muted); font-size: var(--fs-md); line-height: 1; }
+.ui .ms-pick .ms-x { color: var(--muted); font-size: var(--fs-md); line-height: 1; }
 .ui .ms-pick:hover .ms-x { color: var(--fg); }
-.ui .ms-none { color: var(--fg-muted); font-size: var(--fs-xs); }
+.ui .ms-none { color: var(--muted); font-size: var(--fs-xs); }
 .ui .ms-head { display: flex; align-items: center; gap: var(--s-2); }
 .ui .ms-search { flex: 1 1 auto; min-width: 0; }
-.ui .ms-summary { color: var(--fg-muted); font-size: var(--fs-xs); white-space: nowrap; }
+.ui .ms-summary { color: var(--muted); font-size: var(--fs-xs); white-space: nowrap; }
 /* Tall enough to show that scrolling exists, short enough not to own the form. */
 .ui .ms-list { max-height: 220px; overflow-y: auto; border: 1px solid var(--border);
   border-radius: var(--radius); background: var(--surface); display: grid; }

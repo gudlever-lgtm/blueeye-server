@@ -40,6 +40,11 @@ function createSnmpTopologyIngest({
   // Switch-port link history (./switchPortStateService.js): the ports whose
   // status this poll changed, recorded instead of overwritten.
   switchPortStateService = null,
+  // The link-MTU mismatch rule (./linkMtuService.js). Runs here for the same
+  // reason loop detection does — both halves of its evidence have just been
+  // re-read — but throttles itself, because a mismatch is a configuration and
+  // is no truer a minute after the poll that found it.
+  linkMtuService = null,
   // Switch-seen LLDP changes into topology_changes
   // (topologyChangeService.processDeviceSnapshot).
   topologyChangeService = null,
@@ -316,8 +321,21 @@ function createSnmpTopologyIngest({
       }
     }
 
+    // The link-MTU mismatch rule. Best-effort and last, like the loop check
+    // above: a rule that throws must never cost the cycle that fed it. It runs
+    // only when a port inventory was actually stored — without one the MTUs are
+    // the same rows it looked at last time.
+    let linkMtuFindings = 0;
+    if (linkMtuService && interfaceRows > 0) {
+      try {
+        linkMtuFindings = await linkMtuService.check({ agentId });
+      } catch (err) {
+        if (logger) logger.warn(`snmp-topology: link MTU check failed (${err.message})`);
+      }
+    }
+
     return {
-      stored, fdbRows, neighbourRows, interfaceRows, vlanRows, renumbered, loops,
+      stored, fdbRows, neighbourRows, interfaceRows, vlanRows, renumbered, loops, linkMtuFindings,
       portTransitions, neighbourChanges, arpRows, inventoryRows,
       refused, failuresRecorded, deviceErrors,
     };

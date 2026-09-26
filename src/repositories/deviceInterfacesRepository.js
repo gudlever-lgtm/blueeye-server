@@ -15,7 +15,7 @@
 
 const COLUMNS = [
   'id', 'device_id', 'if_name', 'name_source', 'if_index', 'if_index_changed_at',
-  'if_alias', 'if_descr', 'if_type', 'speed_mbps', 'admin_status', 'oper_status',
+  'if_alias', 'if_descr', 'if_type', 'speed_mbps', 'mtu', 'admin_status', 'oper_status',
   'phys_address', 'first_seen', 'last_seen',
 ];
 const BASE_COLUMNS = COLUMNS.join(', ');
@@ -39,6 +39,7 @@ function mapRow(row) {
     ifDescr: row.if_descr ?? null,
     ifType: row.if_type == null ? null : Number(row.if_type),
     speedMbps: row.speed_mbps == null ? null : Number(row.speed_mbps),
+    mtu: row.mtu == null ? null : Number(row.mtu),
     adminStatus: row.admin_status ?? null,
     operStatus: row.oper_status ?? null,
     physAddress: row.phys_address ?? null,
@@ -105,7 +106,7 @@ function createDeviceInterfacesRepository(db) {
         });
       }
 
-      placeholders.push('(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
+      placeholders.push('(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
       params.push(
         deviceId, i.ifName, i.nameSource || 'ifName', next,
         // Only stamped when it actually moved; a first sighting is not a move.
@@ -113,6 +114,7 @@ function createDeviceInterfacesRepository(db) {
         i.ifAlias ?? null, i.ifDescr ?? null,
         i.ifType == null ? null : Number(i.ifType),
         i.speedMbps == null ? null : Number(i.speedMbps),
+        i.mtu == null ? null : Number(i.mtu),
         i.adminStatus ?? null, i.operStatus ?? null, i.physAddress ?? null,
         at, at,
       );
@@ -123,7 +125,7 @@ function createDeviceInterfacesRepository(db) {
     const [res] = await pool.query(
       `INSERT INTO device_interfaces
          (device_id, if_name, name_source, if_index, if_index_changed_at,
-          if_alias, if_descr, if_type, speed_mbps, admin_status, oper_status,
+          if_alias, if_descr, if_type, speed_mbps, mtu, admin_status, oper_status,
           phys_address, first_seen, last_seen)
        VALUES ${placeholders.join(', ')}
        ON DUPLICATE KEY UPDATE
@@ -134,6 +136,7 @@ function createDeviceInterfacesRepository(db) {
          if_descr     = VALUES(if_descr),
          if_type      = VALUES(if_type),
          speed_mbps   = VALUES(speed_mbps),
+         mtu          = VALUES(mtu),
          admin_status = VALUES(admin_status),
          oper_status  = VALUES(oper_status),
          phys_address = VALUES(phys_address),
@@ -241,6 +244,26 @@ function createDeviceInterfacesRepository(db) {
     return rows[0] ? mapRow(rows[0]) : null;
   }
 
+  // Every port that carries an MTU, fleet-wide. The link-MTU mismatch rule
+  // (src/devices/linkMtuMismatch.js) needs BOTH ends of a cable, and the two
+  // ends belong to two different switches which may be polled by two different
+  // agents — so it cannot be answered one device at a time.
+  //
+  // Narrowed to the rows with an MTU rather than every port in the estate: a
+  // port whose MTU the device never reported is excluded from that comparison
+  // anyway, and reading it would make this the largest query on the path for
+  // rows the caller then throws away.
+  async function listAll({ limit = 50000 } = {}) {
+    const lim = Number.isInteger(limit) && limit > 0 && limit <= 500000 ? limit : 50000;
+    const [rows] = await pool.query(
+      `SELECT ${BASE_COLUMNS} FROM device_interfaces
+        WHERE mtu IS NOT NULL
+        ORDER BY device_id ASC, id ASC LIMIT ?`,
+      [lim],
+    );
+    return rows.map(mapRow);
+  }
+
   async function countForDevice(deviceId) {
     const [rows] = await pool.query(
       'SELECT COUNT(*) AS n FROM device_interfaces WHERE device_id = ?', [deviceId],
@@ -282,7 +305,7 @@ function createDeviceInterfacesRepository(db) {
   }
 
   return {
-    upsertMany, setStatus, idMapForDevice, listForDevice, listMacs, findById, countForDevice, purgeBefore,
+    upsertMany, setStatus, idMapForDevice, listForDevice, listAll, listMacs, findById, countForDevice, purgeBefore,
   };
 }
 

@@ -95,6 +95,7 @@ const { createSflowCounterIngest } = require('./devices/sflowCounterIngest');
 const { createSflowExportersRepository } = require('./repositories/sflowExportersRepository');
 const { createL2LoopService } = require('./analysis/l2LoopService');
 const { createSnmpTopologyIngest } = require('./devices/snmpTopologyIngest');
+const { createLinkMtuService } = require('./devices/linkMtuService');
 const { createDeviceFindingSink } = require('./devices/findingSink');
 const { createSwitchPortStateService } = require('./devices/switchPortStateService');
 const { createBurstRunsRepository } = require('./repositories/burstRunsRepository');
@@ -806,6 +807,17 @@ function start() {
   // because the SNMP topology ingest diffs each switch's own LLDP table with it.
   const topologyChangesRepo = createTopologyChangesRepository(db);
   const topologyChangeService = createTopologyChangeService({ topologyChangesRepo, lldpNeighborsRepo, auditLogger });
+  // The link-MTU mismatch rule (migration 139): two switch ports LLDP/CDP says
+  // are cabled together, configured with different MTUs. Its evidence is
+  // fleet-wide — a link's two ends belong to two switches, possibly polled by
+  // two different agents — so it reads across devices and throttles itself.
+  const linkMtuService = createLinkMtuService({
+    snmpDevicesRepo,
+    snmpNeighborsRepo,
+    deviceInterfacesRepo,
+    findingSink: deviceFindingSink,
+    logger,
+  });
   const snmpTopologyIngest = createSnmpTopologyIngest({
     snmpDevicesRepo,
     fdbEntriesRepo,
@@ -814,6 +826,7 @@ function start() {
     l2LoopService,
     switchPortStateService,
     topologyChangeService,
+    linkMtuService,
     deviceArpRepo,
     logger,
   });

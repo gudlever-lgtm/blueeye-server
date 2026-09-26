@@ -22,6 +22,7 @@ const { createAuditLogger } = require('../src/services/complianceLogger');
 const { createInterfaceStateService } = require('../src/health/interfaceStateService');
 const { createDeviceEventIngest } = require('../src/devices/deviceEventIngest');
 const { createSnmpTopologyIngest } = require('../src/devices/snmpTopologyIngest');
+const { createLinkMtuService } = require('../src/devices/linkMtuService');
 const { createSnmpCounterIngest } = require('../src/devices/snmpCounterIngest');
 const { createBurstService } = require('../src/probes/burstService');
 const { createSnapshotService } = require('../src/evidence/snapshotService');
@@ -1180,7 +1181,7 @@ function makeDeviceInterfacesRepo(overrides = {}) {
     id: r.id, deviceId: r.device_id, ifName: r.if_name, nameSource: r.name_source,
     ifIndex: r.if_index, ifIndexChangedAt: iso(r.if_index_changed_at),
     ifAlias: r.if_alias, ifDescr: r.if_descr, ifType: r.if_type,
-    speedMbps: r.speed_mbps, adminStatus: r.admin_status, operStatus: r.oper_status,
+    speedMbps: r.speed_mbps, mtu: r.mtu ?? null, adminStatus: r.admin_status, operStatus: r.oper_status,
     physAddress: r.phys_address, firstSeen: iso(r.first_seen), lastSeen: iso(r.last_seen),
   });
 
@@ -1222,6 +1223,7 @@ function makeDeviceInterfacesRepo(overrides = {}) {
           existing.if_descr = i.ifDescr ?? null;
           existing.if_type = i.ifType ?? null;
           existing.speed_mbps = i.speedMbps ?? null;
+          existing.mtu = i.mtu ?? null;
           existing.admin_status = i.adminStatus ?? null;
           existing.oper_status = i.operStatus ?? null;
           existing.phys_address = i.physAddress ?? null;
@@ -1231,7 +1233,7 @@ function makeDeviceInterfacesRepo(overrides = {}) {
             id: (seq += 1), device_id: Number(deviceId), if_name: i.ifName,
             name_source: i.nameSource || 'ifName', if_index: next, if_index_changed_at: null,
             if_alias: i.ifAlias ?? null, if_descr: i.ifDescr ?? null, if_type: i.ifType ?? null,
-            speed_mbps: i.speedMbps ?? null, admin_status: i.adminStatus ?? null,
+            speed_mbps: i.speedMbps ?? null, mtu: i.mtu ?? null, admin_status: i.adminStatus ?? null,
             oper_status: i.operStatus ?? null, phys_address: i.physAddress ?? null,
             first_seen: at, last_seen: at,
           });
@@ -1292,6 +1294,12 @@ function makeDeviceInterfacesRepo(overrides = {}) {
     }),
     countForDevice: overrides.countForDevice || (async (deviceId) => rows
       .filter((r) => r.device_id === Number(deviceId)).length),
+    // Fleet-wide, and narrowed to the ports that HAVE an MTU, as the real
+    // repository narrows it: the link-mismatch rule excludes the rest anyway.
+    listAll: overrides.listAll || (async ({ limit = 50000 } = {}) => rows
+      .filter((r) => r.mtu != null)
+      .sort((a, b) => (a.device_id - b.device_id) || (a.id - b.id))
+      .slice(0, limit).map(mapOut)),
     listMacs: overrides.listMacs || (async ({ limit = 50000 } = {}) => rows
       .filter((r) => r.phys_address).slice(0, limit)
       .map((r) => ({ deviceId: r.device_id, physAddress: r.phys_address }))),
@@ -4101,6 +4109,17 @@ function makeApp(overrides = {}) {
       // Loop detection runs off the back of a topology cycle, so a test that
       // wires one gets it exercised end-to-end rather than stubbed.
       l2LoopService: overrides.l2LoopService || null,
+      // The REAL link-MTU rule over the fakes, for the same reason: it is
+      // driven by a topology cycle, and a test that submits two switches with
+      // mismatched ports should see the finding come out the other end. The
+      // interval throttle is off here — a test submits two cycles seconds
+      // apart, and a throttle tuned for a live fleet would swallow the second.
+      linkMtuService: overrides.linkMtuService === undefined
+        ? (deviceInterfacesRepo && snmpNeighborsRepo ? createLinkMtuService({
+          snmpDevicesRepo, snmpNeighborsRepo, deviceInterfacesRepo,
+          findingSink: deviceFindingSink, minIntervalMs: 0,
+        }) : null)
+        : overrides.linkMtuService,
       switchPortStateService,
       topologyChangeService,
       deviceArpRepo,

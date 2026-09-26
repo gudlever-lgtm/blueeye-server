@@ -256,6 +256,7 @@ an operator's screen.
 | GET | `/api/diagnose/:id` | viewer+ | the plan, test status and last evaluation |
 | POST | `/api/diagnose/:id/run` | operator+ | push the tests to their agents |
 | POST | `/api/diagnose/:id/evaluate` | operator+ | apply the rules, mark every cause |
+| GET | `/api/diagnose/:id/walkthrough` | viewer+ | the same session as one ordered list of steps |
 | GET | `/api/playbooks` | viewer+ | the catalogue |
 | GET | `/api/playbooks/:id` | viewer+ | one playbook |
 
@@ -283,6 +284,65 @@ unrelated: this one is the technician's, that one is the installer's.
 | 409 | `/run` on a plan with no target or no agent |
 | 500 | JSON, no stack trace |
 | 503 | the session store is not wired (the playbook endpoints still answer) |
+
+---
+
+## The guided walk-through
+
+`GET /api/diagnose/:id/walkthrough` (`src/diagnose/walkthrough.js`, pure) returns
+the same session arranged as **one ordered list of steps**.
+
+**Why it exists.** A plan is a good answer to *what should I look at* and a bad
+answer to *what do I do now*. It hands a technician four causes, nine tests and a
+page of screens all at once — and the person who most needs it, the one who does
+not already know which measurement settles which question, is exactly the person
+who cannot order them. They run everything, read everything, and are no closer to
+a verdict than when they started.
+
+**The order is cheap-and-decisive first**, by probe type rather than by the order
+the playbooks happen to list their tests in:
+
+| | |
+| --- | --- |
+| 1 | does anything answer at all — `ping`, `dhcp` |
+| 2 | is the port open, does the name resolve — `dns`, `rdns`, `tcp`, `tls` |
+| 3 | where on the path — `traceroute`, `tcptraceroute`, `path_mtu` |
+| 4 | does the application answer — `http`, `curl`, `pageload`, `transaction` |
+
+That is the order a network engineer works in, and the reason is not taste: step 4
+failing means nothing until step 1 has passed, while step 1 failing makes steps
+2–4 a waste of an afternoon. Forward goes before reverse at the same rank — "A
+cannot reach B" is worth knowing before "B cannot reach A". A probe type the
+order does not know sorts after the ones it does, so a new one lands at the end
+rather than at random.
+
+Then the screens worth reading (a cause the evidence has ruled out does not get
+its screens read, and a screen two causes both want is read once), then the
+verdict, then the fixes — **only for a cause the evaluation confirmed**. A fix
+offered for a cause nothing confirmed is an invitation to change a setting on a
+network that did not have that problem, and the change gets blamed for the next
+unrelated fault.
+
+**A finished step says what it FOUND, not what it measured.** Each measure step
+carries the rules its measurement made decidable, each with the playbook's own
+sentence, so the reader is not handed a number to interpret. The outcomes are
+`signal` (a rule fired on it), `clear` (its rules ran and none fired — something
+has been eliminated, which is progress and says so), `unread` (nothing in this
+plan reads it), `waiting` and `failed`. Rules are matched to a step by the root
+token of their fact paths, anchored on a boundary and a dot, so `reverse.ping.*`
+never attaches to the forward step and `tcp.*` never to `tcptraceroute`.
+
+**It decides nothing.** The verdict stays the evaluation's — this endpoint
+arranges what `POST /diagnose` planned and `POST /evaluate` concluded, and
+nothing else. That is what keeps it from becoming a second, quieter place where a
+cause gets confirmed. It is a `GET`, viewer+, and it dispatches no probe: the
+dashboard's per-step **Run this step** goes through `POST /diagnose/:id/run` with
+that step's own test ids, like every other run.
+
+**It is honest about being stuck.** `stalled` is true when the current step
+cannot move on its own — a test the plan could not schedule, or one whose
+dispatch failed — which is the state a walk-through has to name rather than show
+a spinner for.
 
 ---
 

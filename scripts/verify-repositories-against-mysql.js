@@ -541,10 +541,21 @@ check('device interfaces: the port NAME is the identity, and a move is reported'
   const device = await devices.create({ host: '10.14.0.20', displayName: 'Access switch' });
 
   const first = await repo.upsertMany(device.id, [
-    { ifName: 'Gi0/1', ifIndex: 1, speedMbps: 1000, ifAlias: 'uplink', operStatus: 'up' },
+    { ifName: 'Gi0/1', ifIndex: 1, speedMbps: 1000, mtu: 9216, ifAlias: 'uplink', operStatus: 'up' },
     { ifName: 'Gi0/2', ifIndex: 2, speedMbps: 1000, operStatus: 'down' },
   ]);
   assert.ok(first.upserted >= 2, 'the wide upsert did not write');
+
+  // ifMtu (migration 139). Written and read back as it was given, and ABSENT
+  // stays null: the link-mismatch rule compares two ends, so a port nobody
+  // measured must not come back as a number to compare against.
+  {
+    const { byName } = await repo.idMapForDevice(device.id);
+    const uplink = await repo.findById(byName.get('Gi0/1'));
+    assert.strictEqual(uplink.mtu, 9216, 'the jumbo MTU did not survive the round trip');
+    const access = await repo.findById(byName.get('Gi0/2'));
+    assert.strictEqual(access.mtu, null, 'an unreported MTU must read as null');
+  }
   assert.deepStrictEqual(first.renumbered, [], 'a first sighting is not a move');
 
   // The whole reason the name is the key: a line card reload renumbers the

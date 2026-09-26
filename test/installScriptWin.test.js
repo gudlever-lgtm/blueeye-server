@@ -471,3 +471,64 @@ test('BLUEEYE_REQUIRE_SIGNED_INSTALL turns an unverifiable release into a refusa
     assert.match(script, /BLUEEYE_REQUIRE_SIGNED_INSTALL/);
   }
 });
+
+// ---- The Windows agent stops needing this script -----------------------------
+// The installer registers a Scheduled Task, and a task can be ended and re-run.
+// It was nevertheless tagged BLUEEYE_RUNTIME=unmanaged, so every Windows agent
+// reported itself as supervised by nothing, declined the one-click update, and
+// could only be moved by downloading and running update.ps1 — outside the signed,
+// command-authenticated channel that already existed for systemd.
+
+test('the installer tells the agent it is supervised by the task it just registered', () => {
+  const script = renderInstallPs1({ serverUrl: 'https://x.test', code: 'C', sourceSha: SHA });
+  assert.match(script, /set "BLUEEYE_RUNTIME=scheduled-task"/);
+  assert.ok(!/BLUEEYE_RUNTIME=unmanaged/.test(script),
+    'a registered Scheduled Task IS a supervisor; saying otherwise is what cost the fleet its update channel');
+  // ...and it is the same task the value names.
+  assert.match(script, /Register-ScheduledTask -TaskName \$ServiceName/);
+});
+
+test('the updater rewrites the runtime line in the launcher it preserves', () => {
+  // Without this the fix never reaches a host already in the field: the update
+  // restores the original launcher verbatim, BLUEEYE_RUNTIME=unmanaged and all,
+  // so the agent keeps declining one-click updates and this script stays the only
+  // way to move it — forever.
+  const script = renderUpdatePs1({ serverUrl: 'https://x.test', sourceSha: SHA });
+  const restoreIdx = script.indexOf('Copy-Item -Path $launcherBackup -Destination $launcher -Force');
+  const rewriteIdx = script.indexOf("'set \"BLUEEYE_RUNTIME=scheduled-task\"'");
+  assert.ok(restoreIdx !== -1, 'the launcher is still preserved');
+  assert.ok(rewriteIdx > restoreIdx, 'and the runtime line is rewritten AFTER it is restored');
+  // The regex must survive the template literal it is built in: a single
+  // backslash there would have been eaten, leaving /^s*set.../ which matches
+  // nothing a launcher contains.
+  assert.ok(script.includes('\\s*set\\s+"?BLUEEYE_RUNTIME='),
+    'the runtime-line pattern kept its backslashes through the template literal');
+});
+
+test('the updater leaves the rest of a preserved launcher alone', () => {
+  const script = renderUpdatePs1({ serverUrl: 'https://x.test', sourceSha: SHA });
+  // Everything else in that file is the host's own configuration — server URL,
+  // certificate pin, paths — and an operator may have tuned it. Only lines that
+  // set BLUEEYE_RUNTIME are replaced; every other line passes through.
+  assert.match(script, /\} else \{ \$_ \}/);
+  assert.ok(!/Set-Content -Path \$launcher -Value \$launcherLines[\s\S]*Copy-Item -Path \$launcherBackup/.test(script),
+    'the standard launcher is only written when there was none to preserve');
+});
+
+test('a launcher with no runtime line at all gets one, before the cd', () => {
+  // Hand-rolled and very old launchers have no BLUEEYE_RUNTIME line. Appending
+  // after the `cd` would still work, but the generated file sets every variable
+  // before it, and a launcher that reads like the generated one is one an
+  // operator can diff against.
+  const script = renderUpdatePs1({ serverUrl: 'https://x.test', sourceSha: SHA });
+  assert.ok(script.includes('\\s*cd /d '), 'it anchors on the cd every generated launcher has');
+  assert.match(script, /\$out\.Add\('set "BLUEEYE_RUNTIME=scheduled-task"'\)/);
+});
+
+test('the update script stays pure ASCII after the rewrite block', () => {
+  // PowerShell 5.1 reads a BOM-less .ps1 in the host code page; the bodies are
+  // kept ASCII so an em-dash cannot turn into a quote that breaks the parse.
+  const script = renderUpdatePs1({ serverUrl: 'https://x.test', sourceSha: SHA });
+  const bad = [...script].filter((c) => c.charCodeAt(0) > 127);
+  assert.deepEqual(bad, [], `non-ASCII in the generated script: ${JSON.stringify(bad.join(''))}`);
+});

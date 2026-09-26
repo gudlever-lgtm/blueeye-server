@@ -81,12 +81,12 @@ const WALKTHROUGH = {
   steps: [
     {
       n: 1, id: 'measure-1', kind: 'measure', status: 'pending', probeType: 'ping', direction: 'forward',
-      target: '8.8.8.8', params: { count: 20 }, testIds: [102], causeIds: ['upstream-loss'],
+      target: '8.8.8.8', params: { count: 20 }, testIds: [102], resultIds: [], measurements: [], causeIds: ['upstream-loss'],
       why: 'Does anything answer at all', outcome: 'waiting', decided: [], detail: null,
     },
     {
       n: 2, id: 'measure-2', kind: 'measure', status: 'pending', probeType: 'path_mtu', direction: 'forward',
-      target: '8.8.8.8', params: {}, testIds: [101], causeIds: ['mtu-blackhole'],
+      target: '8.8.8.8', params: {}, testIds: [101], resultIds: [], measurements: [], causeIds: ['mtu-blackhole'],
       why: 'How big a packet the path carries', outcome: 'waiting', decided: [], detail: null,
     },
     {
@@ -369,6 +369,47 @@ test('a viewer sees the sequence and cannot press anything on it', async (t) => 
   await settle();
   assert.ok(walkSteps(doc).length >= 1, 'a viewer lost the walk-through entirely');
   assert.equal(doc.querySelectorAll('#view .diag-step-actions .btn-primary').length, 0);
+});
+
+test('a finished step shows the measurement beside the verdict', async (t) => {
+  // A verdict nobody can check is an assertion. The size sweep in particular:
+  // the row's own loss column describes the SMALLEST size, so "0% loss" is
+  // exactly what a probe that found an MTU ceiling reports there.
+  const done = JSON.parse(JSON.stringify(WALKTHROUGH));
+  done.steps[0].status = 'done';
+  done.steps[0].outcome = 'signal';
+  done.steps[0].resultIds = [500];
+  done.steps[0].measurements = [{
+    id: 500, type: 'ping', target: '8.8.8.8', ts: '2026-01-01T00:00:00.000Z', ok: true,
+    rttMs: 12.4,
+    sizes: [
+      { size: 64, lossPct: 0, measured: true, mtuHint: null },
+      { size: 1472, lossPct: 100, measured: true, mtuHint: 1400 },
+    ],
+  }];
+  done.steps[0].decided = [{ ruleId: 'loss_size_dependent', effect: 'confirm', because: 'Small packets pass and large ones do not.', result: true }];
+  done.position = 2;
+  const { doc, window, errors } = boot({ t, routes: SESSION({ 'GET /api/diagnose/42/walkthrough': done }) });
+  await settle();
+  await askFor(doc, window, 'large transfers stall over the tunnel');
+  await settle();
+  assert.deepEqual(errors, []);
+
+  const step = walkSteps(doc)[0];
+  assert.match(step.textContent, /Small packets pass and large ones do not/, 'the verdict is missing');
+  assert.ok(step.querySelector('.kv-ui'), 'the measurement is not rendered');
+  assert.match(step.textContent, /12\.4 ms/);
+  assert.match(step.textContent, /Loss at 64 bytes/);
+  assert.match(step.textContent, /Loss at 1472 bytes/);
+  assert.match(step.textContent, /a router said 1400/);
+});
+
+test('a step with no measurement renders no empty measurement block', async (t) => {
+  const { doc, window } = boot({ t, routes: SESSION() });
+  await settle();
+  await askFor(doc, window, 'large transfers stall over the tunnel');
+  await settle();
+  assert.equal(walkSteps(doc)[0].querySelectorAll('.kv-ui').length, 0);
 });
 
 test('a stalled walk-through says so instead of showing a spinner forever', async (t) => {

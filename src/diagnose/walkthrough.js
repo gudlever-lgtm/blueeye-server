@@ -84,6 +84,78 @@ const pick = (v, locale) => (v && typeof v === 'object' && !Array.isArray(v)
   ? (v[locale] ?? v[DEFAULT_LOCALE] ?? null)
   : (v ?? null));
 
+// Null-safe, and the null check is the load-bearing half: `Number(null)` is 0
+// and `Number('')` is 0, so a coercion alone turns "the probe did not measure
+// this" into "it measured zero" — which on a loss column reads as a clean link
+// and on a round trip as an instant one.
+const num = (v) => {
+  if (v === null || v === undefined || v === '') return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+};
+
+// The measurement behind a finished step, reduced to what belongs ON the step.
+//
+// WHY A SUMMARY AND NOT THE ROW. A probe result is a wide record — hops, TLS
+// chains, DHCP offers, element timings — and the screen it belongs on is Probes.
+// What a walk-through step needs is the two or three numbers the reader would
+// have gone and looked up to check the verdict for themselves, next to the
+// verdict. Anything more turns a sequence back into a dump, which is the thing
+// the walk-through exists to fix.
+//
+// SHAPED BY TYPE, because the deciding number is not the same one twice: for a
+// ping it is loss per SIZE (a size sweep is the whole measurement — 64 through
+// and 1472 gone is not loss, it is an MTU), for a path_mtu it is the ceiling
+// and whether anything admitted to it, for an http it is the status code.
+//
+// Never invented: a field the row does not carry is absent, and `ok: false`
+// with a reason is reported as the failure it is rather than as a blank.
+// Pure — a row in, a small object out.
+function summariseResult(row) {
+  if (!row) return null;
+  const out = {
+    id: row.id ?? null,
+    type: row.type ?? null,
+    target: row.target ?? null,
+    ts: row.ts ?? null,
+    ok: row.ok === true,
+  };
+  const rtt = num(row.rttMs);
+  const loss = num(row.lossPct);
+  if (rtt != null) out.rttMs = rtt;
+  if (loss != null) out.lossPct = loss;
+  if (row.status != null && row.status !== '') out.status = row.status;
+  if (row.errorCode) out.errorCode = row.errorCode;
+  if (row.detail) out.detail = String(row.detail).slice(0, 200);
+
+  // The ping size sweep. THE measurement for an MTU fault, and the one a single
+  // loss percentage hides completely: the row's own loss column describes the
+  // SMALLEST size, so a sweep whose 1472 vanished still reads 0% there.
+  if (Array.isArray(row.sizes) && row.sizes.length) {
+    out.sizes = row.sizes.slice(0, 8).map((z) => ({
+      size: num(z && z.size),
+      lossPct: num(z && z.lossPct),
+      measured: (z && z.measured) !== false,
+      mtuHint: num(z && z.mtuHint),
+    }));
+  }
+  // The path-MTU verdict, as the probe reported it.
+  if (row.mtu && typeof row.mtu === 'object') {
+    const m = row.mtu;
+    out.mtu = {
+      pathMtu: num(m.pathMtu ?? m.path_mtu),
+      blackholeDetected: (m.blackholeDetected ?? m.blackhole_detected) === true,
+      icmpFragNeededSeen: (m.icmpFragNeededSeen ?? m.icmp_frag_needed_seen) === true,
+      mtuDropAtHop: num(m.mtuDropAtHop ?? m.mtu_drop_at_hop),
+      recommendedMss: num(m.recommendedMss ?? m.recommended_mss),
+    };
+  }
+  // A path probe's length. The hops themselves live on Probes; how far it got
+  // is what the step needs.
+  if (Array.isArray(row.hops) && row.hops.length) out.hopCount = row.hops.length;
+  return out;
+}
+
 const rank = (probeType) => {
   const i = PROBE_ORDER.indexOf(String(probeType || ''));
   return i === -1 ? PROBE_ORDER.length : i;
@@ -133,7 +205,17 @@ function measureStatus(rows) {
 // something outside this screen (a blocked test, an agent that is not
 // connected), which is the state a walk-through has to be honest about rather
 // than showing a spinner forever.
-function buildWalkthrough({ session = null, tests = [], evaluation = null, locale = DEFAULT_LOCALE } = {}) {
+function buildWalkthrough({
+  session = null, tests = [], evaluation = null, results = [], locale = DEFAULT_LOCALE,
+} = {}) {
+  // probe_results id -> the row, for the measurement each finished step carries.
+  // Optional: without it the steps still say what they decided, they just cannot
+  // show the numbers beside it. The route reads them; nothing here does I/O.
+  const byResultId = new Map();
+  for (const r of Array.isArray(results) ? results : []) {
+    if (r && r.id != null) byResultId.set(Number(r.id), r);
+  }
+
   const plan = (session && session.plan) || {};
   const planTests = Array.isArray(plan.tests) ? plan.tests : [];
   const causes = Array.isArray(plan.causes) ? plan.causes : [];
@@ -176,6 +258,14 @@ function buildWalkthrough({ session = null, tests = [], evaluation = null, local
       // The catalogue's own sentence for why this test is in the plan.
       why: pick(t.why, locale),
       testIds: rows.map((r) => r.id),
+      // The stored probe_results rows this step produced, and the measurement
+      // itself where the caller handed one in. Without them a finished step
+      // states a verdict and gives the reader nowhere to check it — which is
+      // how a walk-through stops being arguable.
+      resultIds: rows.map((r) => r.probeResultId).filter((id) => id != null),
+      measurements: rows
+        .map((r) => (r.probeResultId != null ? summariseResult(byResultId.get(Number(r.probeResultId))) : null))
+        .filter(Boolean),
       causeIds: t.askedBy || [],
       outcome,
       // Only the rules this measurement actually decided, each with the
@@ -205,6 +295,8 @@ function buildWalkthrough({ session = null, tests = [], evaluation = null, local
       // The plan's own reason, already a sentence.
       why: pick(s.reason, locale),
       testIds: [],
+      resultIds: [],
+      measurements: [],
       outcome: null,
       decided: [],
       detail: null,
@@ -235,6 +327,8 @@ function buildWalkthrough({ session = null, tests = [], evaluation = null, local
         why: pick(v.look_for ?? v.lookFor, locale),
         causeIds: [c.id],
         testIds: [],
+        resultIds: [],
+        measurements: [],
         outcome: null,
         decided: [],
         detail: null,
@@ -262,6 +356,8 @@ function buildWalkthrough({ session = null, tests = [], evaluation = null, local
       : null,
     why: null,
     testIds: [],
+    resultIds: [],
+    measurements: [],
     outcome: null,
     decided: [],
     detail: null,
@@ -283,6 +379,8 @@ function buildWalkthrough({ session = null, tests = [], evaluation = null, local
         fix: { text: f.text, complete: f.complete !== false },
         why: null,
         testIds: [],
+        resultIds: [],
+        measurements: [],
         outcome: null,
         decided: [],
         detail: null,
@@ -307,4 +405,4 @@ function buildWalkthrough({ session = null, tests = [], evaluation = null, local
   };
 }
 
-module.exports = { buildWalkthrough, PROBE_ORDER, STEP, STATUS, OUTCOME };
+module.exports = { buildWalkthrough, summariseResult, PROBE_ORDER, STEP, STATUS, OUTCOME };

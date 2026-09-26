@@ -287,6 +287,41 @@
         return t('diag.walk.step.fix');
       }
 
+      // The measurement behind a finished step, as the few numbers a reader
+      // would otherwise go to Probes to look up. Not the whole row: the step
+      // shows what it decided AND what it decided from, and anything past that
+      // turns the sequence back into the dump it replaces.
+      function measurementBlock(m) {
+        var pairs = [];
+        pairs.push([t('diag.walk.m.answered'), m.ok ? t('diag.walk.m.yes') : t('diag.walk.m.no')]);
+        if (m.status != null) pairs.push([t('diag.walk.m.status'), String(m.status)]);
+        if (m.rttMs != null) pairs.push([t('diag.walk.m.rtt'), m.rttMs + ' ms']);
+        // Only where there is no size sweep: a sweep's own rows say it better,
+        // and the row's loss column describes the SMALLEST size, which reads as
+        // "0% loss" on exactly the probe that found an MTU ceiling.
+        if (m.lossPct != null && !(m.sizes && m.sizes.length)) pairs.push([t('diag.walk.m.loss'), m.lossPct + ' %']);
+        if (m.hopCount != null) pairs.push([t('diag.walk.m.hops'), String(m.hopCount)]);
+        if (m.mtu) {
+          if (m.mtu.pathMtu != null) pairs.push([t('diag.walk.m.pathMtu'), m.mtu.pathMtu + ' B']);
+          pairs.push([t('diag.walk.m.blackhole'),
+            m.mtu.blackholeDetected ? t('diag.walk.m.yes') : t('diag.walk.m.no')]);
+          if (m.mtu.mtuDropAtHop != null) pairs.push([t('diag.walk.m.dropAtHop'), String(m.mtu.mtuDropAtHop)]);
+          if (m.mtu.recommendedMss != null) pairs.push([t('diag.walk.m.mss'), m.mtu.recommendedMss + ' B']);
+        }
+        // One row per SIZE. This is the whole measurement for an MTU fault and
+        // the one a single loss figure hides: 64 through and 1472 gone is not
+        // a lossy link, it is an MTU.
+        (m.sizes || []).forEach(function (z) {
+          pairs.push([t('diag.walk.m.size', { size: String(z.size) }),
+            z.measured === false ? t('diag.walk.m.notMeasured')
+              : (z.lossPct == null ? '–' : z.lossPct + ' %')
+                + (z.mtuHint != null ? ' · ' + t('diag.walk.m.hint', { mtu: String(z.mtuHint) }) : '')]);
+        });
+        if (m.errorCode) pairs.push([t('diag.walk.m.error'), String(m.errorCode)]);
+        if (m.detail) pairs.push([t('diag.walk.m.detail'), m.detail]);
+        return ui.keyValues(pairs);
+      }
+
       function stepBlock(step, walk) {
         var isNow = step.n === walk.position;
         var head = el('div', { class: 'diag-step-head' },
@@ -305,6 +340,13 @@
             ? el('div', { class: 'diag-fix' }, step.fix.text)
             : ui.inlineNote(step.fix.text, 'warn'));
         }
+
+        // What it measured, beside what it decided. The verdict comes first
+        // because that is the answer; the numbers are underneath because a
+        // verdict nobody can check is an assertion.
+        (step.measurements || []).forEach(function (m) {
+          main.append(measurementBlock(m));
+        });
 
         // What this step DECIDED — the rules its measurement settled, each with
         // the playbook's own sentence. Not what it measured: a number the

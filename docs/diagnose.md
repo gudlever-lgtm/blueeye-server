@@ -332,6 +332,24 @@ plan reads it), `waiting` and `failed`. Rules are matched to a step by the root
 token of their fact paths, anchored on a boundary and a dot, so `reverse.ping.*`
 never attaches to the forward step and `tcp.*` never to `tcptraceroute`.
 
+**And it carries the measurement it decided from.** A verdict nobody can check
+is an assertion, so a finished step shows both: the rules it settled, and the few
+numbers a reader would otherwise have gone to the Probes screen to look up.
+`summariseResult` shapes them by probe type, because the deciding number is not
+the same one twice — for a `ping` it is loss **per size** (the row's own
+`loss_pct` describes the smallest size, so a sweep whose 1472 vanished still
+reads 0% there), for a `path_mtu` the ceiling, whether anything admitted to it,
+the hop it narrows at and the MSS to clamp to, for an `http` the status code.
+
+The rows come from `probe_results` by the `probe_result_id` the evaluation
+already attached, read one primary key at a time and **scoped to the test's own
+agent** — a result id belonging to another agent reads as absent rather than as
+somebody else's measurement under this session's step. Absent stays absent: a
+field the row does not carry is left out rather than sent as null, and a null
+number is never coerced (`Number(null)` is `0`, which on a loss column reads as a
+clean link). The read is best effort; a failure costs the numbers on one step and
+never the sequence.
+
 **It decides nothing.** The verdict stays the evaluation's — this endpoint
 arranges what `POST /diagnose` planned and `POST /evaluate` concluded, and
 nothing else. That is what keeps it from becoming a second, quieter place where a

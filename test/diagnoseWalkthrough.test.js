@@ -15,7 +15,7 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const request = require('supertest');
 
-const { buildWalkthrough, STEP, STATUS, OUTCOME } = require('../src/diagnose/walkthrough');
+const { buildWalkthrough, summariseResult, STEP, STATUS, OUTCOME } = require('../src/diagnose/walkthrough');
 const { makeApp, makeAgentsRepo, makeDiagnoseSessionsRepo, authHeader } = require('../test-support/fakes');
 
 const F1 = 'Mail kan forbinde, men når der sendes data, mistes pakker eller forbindelsen afbrydes';
@@ -375,4 +375,158 @@ test('a repository that throws is a 500, not a half-built walk-through', async (
   });
   const res = await get(app, '/api/diagnose/1/walkthrough', 'viewer');
   assert.equal(res.status, 500);
+});
+
+// ------------------------------------------------- the measurement behind it
+
+const PING_ROW = {
+  id: 500, type: 'ping', target: '10.0.0.5', ts: '2026-01-01T00:00:00.000Z', ok: true,
+  rttMs: 12.4, lossPct: 0, status: null, hops: null, mtu: null,
+  sizes: [
+    { size: 64, lossPct: 0, measured: true, mtuHint: null },
+    { size: 1472, lossPct: 100, measured: true, mtuHint: null },
+  ],
+};
+const MTU_ROW = {
+  id: 501, type: 'path_mtu', target: '10.0.0.5', ts: '2026-01-01T00:01:00.000Z', ok: true,
+  rttMs: null, lossPct: null,
+  mtu: { pathMtu: 1400, blackholeDetected: true, icmpFragNeededSeen: false, mtuDropAtHop: 5, recommendedMss: 1360 },
+  hops: [{ hop: 1 }, { hop: 2 }, { hop: 3 }, { hop: 4 }, { hop: 5 }],
+};
+
+test('a finished step carries the measurement it decided from', () => {
+  // A verdict nobody can check is an assertion. The step already says which
+  // rules it settled; this is the number the reader would otherwise go to the
+  // Probes screen to look up.
+  const w = buildWalkthrough({
+    session: { plan: plan() },
+    tests: [
+      testRow(10, 'ping', { probeResultId: 500, dispatchedAt: 'x' }),
+      testRow(11, 'path_mtu', { probeResultId: 501, dispatchedAt: 'x' }),
+    ],
+    evaluation: evaluation(),
+    results: [PING_ROW, MTU_ROW],
+  });
+  const [ping, pathMtu] = w.steps;
+  assert.deepEqual(ping.resultIds, [500]);
+  assert.equal(ping.measurements.length, 1);
+  assert.equal(ping.measurements[0].id, 500);
+  assert.equal(ping.measurements[0].rttMs, 12.4);
+  // The size sweep, because a single loss figure hides exactly this: the row's
+  // own lossPct is 0, and 1472 is gone.
+  assert.deepEqual(ping.measurements[0].sizes.map((z) => [z.size, z.lossPct]), [[64, 0], [1472, 100]]);
+
+  assert.equal(pathMtu.measurements[0].mtu.pathMtu, 1400);
+  assert.equal(pathMtu.measurements[0].mtu.blackholeDetected, true);
+  assert.equal(pathMtu.measurements[0].mtu.recommendedMss, 1360);
+  assert.equal(pathMtu.measurements[0].hopCount, 5, 'how far it got, not the hops themselves');
+});
+
+test('a step with no result yet has no measurement, and says nothing instead', () => {
+  const w = buildWalkthrough({
+    session: { plan: plan() },
+    tests: [testRow(10, 'ping', { status: 'dispatched', dispatchedAt: 'x' })],
+    results: [PING_ROW],
+  });
+  assert.deepEqual(w.steps[0].resultIds, []);
+  assert.deepEqual(w.steps[0].measurements, []);
+});
+
+test('a result id with no row behind it is absent, never a blank measurement', () => {
+  // The read is best effort and scoped to the test's own agent, so a row can
+  // legitimately not come back. An empty object rendered as a measurement
+  // would read as "we measured, and it was nothing".
+  const w = buildWalkthrough({
+    session: { plan: plan() },
+    tests: [testRow(10, 'ping', { probeResultId: 999, dispatchedAt: 'x' })],
+    results: [PING_ROW],
+  });
+  assert.deepEqual(w.steps[0].resultIds, [999], 'the link is still stated');
+  assert.deepEqual(w.steps[0].measurements, []);
+});
+
+test('the walk-through works with no results at all', () => {
+  // The sequence and its verdicts never depend on them: a failed read costs
+  // the numbers on one step and nothing else.
+  const w = buildWalkthrough({
+    session: { plan: plan() },
+    tests: [testRow(10, 'ping', { probeResultId: 500, dispatchedAt: 'x' })],
+    evaluation: evaluation(),
+  });
+  assert.equal(w.steps[0].status, STATUS.DONE);
+  assert.equal(w.steps[0].outcome, OUTCOME.SIGNAL);
+  assert.deepEqual(w.steps[0].measurements, []);
+});
+
+test('a null number is absent, never zero', () => {
+  // Number(null) is 0 and Number('') is 0, so a bare coercion turns "the probe
+  // did not measure this" into "it measured zero" — which reads as a clean
+  // link on a loss column and an instant one on a round trip.
+  const m = summariseResult({ id: 9, type: 'ping', target: 'x', ts: 'x', ok: true, rttMs: null, lossPct: '' });
+  assert.ok(!('rttMs' in m));
+  assert.ok(!('lossPct' in m));
+  const real = summariseResult({ id: 9, type: 'ping', target: 'x', ts: 'x', ok: true, rttMs: 0, lossPct: 0 });
+  assert.equal(real.rttMs, 0, 'a measured zero is still a measurement');
+  assert.equal(real.lossPct, 0);
+});
+
+test('summariseResult reports a failure as a failure, not as a blank', () => {
+  const m = summariseResult({
+    id: 7, type: 'tcp', target: '10.0.0.5', ts: 'x', ok: false,
+    errorCode: 'ECONNREFUSED', detail: 'connection refused', rttMs: null, lossPct: null,
+  });
+  assert.equal(m.ok, false);
+  assert.equal(m.errorCode, 'ECONNREFUSED');
+  assert.equal(m.detail, 'connection refused');
+  assert.ok(!('rttMs' in m), 'a field the row does not carry must be absent, not null');
+});
+
+test('summariseResult keeps an http status and caps a long detail', () => {
+  const m = summariseResult({ id: 8, type: 'http', target: 'x', ts: 'x', ok: true, status: '503', detail: 'a'.repeat(400) });
+  assert.equal(m.status, '503');
+  assert.equal(m.detail.length, 200);
+  assert.equal(summariseResult(null), null);
+});
+
+test('the route serves the measurement, scoped to the test\'s own agent', async () => {
+  // A result id that belongs to another agent must read as absent, not as
+  // somebody else\'s measurement rendered under this session\'s step.
+  const asked = [];
+  const app = makeApp({
+    agentsRepo: agents(),
+    probeResultsRepo: {
+      findRunById: async (id, opts) => { asked.push({ id, opts }); return id === 500 ? PING_ROW : null; },
+    },
+  });
+  const created = await post(app, '/api/diagnose', 'viewer', {
+    description: F1, locale: 'en', agentId: 1, target: '10.0.0.5',
+  });
+  const sessionId = created.body.sessionId;
+
+  // Dispatch and attach a result the way a real evaluation would.
+  await post(app, `/api/diagnose/${sessionId}/run`, 'operator', {});
+  const detail = await get(app, `/api/diagnose/${sessionId}`, 'viewer');
+  const pingTest = detail.body.session.tests.find((x) => x.probeType === 'ping');
+  assert.ok(pingTest, 'the plan had no ping test to attach a result to');
+
+  const res = await get(app, `/api/diagnose/${sessionId}/walkthrough`, 'viewer');
+  assert.equal(res.status, 200);
+  // Nothing is attached yet, so nothing is read and nothing is shown — the
+  // walk-through does not go hunting for a result the evaluation has not linked.
+  assert.equal(asked.length, 0);
+  assert.ok(res.body.steps.every((s) => (s.measurements || []).length === 0));
+});
+
+test('a probe-result read that throws costs the numbers, never the walk-through', async () => {
+  const app = makeApp({
+    agentsRepo: agents(),
+    diagnoseSessionsRepo: makeDiagnoseSessionsRepo(),
+    probeResultsRepo: { findRunById: async () => { throw new Error('db gone'); } },
+  });
+  const created = await post(app, '/api/diagnose', 'viewer', {
+    description: F1, locale: 'en', agentId: 1, target: '10.0.0.5',
+  });
+  const res = await get(app, `/api/diagnose/${created.body.sessionId}/walkthrough`, 'viewer');
+  assert.equal(res.status, 200, 'a failed result read took the sequence down with it');
+  assert.ok(res.body.total >= 2);
 });

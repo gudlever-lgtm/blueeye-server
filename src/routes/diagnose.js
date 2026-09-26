@@ -352,6 +352,15 @@ function createDiagnoseRouter({
     const walkthrough = buildWalkthrough({
       session,
       tests,
+      // The measurements behind the finished steps. Each step already knows
+      // which probe_results row it produced (the evaluation attached it); this
+      // reads those rows so the step can show the numbers next to the verdict
+      // rather than asserting one and sending the reader elsewhere to check.
+      //
+      // Scoped to the test's OWN agent on every read: a result id that belongs
+      // to another agent must read as absent, not as somebody else's
+      // measurement rendered under this session's step.
+      results: await loadStepResults(tests),
       // The LAST evaluation, or none. A walk-through before anything has been
       // evaluated is still a walk-through — it is the list of steps with none
       // of them answered yet, which is exactly what somebody starting out
@@ -363,6 +372,35 @@ function createDiagnoseRouter({
   }));
 
   // --- helpers ---------------------------------------------------------------
+
+  // The stored results the finished walk-through steps produced, by id.
+  //
+  // Best effort, and bounded by the plan: a session has at most MAX_TESTS rows
+  // and only the ones an evaluation has already linked are read, so this is a
+  // handful of primary-key lookups rather than a scan. A read that fails costs
+  // the numbers on one step, never the walk-through — the sequence and its
+  // verdicts do not depend on them.
+  async function loadStepResults(tests) {
+    if (!probeResultsRepo || typeof probeResultsRepo.findRunById !== 'function') return [];
+    const wanted = [];
+    const seen = new Set();
+    for (const t of tests || []) {
+      if (!t || t.probeResultId == null || seen.has(t.probeResultId)) continue;
+      seen.add(t.probeResultId);
+      wanted.push(t);
+    }
+    const out = [];
+    for (const t of wanted) {
+      try {
+        // eslint-disable-next-line no-await-in-loop
+        const row = await probeResultsRepo.findRunById(t.probeResultId, { agentId: t.agentId ?? null });
+        if (row) out.push(row);
+      } catch (err) {
+        logger.warn(`diagnose: could not read probe result ${t.probeResultId} for the walk-through (${err.message})`);
+      }
+    }
+    return out;
+  }
 
   // A probe_results row in the shape buildFacts() reads. The repository's own
   // mapper is not used here because this endpoint reads raw rows straight out of

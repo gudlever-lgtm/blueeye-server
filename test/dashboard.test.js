@@ -78,7 +78,8 @@ test('interface + traffic views are flow-source aware (sflow/netflow have no per
   assert.match(js, /function interfaceTable\(interfaces, source/);
   // Callers pass the source through — and the agent record with it, so the
   // empty state's button opens THAT agent's edit form instead of navigating.
-  assert.match(js, /interfaceTable\(data\.interfaces, data\.source, agent\)/);
+  // …and the agent's reported NICs, since the cards ride on the port rows now.
+  assert.match(js, /interfaceTable\(data\.interfaces, data\.source, agent, nics\)/);
   assert.match(js, /changeSource:/);
   // The source-aware empty state itself lives on the screen that draws the
   // table (public/views/interfaces.js) — app.js only passes the source through.

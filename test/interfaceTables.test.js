@@ -129,6 +129,66 @@ async function openPorts(t, over = {}) {
 const portRows = (ports) => [...ports.querySelectorAll('table.dt tbody tr')];
 const firstCell = (tr) => tr.querySelector('td').textContent.trim();
 
+// The NIC inventory's byAgent payload, which the Fleet view folds into the
+// drawer. `ens192` is deliberately NOT in IFACES: a reported card the
+// measurement has not covered is the case that used to live in its own table.
+const NICS = {
+  agents: 1, totalNics: 3, drivers: [], drift: [],
+  byAgent: [{
+    id: 7, name: 'oslo-edge-01',
+    nics: [
+      { iface: 'eth0', driver: 'ixgbe', driverVersion: '5.1.0-k', firmwareVersion: '0x800003df', busInfo: '0000:04:00.0', pciId: '8086:10fb' },
+      { iface: 'eth1', driver: 'ixgbe', driverVersion: '5.1.0-k', firmwareVersion: null, busInfo: null, pciId: '8086:10fb' },
+      { iface: 'ens192', driver: 'vmxnet3', driverVersion: null, firmwareVersion: null, busInfo: null, pciId: null },
+    ],
+  }],
+};
+
+test('the card behind a port rides on that port\'s row, not in a second table', async (t) => {
+  // Ports and NICs were two tables describing the same physical interfaces, and
+  // the reader joined them by eye on the interface name. One table now.
+  const { drawer, ports } = await openPorts(t, { 'GET /api/fleet/nics': NICS });
+  const eth0 = portRows(ports).find((tr) => /^eth0/.test(firstCell(tr)));
+  assert.ok(eth0, 'no eth0 row');
+  const name = eth0.querySelector('td').textContent;
+  assert.match(name, /ixgbe/, 'the driver is not on the port row');
+  assert.match(name, /5\.1\.0-k/, 'the driver version is not on the port row');
+  assert.match(name, /fw 0x800003df/, 'the firmware is not on the port row');
+  assert.ok(!/NIC \(/.test(drawer.textContent), 'the separate NIC section is still there');
+});
+
+test('an agent with cards but no measurement keeps its empty state, and gets the card rows under it', async (t) => {
+  // The explanation is the whole value of the empty state — "wait" for a proc
+  // agent, "this can never fill, change the source" for a flow one. Listing
+  // the cards must not swallow it.
+  const { ports } = await openPorts(t, {
+    'GET /api/fleet/nics': NICS,
+    'GET /api/interfaces': { agentId: 7, source: 'sflow', ts: null, interfaces: [] },
+  });
+  assert.ok(ports.querySelector('.state'), 'the flow-source empty state is gone');
+  assert.match(ports.textContent, /proc or snmp/, 'it lost the explanation that is its whole point');
+  assert.ok(!/has not measured yet/.test(ports.textContent),
+    '"not yet" is the wrong word on a source whose counters are never coming');
+  const named = portRows(ports).map(firstCell);
+  assert.ok(named.some((n) => /^ens192/.test(n)), 'the reported cards are not listed');
+  assert.ok(portRows(ports).every((tr) => tr.classList.contains('is-dimmed')), 'a card row is not dimmed');
+});
+
+test('a card with no firmware string says so rather than going blank', async (t) => {
+  const { ports } = await openPorts(t, { 'GET /api/fleet/nics': NICS });
+  const eth1 = portRows(ports).find((tr) => /^eth1/.test(firstCell(tr)));
+  assert.match(eth1.querySelector('td').textContent, /fw unknown/);
+});
+
+test('a reported card the measurement has not covered still gets a row, and says why', async (t) => {
+  const { ports } = await openPorts(t, { 'GET /api/fleet/nics': NICS });
+  const orphan = portRows(ports).find((tr) => /^ens192/.test(firstCell(tr)));
+  assert.ok(orphan, 'the card with no counters was dropped with its table');
+  assert.ok(orphan.classList.contains('is-dimmed'), 'it is not dimmed');
+  assert.match(orphan.querySelector('td').textContent, /vmxnet3/);
+  assert.match(ports.textContent, /has not measured yet/, 'nothing explains the empty row');
+});
+
 test('the Hardware set summarises the ports, and the drawer has the list', async (t) => {
   const { doc, ports } = await openPorts(t);
   // The set says how many, how many are faulted and which is worst — the fleet

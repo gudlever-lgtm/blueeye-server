@@ -27,8 +27,11 @@
 //   * a failed load replaced the page with a bare red line. It is an ErrorState
 //     naming the call, with a Retry.
 //
-// The per-agent NIC table is exported: the agent detail page draws the same
-// thing, and two copies of it would drift.
+// There is no per-agent NIC table here any more. One agent's cards are not a
+// table of their own: they are the ports that agent has, so the driver and
+// firmware ride under the interface name in the ports table
+// (public/views/interfaces.js) — one row per physical port, counters and
+// hardware together, instead of two tables the reader joined by eye.
 //
 // Repo convention: createX(deps). app.js passes its own helpers in.
 
@@ -39,34 +42,6 @@
     var el = deps.el;
     var t = deps.t;
     var ui = deps.ui;
-
-    // Shared with the agent detail page.
-    function nicTable(nics) {
-      if (!Array.isArray(nics) || !nics.length) {
-        return ui.emptyState({ title: t('nic.noneAgent'), body: t('nic.noneAgentHint') });
-      }
-      return ui.dataTable({
-        dense: true,
-        columns: [
-          { key: 'iface', label: t('nic.col.iface'), width: '130px' },
-          { key: 'driver', label: t('nic.col.driver'), width: '150px' },
-          { key: 'driverVersion', label: t('nic.col.driverVer'), width: '140px' },
-          { key: 'firmware', label: t('nic.col.firmware'), width: '170px' },
-          { key: 'bus', label: t('nic.col.bus') },
-        ],
-        rows: nics.map(function (n) {
-          return {
-            cells: {
-              iface: n.iface || '—',
-              driver: n.driver || '—',
-              driverVersion: ui.meta(n.driverVersion || '—'),
-              firmware: n.firmwareVersion || '—',
-              bus: ui.meta(n.busInfo || n.pciId || '—'),
-            },
-          };
-        }),
-      });
-    }
 
     function view() {
       var state = deps.state;
@@ -288,7 +263,7 @@
       return load().then(function () { return page; });
     }
 
-    return { view: view, nicTable: nicTable };
+    return { view: view };
   }
 
   var apiObj = { create: create };

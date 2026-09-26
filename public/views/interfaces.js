@@ -102,8 +102,10 @@
     // Drift set instead, which from the Fleet drawer meant closing the drawer
     // and re-rendering the screen the reader was already on: the button looked
     // broken because, from there, it did nothing.
+    function isFlow(source) { return source === 'sflow' || source === 'netflow'; }
+
     function emptyFor(source, agent) {
-      if (source === 'sflow' || source === 'netflow') {
+      if (isFlow(source)) {
         var change = agent && deps.changeSource
           ? function () { deps.changeSource(agent); }
           : deps.openAgents;
@@ -125,18 +127,60 @@
       return ui.emptyState({ title: t('iface.none'), body: t('iface.noneHint') });
     }
 
+    // The card behind the port, on the port's own row. Ports and NICs were two
+    // tables describing the same physical interfaces — live counters in one,
+    // driver/firmware in the other — and the reader had to join them by eye on
+    // the interface name. They are joined here instead, so `ens192` carries its
+    // driver and firmware under the name.
+    function cardLine(nic) {
+      if (!nic) return null;
+      var bits = [nic.driver || t('iface.card.unknownDriver')];
+      if (nic.driverVersion) bits.push(nic.driverVersion);
+      bits.push(nic.firmwareVersion
+        ? t('iface.card.fw', { v: nic.firmwareVersion })
+        : t('iface.card.fwUnknown'));
+      var node = ui.metaXs(bits.join(' · '));
+      // The bus/PCI id is the one field nobody scans for but somebody
+      // occasionally needs — it goes on the hover rather than in the line.
+      var bus = nic.busInfo || nic.pciId;
+      if (bus) node.title = bus;
+      return node;
+    }
+
+    function ifaceCell(name, nic) {
+      var line = cardLine(nic);
+      if (!line) return name;
+      return el('div', {}, el('span', {}, name), line);
+    }
+
     // Shared with the agent detail page — two copies of this table would drift.
-    function table(interfaces, source, agent) {
+    //
+    // `nics` is the agent's reported hardware (`capabilities.nic`). It is
+    // optional: a caller that does not have it gets the counters alone, exactly
+    // as before.
+    function table(interfaces, source, agent, nics) {
+      var cards = Array.isArray(nics) ? nics.filter(function (n) { return n && n.iface; }) : [];
+      var byIface = {};
+      cards.forEach(function (n) { byIface[n.iface] = n; });
+
       var list = (interfaces || []).slice().sort(function (a, b) {
         return (rankOf(a) - rankOf(b))
           || ((b.rxBytesPerSec + b.txBytesPerSec) - (a.rxBytesPerSec + a.txBytesPerSec));
       });
-      if (!list.length) return emptyFor(source, agent || null);
-      return ui.dataTable({
+      var measured = {};
+      list.forEach(function (i) { measured[i.iface] = true; });
+      // A card the measurement does not cover — no counters yet, or an agent on
+      // a flow source — still exists, and dropping it would lose hardware the
+      // old NIC table showed. It gets a dimmed row rather than no row.
+      var orphans = cards.filter(function (n) { return !measured[n.iface]; });
+
+      if (!list.length && !orphans.length) return emptyFor(source, agent || null);
+
+      var node = ui.dataTable({
         // Dense: a host or switch has many ports, and a technician scans them.
         dense: true,
         columns: [
-          { key: 'iface', label: t('iface.col.iface'), width: '150px' },
+          { key: 'iface', label: t('iface.col.iface'), width: cards.length ? '190px' : '150px' },
           { key: 'status', label: t('iface.col.status'), width: '96px' },
           // The link is the one column that can give: everything else is a bar
           // or a right-aligned number that clips the moment it is squeezed.
@@ -151,7 +195,7 @@
         rows: list.map(function (i) {
           return {
             cells: {
-              iface: i.iface,
+              iface: ifaceCell(i.iface, byIface[i.iface]),
               status: statusCell(i),
               link: ui.meta(linkText(i)),
               util: i.utilPct != null
@@ -168,8 +212,36 @@
               drop: el('span', { class: i.dropPerSec > 0 ? 'num-warn' : null }, rate(i.dropPerSec, '/s')),
             },
           };
-        }),
+        }).concat(orphans.map(function (n) {
+          return {
+            dimmed: true,
+            cells: {
+              iface: ifaceCell(n.iface, n),
+              status: ui.meta('–'),
+              link: ui.meta('–'),
+              util: ui.meta('–'),
+              rx: ui.meta('–'),
+              tx: ui.meta('–'),
+              err: ui.meta('–'),
+              drop: ui.meta('–'),
+            },
+          };
+        })),
       });
+      if (!orphans.length) return node;
+      // Nothing measured at all, but cards reported: the card rows are the whole
+      // table, and the empty state still has to run — a flow-source agent needs
+      // to be told this table can NEVER fill, and a proc agent with no reading
+      // yet needs to be told to wait. The rows go under it, not instead of it.
+      return el('div', {},
+        list.length ? null : emptyFor(source, agent || null),
+        node,
+        // Why those rows are empty, once, under the table — rather than eight
+        // dashes leaving the reader to guess whether the port is broken. Not on
+        // a flow source: there the empty state above has already said it, and
+        // said it correctly — those counters are never coming, "not yet" is the
+        // wrong word for it.
+        isFlow(source) ? null : ui.inlineNote(t('iface.cardOnly'), 'info'));
     }
 
     // ---------------------------------------------------------- forecast

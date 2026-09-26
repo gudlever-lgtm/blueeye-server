@@ -179,12 +179,43 @@ agent).
 | --- | --- | --- |
 | `systemd` | yes | `systemctl --no-block restart` |
 | `windows-service` | yes | a detached `cmd` that stops and starts the service — a service cannot stop itself in the foreground, because the stop ends the process that was going to issue the start |
+| `scheduled-task` | yes | a detached `cmd` running `schtasks /End` then `/Run` — same reason as the service, and `schtasks.exe` is on every Windows where the ScheduledTasks PowerShell module is a separate component |
 | `launchd` | yes | `launchctl kickstart -k system/<label>` |
 | `docker` | no | the host rebuilds the image |
 | `unmanaged` | no | nothing on the host would restart it |
 
 A Windows or macOS agent too old to report its runtime says `unmanaged` and keeps
 the installer affordance, which is the right answer for it.
+
+### Why Windows said `unmanaged` for so long
+
+`install.ps1` has always registered a **Scheduled Task**, not a service — a real
+Windows service needs a service wrapper the agent does not ship. Because the task
+was not a service, the launcher it wrote said `BLUEEYE_RUNTIME=unmanaged`, and so
+every Windows agent in the fleet reported itself as supervised by nothing:
+
+* the server never sent it an `update` command;
+* the dashboard offered the host-side one-liner instead of an Update button;
+* so the only way to move a Windows agent was to download and run `update.ps1`
+  — outside the signed, command-authenticated channel that already worked for
+  systemd.
+
+The task was supervising the agent the whole time; it just was not saying so.
+`schtasks /End` + `/Run` restarts it exactly the way `net stop`/`net start`
+restarts a service, so from agent **0.47.2** the installer writes
+`BLUEEYE_RUNTIME=scheduled-task` and Windows agents take one-click updates like
+any other.
+
+**Getting an existing host there.** A host already in the field keeps its old
+launcher, and `update.ps1` preserves that launcher across an update — which would
+carry `unmanaged` forever. So the updater now rewrites **that one line** (and
+nothing else in the file, which is the host's own configuration) as it restores
+it. One last run of `update.ps1` on a Windows host is what moves it onto the
+command channel; after that it should never need the script again.
+
+`/enroll/update.ps1` therefore stays. It is no longer the steady-state Windows
+update path — it is the one-time migration onto the real one, and the fallback
+for a host whose agent cannot be reached over its own connection.
 
 On Windows the blue/green swap cannot be atomic — there is no rename-onto-an-
 existing-junction — so it is a remove plus a create, and the gap is covered by
@@ -389,13 +420,16 @@ change that:
    `blueeye-agent` checkout — `scripts/deploy.sh` does both repos).
 2. **Settings → Updates → Reload agent source** (or restart the server) so the
    new bundle is packaged and served.
-3. Systemd agents can then be updated one-click from the same panel. A **Windows**
-   agent that is behind gets an **Update** button in Agents that hands you a
-   PowerShell command to run on that host — it downloads `update.ps1` to a file
-   and runs it (deliberately not piped into `iex`, see "Why not `irm … | iex`" in
-   `docs/enrollment.md`), updates the installed agent in place, keeps its
-   token/identity and never enrolls a second agent. Docker / unmanaged agents
-   re-run their installer on their own host.
+3. Systemd agents — and, from agent 0.47.2, Windows agents reporting
+   `scheduled-task` — can then be updated one-click from the same panel. A
+   **Windows** agent still reporting `unmanaged` (installed before 0.47.2) gets an
+   **Update** button in Agents that hands you a PowerShell command to run on that
+   host — it downloads `update.ps1` to a file and runs it (deliberately not piped
+   into `iex`, see "Why not `irm … | iex`" in `docs/enrollment.md`), updates the
+   installed agent in place, keeps its token/identity and never enrolls a second
+   agent. That run also rewrites the launcher's runtime line, so it is the last
+   time that host needs the script. Docker / unmanaged agents re-run their
+   installer on their own host.
 
 The "a newer agent has been published" line in the panel is the trigger for
 step 1 — before, there was nothing to tell an operator that a new agent existed.

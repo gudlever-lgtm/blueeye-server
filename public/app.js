@@ -1684,7 +1684,13 @@ function agentIsBehind(a, current) {
 // launchd reports 'launchd'. A Windows host running an agent too old to report
 // either still says 'unmanaged', so it keeps the installer affordance — which is
 // the right answer for it, and the reason this is not a platform check any more.
-const SELF_UPDATABLE_RUNTIMES = ['systemd', 'windows-service', 'launchd'];
+// 'scheduled-task' is what the Windows installer actually registers, and what it
+// now writes into the launcher. It used to write 'unmanaged', which is why every
+// Windows agent showed the host-side one-liner instead of an Update button: the
+// task WAS supervising the agent, it just was not saying so. A host still on the
+// old launcher keeps reporting 'unmanaged' and keeps the one-liner, which stays
+// the right answer for it until it has taken that one update.
+const SELF_UPDATABLE_RUNTIMES = ['systemd', 'windows-service', 'scheduled-task', 'launchd'];
 
 function agentSelfUpdatable(a) {
   const managed = String((a && a.capabilities && a.capabilities.managed) || '').toLowerCase();
@@ -13373,6 +13379,7 @@ const DOCS = [
           docsTable([t('docs.fu.colReports'), t('docs.fu.colPushed'), t('docs.fu.colHow')], [
             [el('code', {}, 'systemd'), t('docs.fu.yes'), t('docs.fu.pSystemd')],
             [el('code', {}, 'windows-service'), t('docs.fu.yes'), t('docs.fu.pWindows')],
+            [el('code', {}, 'scheduled-task'), t('docs.fu.yes'), t('docs.fu.pTask')],
             [el('code', {}, 'launchd'), t('docs.fu.yes'), t('docs.fu.pLaunchd')],
             [el('code', {}, 'docker'), t('docs.fu.no'), t('docs.fu.pDocker')],
             [el('code', {}, 'unmanaged'), t('docs.fu.no'), t('docs.fu.pUnmanaged')],

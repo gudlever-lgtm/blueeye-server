@@ -35,10 +35,11 @@ const {
   validateConnectionTestSchedule,
   validateConnectionTestWalk,
   validateLadderQuery,
+  validateRunsQuery,
 } = require('../validation/connectionTestValidation');
 const { validateTestPackageInput } = require('../validation/testPackageValidation');
 
-function createConnectionTestRouter({ agentsRepo, agentCommander, probeResultsRepo = null, arpEntriesRepo = null, testPackagesRepo = null, usageService = null, auditLogger = null, settingsService = null, deviceLocator = null, interfaceHealthFor = null, diagnoseCatalog = null }) {
+function createConnectionTestRouter({ agentsRepo, agentCommander, probeResultsRepo = null, arpEntriesRepo = null, testPackagesRepo = null, usageService = null, auditLogger = null, settingsService = null, deviceLocator = null, interfaceHealthFor = null, diagnoseCatalog = null, ladderRunsRepo = null }) {
   const router = express.Router();
   const validationError = (res, details) => res.status(400).json({ error: 'Validation failed', details });
 
@@ -158,6 +159,22 @@ function createConnectionTestRouter({ agentsRepo, agentCommander, probeResultsRe
     })
   );
 
+  // The diagnoses that have been run: what was asked, when, by whom, and what
+  // it concluded. The audit trail records the ACT of dispatching probes; this
+  // records the diagnosis, which is the thing somebody wants a week later when
+  // they ask what we found last time.
+  router.get(
+    '/runs',
+    requireAuth,
+    requireRole(ROLES.VIEWER, ROLES.OPERATOR, ROLES.ADMIN),
+    asyncHandler(async (req, res) => {
+      if (!ladderRunsRepo) return res.status(503).json({ error: 'Diagnosis history is not available' });
+      const { value, errors } = validateRunsQuery(req.query);
+      if (errors) return validationError(res, errors);
+      res.json({ runs: await ladderRunsRepo.list(value) });
+    })
+  );
+
   // --- the ladder ----------------------------------------------------------
   //
   // "I cannot reach X" as one call. The operator names the destination and, if
@@ -257,8 +274,34 @@ function createConnectionTestRouter({ agentsRepo, agentCommander, probeResultsRe
         });
       }
 
+      // The log of diagnoses run. The audit row above records that probes were
+      // DISPATCHED; this records the diagnosis, and its verdict is stamped on
+      // when the ladder is next read — the probes come back over the following
+      // seconds, so there is nothing to conclude yet.
+      //
+      // Best-effort: a diagnosis that ran is worth more than a log of it, so a
+      // logging failure never costs the operator the answer.
+      let runId = null;
+      if (ladderRunsRepo && typeof ladderRunsRepo.start === 'function') {
+        runId = await ladderRunsRepo.start({
+          agentId: value.agentId,
+          peerAgentId: value.peerAgentId || null,
+          ladder: def.id,
+          target: value.host || value.device || null,
+          symptom: value.symptom || null,
+          // How many probes reached an agent — the length of the list, not the
+          // list. `delivered` counts sockets written to, which is the same
+          // number today and would stop being it the moment one command went to
+          // two connections of the same agent.
+          dispatched: dispatched.length,
+          startedBy: req.user ? req.user.id : null,
+          startedEmail: req.user ? req.user.email || null : null,
+        }).catch(() => null);
+      }
+
       res.status(202).json({
         ladder: def.id,
+        runId,
         agentId: value.agentId,
         peerAgentId: value.peerAgentId || null,
         host: value.host || null,
@@ -330,18 +373,29 @@ function createConnectionTestRouter({ agentsRepo, agentCommander, probeResultsRe
       }
 
       const config = await ladderConfig(def.id);
+      const walked = ladders.walk({ ladder: def, ctx, config, locale: value.locale, symptom: value.symptom });
+
+      // Stamp the conclusion onto the run that produced it. A read with no walk
+      // behind it (somebody opening the screen on an old destination) writes
+      // nothing — inventing a run for it would log a diagnosis nobody
+      // performed. Best-effort, for the same reason as the write at dispatch.
+      if (ladderRunsRepo && typeof ladderRunsRepo.recordVerdict === 'function') {
+        await ladderRunsRepo.recordVerdict({
+          agentId: value.agentId || null,
+          ladder: def.id,
+          target: value.host || value.device || null,
+          outcome: walked.verdict.outcome,
+          stopsAt: walked.stopsAt,
+        }).catch(() => null);
+      }
+
       res.json({
         agentId: value.agentId || null,
         peerAgentId: value.peerAgentId || null,
         host: value.host || null,
         device: value.device || null,
-        ...(() => {
-          const out = ladders.walk({ ladder: def, ctx, config, locale: value.locale, symptom: value.symptom });
-          // Offered for the rung it STOPPED at, and for a `suspect` when
-          // nothing is broken — the two cases where an operator has a reason
-          // to read further. A healthy ladder offers nothing to read.
-          return { ...out, playbooks: playbooksFor(out.verdict, value.locale) };
-        })(),
+        ...walked,
+        playbooks: playbooksFor(walked.verdict, value.locale),
       });
     })
   );
@@ -369,7 +423,26 @@ function createConnectionTestRouter({ agentsRepo, agentCommander, probeResultsRe
         if (!check.ok) return res.status(403).json(check.body);
       }
 
-      const { specs, skipped } = specsFor(value.host, value.checks);
+      // A ladder can be scheduled too: the same walk, on a period. What it
+      // pushes is the ladder's own dispatch list rather than a hand-picked
+      // selection, for the same reason a walk is not a selection — a rung
+      // nobody ran reads "not tested", and a ladder of those says nothing.
+      //
+      // The verdict is not computed by the schedule: each run lands as ordinary
+      // probe results, and reading the ladder afterwards is what concludes.
+      // That keeps a scheduled diagnosis and a hand-run one the same thing.
+      const def = value.ladder ? ladders.get(value.ladder) : null;
+      if (def && !def.dispatch) {
+        return validationError(res, { ladder: `${def.id} measures nothing new, so there is nothing to schedule` });
+      }
+      let specs;
+      let skipped;
+      if (def) {
+        const cfg = ladders.resolveConfig(def, await ladderConfig(def.id));
+        ({ specs, skipped } = def.dispatch({ host: value.host, config: cfg }));
+      } else {
+        ({ specs, skipped } = specsFor(value.host, value.checks));
+      }
       if (!specs.length) {
         return res.status(400).json({
           error: 'Validation failed',
@@ -387,7 +460,7 @@ function createConnectionTestRouter({ agentsRepo, agentCommander, probeResultsRe
       // connection-test package is a test package, and it has to satisfy the
       // same contract as one an operator builds by hand.
       const { value: pkg, errors: pe } = validateTestPackageInput({
-        name: value.name || `Connection test — ${value.host}`,
+        name: value.name || (def ? `${def.id} — ${value.host}` : `Connection test — ${value.host}`),
         enabled: true,
         schedule_spec: value.recurrence,
         targets: { mode: 'agents', agentIds: [value.agentId] },

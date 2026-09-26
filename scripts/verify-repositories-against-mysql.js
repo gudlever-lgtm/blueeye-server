@@ -48,6 +48,7 @@ const { createDeviceInterfacesRepository } = require(path.join(ROOT, 'src/reposi
 const { createDeviceCounterSamplesRepository } = require(path.join(ROOT, 'src/repositories/deviceCounterSamplesRepository'));
 const { createFdbEntriesRepository } = require(path.join(ROOT, 'src/repositories/fdbEntriesRepository'));
 const { createSnmpCredentialProfilesRepository } = require(path.join(ROOT, 'src/repositories/snmpCredentialProfilesRepository'));
+const { createLadderRunsRepository } = require(path.join(ROOT, 'src/repositories/ladderRunsRepository'));
 const { AUTH_PROTOS, PRIV_PROTOS } = require(path.join(ROOT, 'src/validation/snmpProfileValidation'));
 
 // A stand-in for the real secretBox. The encryption itself is tested
@@ -60,6 +61,59 @@ const fakeSecretBox = {
 
 const checks = [];
 const check = (name, fn) => checks.push({ name, fn });
+
+check('ladder runs: the verdict lands on the run that produced it, and on no other', async (pool) => {
+  // The attribution rule is the whole point of this table and it is pure SQL —
+  // a scripted pool can assert the statement and its parameters, and can never
+  // say whether MySQL agrees about which row is "the most recent run of this
+  // agent, ladder and target, inside the window".
+  const repo = createLadderRunsRepository({ pool });
+  await pool.query("INSERT INTO agents (id, agent_key, hostname, status, created_at) VALUES (901, 'k-901', 'probe-901', 'online', NOW(3))");
+
+  const a = await repo.start({ agentId: 901, ladder: 'reachability', target: 'a.example', symptom: 'the site is down', dispatched: 9 });
+  const b = await repo.start({ agentId: 901, ladder: 'reachability', target: 'b.example', dispatched: 9 });
+  const local = await repo.start({ agentId: 901, ladder: 'local_host', target: null, dispatched: 3 });
+
+  // The verdict goes to the run for THIS destination, and touches no other.
+  const hit = await repo.recordVerdict({ agentId: 901, ladder: 'reachability', target: 'a.example', outcome: 'stops', stopsAt: 'firewall' });
+  assert.strictEqual(hit, a);
+  assert.strictEqual((await repo.findById(a)).stopsAt, 'firewall');
+  assert.strictEqual((await repo.findById(b)).outcome, null, "another destination's run was stamped");
+  assert.strictEqual((await repo.findById(local)).outcome, null, "another ladder's run was stamped");
+
+  // A NULL target is a target, not a wildcard: local_host runs match each
+  // other and never match a destination's.
+  assert.strictEqual(await repo.recordVerdict({ agentId: 901, ladder: 'local_host', target: null, outcome: 'clear' }), local);
+  assert.strictEqual((await repo.findById(local)).outcome, 'clear');
+
+  // Nothing to attribute it to is null, not an invented row.
+  assert.strictEqual(await repo.recordVerdict({ agentId: 901, ladder: 'reachability', target: 'never.example', outcome: 'clear' }), null);
+
+  // Outside the window, a read is a new question about an old run.
+  await pool.query('UPDATE ladder_runs SET started_at = NOW(3) - INTERVAL 2 HOUR WHERE id = ?', [b]);
+  assert.strictEqual(await repo.recordVerdict({ agentId: 901, ladder: 'reachability', target: 'b.example', outcome: 'clear' }), null);
+
+  // The newest run wins when two share a destination.
+  const again = await repo.start({ agentId: 901, ladder: 'reachability', target: 'a.example', dispatched: 9 });
+  assert.strictEqual(await repo.recordVerdict({ agentId: 901, ladder: 'reachability', target: 'a.example', outcome: 'clear' }), again);
+  assert.strictEqual((await repo.findById(a)).outcome, 'stops', 'the older run was overwritten');
+
+  // Listing, filtering and the bounds.
+  assert.strictEqual((await repo.list({ agentId: 901 })).length, 4);
+  assert.strictEqual((await repo.list({ agentId: 901, ladder: 'local_host' })).length, 1);
+  assert.strictEqual((await repo.list({ agentId: 901, target: 'a.example' })).length, 2);
+  assert.strictEqual((await repo.list({ agentId: 901, limit: 2 })).length, 2);
+  // Newest first.
+  const listed = await repo.list({ agentId: 901 });
+  assert.strictEqual(listed[0].id, again);
+  // A symptom survives the round trip, and so does the millisecond stamp.
+  assert.strictEqual((await repo.findById(a)).symptom, 'the site is down');
+  assert.ok((await repo.findById(a)).verdictAt, 'the verdict time was not stored');
+
+  // Deleting the agent takes its diagnoses with it.
+  await pool.query('DELETE FROM agents WHERE id = 901');
+  assert.strictEqual((await repo.list({ agentId: 901 })).length, 0, 'ladder_runs outlived its agent');
+});
 
 check('change acks: upsert, millisecond round trip, per-user read, undo', async (pool) => {
   // User 1 is the seeded admin (see the migration chain).

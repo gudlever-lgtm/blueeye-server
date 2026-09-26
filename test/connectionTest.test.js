@@ -616,3 +616,151 @@ test('a deployment with no playbook catalogue still answers', async () => {
   assert.equal(res.body.stopsAt, 'firewall');
   assert.deepEqual(res.body.playbooks, []);
 });
+
+// ------------------------------------------------- the log of diagnoses run
+
+const { makeLadderRunsRepo } = require('../test-support/fakes');
+
+const loggedApp = (runsRepo, rows = LADDER_ROWS) => makeApp({
+  agentsRepo: agentsRepo(),
+  probeResultsRepo: makeProbeResultsRepo({ latestByAgent: async () => rows }),
+  ladderRunsRepo: runsRepo,
+});
+
+test('a walk is logged when it is dispatched, with who ran it and what they said', async () => {
+  const runs = makeLadderRunsRepo();
+  const res = await request(loggedApp(runs)).post('/api/connection-test/walk').set('Authorization', operator())
+    .send({ agentId: 1, host: 'example.com', symptom: 'the site loads for nobody' });
+  assert.equal(res.status, 202);
+  assert.ok(res.body.runId, 'the dispatch did not report a run id');
+  assert.equal(runs.rows.length, 1);
+  const r = runs.rows[0];
+  assert.equal(r.ladder, 'reachability');
+  assert.equal(r.target, 'example.com');
+  assert.equal(r.symptom, 'the site loads for nobody');
+  assert.ok(r.dispatched > 0, 'the log did not record how many probes went out');
+  assert.ok(r.startedEmail, 'the log does not say who ran it');
+  // No verdict yet: the probes have not come back.
+  assert.equal(r.outcome, null);
+  assert.equal(r.stopsAt, null);
+});
+
+test('reading the ladder stamps the verdict onto the run that produced it', async () => {
+  const runs = makeLadderRunsRepo();
+  const app2 = loggedApp(runs);
+  await request(app2).post('/api/connection-test/walk').set('Authorization', operator())
+    .send({ agentId: 1, host: 'example.com' });
+  const read = await request(app2).get('/api/connection-test/ladder?agentId=1&host=example.com').set('Authorization', viewer());
+  assert.equal(read.status, 200);
+  assert.equal(runs.rows.length, 1, 'reading the ladder created a second run');
+  assert.equal(runs.rows[0].outcome, 'stops');
+  assert.equal(runs.rows[0].stopsAt, 'firewall');
+  assert.ok(runs.rows[0].verdictAt);
+});
+
+test('a read with no walk behind it logs nothing', async () => {
+  // Somebody opening the screen on an old destination is looking at history.
+  // Inventing a run for it would log a diagnosis nobody performed.
+  const runs = makeLadderRunsRepo();
+  const res = await request(loggedApp(runs)).get('/api/connection-test/ladder?agentId=1&host=example.com').set('Authorization', viewer());
+  assert.equal(res.status, 200);
+  assert.deepEqual(runs.rows, []);
+});
+
+test('a verdict is never attributed to a run from another destination or ladder', async () => {
+  const runs = makeLadderRunsRepo();
+  const app2 = loggedApp(runs);
+  await request(app2).post('/api/connection-test/walk').set('Authorization', operator())
+    .send({ agentId: 1, host: 'other.example' });
+  await request(app2).get('/api/connection-test/ladder?agentId=1&host=example.com').set('Authorization', viewer());
+  assert.equal(runs.rows[0].target, 'other.example');
+  assert.equal(runs.rows[0].outcome, null, "another destination's verdict was written onto this run");
+});
+
+test('a logging failure never costs the operator the diagnosis', async () => {
+  const broken = {
+    start: async () => { throw new Error('ladder_runs is unreachable'); },
+    recordVerdict: async () => { throw new Error('ladder_runs is unreachable'); },
+    list: async () => { throw new Error('ladder_runs is unreachable'); },
+  };
+  const app2 = loggedApp(broken);
+  const walk = await request(app2).post('/api/connection-test/walk').set('Authorization', operator())
+    .send({ agentId: 1, host: 'example.com' });
+  assert.equal(walk.status, 202, 'a broken log stopped the walk');
+  assert.equal(walk.body.runId, null);
+  const read = await request(app2).get('/api/connection-test/ladder?agentId=1&host=example.com').set('Authorization', viewer());
+  assert.equal(read.status, 200, 'a broken log stopped the verdict');
+  assert.equal(read.body.stopsAt, 'firewall');
+});
+
+test('GET /runs lists the diagnoses, filtered, and 503s without a store', async () => {
+  const runs = makeLadderRunsRepo();
+  const app2 = loggedApp(runs);
+  await request(app2).post('/api/connection-test/walk').set('Authorization', operator()).send({ agentId: 1, host: 'a.example' });
+  await request(app2).post('/api/connection-test/walk').set('Authorization', operator()).send({ agentId: 1, host: 'b.example' });
+  await request(app2).post('/api/connection-test/walk').set('Authorization', operator()).send({ agentId: 1, ladder: 'local_host' });
+
+  const all = await request(app2).get('/api/connection-test/runs?agentId=1').set('Authorization', viewer());
+  assert.equal(all.status, 200);
+  assert.equal(all.body.runs.length, 3);
+  const byLadder = await request(app2).get('/api/connection-test/runs?agentId=1&ladder=local_host').set('Authorization', viewer());
+  assert.deepEqual(byLadder.body.runs.map((r) => r.ladder), ['local_host']);
+  const byTarget = await request(app2).get('/api/connection-test/runs?agentId=1&target=a.example').set('Authorization', viewer());
+  assert.deepEqual(byTarget.body.runs.map((r) => r.target), ['a.example']);
+
+  assert.equal((await request(app2).get('/api/connection-test/runs')).status, 401);
+  for (const q of ['?limit=0', '?limit=500', '?offset=-1', '?agentId=x', '?ladder=nope', '?target=a%20b;id']) {
+    const res = await request(app2).get(`/api/connection-test/runs${q}`).set('Authorization', viewer());
+    assert.equal(res.status, 400, `${q} → ${res.status}`);
+  }
+
+  const express = require('express');
+  const { createConnectionTestRouter } = require('../src/routes/connectionTest');
+  const bare = express();
+  bare.use(express.json());
+  bare.use('/api/connection-test', createConnectionTestRouter({ agentsRepo: agentsRepo(), agentCommander: makeAgentCommander(), ladderRunsRepo: null }));
+  assert.equal((await request(bare).get('/api/connection-test/runs').set('Authorization', viewer())).status, 503);
+});
+
+// ------------------------------------------------- scheduling a diagnosis
+
+test('POST /schedule saves a ladder as a recurring package, built from its own dispatch', async () => {
+  const packages = [];
+  const app2 = makeApp({
+    agentsRepo: agentsRepo(),
+    testPackagesRepo: makeTestPackagesRepo({ create: async (p) => { packages.push(p); return { id: 1, ...p }; } }),
+  });
+  const res = await request(app2).post('/api/connection-test/schedule').set('Authorization', operator())
+    .send({ agentId: 1, host: 'example.com', ladder: 'local_host', recurrence });
+  assert.equal(res.status, 201);
+  const pkg = packages[0];
+  assert.match(pkg.name, /local_host/);
+  // The ladder's own three probes, not a hand-picked selection.
+  assert.deepEqual(pkg.items.map((i) => i.probe.type).sort(), ['dhcp', 'dns', 'traceroute']);
+});
+
+test('POST /schedule refuses a ladder alongside a hand-picked selection', async () => {
+  const res = await request(app()).post('/api/connection-test/schedule').set('Authorization', operator())
+    .send({ agentId: 1, host: 'example.com', ladder: 'two_way', checks: ['ping'], recurrence });
+  assert.equal(res.status, 400);
+  assert.match(res.body.details.checks, /do not also name checks/);
+});
+
+test('POST /schedule refuses a ladder that measures nothing new', async () => {
+  const res = await request(app()).post('/api/connection-test/schedule').set('Authorization', operator())
+    .send({ agentId: 1, host: 'example.com', ladder: 'device_location', recurrence });
+  assert.equal(res.status, 400);
+  assert.match(res.body.details.ladder, /nothing to schedule/);
+});
+
+test('POST /schedule still takes a hand-picked selection', async () => {
+  const packages = [];
+  const app2 = makeApp({
+    agentsRepo: agentsRepo(),
+    testPackagesRepo: makeTestPackagesRepo({ create: async (p) => { packages.push(p); return { id: 1, ...p }; } }),
+  });
+  const res = await request(app2).post('/api/connection-test/schedule').set('Authorization', operator())
+    .send({ agentId: 1, host: 'example.com', checks: ['ping', 'dns'], recurrence });
+  assert.equal(res.status, 201);
+  assert.deepEqual(packages[0].items.map((i) => i.probe.type).sort(), ['dns', 'ping']);
+});

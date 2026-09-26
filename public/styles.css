@@ -2132,6 +2132,23 @@ button.ghost.small:has(> .icon-glyph) {
 .ct-playbook-body h4 { margin: 10px 0 4px; font-size: 13px; }
 .ct-playbook-fixes { margin: 0; padding-left: 20px; }
 .ct-playbook-fixes li { margin-bottom: 4px; }
+/* The battery of checks now sits BELOW the answer, as a section of its own —
+   it is what the diagnosis ran, not the point of the page. */
+.ct-battery { margin-top: 22px; padding-top: 14px; border-top: 1px solid var(--hairline); }
+.ct-battery-head { margin: 0 0 10px; font-size: 14px; }
+.ct-ladder-empty { margin: 12px 0 4px; }
+.ct-ladder-go { font-weight: 600; }
+/* What was diagnosed before, and what it said. */
+.ct-history { margin-top: 14px; }
+.ct-history-head { margin: 0 0 6px; font-size: 13px; }
+.ct-history-list { list-style: none; margin: 0; padding: 0; font-size: 12px; }
+.ct-history-list li { padding: 4px 0; border-bottom: 1px solid var(--hairline); }
+.ct-history-list li:last-child { border-bottom: none; }
+.ct-history-when { color: var(--muted); font-family: var(--mono); }
+.ct-history-what { font-weight: 600; }
+.ct-history-outcome.stops { color: var(--bad); }
+.ct-history-outcome.suspect, .ct-history-outcome.partial { color: var(--warn); }
+.ct-history-outcome.clear { color: var(--ok); }
 .ct-rungs {
   list-style: none; margin: 10px 0 0; padding: 0;
   border: 1px solid var(--hairline); border-radius: var(--radius); overflow: hidden;

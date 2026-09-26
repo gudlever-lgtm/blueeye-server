@@ -1513,6 +1513,60 @@ function makeResultsRepo(overrides = {}) {
 }
 
 // A fake probe-results repository (records inserted rows; benign empty reads).
+
+// A fake `ladder_runs` repository (in-memory, stateful). Mirrors the real one's
+// ATTRIBUTION rule, which is the part a route test can get wrong: a verdict is
+// stamped onto the most recent run of the same (agent, ladder, target), and a
+// read with no run behind it writes nothing rather than inventing one.
+function makeLadderRunsRepo(overrides = {}) {
+  const rows = [];
+  let seq = 0;
+  const WINDOW_MS = 30 * 60 * 1000;
+  return {
+    rows,
+    start: overrides.start || (async ({ agentId, peerAgentId = null, ladder, target = null, symptom = null, dispatched = 0, startedBy = null, startedEmail = null, at = new Date() }) => {
+      seq += 1;
+      rows.push({
+        id: seq,
+        agentId: Number(agentId),
+        peerAgentId: peerAgentId == null ? null : Number(peerAgentId),
+        ladder: String(ladder),
+        target: target == null ? null : String(target),
+        symptom: symptom == null ? null : String(symptom).slice(0, 500),
+        dispatched,
+        outcome: null,
+        stopsAt: null,
+        startedAt: (at instanceof Date ? at : new Date(at)).toISOString(),
+        verdictAt: null,
+        startedBy,
+        startedEmail,
+      });
+      return seq;
+    }),
+    recordVerdict: overrides.recordVerdict || (async ({ agentId, ladder, target = null, outcome = null, stopsAt = null, at = new Date() }) => {
+      const now = at instanceof Date ? at : new Date(at);
+      const match = rows
+        .filter((r) => r.agentId === Number(agentId) && r.ladder === String(ladder)
+          && (target == null ? r.target === null : r.target === String(target))
+          && now.getTime() - new Date(r.startedAt).getTime() <= WINDOW_MS)
+        .sort((a, b) => (a.startedAt < b.startedAt ? 1 : a.startedAt > b.startedAt ? -1 : b.id - a.id))[0];
+      if (!match) return null;
+      match.outcome = outcome;
+      match.stopsAt = stopsAt;
+      match.verdictAt = now.toISOString();
+      return match.id;
+    }),
+    list: overrides.list || (async ({ agentId = null, ladder = null, target = null, limit = 50, offset = 0 } = {}) => rows
+      .filter((r) => (agentId == null || r.agentId === Number(agentId))
+        && (!ladder || r.ladder === String(ladder))
+        && (!target || r.target === String(target)))
+      .sort((a, b) => (a.startedAt < b.startedAt ? 1 : a.startedAt > b.startedAt ? -1 : b.id - a.id))
+      .slice(offset, offset + limit)),
+    findById: overrides.findById || (async (id) => rows.find((r) => r.id === Number(id)) || null),
+    purgeBefore: overrides.purgeBefore || (async () => 0),
+  };
+}
+
 function makeProbeResultsRepo(overrides = {}) {
   const rows = [];
   return {
@@ -4274,6 +4328,7 @@ function makeApp(overrides = {}) {
     logRing: overrides.logRing || makeLogRing(),
     speedtestResultsRepo: overrides.speedtestResultsRepo || makeSpeedtestResultsRepo(),
     healthAcksRepo: overrides.healthAcksRepo === undefined ? makeAgentHealthAcksRepo() : overrides.healthAcksRepo,
+    ladderRunsRepo: overrides.ladderRunsRepo === undefined ? makeLadderRunsRepo() : overrides.ladderRunsRepo,
     releaseStore,
     // The real server passes a live resolver over the key service (the key can be
     // generated or deleted without a restart), so the fake does too — otherwise
@@ -4416,6 +4471,7 @@ module.exports = {
   makeAgentTokensRepo,
   makeResultsRepo,
   makeProbeResultsRepo,
+  makeLadderRunsRepo,
   makeProbeOutagesRepo,
   makeEventCasesRepo,
   makeEventNotesRepo,

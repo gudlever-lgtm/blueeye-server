@@ -429,7 +429,7 @@ test('a stalled walk-through says so instead of showing a spinner forever', asyn
 });
 
 test('a walk-through the server cannot build costs the sequence, never the plan', async (t) => {
-  const { doc, window, errors } = boot({ t, routes: SESSION({ 'GET /api/diagnose/42/walkthrough': { status: 500, body: { error: 'boom' } } }) });
+  const { doc, window, errors, log } = boot({ t, routes: SESSION({ 'GET /api/diagnose/42/walkthrough': { status: 500, body: { error: 'boom' } } }) });
   await settle();
   await askFor(doc, window, 'large transfers stall over the tunnel');
   await settle();
@@ -437,4 +437,30 @@ test('a walk-through the server cannot build costs the sequence, never the plan'
   // The causes and the tests are still there — the plan does not depend on it.
   assert.ok(panels(doc).some((p) => /MTU black hole/.test(p.textContent)));
   assert.ok(testRows(doc).length >= 2);
+
+  // AND IT ASKS ONCE. The lazy fetch ends by redrawing, and the redraw comes
+  // straight back through the same branch — so a failed request that did not
+  // record having been tried would start another, fail, redraw, forever. It
+  // hung this suite before it was caught, and it would spin a real browser.
+  const asked = log.filter((x) => x.key === 'GET /api/diagnose/42/walkthrough');
+  assert.equal(asked.length, 1, 'the failed walk-through fetch retried on its own');
+
+  const walk = panels(doc).find((p) => /Walk me through it/.test(p.textContent));
+  assert.ok(walk, 'no walk-through panel');
+  assert.match(walk.textContent, /boom|could not be built/i);
+});
+
+test('Retry on a failed walk-through asks again, exactly once more', async (t) => {
+  const { doc, window, log } = boot({ t, routes: SESSION({ 'GET /api/diagnose/42/walkthrough': { status: 500, body: { error: 'boom' } } }) });
+  await settle();
+  await askFor(doc, window, 'large transfers stall over the tunnel');
+  await settle();
+
+  const walk = panels(doc).find((p) => /Walk me through it/.test(p.textContent));
+  const retry = [...walk.querySelectorAll('.btn')].find((b) => /retry|prøv/i.test(b.textContent));
+  assert.ok(retry, 'the failure offers no way back');
+  retry.dispatchEvent(new window.Event('click', { bubbles: true }));
+  await settle();
+  assert.equal(log.filter((x) => x.key === 'GET /api/diagnose/42/walkthrough').length, 2,
+    'Retry asked more than once, or not at all');
 });

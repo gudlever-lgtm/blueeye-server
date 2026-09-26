@@ -181,6 +181,7 @@
             // the one mistake a walk-through cannot survive.
             st.walkthrough = null;
             st.walkPending = false;
+            st.walkTried = false;
             st.walkSkipped = {};
             st.walkAll = false;
             st.walkError = null;
@@ -441,16 +442,35 @@
         if (!st.walkSkipped) st.walkSkipped = {};
         var walk = st.walkthrough;
         if (!walk) {
-          // Fetched once per plan, lazily: the plan renders immediately and the
+          // Fetched ONCE per plan, lazily: the plan renders immediately and the
           // walk-through fills in, rather than the screen waiting on a second
           // request before it shows anything.
-          if (!st.walkPending) {
+          //
+          // `walkTried` is what makes it once. The fetch ends by redrawing, and
+          // the redraw comes straight back through here — so a request that
+          // FAILED would find no walk-through, start another, fail, and redraw
+          // again, forever. Pending is not enough to stop that: it is already
+          // false by then. A failure is shown with a Retry the reader presses,
+          // which is also the only honest offer: nothing about redrawing makes
+          // the next attempt more likely to work.
+          if (!st.walkPending && !st.walkTried) {
             st.walkPending = true;
-            refreshWalkthrough().then(function () { st.walkPending = false; drawPlan(); });
+            refreshWalkthrough().then(function () {
+              st.walkPending = false;
+              st.walkTried = true;
+              drawPlan();
+            });
           }
           return ui.panel({
             title: t('diag.walk.title'),
-            children: [ui.emptyState({ title: t('diag.walk.loading') })],
+            children: [st.walkError
+              ? ui.errorState({
+                title: t('diag.walk.err'),
+                body: st.walkError,
+                detail: 'GET /api/diagnose/' + st.plan.sessionId + '/walkthrough',
+                onRetry: function () { st.walkTried = false; st.walkError = null; drawPlan(); },
+              })
+              : ui.emptyState({ title: t('diag.walk.loading') })],
           });
         }
 

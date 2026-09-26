@@ -134,6 +134,7 @@ function createApp({
   speedtestResultsRepo,
   // Fleet-verdict acknowledgements (migration 138).
   healthAcksRepo = null,
+  ladderRunsRepo = null,
   integrationsRepo,
   integrationAuditRepo,
   integrationsDispatcher,
@@ -356,6 +357,7 @@ function createApp({
       serviceTests,
       speedtestResultsRepo,
       healthAcksRepo,
+      ladderRunsRepo,
       integrationsRepo,
       integrationAuditRepo,
       integrationsDispatcher,

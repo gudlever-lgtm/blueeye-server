@@ -68,6 +68,9 @@
       "halv duplex"
     ]
   },
+  "rungs": [
+    "duplex"
+  ],
   "tests": [
     {
       "type": "ping",

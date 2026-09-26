@@ -3666,4 +3666,54 @@ CREATE TABLE IF NOT EXISTS `trust_key_identity` (
   CONSTRAINT `fk_trust_key_identity_ack_user` FOREIGN KEY (`acknowledged_by`) REFERENCES `users` (`id`) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- 141 — the log of diagnoses run.
+--
+-- The Connection test's ladder walks the layers a packet meets and names the
+-- first one that breaks. Until now that answer existed only on the screen of
+-- whoever pressed the button: the audit trail recorded that probes were
+-- DISPATCHED (who, when, against what), and nothing recorded what the walk
+-- CONCLUDED. "We diagnosed this yesterday and it said the firewall" was not a
+-- question this server could answer.
+--
+-- One row per walk. The verdict is written later, not at dispatch: probes come
+-- back over the following seconds, so the conclusion is stamped on when the
+-- ladder is next READ for that run, and each later read overwrites it. Last
+-- write wins, which is the final state of that diagnosis.
+--
+-- WHY A TABLE AND NOT MORE AUDIT ROWS. The audit trail is a hash-chained record
+-- of what somebody DID, and it is append-only by design — a verdict that
+-- arrives four seconds after the action cannot be written back into the row
+-- that recorded the action without breaking the chain. It is also the wrong
+-- shape to read: nobody wants "every probe_start ever" to answer "what did the
+-- last diagnosis of this host say". The audit row still exists and still
+-- records the dispatch; this is the diagnosis.
+--
+-- WHAT IS NOT STORED: the per-rung sentences. They are rendered from the
+-- measurements on demand, in the reader's own language, and a copy frozen in
+-- English at run time would drift from the probe rows it claims to describe.
+-- `stops_at` is the rung id, which is stable; the sentence is rebuilt from the
+-- results whenever the row is opened.
+CREATE TABLE IF NOT EXISTS `ladder_runs` (
+  `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `agent_id` INT UNSIGNED NOT NULL,
+  `peer_agent_id` INT UNSIGNED NULL DEFAULT NULL,
+  `ladder` VARCHAR(32) NOT NULL,
+  `target` VARCHAR(255) NULL DEFAULT NULL,
+  `symptom` VARCHAR(500) NULL DEFAULT NULL,
+  `outcome` VARCHAR(16) NULL DEFAULT NULL,
+  `stops_at` VARCHAR(32) NULL DEFAULT NULL,
+  `dispatched` SMALLINT UNSIGNED NOT NULL DEFAULT 0,
+  `started_at` DATETIME(3) NOT NULL,
+  `verdict_at` DATETIME(3) NULL DEFAULT NULL,
+  `started_by` INT UNSIGNED NULL DEFAULT NULL,
+  `started_email` VARCHAR(255) NULL DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  KEY `idx_ladder_runs_agent_started` (`agent_id`, `started_at`),
+  KEY `idx_ladder_runs_lookup` (`agent_id`, `ladder`, `target`, `started_at`),
+  KEY `idx_ladder_runs_started` (`started_at`),
+  CONSTRAINT `fk_ladder_runs_agent` FOREIGN KEY (`agent_id`) REFERENCES `agents` (`id`) ON DELETE CASCADE,
+  CONSTRAINT `fk_ladder_runs_peer` FOREIGN KEY (`peer_agent_id`) REFERENCES `agents` (`id`) ON DELETE SET NULL,
+  CONSTRAINT `fk_ladder_runs_user` FOREIGN KEY (`started_by`) REFERENCES `users` (`id`) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 SET FOREIGN_KEY_CHECKS = 1;

@@ -87,8 +87,20 @@ function validateConnectionTestSchedule(body) {
   if (agentId !== undefined) value.agentId = agentId;
   const host = validateHost(input.host, errors);
   if (host !== undefined) value.host = host;
-  const checks = validateChecks(input.checks, errors);
-  if (checks !== undefined) value.checks = checks;
+
+  // A schedule is either a LADDER (the whole walk, on a period) or a hand-picked
+  // selection of checks. Naming both would leave the route choosing, and the
+  // operator reading a package that runs something they did not ask for.
+  if (input.ladder !== undefined && input.ladder !== '' && input.ladder !== null) {
+    if (input.checks !== undefined) {
+      errors.checks = 'a scheduled ladder runs the whole walk — do not also name checks';
+    }
+    const l = checkLadder(input.ladder, errors);
+    if (l !== undefined) value.ladder = l;
+  } else {
+    const checks = validateChecks(input.checks, errors);
+    if (checks !== undefined) value.checks = checks;
+  }
 
   const runs = validateRounds(input.runs, errors, 'runs');
   if (runs !== undefined) value.runs = runs;
@@ -97,8 +109,8 @@ function validateConnectionTestSchedule(body) {
   // MAX_ITEMS items — so "every check, three times per run" has a ceiling, and
   // the operator is told which knob to turn down rather than getting a package
   // that silently runs fewer checks than it shows.
-  if (checks !== undefined && runs !== undefined && checks.length * runs > MAX_ITEMS) {
-    errors.runs = `a scheduled run may carry at most ${MAX_ITEMS} tests (${checks.length} checks × ${runs} runs)`;
+  if (value.checks !== undefined && runs !== undefined && value.checks.length * runs > MAX_ITEMS) {
+    errors.runs = `a scheduled run may carry at most ${MAX_ITEMS} tests (${value.checks.length} checks × ${runs} runs)`;
   }
 
   const { value: recurrence, errors: re } = validateRecurrence(input.recurrence);
@@ -258,11 +270,48 @@ function validateLadderQuery(query) {
   return Object.keys(errors).length ? { errors } : { value };
 }
 
+// GET /runs — the log of diagnoses. Every filter is optional; what is bounded
+// is how much one request may read back.
+function validateRunsQuery(query) {
+  const input = query && typeof query === 'object' ? query : {};
+  const errors = {};
+  const value = {};
+
+  if (input.agentId !== undefined && input.agentId !== '') {
+    const n = Number(input.agentId);
+    if (!Number.isInteger(n) || n <= 0) errors.agentId = 'agentId must be a positive integer';
+    else value.agentId = n;
+  }
+  if (input.ladder !== undefined && input.ladder !== '') {
+    const l = checkLadder(input.ladder, errors);
+    if (l !== undefined) value.ladder = l;
+  }
+  if (input.target !== undefined && input.target !== '') {
+    const host = validateHost(input.target, errors);
+    if (host !== undefined) value.target = host;
+    // validateHost reports under `host`; this field is called target here.
+    if (errors.host) { errors.target = errors.host; delete errors.host; }
+  }
+  if (input.limit !== undefined && input.limit !== '') {
+    const n = Number(input.limit);
+    if (!Number.isInteger(n) || n < 1 || n > 200) errors.limit = 'limit must be an integer between 1 and 200';
+    else value.limit = n;
+  }
+  if (input.offset !== undefined && input.offset !== '') {
+    const n = Number(input.offset);
+    if (!Number.isInteger(n) || n < 0) errors.offset = 'offset must be a non-negative integer';
+    else value.offset = n;
+  }
+
+  return Object.keys(errors).length ? { errors } : { value };
+}
+
 module.exports = {
   validateConnectionTestRun,
   validateConnectionTestSchedule,
   validateConnectionTestWalk,
   validateLadderQuery,
+  validateRunsQuery,
   MAX_ROUNDS,
   SYMPTOM_MAX,
 };

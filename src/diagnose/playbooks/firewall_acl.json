@@ -66,6 +66,9 @@
       "lukket"
     ]
   },
+  "rungs": [
+    "firewall"
+  ],
   "tests": [
     {
       "type": "ping",

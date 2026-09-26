@@ -167,6 +167,7 @@ const { createReportMailer } = require('./services/reportMailer');
 const { createReportScheduler } = require('./services/reportScheduler');
 const { createSpeedtestResultsRepository } = require('./repositories/speedtestResultsRepository');
 const { createAgentHealthAcksRepository } = require('./repositories/agentHealthAcksRepository');
+const { createLadderRunsRepository } = require('./repositories/ladderRunsRepository');
 const { createSecretBox } = require('./lib/secretBox');
 const { createIntegrationsRepository } = require('./repositories/integrationsRepository');
 const { createIntegrationAuditRepository } = require('./repositories/integrationAuditRepository');
@@ -408,6 +409,7 @@ function start() {
   const speedtestResultsRepo = createSpeedtestResultsRepository(db);
   // "Somebody is on this" on a Fleet verdict (migration 138).
   const healthAcksRepo = createAgentHealthAcksRepository(db);
+  const ladderRunsRepo = createLadderRunsRepository(db);
 
   // Transaction tests (http/tcp/dns/icmp journeys): config pushed to agents over
   // WS, results ingested over WS. Secrets (config_secrets) are AES-256-GCM at rest
@@ -1470,6 +1472,7 @@ function start() {
     severityRulesRepo,
     speedtestResultsRepo,
     healthAcksRepo,
+    ladderRunsRepo,
     integrationsRepo,
     integrationAuditRepo,
     integrationsDispatcher,

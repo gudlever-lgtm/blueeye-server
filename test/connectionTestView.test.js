@@ -349,7 +349,7 @@ test('Repeat saves a recurring test package and says what it saved', async (t) =
   assert.deepEqual(pkg.targets, { mode: 'agents', agentIds: [1], locationIds: [] });
   assert.ok(pkg.items.length >= 5, `only ${pkg.items.length} items`);
   assert.equal(doc.querySelector('#modal').classList.contains('hidden'), true, 'the dialog stayed open');
-  assert.match(doc.querySelector('.ct-chip').textContent, /Daily from 08:00/);
+  assert.match(doc.querySelector('.ct-chip-battery').textContent, /Daily from 08:00/);
 });
 
 test('a viewer sees the screen but is not offered Repeat', async (t) => {
@@ -530,5 +530,32 @@ test('a two-way diagnosis runs from both ends and names the direction', async (t
   const rungs = [...doc.querySelectorAll('.ct-rung')];
   assert.equal(rungs.length, 6);
   assert.ok(rungs.some((r) => /Direction of loss/.test(r.textContent)));
+  assert.deepEqual(errors, []);
+});
+
+test('the verdict offers the playbook that explains the rung, and opens it in place', async (t) => {
+  const { doc, errors } = await boot(t, { app: appWith({ probeRows: FILTERED_ROWS }) });
+  await open(doc);
+  await setTarget(doc, 'example.com');
+  assert.ok(await until(() => doc.querySelector('.ct-verdict'), 15000), 'no verdict');
+
+  const head = doc.querySelector('.ct-playbook-head');
+  assert.ok(head, 'the verdict offered nothing to read');
+  assert.match(head.textContent, /Why this happens/);
+  assert.match(head.textContent, /firewall or ACL/i);
+
+  // Closed until asked: a verdict that offers three playbooks must not fetch
+  // three bodies nobody reads.
+  assert.equal(doc.querySelector('.ct-playbook-body').hidden, true);
+  head.click();
+  assert.ok(await until(() => doc.querySelector('.ct-playbook-fixes'), 15000), 'the playbook body never loaded');
+  const body = doc.querySelector('.ct-playbook-body');
+  assert.equal(body.hidden, false);
+  assert.match(body.textContent, /ICMP and TCP are different traffic/);
+  assert.ok(body.querySelectorAll('.ct-playbook-fixes li').length >= 3, 'no fixes listed');
+
+  // And it closes again without re-fetching.
+  head.click();
+  assert.equal(doc.querySelector('.ct-playbook-body').hidden, true);
   assert.deepEqual(errors, []);
 });

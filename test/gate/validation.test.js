@@ -48,6 +48,11 @@ const ACCEPTS_EMPTY = new Set([
   // the button did before it could select a subset. An empty body is the
   // normal case, not a mistake.
   'validateDiagnoseRun',
+  // The log of diagnoses run is a LIST: every filter is optional, and no filter
+  // at all means "every diagnosis, newest first", which is what the screen
+  // opens on. What the validator bounds is how much one request may read back,
+  // not whether it asked for anything.
+  'validateRunsQuery',
   // The device log opens with no filter at all — "the last two hours, every
   // device, every severity" — which is exactly what a technician wants before
   // they know what they are looking for. Every field IS optional here; the

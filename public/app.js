@@ -1338,20 +1338,30 @@ const PAGE_INFO = {
     ],
   },
   connectionTest: {
-    hero: 'One address, the whole battery: type an IP or a DNS name and run every check at once — resolution, ICMP, the ports, the path and the packet size — once, a number of times, or on a repeat.',
-    title: 'Connection test',
+    get hero() { return t('pi.ct.hero'); },
+    get title() { return t('ct.title'); },
     body: () => [
-      el('div', { class: 'callout' },
-        el('strong', {}, 'Probe · Connection test · Test package: '),
-        el('span', {}, 'A ', viewLink('probes', 'probe'), ' answers one question about one target. A connection test asks all of them at once, from one agent, against one address — the screen you reach for when somebody says “I cannot reach X”. A ', viewLink('tests', 'test package'), ' is the same thing saved: named, aimed at many agents, and repeating.')),
-      el('p', {}, 'Type the address, press Run, and each selected check is pushed to the agent in one request. The number in the button is how many ROUNDS to run: every selected check, that many times, one round after the other — useful when a fault comes and goes and a single sample proves nothing.'),
-      el('h4', {}, 'What gets run'),
-      el('p', {}, 'The arrow opens the list. Everything the agent can run is selected by default; clear what you do not want. Two rows are always disabled: ', el('strong', {}, 'reverse DNS'), ' and the ', el('strong', {}, 'TLS certificate'), ' check are catalogue entries the agent cannot run yet, and they are shown rather than hidden so the list says what a connection test will cover. A ', el('strong', {}, 'DNS lookup'), ' is disabled when the target is an IP address — there is nothing to resolve, and a green tick for a question nobody asked is worse than no row at all.'),
-      el('h4', {}, 'Stop'),
-      el('p', {}, 'Stop ends the run: no further rounds are sent. A check already handed to the agent finishes on the agent — nothing can call it back — so its result may still arrive a moment later.'),
-      el('h4', {}, 'Repeat'),
-      el('p', {}, 'Repeat saves the same test as a scheduled ', viewLink('tests', 'test package'), ': a period (hourly / daily / weekly / monthly), how often to repeat inside that period, when it starts, and how many times the battery runs per scheduled run. The dialog writes the schedule out as a sentence before you save it. Times are the server\u2019s clock. Edit or delete it afterwards on the Test packages tab — closing this page does not stop it.'),
-      el('p', { class: 'muted' }, 'Every check is an ordinary probe, so the full result — path map, per-hop measurement, history — opens on the Run-a-probe tab, and the same results drive the health verdict on ', viewLink('fleet', 'Overview'), ' and availability in ', viewLink('reporting', 'Reporting'), '. Metadata only: targets and timings, never packet contents.'),
+      el('div', { class: 'callout' }, el('strong', {}, t('pi.ct.ladder.lbl')), ' ',
+        el('span', {}, t('pi.ct.ladder.p1'))),
+      el('p', {}, t('pi.ct.ladder.p2')),
+
+      el('h4', {}, t('pi.ct.four.h')),
+      el('p', {}, t('pi.ct.four.p')),
+      el('ul', {},
+        el('li', {}, el('strong', {}, t('set.ladder.name.reachability')), ' \u2014 ', t('pi.ct.four.reach')),
+        el('li', {}, el('strong', {}, t('set.ladder.name.two_way')), ' \u2014 ', t('pi.ct.four.twoway')),
+        el('li', {}, el('strong', {}, t('set.ladder.name.local_host')), ' \u2014 ', t('pi.ct.four.local')),
+        el('li', {}, el('strong', {}, t('set.ladder.name.device_location')), ' \u2014 ', t('pi.ct.four.device'))),
+
+      el('h4', {}, t('pi.ct.why.h')),
+      el('p', {}, t('pi.ct.why.p1'), ' ', viewLink('diagnose', t('pi.ct.why.link')), ' ', t('pi.ct.why.p2')),
+
+      el('h4', {}, t('ct.battery.title')),
+      el('p', {}, t('pi.ct.battery.p1')),
+      el('p', {}, el('strong', {}, t('ct.stop')), ' \u2014 ', t('ct.stopNote')),
+      el('p', {}, el('strong', {}, t('ct.repeat')), ' \u2014 ', t('pi.ct.repeat')),
+
+      el('p', { class: 'muted' }, t('pi.ct.foot1'), ' ', settingsLink('ladder', t('pi.ct.foot.settings')), ' ', t('pi.ct.foot2')),
     ],
   },
   flows: {
@@ -8295,7 +8305,7 @@ async function connectionTestView() {
   const stopBtn = el('button', { class: 'small ghost', disabled: 'disabled' }, t('ct.stop'));
   const repeatBtn = el('button', { class: 'small ghost' }, t('ct.repeat'));
   const status = el('span', { class: 'muted small' });
-  const scheduleChip = el('span', { class: 'ct-chip', hidden: true });
+  const scheduleChip = el('span', { class: 'ct-chip ct-chip-battery', hidden: true });
 
   // The ladder's own controls, declared with the rest because the page is laid
   // out before the ladder's functions are defined further down.
@@ -8314,8 +8324,12 @@ async function connectionTestView() {
   const peerWrap = el('label', { class: 'inline muted ct-peer', hidden: true }, t('ct.ladder.peer'), ' ', peerSel);
   const deviceInput = el('input', { type: 'text', spellcheck: 'false', maxlength: '255', placeholder: t('ct.ladder.device.placeholder') });
   const deviceWrap = el('label', { class: 'inline muted ct-device', hidden: true }, t('ct.ladder.device'), ' ', deviceInput);
-  const ladderBtn = el('button', { class: 'small' }, t('ct.ladder.run'));
+  const ladderBtn = el('button', { class: 'small primary ct-ladder-go' }, t('ct.ladder.run'));
+  const ladderRepeatBtn = el('button', { class: 'small ghost' }, t('ct.repeat'));
+  const ladderChip = el('span', { class: 'ct-chip ct-chip-ladder', hidden: true });
+  const historyPanel = el('div', { class: 'ct-history' });
   const ladderPanel = el('div', { class: 'ct-ladder', hidden: true });
+  const ladderEmpty = el('div', {});
   const ladderCatalogue = ladderCat;
   ladderSel.replaceChildren(...ladderCatalogue.map((l) => el('option', { value: l.id }, t(`set.ladder.name.${l.id}`))));
   const currentLadder = () => ladderCatalogue.find((l) => l.id === ladderSel.value) || null;
@@ -8517,22 +8531,51 @@ async function connectionTestView() {
   }
   target.addEventListener('change', refreshCatalogue);
 
+  // --- the page, in the order the work is done ------------------------------
+  //
+  // The ladder is the screen, not a control above one. It used to open on the
+  // nine-row check list with the diagnosis bolted on top, which taught every
+  // operator that the list was the feature and the answer was an extra — and
+  // nobody picks a tool they have to notice first.
+  //
+  // So: say what is wrong, read where it stops. The battery of checks is still
+  // all there, one section down, for the operator who already knows which
+  // question they are asking. That is the minority case, and it now looks like
+  // one.
+  const hasLadder = ladderCatalogue.length > 0;
+
   root.append(el('div', { class: 'history-controls' },
     el('label', { class: 'inline muted' }, t('ct.agent'), ' ', agentSel),
     el('label', { class: 'inline muted ct-target' }, t('ct.target'), ' ', target)));
-  if (canWrite() && ladderCatalogue.length) {
+
+  if (canWrite() && hasLadder) {
     root.append(el('div', { class: 'history-controls ct-ladder-row' },
       el('label', { class: 'inline muted' }, t('ct.ladder.pick'), ' ', ladderSel), peerWrap, deviceWrap));
     root.append(el('div', { class: 'history-controls ct-symptom-row' },
-      el('label', { class: 'inline muted ct-symptom-label' }, t('ct.symptom.label'), ' ', symptom), ladderBtn));
+      el('label', { class: 'inline muted ct-symptom-label' }, t('ct.symptom.label'), ' ', symptom),
+      ladderBtn, ladderRepeatBtn, ladderChip));
   }
   root.append(ladderPanel);
-  root.append(el('div', { class: 'history-controls ct-actions' },
+  // An empty screen should say what it is for, not sit blank until somebody
+  // guesses. Replaced by the verdict the moment there is one.
+  if (hasLadder) {
+    ladderEmpty.replaceChildren(el('div', { class: 'empty ct-ladder-empty' }, t('ct.ladder.empty')));
+    root.append(ladderEmpty);
+    root.append(historyPanel);
+  }
+
+  // The battery, below the answer: its own section with a heading, so it reads
+  // as "and here is what it ran" rather than as the point of the page.
+  const battery = el('div', { class: 'ct-battery' });
+  if (hasLadder) battery.append(el('h3', { class: 'ct-battery-head' }, t('ct.battery.title')));
+  battery.append(el('div', { class: 'history-controls ct-actions' },
     runBtn, stopBtn, canWrite() ? repeatBtn : null, scheduleChip, status));
-  root.append(el('div', { class: 'ct-toggle-row' }, toggle, counter), listWrap,
+  battery.append(el('div', { class: 'ct-toggle-row' }, toggle, counter), listWrap,
     el('div', { class: 'muted small ct-note' }, t('ct.stopNote'), ' ', t('ct.resultsNote')));
+  root.append(battery);
+
   renderRows();
-  if (ladderCatalogue.length) syncLadderFields();
+  if (hasLadder) syncLadderFields();
 
   // --- the ladder ----------------------------------------------------------
   //
@@ -8585,6 +8628,7 @@ async function connectionTestView() {
     return q;
   }
 
+
   // Show only the fields the chosen ladder uses. A field that does nothing for
   // the selected ladder is worse than a missing one: it invites an operator to
   // fill it in and then ignores it.
@@ -8597,11 +8641,101 @@ async function connectionTestView() {
     // Device location measures nothing new — there is nothing to run, only a
     // verdict to read, so the button says so.
     ladderBtn.replaceChildren(def.dispatches ? t('ct.ladder.run') : t('ct.ladder.read'));
+    ladderRepeatBtn.hidden = !def.dispatches;
+    ladderChip.hidden = true;
     refreshLadder();
+    refreshHistory();
   }
   ladderSel.addEventListener('change', syncLadderFields);
   peerSel.addEventListener('change', () => refreshLadder());
   deviceInput.addEventListener('change', () => refreshLadder());
+
+  // The playbook that explains the rung the ladder stopped at. The ladder says
+  // WHERE; this says WHY and WHAT TO DO — and it opens IN PLACE, because the
+  // operator is already looking at the answer and sending them to another
+  // screen to describe the same fault a second time is the hop this removes.
+  //
+  // The body is fetched once, on first open: a verdict that offers three
+  // playbooks should not cost three requests nobody reads.
+  function playbookNode(pb) {
+    const caret = el('span', { class: 'ct-caret' }, '▸');
+    const body = el('div', { class: 'ct-playbook-body', hidden: true });
+    let loaded = false;
+    const head = el('button', { class: 'ct-playbook-head', type: 'button', 'aria-expanded': 'false' },
+      caret, ' ', el('strong', {}, t('ct.ladder.why')), ' ', el('span', {}, pb.title));
+    head.addEventListener('click', async () => {
+      const open = head.getAttribute('aria-expanded') === 'true';
+      head.setAttribute('aria-expanded', String(!open));
+      body.hidden = open;
+      caret.textContent = open ? '▸' : '▾';
+      if (open || loaded) return;
+      body.replaceChildren(el('div', { class: 'muted small' }, t('ct.ladder.loading')));
+      try {
+        const r = await api(`/api/playbooks/${encodeURIComponent(pb.id)}?locale=${encodeURIComponent(window.I18n.getLocale())}`);
+        const p = r.playbook || r;
+        body.replaceChildren(
+          p.explanation ? el('p', {}, p.explanation) : null,
+          (p.fixes || []).length
+            ? el('div', {},
+              el('h4', {}, t('ct.ladder.fixes')),
+              el('ul', { class: 'ct-playbook-fixes' }, ...p.fixes.map((f) => el('li', {}, f))))
+            : null,
+          el('div', { class: 'muted small' }, t('ct.ladder.playbookNote')));
+        loaded = true;
+      } catch (e) {
+        body.replaceChildren(el('div', { class: 'error small' }, errText(e)));
+      }
+    });
+    return el('div', { class: 'ct-playbook' }, head, body);
+  }
+
+  // Save this diagnosis as a recurring test package. The schedule pushes the
+  // ladder's own probes on a period; reading the ladder afterwards is what
+  // concludes, so a scheduled diagnosis and a hand-run one are the same thing.
+  ladderRepeatBtn.addEventListener('click', () => {
+    const def = currentLadder();
+    const q = ladderQuery();
+    if (!def || !q) { say(t('ct.ladder.needs'), true); return; }
+    if (!def.dispatches) { say(t('ct.ladder.noSchedule'), true); return; }
+    openRepeatModal({
+      what: t(`set.ladder.name.${def.id}`),
+      onSave: (spec, runs) => api('/api/connection-test/schedule', {
+        method: 'POST',
+        body: {
+          agentId: Number(agentSel.value),
+          host: q.get('host') || target.value.trim(),
+          ladder: def.id,
+          runs,
+          recurrence: spec,
+        },
+      }),
+      onSaved: (pkg, summary) => repeatChip(ladderChip, pkg, summary),
+    });
+  });
+
+  // What was diagnosed before, and what it said. The audit trail records the
+  // ACT; this is the diagnosis, which is what somebody wants a week later.
+  async function refreshHistory() {
+    const def = currentLadder();
+    if (!def) return;
+    const q = new URLSearchParams({ agentId: String(agentSel.value), ladder: def.id, limit: '5' });
+    let runs;
+    try { runs = (await api(`/api/connection-test/runs?${q.toString()}`)).runs || []; }
+    catch { historyPanel.replaceChildren(); return; }
+    if (!runs.length) { historyPanel.replaceChildren(); return; }
+    historyPanel.replaceChildren(
+      el('h4', { class: 'ct-history-head' }, t('ct.history.title')),
+      el('ul', { class: 'ct-history-list' }, ...runs.map((r) => el('li', {},
+        el("span", { class: "ct-history-when" }, fmtDate(r.startedAt)),
+        ' ',
+        el('span', { class: 'ct-history-what' }, r.target || t(`set.ladder.name.${r.ladder}`)),
+        ' — ',
+        r.outcome
+          ? el('span', { class: `ct-history-outcome ${r.outcome}` },
+            r.stopsAt ? t('ct.history.stopped', { layer: t(`ct.ladder.layer.${r.stopsAt}`) }) : t(`ct.ladder.outcome.${r.outcome}`))
+          : el('span', { class: 'muted' }, t('ct.history.noVerdict')),
+        r.startedEmail ? el('span', { class: 'muted small' }, ` · ${r.startedEmail}`) : null))));
+  }
 
   // Recompute the verdict from what is already stored. Safe to call at any
   // moment: a rung with nothing behind it reads "not tested", never "fine".
@@ -8612,13 +8746,15 @@ async function connectionTestView() {
     if (note) q.set('symptom', note);
     let v;
     try { v = await api(`/api/connection-test/ladder?${q.toString()}`); }
-    catch (e) { if (!quiet) { ladderPanel.hidden = false; ladderPanel.replaceChildren(el('div', { class: 'error' }, errText(e))); } return; }
+    catch (e) { if (!quiet) { ladderEmpty.replaceChildren(); ladderPanel.hidden = false; ladderPanel.replaceChildren(el('div', { class: 'error' }, errText(e))); } return; }
     ladderPanel.hidden = false;
+    ladderEmpty.replaceChildren();
     ladderPanel.replaceChildren(
       el('div', { class: `ct-verdict ${v.verdict.outcome}` },
         el('div', { class: 'ct-verdict-head' }, t(`ct.ladder.outcome.${v.verdict.outcome}`)),
         el('div', { class: 'ct-verdict-text' }, v.verdict.text),
-        v.symptom ? el('div', { class: 'muted small ct-verdict-symptom' }, t('ct.ladder.youSaid', { symptom: v.symptom })) : null),
+        v.symptom ? el('div', { class: 'muted small ct-verdict-symptom' }, t('ct.ladder.youSaid', { symptom: v.symptom })) : null,
+        ...(v.playbooks || []).map(playbookNode)),
       el('ol', { class: 'ct-rungs' }, ...v.layers.map(rungNode)));
   }
 
@@ -8664,6 +8800,7 @@ async function connectionTestView() {
     ladderRunning = false; running = false;
     ladderBtn.disabled = false; stopBtn.disabled = true;
     say(stopRequested ? t('ct.status.stopped') : t('ct.ladder.done', { host }));
+    await refreshHistory();
     syncCounter();
   }
 
@@ -13214,6 +13351,28 @@ const DOCS = [
             ['Check ', viewLink('geo', 'Destinations'), ' / Topology to see whether the site lost a key dependency (a DNS resolver, a SaaS endpoint, an upstream ASN).'],
           ]),
           docsExpect('A site anomaly that hits every agent simultaneously is almost always shared infrastructure (WAN link, firewall, DNS, power). A single agent standing out while its neighbours are green is a host- or NIC-local problem — jump to “Investigate an interface”.'),
+        ],
+      },
+      {
+        // Fully translated, unlike its older neighbours: this is new text, and
+        // new UI text goes through the translation layer.
+        id: 'ladder', get title() { return t('docs.ladder.title'); }, body: () => [
+          docsLead(t('docs.ladder.lead')),
+          docsSteps([
+            [t('docs.ladder.s1a'), ' ', viewLink('probes', t('ct.tab'), 'connection'), t('docs.ladder.s1b')],
+            t('docs.ladder.s2'),
+            t('docs.ladder.s3'),
+            t('docs.ladder.s4'),
+          ]),
+          docsTable([t('docs.ladder.col.stops'), t('docs.ladder.col.means')], [
+            [t('docs.ladder.r1.f'), t('docs.ladder.r1.v')],
+            [t('docs.ladder.r2.f'), t('docs.ladder.r2.v')],
+            [t('docs.ladder.r3.f'), t('docs.ladder.r3.v')],
+            [t('docs.ladder.r4.f'), t('docs.ladder.r4.v')],
+          ]),
+          docsExpect(
+            el('span', {}, t('docs.ladder.exp1')),
+            el('span', {}, t('docs.ladder.exp2'))),
         ],
       },
       {

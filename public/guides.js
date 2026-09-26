@@ -994,6 +994,28 @@
 
     // ------------------------------------------------------------ Diagnostics
     function diagnosticsSteps() { return [
+      // The ladder comes FIRST, before the tour of the tools. "Which tool
+      // answers which question" is the right second question and the wrong
+      // first one: an operator with a fault in front of them does not yet know
+      // which question to ask, and the ladder is what turns "I cannot reach X"
+      // into a question with a name on it.
+      {
+        id: 'ladder',
+        title: function () { return t('guide.diag.step.ladder'); },
+        body: function () {
+          return [
+            lead(t('guide.diag.ladder.lead')),
+            todo([t('guide.diag.ladder.do1'), t('guide.diag.ladder.do2'), t('guide.diag.ladder.do3')]),
+            table([t('guide.diag.ladder.caseCol'), t('guide.diag.ladder.saysCol')], [
+              [t('guide.diag.ladder.c1.f'), t('guide.diag.ladder.c1.v')],
+              [t('guide.diag.ladder.c2.f'), t('guide.diag.ladder.c2.v')],
+              [t('guide.diag.ladder.c3.f'), t('guide.diag.ladder.c3.v')],
+            ]),
+            note(t('guide.diag.ladder.note')),
+            actions(viewButton('probes', t('guide.diag.ladder.open'), 'connection')),
+          ];
+        },
+      },
       {
         id: 'intro',
         title: function () { return t('guide.diag.step.intro'); },

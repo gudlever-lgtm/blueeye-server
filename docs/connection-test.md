@@ -306,6 +306,95 @@ table at all ⇒ `unknown`.
 No agent change was needed for any of it: agents have reported their ARP tables
 since the `arp_entries` work (see [arp-identity.md](arp-identity.md)).
 
+## The verdict links to its explanation
+
+The ladder says **where** the communication stops. A playbook says **why** and
+**what to do**. The join between them is data: each playbook declares the rungs
+it explains.
+
+```jsonc
+// src/diagnose/playbooks/firewall_acl.json
+"rungs": ["firewall"]
+```
+
+Validated at load against the rung ids the ladders actually declare, so a typo
+(`firewal`) fails the build rather than producing a playbook that can never be
+offered. Optional: a playbook that explains a fault no rung measures is still a
+playbook, it is just not reachable from a verdict.
+
+`GET /api/connection-test/ladder` returns the matching playbooks for the rung it
+stopped at, in the same locale as the verdict, and the screen opens them **in
+place** under the verdict — title, explanation and the fixes. The operator is
+already looking at the answer; sending them to another screen to describe the
+same fault a second time is the hop this removes.
+
+| Rung | Playbook |
+| --- | --- |
+| `firewall` | `firewall_acl` |
+| `dns`, `resolver` | `dns_resolution` |
+| `routing` | `hop_packet_loss`, `ecmp_member_link` |
+| `symmetry`, `direction` | `asymmetric_routing` |
+| `errors`, `counters` | `physical_errors`, `congestion`, `l2_loop` |
+| `duplex` | `duplex_mismatch` |
+| `mtu` | `mtu_blackhole` |
+| `nat_lb` | `ecmp_member_link` |
+
+A rung nothing explains yet — `tls`, `arp`, `identity`, `port` — returns an empty
+list. The verdict still says where it stops; it just has nothing further to
+offer, which is honest and not a gap worth hiding. **Adding a playbook for one
+is a `rungs` entry in its JSON and nothing else.**
+
+## The log of diagnoses run
+
+**Table:** `ladder_runs` (migration 141) · **API:** `GET /api/connection-test/runs`
+· **Code:** `src/repositories/ladderRunsRepository.js`
+
+One row per walk. The audit trail records the **act** — who dispatched probes,
+when, against what, in a hash-chained record that is append-only by design. This
+records the **diagnosis**, which is a different thing and has to be written
+twice: once at dispatch, and once when the verdict exists.
+
+The verdict does not exist when the button is pressed. Probes come back over the
+following seconds, so it is stamped on when the ladder is next **read** for that
+run, and each later read overwrites it. Last write wins, which is the final state
+of that diagnosis rather than its first, most-incomplete one.
+
+Attribution is the part with teeth: a verdict lands on the most recent run of the
+same `(agent, ladder, target)` inside a 30-minute window. A read with **no walk
+behind it** — somebody opening the screen on an old destination — writes nothing,
+because inventing a run for it would log a diagnosis nobody performed. A read of
+the same destination the next morning is a new question about an old run, not the
+conclusion of that run, which is what the window is for.
+
+Both writes are **best-effort**: a diagnosis that ran is worth more than a log of
+it, so a logging failure never costs the operator the answer.
+
+What is deliberately **not** stored: the per-rung sentences. They are rendered
+from the measurements on demand, in the reader's own language, and a copy frozen
+in English at run time would drift from the probe rows it claims to describe.
+`stops_at` is the rung id, which is stable; the sentence is rebuilt whenever the
+row is opened.
+
+The screen shows the last five under **Diagnoses run before**.
+
+## Scheduling a diagnosis
+
+**Repeat** next to the diagnosis button saves it as an ordinary
+[test package](../docs/connection-test.md): `POST /api/connection-test/schedule`
+with a `ladder` instead of a `checks` selection.
+
+What it pushes is the ladder's **own** dispatch list, not a hand-picked
+selection — for the same reason a walk is not a selection: a rung nobody ran
+reads `unknown`, and a ladder of those says nothing. Naming both a ladder and a
+list of checks is a 400, because otherwise the route chooses and the operator
+reads a package that runs something they did not ask for.
+
+The schedule does not compute a verdict. Each run lands as ordinary probe
+results, and reading the ladder afterwards is what concludes — so a scheduled
+diagnosis and a hand-run one are the same thing, and the history above covers
+both. `device_location` cannot be scheduled: it measures nothing new, so there is
+nothing to run.
+
 ## The symptom is data
 
 The free-text box travels as a JSON string value, is bounded at 500 characters,

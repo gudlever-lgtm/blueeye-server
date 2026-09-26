@@ -73,6 +73,10 @@
       "pakketab"
     ]
   },
+  "rungs": [
+    "errors",
+    "counters"
+  ],
   "tests": [
     {
       "type": "ping",

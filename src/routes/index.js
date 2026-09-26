@@ -230,6 +230,7 @@ function createApiRouter({
   logRing,
   speedtestResultsRepo,
   healthAcksRepo = null,
+  ladderRunsRepo = null,
   integrationsRepo,
   integrationAuditRepo,
   integrationsDispatcher,
@@ -751,6 +752,13 @@ function createApiRouter({
       // local-host one reads the agent's own interfaces. Both are the SAME
       // computation their own screens use, passed in rather than repeated.
       deviceLocator,
+      // The join between a verdict and its explanation: the playbooks that
+      // explain the rung a ladder stopped at (each playbook declares its own
+      // `rungs`).
+      diagnoseCatalog,
+      // The log of diagnoses run: one row per walk, with the verdict stamped
+      // on when the ladder is next read (migration 141).
+      ladderRunsRepo,
       interfaceHealthFor: resultsRepo ? async (agentId) => {
         const rows = await resultsRepo.findByAgentId(agentId, { limit: 1 });
         const latest = rows && rows[0];

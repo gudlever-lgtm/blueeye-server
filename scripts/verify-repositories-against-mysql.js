@@ -68,7 +68,7 @@ check('ladder runs: the verdict lands on the run that produced it, and on no oth
   // say whether MySQL agrees about which row is "the most recent run of this
   // agent, ladder and target, inside the window".
   const repo = createLadderRunsRepository({ pool });
-  await pool.query("INSERT INTO agents (id, agent_key, hostname, status, created_at) VALUES (901, 'k-901', 'probe-901', 'online', NOW(3))");
+  await pool.query("INSERT INTO agents (id, hostname, platform, arch, status) VALUES (901, 'probe-901', 'linux', 'x64', 'online')");
 
   const a = await repo.start({ agentId: 901, ladder: 'reachability', target: 'a.example', symptom: 'the site is down', dispatched: 9 });
   const b = await repo.start({ agentId: 901, ladder: 'reachability', target: 'b.example', dispatched: 9 });

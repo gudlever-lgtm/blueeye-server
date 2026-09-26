@@ -581,7 +581,16 @@ try {
     "set ""BLUEEYE_TOKEN_PATH=$TokenPath""",
     "set ""BLUEEYE_AGENT_CONFIG=$ConfigPath""",
     "set ""BLUEEYE_ACTION_LOG=$(Join-Path $LogDir 'actions.log')""",
-    'set "BLUEEYE_RUNTIME=unmanaged"',
+    // The Scheduled Task registered below IS this agent's supervisor, and a task
+    // can be ended and re-run (schtasks /End, /Run). Tagging it 'unmanaged' was
+    // understating what the host can do, and the whole Windows fleet paid for it:
+    // every agent declined the one-click update, so the only way to move one was a
+    // downloaded PowerShell script - outside the signed, command-authenticated
+    // channel that already existed for systemd. blueeye-agent restarts a
+    // 'scheduled-task' from 0.47.2 on; an older agent does not recognise the value
+    // and falls back to 'unmanaged' exactly as before, so writing it is safe on a
+    // host whose agent has not updated yet.
+    'set "BLUEEYE_RUNTIME=scheduled-task"',
     "cd /d ""$InstallDir""",
     "echo [%DATE% %TIME%] starting blueeye-agent >> ""$AgentLog""",
     """$NodeExe"" ""$(Join-Path $InstallDir 'src\\index.js')"" >> ""$AgentLog"" 2>&1"
@@ -794,6 +803,42 @@ try {
   $AgentLog = Join-Path $LogDir 'agent.log'
   if ($launcherBackup) {
     Copy-Item -Path $launcherBackup -Destination $launcher -Force
+    # THE LAST TIME THIS SCRIPT SHOULD BE NEEDED ON THIS HOST.
+    #
+    # The preserved launcher is whatever the original installer wrote, and every
+    # installer before this one wrote BLUEEYE_RUNTIME=unmanaged. That single line
+    # is why a Windows agent declines the one-click update: it reports itself as
+    # supervised by nothing, so the server never sends it an 'update' command, and
+    # this script stays the only way to move it. Restoring the launcher verbatim
+    # would carry that forever.
+    #
+    # So the runtime line is rewritten - and nothing else is, because the rest of
+    # the file is this host's own configuration (server URL, pin, paths) and an
+    # operator may have tuned it.
+    $lines = @(Get-Content -Path $launcher -ErrorAction SilentlyContinue)
+    if ($lines.Count -gt 0) {
+      $before = ($lines -join [string][char]10)
+      if ($before -match 'BLUEEYE_RUNTIME=') {
+        $lines = $lines | ForEach-Object {
+          if ($_ -match '^\\s*set\\s+"?BLUEEYE_RUNTIME=') { 'set "BLUEEYE_RUNTIME=scheduled-task"' } else { $_ }
+        }
+      } else {
+        # An older launcher with no runtime line at all: add one before the 'cd',
+        # which every generated launcher has.
+        $out = New-Object System.Collections.ArrayList
+        foreach ($l in $lines) {
+          if ($l -match '^\\s*cd /d ' -and -not ($out -contains 'set "BLUEEYE_RUNTIME=scheduled-task"')) {
+            [void]$out.Add('set "BLUEEYE_RUNTIME=scheduled-task"')
+          }
+          [void]$out.Add($l)
+        }
+        $lines = $out.ToArray()
+      }
+      if (($lines -join [string][char]10) -ne $before) {
+        Set-Content -Path $launcher -Value $lines -Encoding ASCII
+        Info 'launcher: BLUEEYE_RUNTIME is now scheduled-task - this agent can take one-click updates from the dashboard, so this script should not be needed again.'
+      }
+    }
   } else {
     # No launcher to preserve (a hand-rolled install): write the standard one so the
     # scheduled task below has something to start, with the same environment the
@@ -805,7 +850,7 @@ try {
       "set ""BLUEEYE_TOKEN_PATH=$TokenPath""",
       "set ""BLUEEYE_AGENT_CONFIG=$ConfigPath""",
       "set ""BLUEEYE_ACTION_LOG=$(Join-Path $LogDir 'actions.log')""",
-      'set "BLUEEYE_RUNTIME=unmanaged"',
+      'set "BLUEEYE_RUNTIME=scheduled-task"',
       "cd /d ""$InstallDir""",
       "echo [%DATE% %TIME%] starting blueeye-agent >> ""$AgentLog""",
       """$NodeExe"" ""$(Join-Path $InstallDir 'src\\index.js')"" >> ""$AgentLog"" 2>&1"

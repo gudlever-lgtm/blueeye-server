@@ -319,10 +319,202 @@ It is not wasted: the same text matched against the playbook catalogue picks
 causes, the reading rules and the fixes live. The ladder says *where*; a playbook
 says *why* and *what to do*.
 
-## A note on language
+## Language
 
-The rung sentences are written by the server in English, like the probe-failure
-explanations in `src/analysis/probeFailure.js` that the probe table already
-shows. They are the reading of a measurement and have to say the same thing
-wherever they appear. Everything around them — the layer names, the statuses, the
-outcome, the labels — goes through `public/i18n.js` in both catalogues.
+The rung sentences are rendered on the **server**, in the locale the request
+asks for (`GET /api/connection-test/ladder?locale=da`; the dashboard sends its
+own current language). The catalogue is `src/connectionTest/i18n.js` — the same
+per-request-locale pattern `src/nis2/i18n.js` uses for the report documents, and
+for the same reason: `public/i18n.js` keeps one active locale in module state,
+and on a server that would let one request's language leak into another's
+verdict.
+
+A rung carries a message **key and its parameters**, never a sentence. The
+sentence is rendered once, at the end of the walk. A rung evaluator therefore
+does not know locales exist, and a rung added with an English sentence only
+fails the build (`missingKeys()` is asserted in `test/connectionLadder.test.js`).
+
+**Technical terms are not translated, in any locale.** DNS, ARP, ICMP, TCP, SYN,
+RST, TLS, ACL, MTU, HTTP, NAT, VIP, firewall, load balancer, proxy, security
+group, ping, traceroute, reset, timeout. They are what the equipment, its
+documentation and the engineer all call them; a Danish word for SYN makes a
+sentence harder to act on, not easier. Everything around them is the local
+language:
+
+> Kommunikationen stopper ved firewallen: ICMP besvares, og TCP/443 droppes
+> lydløst — en firewall-regel, en ACL eller en security group der tillader ping
+> og nægter applikationsporten. En vært der var nede kunne ikke have svaret på
+> ping.
+
+One thing stays in the words it was written in: a clause the **agent** produced
+(`detail` — `connect ECONNREFUSED 93.184.216.34:80`, `certificate expired 3 days
+ago`). It is a measurement in the words of the thing that measured it, the probe
+table already shows it as-is, and rewriting it here would create a second
+version of a string an operator may need to match against a log. The sentence
+around it is translated; the clause is quoted inside it.
+
+---
+
+# Four ladders
+
+A ladder is an ordered list of rungs, an evaluator per rung, and a rule for
+reading the result. That is a table, not a constant — so each one is a file in
+`src/connectionTest/ladders/` and the shared machinery lives once, in
+`registry.js`. **API:** `GET /api/connection-test/ladders` serves the catalogue;
+the screen renders what it is served, the same rule the check catalogue follows.
+
+| Ladder | Needs | Rungs | Dispatches |
+| --- | --- | --- | --- |
+| `reachability` | one agent, a destination | DNS → ARP → routing → firewall → TCP → NAT/LB → TLS → application | the check catalogue |
+| `two_way` | **two** agents | forward → reverse → symmetry → direction → latency → MTU | ping, traceroute, path MTU, from **both** ends |
+| `local_host` | one agent | link → duplex → errors → DHCP → gateway → resolver | DHCP, traceroute, DNS |
+| `device_location` | a device | identity → switch → port → state → counters → VLAN | **nothing** |
+
+What every ladder shares is in the registry, not repeated in each: a rung is
+only decided by a measurement, the first failure is the answer, everything above
+it is `unreached`, a rung switched off is reported rather than dropped, and the
+sentences are rendered once at the end in the caller's language.
+
+## `two_way` — the same question from both ends
+
+A one-way ladder can say the communication stops; it cannot say which
+**direction** is broken. That is the whole answer for a class of faults a
+forward test reports as "the network is fine":
+
+- **a stateful firewall on the return path**, which never saw the SYN and drops
+  the answer. From the near end that is indistinguishable from a dead service,
+  until the far end reports that *its* traffic arrives;
+- **asymmetric routing** — the two directions take different paths, so one can
+  be broken while the other is perfect;
+- **one-way loss**, which a round-trip measurement averages into something mild;
+- **an MTU that differs per direction**, so a request fits and the reply vanishes.
+
+Both ends probe the other's own reported address (`capabilities.ips`); an agent
+that has never reported one leaves the far end nothing to aim at, and is told so
+rather than probing a blank.
+
+**What it does not claim.** A round trip cannot be split into two one-way
+latencies without synchronised clocks, which BlueEyes does not have and will not
+invent. The latency rung compares two **round** trips — A→B→A against B→A→B — and
+says so: a difference means the two round trips are not the same path, which is a
+real finding and a different one from "the outbound leg is slow".
+
+Path symmetry reuses `comparePaths()` from `src/diagnose/facts.js` rather than
+re-implementing it, because a second, quietly different answer to "is this path
+symmetric" is worse than no second opinion. Asymmetry alone is a `suspect`, never
+a break — it is normal on the internet and across most WANs. It becomes the
+answer when a direction is also losing, and the direction rung is what says so.
+
+## `local_host` — is it this machine?
+
+Asked before a destination ladder means anything. Every rung of `reachability`
+measures the path to somewhere; none of them can tell you the NIC negotiated
+half duplex, that two DHCP servers answered, or that the default gateway two
+feet away is what is unreachable.
+
+Everything it reads is data agents **already** report: interface health from the
+traffic payload, the DHCP probe's offers, the first hop of a traceroute (which
+*is* the gateway this host uses, read off the wire rather than out of a config
+file), and any DNS probe.
+
+Two rungs carry a distinction worth stating:
+
+- **duplex** — late collisions *name* a mismatch; they only happen when one end
+  may transmit while the other is transmitting. Half duplex on a switched port
+  is a negotiation that failed and behaves as a network fault that gets worse
+  under load, which is how it survives weeks of being diagnosed as congestion.
+  Duplex that was not reported reads `unknown`, never `ok`;
+- **DHCP** — nobody answering and *several* servers answering are different
+  faults. The second is a security finding as much as an availability one:
+  whichever answers first hands out the default gateway and the resolver. A test
+  that could not **run** (no permission for port 68) says nothing about the
+  network and is reported as saying nothing.
+
+## `device_location` — where is it plugged in?
+
+Answers **where**, not why, and dispatches nothing: every rung reads what the
+fleet already collected, through the same `src/topology/deviceLocator.js` the
+Path & location screen uses. One locator, so there is one answer to "where is
+this".
+
+It is a ladder rather than a page because "where is it" fails in stages with
+different owners, and a page of blanks makes all of them look like "the tool
+does not know":
+
+| Rung fails | What it actually means |
+| --- | --- |
+| identity | no ARP table this server reads covers that segment — a coverage gap, not a missing device |
+| switch | the switches in front of it are not polled here |
+| port | the switch knows the MAC and reported no port |
+| state | administratively down (somebody shut it) is told apart from a port that fell over |
+
+A port with more MACs behind it than `accessPortMaxMacs` is an uplink or a
+trunk, not where the device is plugged in — it is the *direction* the device
+lies in, and reporting it as "the port" sends somebody to unplug a switch. VLAN
+is a fact, not a fault, unless the caller said which one it should be on.
+
+A device nothing has ever seen is a **verdict**, not a 404: the first rung says
+so in a sentence, and a 404 would make it look like the API was wrong.
+
+---
+
+# Settings → Diagnostics
+
+Each ladder keeps its own configuration, because "which rungs run" means
+something different for each of them. The defaults **are** the shipped ladders,
+so a server that never opens this screen behaves exactly as it did before it
+existed.
+
+**API:** `PUT /api/settings/ladder/:id` (admin), all of them carried in `GET
+/api/settings` as `ladders`. **Code:** the `LADDER_*` half of
+`src/services/settings.js`, `settingsLadderView()` in `public/app.js`, and the
+model itself in `src/connectionTest/ladders/` — imported by the settings service
+rather than restated, so the panel and the walk can never disagree about what a
+rung is or which orders are legal. The fields are rendered from the server's own
+`defaults`, so a ladder that gains a knob gains a field without the screen being
+taught about it.
+
+| Setting | Ladders | What it does |
+| --- | --- | --- |
+| `order`, `enabled` | all | which rungs run, in what order |
+| `ports` | reachability | the TCP ports the TCP and firewall rungs read. 80 and 443 by default — and the wrong answer for a service on 8443, 22 or 1433, which is most of why this is configurable |
+| `certWarnDays`, `lossThresholdPct` | reachability | a certificate expiring within this is `suspect`; sustained per-hop loss at or above this is the routing rung's break |
+| `latencyRatio`, `latencyMinMs` | two_way | how much slower one round trip must be than the other before it is worth a sentence, with an absolute floor so a sub-millisecond LAN never trips it |
+| `errPerSec`, `dropPerSec`, `resolverSlowMs` | local_host | what counts as a fault on the NIC, and when a resolver is slow |
+| `accessPortMaxMacs`, `errPps`, `discPps` | device_location | above how many MACs a port is an uplink, and what its counters may read |
+
+## Half the order is fixed, and that is not tidiness
+
+Every ladder declares a **causal chain** — rungs where each is only reachable
+because the one before it worked:
+
+```
+reachability     DNS → routing → firewall → TCP → TLS → application
+two_way          forward → reverse → symmetry → direction
+local_host       link → duplex → DHCP → gateway → resolver
+device_location  identity → switch → port → state
+```
+
+A name has to resolve before a path can be walked to it; there is nothing to
+compare until both directions have been measured; a link has to be up before
+duplex means anything; without a MAC there is no forwarding-table lookup. Move
+TLS above TCP and the ladder reports "stops at TLS" for a host whose port never
+opened — a confident, wrong answer, which is worse than no answer.
+
+Everything else is an observation **about** the subject rather than a step along
+it — `arp` and `nat_lb`, `latency` and `mtu`, `errors`, `counters` and `vlan` —
+and moves freely, to anywhere in the list or off it.
+
+The rule is enforced in `validateOrder()` and the screen asks it before drawing
+a ▲▼ button, so this is a panel that cannot request something the server would
+refuse rather than one trusted to behave. A `PUT` that breaks a chain is a **400
+naming the pair**, never a silent fallback: a screen showing an order the server
+is not walking is exactly the failure this avoids.
+
+## A rung switched off is reported, not dropped
+
+The ladder still shows it, with `disabled: true` and a sentence saying it was
+switched off in Settings. Shrinking the ladder would make an incomplete answer
+look like a complete one — the same rule as `unknown` never being promoted to
+`ok`, applied to a decision an operator made rather than to a missing
+measurement.

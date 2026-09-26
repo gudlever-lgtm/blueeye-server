@@ -86,7 +86,7 @@ function catalogue(host = null) {
 // anything that does not apply to this target. Returns `{ specs, skipped }` so
 // the caller can tell the operator what was left out and why — a check that
 // quietly disappears is the same bug as one that quietly fails.
-function specsFor(host, ids) {
+function specsFor(host, ids, { ports = null } = {}) {
   const want = new Set(ids || []);
   const specs = [];
   const skipped = [];
@@ -97,6 +97,17 @@ function specsFor(host, ids) {
       continue;
     }
     specs.push({ id: c.id, probe: c.spec(host) });
+  }
+  // Extra TCP ports the ladder is configured for. They ride alongside the
+  // catalogue's own rows rather than replacing them, so a run still produces
+  // every check the screen listed — and an estate on 8443 gets a firewall rung
+  // about 8443 instead of one about a port nobody uses. The id is derived from
+  // the port so a result can still be matched back to the row that asked.
+  const extra = (Array.isArray(ports) ? ports : [])
+    .filter((p) => Number.isInteger(p) && p > 0 && p <= 65535)
+    .filter((p) => !CHECKS.some((c) => c.type === 'tcp' && c.port === p));
+  if (want.has('tcp80') || want.has('tcp443')) {
+    for (const p of new Set(extra)) specs.push({ id: `tcp${p}`, probe: { type: 'tcp', host, port: p, count: 1 } });
   }
   return { specs, skipped };
 }

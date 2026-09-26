@@ -131,20 +131,95 @@ function validateSymptom(raw, errors) {
   return s;
 }
 
+// Which ladder. Unknown ids are rejected rather than defaulted: a caller that
+// asked for `two_way` and silently got `reachability` would be handed a verdict
+// about a question it did not ask.
+const { ids: ladderIds, get: getLadder } = require('../connectionTest/ladders');
+
+function checkLadder(raw, errors) {
+  if (raw === undefined || raw === null || raw === '') return 'reachability';
+  if (typeof raw !== 'string' || !getLadder(raw)) {
+    errors.ladder = `ladder must be one of: ${ladderIds().join(', ')}`;
+    return undefined;
+  }
+  return raw;
+}
+
+// The far end of a two-way walk, and the thing a device-location walk is about.
+// Both are optional at this level because which one is REQUIRED depends on the
+// ladder, and the route is where that is known.
+function checkPeerAgentId(raw, errors) {
+  if (raw === undefined || raw === null || raw === '') return null;
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n <= 0) { errors.peerAgentId = 'peerAgentId must be a positive integer'; return undefined; }
+  return n;
+}
+
+const DEVICE_MAX = 255;
+
+function checkDevice(raw, errors) {
+  if (raw === undefined || raw === null || raw === '') return null;
+  if (typeof raw !== 'string') { errors.device = 'device must be text'; return undefined; }
+  const d = raw.trim();
+  if (!d || d.length > DEVICE_MAX) { errors.device = `device must be 1-${DEVICE_MAX} characters`; return undefined; }
+  // An IP, a MAC or a hostname — the same three the locator accepts. Bounded
+  // here so nothing hostile reaches a query.
+  if (!/^[A-Za-z0-9_.:-]+$/.test(d)) { errors.device = 'device must be an IP address, a MAC address or a hostname'; return undefined; }
+  return d;
+}
+
 function validateConnectionTestWalk(body) {
   const input = body && typeof body === 'object' && !Array.isArray(body) ? body : {};
   const errors = {};
   const value = {};
 
-  const agentId = validateAgentId(input.agentId, errors);
-  if (agentId !== undefined) value.agentId = agentId;
-  const host = validateHost(input.host, errors);
-  if (host !== undefined) value.host = host;
+  const ladder = checkLadder(input.ladder, errors);
+  if (ladder !== undefined) value.ladder = ladder;
+  const def = ladder ? getLadder(ladder) : null;
+
+  // What a ladder NEEDS is the ladder's own statement (registry `needs`), so a
+  // new one cannot be added with a requirement this file has never heard of.
+  if (def && def.needs.agents >= 1) {
+    const agentId = validateAgentId(input.agentId, errors);
+    if (agentId !== undefined) value.agentId = agentId;
+  }
+  if (def && def.needs.agents >= 2) {
+    const peer = checkPeerAgentId(input.peerAgentId, errors);
+    if (peer === null) errors.peerAgentId = `${def.id} measures both directions, so it needs a second agent`;
+    else if (peer !== undefined) value.peerAgentId = peer;
+  }
+  if (def && def.needs.target === 'host') {
+    const host = validateHost(input.host, errors);
+    if (host !== undefined) value.host = host;
+  }
+  if (def && def.needs.target === 'device') {
+    const device = checkDevice(input.device, errors);
+    if (device === null) errors.device = `${def.id} is about one device, so it needs an IP, a MAC or a hostname`;
+    else if (device !== undefined) value.device = device;
+  }
   const symptom = validateSymptom(input.symptom, errors);
   if (symptom !== undefined) value.symptom = symptom;
 
   return Object.keys(errors).length ? { errors } : { value };
 }
+
+// Which language the verdict comes back in. The ladder's sentences are rendered
+// on the server (src/connectionTest/i18n.js), so the locale travels with the
+// request rather than sitting in module state where one user's language could
+// leak into another's answer. An unknown one is not an error: English is a
+// usable answer, and refusing to diagnose because of a language tag is not.
+const { isLocale, DEFAULT_LOCALE } = require('../connectionTest/i18n');
+
+// Not exported, and deliberately not called validate*: it does not return the
+// { value, errors } contract every validator in this directory does (the gate
+// sweeps for that), because there is nothing to reject. A locale is either one
+// we have a catalogue for or it is English, and refusing to diagnose a network
+// because of a language tag would be absurd.
+//
+// `?locale[]=da` hands Express an ARRAY, and an array stringifies to its one
+// element — so a plain isLocale() check would accept it. Only a string may be a
+// locale here; anything else is the default.
+const localeOf = (raw) => ((typeof raw === 'string' && isLocale(raw)) ? raw.toLowerCase() : DEFAULT_LOCALE);
 
 // GET /ladder — read the verdict for a destination from results already stored.
 // Same host rule as a run: a query that could name a host a run could not would
@@ -154,12 +229,31 @@ function validateLadderQuery(query) {
   const errors = {};
   const value = {};
 
-  const agentId = validateAgentId(input.agentId, errors);
-  if (agentId !== undefined) value.agentId = agentId;
-  const host = validateHost(input.host, errors);
-  if (host !== undefined) value.host = host;
+  const ladder = checkLadder(input.ladder, errors);
+  if (ladder !== undefined) value.ladder = ladder;
+  const def = ladder ? getLadder(ladder) : null;
+
+  if (def && def.needs.agents >= 1) {
+    const agentId = validateAgentId(input.agentId, errors);
+    if (agentId !== undefined) value.agentId = agentId;
+  }
+  if (def && def.needs.agents >= 2) {
+    const peer = checkPeerAgentId(input.peerAgentId, errors);
+    if (peer === null) errors.peerAgentId = `${def.id} reads both directions, so it needs a second agent`;
+    else if (peer !== undefined) value.peerAgentId = peer;
+  }
+  if (def && def.needs.target === 'host') {
+    const host = validateHost(input.host, errors);
+    if (host !== undefined) value.host = host;
+  }
+  if (def && def.needs.target === 'device') {
+    const device = checkDevice(input.device, errors);
+    if (device === null) errors.device = `${def.id} is about one device, so it needs an IP, a MAC or a hostname`;
+    else if (device !== undefined) value.device = device;
+  }
   const symptom = validateSymptom(input.symptom, errors);
   if (symptom !== undefined) value.symptom = symptom;
+  value.locale = localeOf(input.locale);
 
   return Object.keys(errors).length ? { errors } : { value };
 }

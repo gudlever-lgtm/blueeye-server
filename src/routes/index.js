@@ -45,6 +45,7 @@ const { createDeviceConfigRouter } = require('./deviceConfig');
 const { createAskCache } = require('../eventCases/askCache');
 const { createThresholdsRouter } = require('./thresholds');
 const { createInterfacesRouter } = require('./interfaces');
+const { computeInterfaceHealth } = require('../health/interfaceHealth');
 const { createDeviceEventsRouter } = require('./deviceEvents');
 const { createSnmpDevicesRouter } = require('./snmpDevices');
 const { createSnmpProfilesRouter } = require('./snmpProfiles');
@@ -502,15 +503,16 @@ function createApiRouter({
   // mounted, like coverage below: reads over existing repositories, and a
   // store this install lacks turns into a 503 or an explicit `unavailable`
   // source rather than a missing route.
-  {
-    const deviceLocator = createDeviceLocator({
-      agentsRepo, locationsRepo, snmpDevicesRepo, snmpNeighborsRepo, deviceInterfacesRepo,
-      fdbEntriesRepo, counterSamplesRepo, arpEntriesRepo, deviceArpRepo, lldpNeighborsRepo,
-      discoveredDevicesRepo, logger,
-    });
-    router.use('/api/topology/l2-path', createL2PathRouter({ deviceLocator }));
-    router.use('/api/devices', createDeviceLocateRouter({ deviceLocator }));
-  }
+  // Declared out here because the Connection test's device-location ladder
+  // reads the SAME locator rather than a second one built from the same
+  // repositories — two locators would be two answers to "where is this".
+  const deviceLocator = createDeviceLocator({
+    agentsRepo, locationsRepo, snmpDevicesRepo, snmpNeighborsRepo, deviceInterfacesRepo,
+    fdbEntriesRepo, counterSamplesRepo, arpEntriesRepo, deviceArpRepo, lldpNeighborsRepo,
+    discoveredDevicesRepo, logger,
+  });
+  router.use('/api/topology/l2-path', createL2PathRouter({ deviceLocator }));
+  router.use('/api/devices', createDeviceLocateRouter({ deviceLocator }));
   // "Which parts of the network do I NOT see?" — the coverage-gap report.
   // Always mounted, like the checklist above: a READ over existing
   // repositories, every source best-effort, and a source that is not wired
@@ -742,6 +744,18 @@ function createApiRouter({
       // The ladder reads what the probes already stored rather than measuring
       // again, and asks the neighbour table whether ARP is even on the path.
       probeResultsRepo: probeResultsRepo || null, arpEntriesRepo: arpEntriesRepo || null,
+      // Settings → Diagnostics: which rungs each ladder walks, in what order,
+      // against which ports, at which thresholds.
+      settingsService,
+      // The device-location ladder reads what the fleet already reported; the
+      // local-host one reads the agent's own interfaces. Both are the SAME
+      // computation their own screens use, passed in rather than repeated.
+      deviceLocator,
+      interfaceHealthFor: resultsRepo ? async (agentId) => {
+        const rows = await resultsRepo.findByAgentId(agentId, { limit: 1 });
+        const latest = rows && rows[0];
+        return computeInterfaceHealth(latest && latest.payload && latest.payload.traffic);
+      } : null,
     }));
   }
   if (transactionsRepo) {

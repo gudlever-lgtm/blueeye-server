@@ -2137,6 +2137,25 @@ button.ghost.small:has(> .icon-glyph) {
 .ct-rung.failed { background: var(--bad-weak); }
 .ct-rung.failed .ct-rung-because { color: var(--text); }
 .ct-rung.unreached, .ct-rung.unknown, .ct-rung.not_applicable { opacity: .6; }
+
+/* Settings → Diagnostics: the ladder's own order, with the causal chain marked
+   as fixed rather than merely refusing to move. */
+.ladder-order { list-style: none; margin: 10px 0; padding: 0; border: 1px solid var(--hairline); border-radius: var(--radius); }
+.ladder-rung {
+  display: grid; grid-template-columns: 22px 1fr auto auto; gap: 10px; align-items: center;
+  padding: 8px 12px; border-bottom: 1px solid var(--hairline);
+}
+.ladder-rung:last-child { border-bottom: none; }
+.ladder-rung input[type="checkbox"] { width: 16px; height: 16px; accent-color: var(--accent); }
+.ladder-rung-name { font-weight: 600; font-size: 13px; }
+.ladder-lock, .ladder-free {
+  font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted);
+  border: 1px solid var(--hairline); border-radius: var(--radius-pill); padding: 1px 8px; white-space: nowrap;
+}
+.ladder-rung.locked { background: var(--panel-2); }
+.ladder-move { display: flex; gap: 4px; }
+.ladder-fields { display: grid; gap: 12px; margin-top: 12px; }
+.ladder-fields label { display: grid; gap: 4px; font-size: 13px; }
 .ct-chip {
   display: inline-flex; align-items: center; gap: 6px; font-size: 12px;
   border: 1px solid var(--accent); color: var(--accent); background: var(--accent-weak);

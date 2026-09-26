@@ -37,7 +37,7 @@ const PUBLIC = path.join(__dirname, '..', '..', 'public');
 // file -> how many hardcoded user-facing sentences it may still contain.
 // Only ever edit these DOWNWARD, in the same commit that does the migrating.
 const CEILING = {
-  'app.js': 608,
+  'app.js': 607,
   'guides.js': 0,
   'serviceAssurance.js': 0,
   // The kitchen sink's are sample DATA inside a component demo, not product

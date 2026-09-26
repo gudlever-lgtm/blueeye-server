@@ -78,6 +78,26 @@ const CASES = {
     rule_out: { iface: { late_coll_per_sec: 0, err_per_sec: 0 } },
     open: { ping: { loss_pct: 4 } },
   },
+  // Built from probe rows rather than written by hand, because the per-port
+  // namespace this playbook reads (`tcp.port_443.failure`) is produced by
+  // buildFacts from a `host:port` target — a hand-written fact object would
+  // pass while the real path produced nothing.
+  firewall_acl: {
+    confirm: buildFacts({
+      results: [
+        { type: 'ping', ok: true, lossPct: 0 },
+        { type: 'tcp', target: 'example.com:443', ok: false, failure: 'timeout' },
+      ],
+    }),
+    // A reset rules it out: the packet arrived and the host said no.
+    rule_out: buildFacts({
+      results: [
+        { type: 'ping', ok: true, lossPct: 0 },
+        { type: 'tcp', target: 'example.com:443', ok: false, failure: 'refused' },
+      ],
+    }),
+    open: { ping: { ok: true } },
+  },
 };
 
 test('every playbook in the starter catalogue has a pattern that confirms it', () => {

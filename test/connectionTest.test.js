@@ -315,3 +315,243 @@ test('the catalogue carries an application check, so a port that opens is not th
   assert.equal(http.available, true);
   assert.equal(http.applies, true);
 });
+
+// ------------------------------------------------- the ladder's configuration
+
+const { makeSettingsService } = (() => {
+  // A settings service the router will accept: only getLadder is read.
+  const fakes = require('../test-support/fakes');
+  return { makeSettingsService: fakes.makeSettingsService || null };
+})();
+
+const ladderSettings = (ladder) => ({ getLadder: async () => ladder });
+
+test('GET /ladder walks the configured order and reports a switched-off rung as such', async () => {
+  const app2 = makeApp({
+    agentsRepo: agentsRepo(),
+    probeResultsRepo: makeProbeResultsRepo({ latestByAgent: async () => LADDER_ROWS }),
+    settingsService: ladderSettings({
+      order: ['nat_lb', 'dns', 'arp', 'routing', 'firewall', 'tcp', 'tls', 'application'],
+      enabled: { dns: true, arp: false, routing: true, firewall: true, tcp: true, nat_lb: true, tls: true, application: true },
+      ports: [80, 443],
+      certWarnDays: 14,
+      lossThresholdPct: 5,
+    }),
+  });
+  const res = await request(app2).get('/api/connection-test/ladder?agentId=1&host=example.com').set('Authorization', viewer());
+  assert.equal(res.status, 200);
+  assert.equal(res.body.layers[0].layer, 'nat_lb', 'the configured order was not walked');
+  const arp = res.body.layers.find((l) => l.layer === 'arp');
+  assert.equal(arp.disabled, true);
+  // Eight rungs still: switching one off must not make the answer look complete.
+  assert.equal(res.body.layers.length, 8);
+  assert.equal(res.body.stopsAt, 'firewall');
+});
+
+test('GET /ladder answers in the locale asked for, and falls back rather than failing', async () => {
+  const da = await request(ladderApp()).get('/api/connection-test/ladder?agentId=1&host=example.com&locale=da').set('Authorization', viewer());
+  assert.equal(da.status, 200);
+  assert.equal(da.body.locale, 'da');
+  assert.match(da.body.verdict.text, /Kommunikationen stopper ved firewallen/);
+  // Technical terms are not translated, in any locale.
+  for (const term of ['ICMP', 'TCP/443', 'ACL']) assert.ok(da.body.verdict.text.includes(term), term);
+
+  for (const q of ['&locale=de', '&locale=', '&locale[]=da', `&locale=${'x'.repeat(200)}`]) {
+    const res = await request(ladderApp()).get(`/api/connection-test/ladder?agentId=1&host=example.com${q}`).set('Authorization', viewer());
+    assert.equal(res.status, 200, q);
+    assert.equal(res.body.locale, 'en', q);
+  }
+});
+
+test('a settings service that throws does not stop a diagnosis', async () => {
+  const app2 = makeApp({
+    agentsRepo: agentsRepo(),
+    probeResultsRepo: makeProbeResultsRepo({ latestByAgent: async () => LADDER_ROWS }),
+    settingsService: { getLadder: async () => { throw new Error('settings table unreachable'); } },
+  });
+  const res = await request(app2).get('/api/connection-test/ladder?agentId=1&host=example.com').set('Authorization', viewer());
+  assert.equal(res.status, 200, 'the ladder refused to run because settings were unreadable');
+  assert.equal(res.body.stopsAt, 'firewall');
+});
+
+test('POST /walk dispatches the configured ports as well as the catalogue ones', async () => {
+  const sent = [];
+  const res = await request(makeApp({
+    agentsRepo: agentsRepo(),
+    agentCommander: makeAgentCommander({ sendCommand: (id, cmd) => { sent.push(cmd); return 1; } }),
+    settingsService: ladderSettings({ ...require('../src/connectionTest/ladder').DEFAULT_CONFIG, ports: [443, 8443, 22] }),
+  })).post('/api/connection-test/walk').set('Authorization', operator()).send({ agentId: 1, host: 'example.com' });
+  assert.equal(res.status, 202);
+  const tcpPorts = sent.filter((c) => c.probe.type === 'tcp').map((c) => c.probe.port).sort((a, b) => a - b);
+  assert.deepEqual(tcpPorts, [22, 80, 443, 8443], `dispatched ${tcpPorts.join(', ')}`);
+});
+
+// ------------------------------------------------- the other three ladders
+
+const AGENT_A = { id: 1, hostname: 'probe-01', display_name: 'probe-01', capabilities: { ips: ['10.0.0.10'] } };
+const AGENT_B = { id: 2, hostname: 'probe-02', display_name: 'probe-02', capabilities: { ips: ['10.9.0.20'] } };
+const twoAgents = () => makeAgentsRepo({
+  findById: async (id) => [AGENT_A, AGENT_B].find((a) => a.id === Number(id)) || null,
+  findAll: async () => [AGENT_A, AGENT_B],
+});
+
+test('GET /ladders says what exists and what each one needs', async () => {
+  const res = await request(app()).get('/api/connection-test/ladders').set('Authorization', viewer());
+  assert.equal(res.status, 200);
+  const byId = Object.fromEntries(res.body.ladders.map((l) => [l.id, l]));
+  assert.deepEqual(Object.keys(byId).sort(), ['device_location', 'local_host', 'reachability', 'two_way']);
+  assert.deepEqual(byId.two_way.needs, { agents: 2, target: 'none' });
+  // A screen has to know which rungs it may offer to move.
+  assert.deepEqual(byId.reachability.movable, ['arp', 'nat_lb']);
+  assert.equal(byId.device_location.dispatches, false);
+  assert.equal((await request(app()).get('/api/connection-test/ladders')).status, 401);
+});
+
+test('POST /walk on the two-way ladder pushes probes from BOTH ends at each other', async () => {
+  const sent = [];
+  const res = await request(makeApp({
+    agentsRepo: twoAgents(),
+    agentCommander: makeAgentCommander({ sendCommand: (id, cmd) => { sent.push({ id, cmd }); return 1; } }),
+  })).post('/api/connection-test/walk').set('Authorization', operator())
+    .send({ ladder: 'two_way', agentId: 1, peerAgentId: 2 });
+  assert.equal(res.status, 202);
+  // Agent 1 probes agent 2's address, and agent 2 probes agent 1's.
+  const from1 = sent.filter((x) => x.id === 1).map((x) => x.cmd.probe.host);
+  const from2 = sent.filter((x) => x.id === 2).map((x) => x.cmd.probe.host);
+  assert.ok(from1.length >= 3 && from1.every((h) => h === '10.9.0.20'), from1.join(','));
+  assert.ok(from2.length >= 3 && from2.every((h) => h === '10.0.0.10'), from2.join(','));
+});
+
+test('POST /walk on the two-way ladder needs two DIFFERENT agents that both have an address', async () => {
+  const app2 = makeApp({ agentsRepo: twoAgents() });
+  const noPeer = await request(app2).post('/api/connection-test/walk').set('Authorization', operator())
+    .send({ ladder: 'two_way', agentId: 1 });
+  assert.equal(noPeer.status, 400);
+  assert.match(noPeer.body.details.peerAgentId, /second agent/);
+
+  const same = await request(app2).post('/api/connection-test/walk').set('Authorization', operator())
+    .send({ ladder: 'two_way', agentId: 1, peerAgentId: 1 });
+  assert.equal(same.status, 400);
+  assert.match(same.body.details.peerAgentId, /must be different agents/);
+
+  const missing = await request(app2).post('/api/connection-test/walk').set('Authorization', operator())
+    .send({ ladder: 'two_way', agentId: 1, peerAgentId: 999999 });
+  assert.equal(missing.status, 404);
+
+  // An agent that never reported an address of its own leaves the far end
+  // with nothing to aim at, and is told so rather than probing a blank.
+  const anon = makeApp({
+    agentsRepo: makeAgentsRepo({ findById: async (id) => (Number(id) === 1 ? AGENT_A : { id: 2, hostname: 'probe-02', capabilities: {} }) }),
+  });
+  const res = await request(anon).post('/api/connection-test/walk').set('Authorization', operator())
+    .send({ ladder: 'two_way', agentId: 1, peerAgentId: 2 });
+  assert.equal(res.status, 400);
+  assert.match(res.body.details.peerAgentId, /has not reported an address of its own/);
+});
+
+test('POST /walk on the local-host ladder asks its own three questions', async () => {
+  const sent = [];
+  const res = await request(makeApp({
+    agentsRepo: agentsRepo(),
+    agentCommander: makeAgentCommander({ sendCommand: (id, cmd) => { sent.push(cmd.probe.type); return 1; } }),
+  })).post('/api/connection-test/walk').set('Authorization', operator()).send({ ladder: 'local_host', agentId: 1 });
+  assert.equal(res.status, 202);
+  assert.deepEqual(sent.sort(), ['dhcp', 'dns', 'traceroute']);
+});
+
+test('POST /walk refuses the device-location ladder, which measures nothing new', async () => {
+  const res = await request(app()).post('/api/connection-test/walk').set('Authorization', operator())
+    .send({ ladder: 'device_location', device: '10.0.0.5' });
+  assert.equal(res.status, 400);
+  assert.match(res.body.details.ladder, /measures nothing new/);
+});
+
+test('POST /walk rejects an unknown ladder rather than defaulting to one', async () => {
+  const res = await request(app()).post('/api/connection-test/walk').set('Authorization', operator())
+    .send({ ladder: 'nope', agentId: 1, host: 'example.com' });
+  assert.equal(res.status, 400);
+  assert.match(res.body.details.ladder, /must be one of/);
+});
+
+test('GET /ladder reads the two-way ladder from what both ends stored', async () => {
+  const rows = {
+    1: [{ type: 'ping', target: '10.9.0.20', ok: true, lossPct: 0, rttMs: 12 }],
+    2: [{ type: 'ping', target: '10.0.0.10', ok: true, lossPct: 40, rttMs: 13 }],
+  };
+  const res = await request(makeApp({
+    agentsRepo: twoAgents(),
+    probeResultsRepo: makeProbeResultsRepo({ latestByAgent: async (id) => rows[Number(id)] || [] }),
+  })).get('/api/connection-test/ladder?ladder=two_way&agentId=1&peerAgentId=2').set('Authorization', viewer());
+  assert.equal(res.status, 200);
+  assert.equal(res.body.ladder, 'two_way');
+  assert.equal(res.body.stopsAt, 'direction');
+  assert.match(res.body.verdict.text, /probe-02 → probe-01/);
+});
+
+// The device-location ladder reads the SAME locator the Path & location screen
+// uses, so these mount the router directly with a fake in its place — makeApp
+// builds the real one out of repositories, which is a different test.
+const withLocator = (deviceLocator) => {
+  const express = require('express');
+  const { createConnectionTestRouter } = require('../src/routes/connectionTest');
+  const bare = express();
+  bare.use(express.json());
+  bare.use('/api/connection-test', createConnectionTestRouter({
+    agentsRepo: agentsRepo(), agentCommander: makeAgentCommander(), deviceLocator,
+  }));
+  return bare;
+};
+
+test('GET /ladder reads the device-location ladder from the locator, and 503s without one', async () => {
+  const locator = {
+    where: async () => ({
+      label: '10.0.0.5',
+      macs: [{ mac: 'aa:bb:cc:dd:ee:ff', vendor: 'Dell' }],
+      location: { deviceId: 2, deviceName: 'sw-core-1', ifName: 'Gi1/0/7', vlan: 20, portMacCount: 1 },
+      port: { known: true, ifName: 'Gi1/0/7', adminStatus: 'down', operStatus: 'down' },
+    }),
+  };
+  const res = await request(withLocator(locator))
+    .get('/api/connection-test/ladder?ladder=device_location&device=10.0.0.5').set('Authorization', viewer());
+  assert.equal(res.status, 200);
+  assert.equal(res.body.stopsAt, 'state');
+  assert.match(res.body.layers.find((l) => l.layer === 'state').because, /somebody shut it/);
+
+  const none = await request(withLocator(null))
+    .get('/api/connection-test/ladder?ladder=device_location&device=10.0.0.5').set('Authorization', viewer());
+  assert.equal(none.status, 503);
+});
+
+test('a device nothing has seen is a verdict, not a 404', async () => {
+  const res = await request(withLocator({ where: async () => null }))
+    .get('/api/connection-test/ladder?ladder=device_location&device=10.0.0.5').set('Authorization', viewer());
+  assert.equal(res.status, 200, 'a device the fleet has never seen looked like a broken API');
+  assert.equal(res.body.stopsAt, 'identity');
+});
+
+test('a locator that throws does not take the diagnosis down with it', async () => {
+  const res = await request(withLocator({ where: async () => { throw new Error('fdb table unreadable'); } }))
+    .get('/api/connection-test/ladder?ladder=device_location&device=10.0.0.5').set('Authorization', viewer());
+  assert.equal(res.status, 200);
+  assert.equal(res.body.stopsAt, 'identity');
+});
+
+test('GET /ladder: every ladder rejects a missing or hostile input without a 500', async () => {
+  const app2 = makeApp({ agentsRepo: twoAgents() });
+  const bad = [
+    '?ladder=two_way&agentId=1',
+    '?ladder=two_way&agentId=1&peerAgentId=0',
+    '?ladder=local_host',
+    '?ladder=device_location',
+    '?ladder=device_location&device=',
+    '?ladder=device_location&device=a%20b;id',
+    `?ladder=device_location&device=${'x'.repeat(400)}`,
+    '?ladder=nope&agentId=1',
+    '?ladder[]=two_way&agentId=1',
+  ];
+  for (const q of bad) {
+    const res = await request(app2).get(`/api/connection-test/ladder${q}`).set('Authorization', viewer());
+    assert.equal(res.status, 400, `${q} → ${res.status}`);
+    assert.ok(res.body.details && Object.keys(res.body.details).length, q);
+  }
+});

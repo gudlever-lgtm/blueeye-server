@@ -443,3 +443,92 @@ test('a viewer reads the verdict but is offered nothing that dispatches', async 
   assert.match(doc.querySelector('.ct-verdict').textContent, /firewall/i);
   assert.deepEqual(errors, []);
 });
+
+test('the screen offers every ladder the server can walk, and asks for what each needs', async (t) => {
+  const { doc, errors } = await boot(t, { app: appWith({ probeRows: FILTERED_ROWS }) });
+  await open(doc);
+  const pick = doc.querySelector('.ct-ladder-pick');
+  assert.ok(pick, 'no ladder picker');
+  assert.deepEqual([...pick.options].map((o) => o.value),
+    ['reachability', 'two_way', 'local_host', 'device_location']);
+
+  const peer = doc.querySelector('.ct-peer');
+  const device = doc.querySelector('.ct-device');
+  const target = doc.querySelector('.connection-test .ct-target');
+  const choose = async (id) => {
+    pick.value = id;
+    pick.dispatchEvent(new doc.defaultView.Event('change', { bubbles: true }));
+    await tick(150);
+  };
+
+  // Reaching a destination: a target, and nothing else.
+  assert.equal(target.hidden, false);
+  assert.equal(peer.hidden, true);
+  assert.equal(device.hidden, true);
+
+  // Between two agents: a far end, and no destination to type.
+  await choose('two_way');
+  assert.equal(peer.hidden, false, 'no far-end picker for a two-way test');
+  assert.equal(target.hidden, true, 'a two-way test asked for a destination it does not use');
+
+  // This host itself: neither.
+  await choose('local_host');
+  assert.equal(peer.hidden, true);
+  assert.equal(target.hidden, true);
+  assert.equal(device.hidden, true);
+
+  // Where a device is plugged in: a device, and a button that says it only
+  // reads — the ladder dispatches nothing.
+  await choose('device_location');
+  assert.equal(device.hidden, false);
+  assert.match(doc.querySelector('.ct-symptom-row button').textContent, /Read what is known/);
+
+  assert.deepEqual(errors, []);
+});
+
+test('a two-way diagnosis runs from both ends and names the direction', async (t) => {
+  const sent = [];
+  const AGENTS2 = [
+    { id: 1, hostname: 'probe-01', display_name: 'probe-01', status: 'online', capabilities: { ips: ['10.0.0.10'] }, meta: {}, monitor_config: {} },
+    { id: 2, hostname: 'probe-02', display_name: 'probe-02', status: 'online', capabilities: { ips: ['10.9.0.20'] }, meta: {}, monitor_config: {} },
+  ];
+  const rows = {
+    1: [{ id: 1, type: 'ping', target: '10.9.0.20', ok: true, lossPct: 0, rttMs: 12, ts: new Date().toISOString() }],
+    2: [{ id: 2, type: 'ping', target: '10.0.0.10', ok: true, lossPct: 40, rttMs: 13, ts: new Date().toISOString() }],
+  };
+  const app = makeApp({
+    agentsRepo: makeAgentsRepo({
+      findAll: async () => AGENTS2,
+      findById: async (id) => AGENTS2.find((a) => a.id === Number(id)) || null,
+    }),
+    agentCommander: { sendCommand: (id, cmd) => { sent.push({ id, cmd }); return 1; } },
+    probeResultsRepo: { latestByAgent: async (id) => rows[Number(id)] || [], findByAgent: async () => [] },
+  });
+  const { doc, errors } = await boot(t, { app });
+  await open(doc);
+
+  const pick = doc.querySelector('.ct-ladder-pick');
+  pick.value = 'two_way';
+  pick.dispatchEvent(new doc.defaultView.Event('change', { bubbles: true }));
+  await tick(150);
+  // The far end has to be a different agent from the near one.
+  const peerSel = doc.querySelector('.ct-peer select');
+  peerSel.value = '2';
+  peerSel.dispatchEvent(new doc.defaultView.Event('change', { bubbles: true }));
+
+  doc.querySelector('.ct-symptom-row button').click();
+  assert.ok(await until(() => sent.length >= 6, 20000), `only ${sent.length} probes dispatched`);
+  // Each end probes the other's address.
+  assert.ok(sent.filter((x) => x.id === 1).every((x) => x.cmd.probe.host === '10.9.0.20'));
+  assert.ok(sent.filter((x) => x.id === 2).every((x) => x.cmd.probe.host === '10.0.0.10'));
+
+  assert.ok(await until(() => doc.querySelector('.ct-verdict'), 20000), 'no verdict rendered');
+  const verdict = doc.querySelector('.ct-verdict');
+  assert.match(verdict.textContent, /probe-02 → probe-01/);
+  assert.match(verdict.textContent, /return path/i);
+  // Six rungs, named in the screen's own language.
+  const rungs = [...doc.querySelectorAll('.ct-rung')];
+  assert.equal(rungs.length, 6);
+  assert.ok(rungs.some((r) => /Direction of loss/.test(r.textContent)));
+  assert.deepEqual(errors, []);
+});

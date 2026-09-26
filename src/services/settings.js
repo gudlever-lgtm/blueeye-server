@@ -1,5 +1,12 @@
 'use strict';
 
+// The ladder registry is the source of truth for what a rung is, what order is
+// legal and what a threshold may be — imported rather than restated, so the
+// settings panel and the walk can never disagree about either. Every ladder
+// keeps its own configuration, because "which rungs run" means something
+// different for each of them.
+const ladders = require('../connectionTest/ladders');
+
 const { DEFAULT_CATEGORIES, listCategories } = require('../flows/categories');
 const { baseUrlBlockedReason } = require('../integrations/ssrfGuard');
 const { resolveAlertingEnabled, refreshEffectiveEnabled } = require('../analysis/alerting/config');
@@ -543,6 +550,110 @@ function createSettingsService({ settingsRepo, config, liveAnalysis = null, live
     const current = await getThroughput();
     const merged = { ...current, ...value };
     await settingsRepo.set('throughput', merged);
+    return merged;
+  }
+
+  // ---- The diagnostic ladder (Settings → Diagnostics) ----------------------
+  //
+  // Which rungs the ladder walks, in what order, against which ports, at which
+  // thresholds. The defaults ARE the shipped ladder, so a deployment that never
+  // opens this panel behaves exactly as it did before.
+  //
+  // The order is checked here rather than clamped: an operator who drags TLS
+  // above TCP gets a 400 that says why, because silently putting it back would
+  // leave the screen showing an order the server is not walking. Everything
+  // else is clamped in ladder.js's resolveConfig, which is the last line before
+  // a walk and has to cope with a row written by an older version.
+  // One ladder's configuration. The order is CHECKED rather than clamped: an
+  // operator who drags TLS above TCP gets a 400 that says why, because silently
+  // putting it back would leave the screen showing an order the server is not
+  // walking. Everything else is clamped by the ladder's own `clamp`, which is
+  // the last line before a walk and has to cope with a row an older version
+  // wrote.
+  function validateLadderPatch(def, patch) {
+    const p = patch && typeof patch === 'object' && !Array.isArray(patch) ? patch : {};
+    const errors = {};
+    const value = {};
+
+    if (p.order !== undefined) {
+      const why = ladders.validateOrder(def, p.order);
+      if (why) errors.order = why;
+      else value.order = [...p.order];
+    }
+    if (p.enabled !== undefined) {
+      if (!p.enabled || typeof p.enabled !== 'object' || Array.isArray(p.enabled)) {
+        errors.enabled = 'enabled must be an object of rung → true/false';
+      } else {
+        const out = {};
+        for (const [k, v] of Object.entries(p.enabled)) {
+          if (!def.layers.includes(k)) { errors.enabled = `"${k}" is not a rung of ${def.id}`; break; }
+          if (typeof v !== 'boolean') { errors.enabled = `enabled.${k} must be true or false`; break; }
+          out[k] = v;
+        }
+        if (!errors.enabled) value.enabled = out;
+      }
+    }
+    if (p.ports !== undefined) {
+      if (!Object.prototype.hasOwnProperty.call(def.extras, 'ports')) errors.ports = `${def.id} has no ports to set`;
+      else {
+        const list = Array.isArray(p.ports) ? p.ports : null;
+        if (!list || list.length === 0) errors.ports = 'ports must be a non-empty list of port numbers';
+        else if (list.length > 8) errors.ports = 'at most 8 ports — every one is a probe pushed on every run';
+        else if (!list.every((n) => Number.isInteger(n) && n > 0 && n <= 65535)) errors.ports = 'each port must be an integer between 1 and 65535';
+        else value.ports = [...new Set(list)];
+      }
+    }
+    // The numeric knobs, checked against the range the ladder itself accepts:
+    // a value this lets through that `clamp` would then drop would be a setting
+    // that saves and does nothing.
+    for (const [k, def0] of Object.entries(def.extras)) {
+      if (k === 'ports' || p[k] === undefined) continue;
+      if (typeof def0 !== 'number') { errors[k] = `${k} is not a number setting`; continue; }
+      const kept = def.clamp({ [k]: p[k] });
+      if (!Object.prototype.hasOwnProperty.call(kept, k)) errors[k] = `${k} is out of range for ${def.id}`;
+      else value[k] = kept[k];
+    }
+    for (const k of Object.keys(p)) {
+      if (k !== 'order' && k !== 'enabled' && !Object.prototype.hasOwnProperty.call(def.extras, k)) {
+        errors[k] = `${def.id} has no setting called "${k}"`;
+      }
+    }
+
+    return { errors: Object.keys(errors).length ? errors : null, value };
+  }
+
+  // Every ladder's effective configuration, keyed by id. What this returns is
+  // what the ladders will actually do — resolveConfig is the same function the
+  // walk calls, never a tidier version of it.
+  async function getLadders() {
+    const override = await loadOverride('ladders');
+    const stored = override && typeof override === 'object' ? override : {};
+    const out = {};
+    for (const def of ladders.all()) out[def.id] = ladders.resolveConfig(def, stored[def.id]);
+    return out;
+  }
+
+  // One ladder's configuration, by id.
+  async function getLadder(id = ladders.REACHABILITY) {
+    const all = await getLadders();
+    return all[id] || null;
+  }
+
+  async function setLadder(id, patch) {
+    const def = ladders.get(id);
+    if (!def) throw badRequest('unknown ladder', { ladder: `"${id}" is not a ladder — one of: ${ladders.ids().join(', ')}` });
+    const { errors, value } = validateLadderPatch(def, patch || {});
+    if (errors) throw badRequest(`invalid ${def.id} ladder settings`, errors);
+    const current = await getLadders();
+    const merged = {
+      ...current[def.id],
+      ...value,
+      // `enabled` is a patch of its own: naming one rung must not switch the
+      // others off.
+      enabled: { ...current[def.id].enabled, ...(value.enabled || {}) },
+    };
+    const override = await loadOverride('ladders');
+    await settingsRepo.set('ladders', { ...(override && typeof override === 'object' ? override : {}), [def.id]: merged });
     return merged;
   }
 
@@ -1308,6 +1419,7 @@ function createSettingsService({ settingsRepo, config, liveAnalysis = null, live
     getDiscovery, setDiscovery, validateDiscovery,
     getSecurity, setSecurity, validateSecurity,
     getThroughput, setThroughput, validateThroughput,
+    getLadder, getLadders, setLadder, validateLadderPatch,
     getAgents, setAgents, validateAgents, getDefaultMonitorConfig,
     getEvents, setEvents, validateEvents,
     getAssistant, getAssistantSafe, setAssistant, validateAssistant,

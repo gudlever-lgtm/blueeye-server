@@ -111,7 +111,8 @@ function detectMiddlebox({ traceroute = null, tcptraceroute = null, tls = null, 
         basis: BASIS.OBSERVED,
         icmp_endpoint: icmpEnd.ip,
         tcp_endpoint: tcpEnd.ip,
-        text: `ICMP ends at ${icmpEnd.ip} (hop ${icmpEnd.hop}), the TCP session ends at ${tcpEnd.ip} (hop ${tcpEnd.hop}) — something terminates the connection before the host that answers ping`,
+        key: 'lb.divergence',
+        params: { icmpIp: icmpEnd.ip, icmpHop: icmpEnd.hop, tcpIp: tcpEnd.ip, tcpHop: tcpEnd.hop },
       });
     } else {
       present = false;
@@ -119,7 +120,8 @@ function detectMiddlebox({ traceroute = null, tcptraceroute = null, tls = null, 
         kind: 'paths_agree',
         basis: BASIS.OBSERVED,
         endpoint: icmpEnd.ip,
-        text: `both paths end at ${icmpEnd.ip} — nothing between the agent and the destination is terminating the session`,
+        key: 'lb.agree',
+        params: { ip: icmpEnd.ip },
       });
     }
   }
@@ -128,7 +130,7 @@ function detectMiddlebox({ traceroute = null, tcptraceroute = null, tls = null, 
   // is ECMP in the network or a pool in front of the service; either way more
   // than one machine can answer and a test that hits one says nothing about the
   // others.
-  for (const [label, result] of [['icmp', traceroute], ['tcp', tcptraceroute]]) {
+  for (const [label, result] of [['ICMP', traceroute], ['TCP', tcptraceroute]]) {
     const wide = widestHop(result);
     if (!wide) continue;
     if (present !== true) { present = true; basis = BASIS.OBSERVED; }
@@ -137,7 +139,10 @@ function detectMiddlebox({ traceroute = null, tcptraceroute = null, tls = null, 
       basis: BASIS.OBSERVED,
       hop: wide.hop,
       ips: wide.ips,
-      text: `${wide.ips.length} addresses answered at hop ${wide.hop ?? '?'} of the ${label} path (${wide.ips.join(', ')}) — the traffic is balanced across them, so one test speaks for one of them`,
+      key: 'lb.multihop',
+      // `path` is ICMP or TCP — a protocol name, so it is the same word in
+      // every locale and is not a translated string.
+      params: { count: wide.ips.length, hop: wide.hop ?? '?', path: label, ips: wide.ips.join(', ') },
     });
   }
 
@@ -147,7 +152,8 @@ function detectMiddlebox({ traceroute = null, tcptraceroute = null, tls = null, 
     evidence.push({
       kind: 'cert_name_mismatch',
       basis: BASIS.OBSERVED,
-      text: `the certificate does not carry ${mismatch.want || 'the name asked for'}${mismatch.subject ? ` (it is for ${mismatch.subject})` : ''} — a shared front end answered for a name it does not serve`,
+      key: mismatch.subject ? 'lb.cert.subject' : 'lb.cert',
+      params: { want: mismatch.want || 'the name asked for', subject: mismatch.subject },
     });
   }
 
@@ -158,7 +164,10 @@ function detectMiddlebox({ traceroute = null, tcptraceroute = null, tls = null, 
       kind: 'gateway_status',
       basis: BASIS.INFERRED,
       status,
-      text: `HTTP ${status} (${GATEWAY_STATUS[status]}) — a gateway answered for an upstream that did not. Nothing was inspected; the status names the shape of what produced it`,
+      key: 'lb.gateway',
+      // The reason phrase is the one in the HTTP specification, so it stays as
+      // it is in every locale — it is what the status code is called.
+      params: { status, phrase: GATEWAY_STATUS[status] },
     });
   }
 

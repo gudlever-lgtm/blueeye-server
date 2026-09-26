@@ -11,6 +11,8 @@
 //
 //   GET  /api/connection-test/checks   viewer+   the catalogue (per target)
 //   POST /api/connection-test/run      operator+ dispatch the selection now
+//   POST /api/connection-test/walk     operator+ describe a problem, run the ladder
+//   GET  /api/connection-test/ladder   viewer+   where the communication stops
 //   POST /api/connection-test/schedule operator+ save it as a recurring package
 //
 // Why a router of its own rather than a loop in the browser: the catalogue then
@@ -23,14 +25,19 @@ const express = require('express');
 const { asyncHandler } = require('../middleware/asyncHandler');
 const { requireAuth, requireRole } = require('../auth/middleware');
 const { ROLES } = require('../auth/roles');
-const { catalogue, specsFor } = require('../connectionTest/checks');
+const net = require('net');
+const { catalogue, specsFor, CHECK_IDS } = require('../connectionTest/checks');
+const { walk } = require('../connectionTest/ladder');
+const { arpContext } = require('../connectionTest/arpContext');
 const {
   validateConnectionTestRun,
   validateConnectionTestSchedule,
+  validateConnectionTestWalk,
+  validateLadderQuery,
 } = require('../validation/connectionTestValidation');
 const { validateTestPackageInput } = require('../validation/testPackageValidation');
 
-function createConnectionTestRouter({ agentsRepo, agentCommander, testPackagesRepo = null, usageService = null, auditLogger = null }) {
+function createConnectionTestRouter({ agentsRepo, agentCommander, probeResultsRepo = null, arpEntriesRepo = null, testPackagesRepo = null, usageService = null, auditLogger = null }) {
   const router = express.Router();
   const validationError = (res, details) => res.status(400).json({ error: 'Validation failed', details });
 
@@ -94,6 +101,98 @@ function createConnectionTestRouter({ agentsRepo, agentCommander, testPackagesRe
       }
 
       res.status(202).json({ agentId: value.agentId, host: value.host, delivered, dispatched, skipped });
+    })
+  );
+
+  // --- the ladder ----------------------------------------------------------
+  //
+  // "I cannot reach X" as one call. The operator names the destination and, if
+  // they want, says what is wrong in their own words; every check in the
+  // catalogue that applies is pushed at once, and GET /ladder then reads the
+  // results back as one verdict: which rung the communication stops at.
+  //
+  // The selection is NOT a parameter. The point of the ladder is that the whole
+  // of it runs — a rung that was skipped reads `unknown`, and a ladder full of
+  // unknowns cannot say where anything stops. An operator who wants to choose
+  // has POST /run.
+  router.post(
+    '/walk',
+    requireAuth,
+    requireRole(ROLES.OPERATOR, ROLES.ADMIN),
+    asyncHandler(async (req, res) => {
+      const { value, errors } = validateConnectionTestWalk(req.body);
+      if (errors) return validationError(res, errors);
+
+      const agent = await agentsRepo.findById(value.agentId);
+      if (!agent) return res.status(404).json({ error: 'Agent not found' });
+
+      const { specs, skipped } = specsFor(value.host, CHECK_IDS);
+      if (!specs.length) {
+        return res.status(400).json({
+          error: 'Validation failed',
+          details: { host: 'no check in the catalogue can run against this target' },
+          skipped,
+        });
+      }
+
+      let delivered = 0;
+      const dispatched = [];
+      for (const s of specs) {
+        const n = agentCommander ? agentCommander.sendCommand(value.agentId, { name: 'run-probe', probe: s.probe }) : 0;
+        if (n > 0) { delivered += n; dispatched.push({ id: s.id, type: s.probe.type, port: s.probe.port || null }); }
+      }
+      if (delivered === 0) return res.status(409).json({ error: 'Agent not connected', delivered: 0 });
+
+      if (auditLogger && typeof auditLogger.record === 'function') {
+        await auditLogger.record(req, {
+          category: 'agent',
+          action: 'probe_start',
+          target: `agent:${value.agentId}`,
+          // The symptom rides as a JSON string VALUE, never as part of a
+          // sentence — the same rule the diagnose module follows for the
+          // operator's own words.
+          detail: JSON.stringify({ ladder: true, target: value.host, symptom: value.symptom || null, checks: dispatched.map((d) => d.id) }),
+        });
+      }
+
+      res.status(202).json({
+        agentId: value.agentId,
+        host: value.host,
+        symptom: value.symptom || null,
+        delivered,
+        dispatched,
+        skipped,
+      });
+    })
+  );
+
+  // Where does it stop? Computed from results already in probe_results, so it
+  // can be asked again at any time, answers for a run somebody else started,
+  // and can never disagree with the rows a screen is showing.
+  router.get(
+    '/ladder',
+    requireAuth,
+    requireRole(ROLES.VIEWER, ROLES.OPERATOR, ROLES.ADMIN),
+    asyncHandler(async (req, res) => {
+      if (!probeResultsRepo) return res.status(503).json({ error: 'Probe results are not available' });
+      const { value, errors } = validateLadderQuery(req.query);
+      if (errors) return validationError(res, errors);
+
+      const agent = await agentsRepo.findById(value.agentId);
+      if (!agent) return res.status(404).json({ error: 'Agent not found' });
+
+      // Every probe type this destination could have produced, plus room for
+      // the other targets the agent has tested — latestByAgent is one row per
+      // (type, target) and the ladder filters to this destination itself.
+      const results = await probeResultsRepo.latestByAgent(value.agentId, 200);
+      // ARP is only answerable for an address, and only from the agent's own
+      // neighbour table. A name has not resolved to anything yet as far as this
+      // rung is concerned.
+      const arp = net.isIP(value.host) !== 0
+        ? await arpContext({ arpRepo: arpEntriesRepo, agentId: value.agentId, ip: value.host })
+        : null;
+
+      res.json({ agentId: value.agentId, ...walk({ results, host: value.host, arp, symptom: value.symptom }) });
     })
   );
 

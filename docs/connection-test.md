@@ -7,9 +7,10 @@ Where to find it: **Probes & Tests → Connection test**.
 
 ## The question it answers
 
-"I cannot reach X" is not one question, it is nine. Does the name resolve? Does
+"I cannot reach X" is not one question, it is ten. Does the name resolve? Does
 the host answer ICMP? Is port 443 open? Is 80? What does the path look like, and
-where does it get bad? Does a full-size packet get through?
+where does it get bad? Does a full-size packet get through? And — the one every
+other check only implies — does the service at the other end actually answer?
 
 The Run-a-probe tab answers one of those at a time, which is the right tool when
 you already know what you are looking for and the wrong one when somebody has
@@ -39,6 +40,7 @@ is always a check the server can dispatch.
 | Traceroute | `traceroute`, 3 queries/hop | Per-hop loss and latency |
 | TCP traceroute | `tcptraceroute` port 443 | The path a TCP session takes |
 | Path MTU | `path_mtu`, per hop | The largest packet the path carries |
+| HTTP request | `http` to `https://<host>/` | Whether the **service** answers, not just the port |
 
 Two rules keep the list honest rather than tidy:
 
@@ -202,3 +204,125 @@ how often, starting when — is now asked in the same words on five screens:
 
 Reporting has the same idea with a different payload — see
 [scheduled-reports.md](scheduled-reports.md).
+
+
+---
+
+# The ladder
+
+Ten rows is ten answers, and an operator still has to work out which one matters.
+The ladder is that reading. It walks the layers **in the order a packet meets
+them** and names the first one that breaks.
+
+```
+DNS → ARP → routing → firewall/ACL → TCP → NAT/load balancer → TLS → application
+```
+
+Where to find it: the same screen. Type the destination, say what is wrong in
+your own words, press **Find where it stops**.
+
+**API:** `POST /api/connection-test/walk` (operator+) dispatches every check in
+the catalogue; `GET /api/connection-test/ladder?agentId=&host=` (viewer+) reads
+the verdict back. **Code:** `src/connectionTest/ladder.js`,
+`src/connectionTest/lb.js`, `src/connectionTest/arpContext.js`.
+
+## The four rules it stands on
+
+**A rung is only decided by a measurement.** No check, no verdict: the rung reads
+`unknown`, and `unknown` is never promoted to `ok`. "We looked and it is fine"
+and "nobody looked" are different sentences, and a ladder that blurs them is a
+guess with a tick next to it.
+
+**Everything above the break is `unreached`, not green.** A TLS handshake that
+"succeeded" while DNS pointed at the wrong address proves nothing about TLS. The
+rung keeps what it would have said in `would_have_said`, so the measurement is
+not lost — it just does not get to be an answer.
+
+**Every rung carries its own reason.** `because` is the measurement that decided
+it, written out. A red rung whose explanation lives on another screen is the
+thing this replaces.
+
+**Nothing is re-measured.** Every input is an ordinary row in `probe_results`, so
+the verdict can be recomputed at any time, answers for a run somebody else
+started, and can never disagree with the row a screen is showing.
+
+## Why the firewall rung sits where it does
+
+It is decided by the **divergence** between ICMP and TCP, not by either alone —
+which is the single most misread signal in network troubleshooting.
+
+| ping | the port | the rung says |
+| --- | --- | --- |
+| answers | times out | **stops here.** A filter. The host is up (it answered ICMP) and the SYN is dropped in silence — a firewall rule, an ACL or a security group |
+| answers | refused | **works.** A reset is the host *answering*. The path is open and nothing is listening: the service's problem, not the network's |
+| answers | unclassified | **not tested.** An agent that did not report refused-vs-timeout cannot tell a drop from a reset, and this rung will not guess |
+| no reply | connects | **worth knowing.** ICMP is filtered and the application path is open. An ICMP-only monitor calls this an outage; it is not one |
+| no reply | fails | **not tested.** Both directions are broken, which is the path — routing owns it |
+
+Going to the firewall team on a reset is the wrong trip, and the rung says so in
+as many words.
+
+## NAT / load balancer: observed, not guessed
+
+Before this, a proxy in the path could only ever be *inferred* — Service
+Assurance reads a 502 and proposes "a load balancer or reverse proxy" with
+`basis: inferred`, because nothing was ever inspected. The ladder inspects.
+
+`traceroute` walks the path ICMP takes; `tcptraceroute` walks the path a SYN to
+the application port takes. On a plain routed path they end at the same address.
+They end at **different** addresses when something terminates the TCP session
+before the host that answers ping — which is what a load balancer, a reverse
+proxy and a destination NAT all are.
+
+| Evidence | Basis |
+| --- | --- |
+| The two paths end at different addresses | observed |
+| Several addresses answered at one hop of one run | observed |
+| The certificate does not carry the name asked for | observed |
+| HTTP 502 / 503 / 504 | inferred — the status names the shape of what produced it |
+| Both paths walked and they agree | observed — and the one case that may conclude *nothing is there* |
+
+It never compares hop **counts**: ICMP and TCP are policed differently at nearly
+every hop, so two paths of different lengths to the same address are normal, and
+reading that as a finding would report a load balancer on most of the internet.
+
+A middlebox is not a fault. It is reported as `suspect`, and when something above
+it breaks it is carried into the verdict sentence — a healthy handshake under a
+dead service is exactly what a load balancer explains.
+
+## ARP: answered, and honestly bounded
+
+ARP only resolves addresses on the sender's own segment. Anything routed goes to
+the default gateway and the destination's MAC is never asked for, so "no ARP
+entry" is the correct state of a working network, not a finding.
+
+So the rung asks whether ARP is on the path **first**, from the agent's own
+neighbour table in `arp_entries`: an address it has ARPed is by definition on one
+of its segments, so the /24 (or /64) of every entry it reported is a segment it
+sits on. Off-segment ⇒ `not applicable`. On-segment with a MAC ⇒ `ok`.
+On-segment with no MAC ever reported ⇒ **the rung that breaks**. No neighbour
+table at all ⇒ `unknown`.
+
+No agent change was needed for any of it: agents have reported their ARP tables
+since the `arp_entries` work (see [arp-identity.md](arp-identity.md)).
+
+## The symptom is data
+
+The free-text box travels as a JSON string value, is bounded at 500 characters,
+is echoed back beside the verdict and is written to the audit detail. **Nothing
+reads it to decide what to run.** The ladder is fixed, so a sentence typed into
+that field can never change which commands an agent is asked to execute — the
+same rule [diagnose.md](diagnose.md) follows for an operator's own words.
+
+It is not wasted: the same text matched against the playbook catalogue picks
+`firewall_acl` and the rest on **Diagnostics → Diagnose**, which is where the
+causes, the reading rules and the fixes live. The ladder says *where*; a playbook
+says *why* and *what to do*.
+
+## A note on language
+
+The rung sentences are written by the server in English, like the probe-failure
+explanations in `src/analysis/probeFailure.js` that the probe table already
+shows. They are the reading of a measurement and have to say the same thing
+wherever they appear. Everything around them — the layer names, the statuses, the
+outcome, the labels — goes through `public/i18n.js` in both catalogues.

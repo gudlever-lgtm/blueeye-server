@@ -8254,6 +8254,11 @@ const CT_MAX_ROUNDS = 20;
 // round-trips in a second or two; a traceroute takes longer, so the last look
 // is late enough to catch it without the screen sitting still in between.
 const CT_POLL_MS = [2200, 4200, 7000];
+// The ladder runs the WHOLE catalogue, and a traceroute, a TCP traceroute and a
+// path-MTU sweep each take tens of seconds. These are the moments the verdict is
+// recomputed, not a timeout: every look is a complete answer over whatever has
+// come back so far, and the rungs fill in as the agent reports.
+const CT_LADDER_POLL_MS = [3000, 8000, 16000, 28000, 45000];
 
 async function connectionTestView() {
   const root = el('div', { class: 'probes connection-test' });
@@ -8278,6 +8283,16 @@ async function connectionTestView() {
   const repeatBtn = el('button', { class: 'small ghost' }, t('ct.repeat'));
   const status = el('span', { class: 'muted small' });
   const scheduleChip = el('span', { class: 'ct-chip', hidden: true });
+
+  // The ladder's own controls, declared with the rest because the page is laid
+  // out before the ladder's functions are defined further down.
+  const CT_LADDER_LAYERS = ['dns', 'arp', 'routing', 'firewall', 'tcp', 'nat_lb', 'tls', 'application'];
+  const symptom = el('input', {
+    type: 'text', class: 'ct-symptom', spellcheck: 'false', maxlength: '500',
+    placeholder: t('ct.symptom.placeholder'), 'aria-label': t('ct.symptom.label'),
+  });
+  const ladderBtn = el('button', { class: 'small' }, t('ct.ladder.run'));
+  const ladderPanel = el('div', { class: 'ct-ladder', hidden: true });
 
   // The run count lives INSIDE the button — "Run [3] tests" is one control, and
   // the label follows the number so it never reads "Run 3 test".
@@ -8469,17 +8484,105 @@ async function connectionTestView() {
       catalogue = (await api(`/api/connection-test/checks${q}`)).checks || catalogue;
       renderRows();
     } catch { /* keep the catalogue we have — the target is checked again on run */ }
+    // The verdict is computed from results that are already stored, so a new
+    // target shows whatever this agent last measured against it — including for
+    // a viewer, who cannot dispatch anything but can read where it stopped.
+    if (host) await refreshLadder();
   }
   target.addEventListener('change', refreshCatalogue);
 
   root.append(el('div', { class: 'history-controls' },
     el('label', { class: 'inline muted' }, t('ct.agent'), ' ', agentSel),
     el('label', { class: 'inline muted ct-target' }, t('ct.target'), ' ', target)));
+  if (canWrite()) {
+    root.append(el('div', { class: 'history-controls ct-symptom-row' },
+      el('label', { class: 'inline muted ct-symptom-label' }, t('ct.symptom.label'), ' ', symptom), ladderBtn));
+  }
+  root.append(ladderPanel);
   root.append(el('div', { class: 'history-controls ct-actions' },
     runBtn, stopBtn, canWrite() ? repeatBtn : null, scheduleChip, status));
   root.append(el('div', { class: 'ct-toggle-row' }, toggle, counter), listWrap,
     el('div', { class: 'muted small ct-note' }, t('ct.stopNote'), ' ', t('ct.resultsNote')));
   renderRows();
+
+  // --- the ladder ----------------------------------------------------------
+  //
+  // Say what is wrong and let the server walk the layers a packet goes through
+  // — DNS, ARP, routing, firewall, TCP, NAT/load balancer, TLS, the application
+  // — and name the first one that breaks. The check list above answers nine
+  // questions; this answers the one the operator actually asked.
+  //
+  // The rung sentences are written by the server (src/connectionTest/ladder.js)
+  // in the same way a probe failure's explanation is, because they ARE the
+  // reading of a measurement and have to say the same thing wherever they are
+  // shown. Everything around them — the labels, the layer names, the outcome —
+  // is translated here.
+  let ladderRunning = false;
+
+  function rungNode(l) {
+    const label = CT_LADDER_LAYERS.includes(l.layer) ? t(`ct.ladder.layer.${l.layer}`) : l.layer;
+    return el('li', { class: `ct-rung ${l.status}` },
+      el('span', { class: 'ct-rung-name' }, label),
+      el('span', { class: `ct-state ${l.status === 'ok' ? 'ok' : l.status === 'failed' ? 'failed' : 'skipped'}` },
+        t(`ct.ladder.status.${l.status}`)),
+      el('div', { class: 'ct-rung-because' }, l.because));
+  }
+
+  // Recompute the verdict from what is already stored. Safe to call at any
+  // moment: a rung with nothing behind it reads "not tested", never "fine".
+  async function refreshLadder(quiet = true) {
+    const host = target.value.trim();
+    if (!host) return;
+    const q = new URLSearchParams({ agentId: String(agentSel.value), host });
+    const note = symptom.value.trim();
+    if (note) q.set('symptom', note);
+    let v;
+    try { v = await api(`/api/connection-test/ladder?${q.toString()}`); }
+    catch (e) { if (!quiet) { ladderPanel.hidden = false; ladderPanel.replaceChildren(el('div', { class: 'error' }, errText(e))); } return; }
+    ladderPanel.hidden = false;
+    ladderPanel.replaceChildren(
+      el('div', { class: `ct-verdict ${v.verdict.outcome}` },
+        el('div', { class: 'ct-verdict-head' }, t(`ct.ladder.outcome.${v.verdict.outcome}`)),
+        el('div', { class: 'ct-verdict-text' }, v.verdict.text),
+        v.symptom ? el('div', { class: 'muted small ct-verdict-symptom' }, t('ct.ladder.youSaid', { symptom: v.symptom })) : null),
+      el('ol', { class: 'ct-rungs' }, ...v.layers.map(rungNode)));
+  }
+
+  async function runLadder() {
+    const host = target.value.trim();
+    if (!host) { say(t('ct.status.noTarget'), true); return; }
+    ladderRunning = true; running = true;
+    ladderBtn.disabled = true; runBtn.disabled = true; stopBtn.disabled = false; stopRequested = false;
+    say(t('ct.ladder.dispatching', { host }));
+    try {
+      await api('/api/connection-test/walk', {
+        method: 'POST',
+        body: { agentId: Number(agentSel.value), host, symptom: symptom.value.trim() || undefined },
+      });
+    } catch (e) {
+      say(e.status === 409 ? t('ct.status.notConnected') : errText(e), true);
+      ladderRunning = false; running = false; ladderBtn.disabled = false; stopBtn.disabled = true; syncCounter();
+      return;
+    }
+    // Show the ladder straight away, with what is already known and the
+    // operator's own words on it, rather than leaving the screen still for
+    // three seconds while the first probes come back.
+    await refreshLadder();
+    let waited = 0;
+    for (const at of CT_LADDER_POLL_MS) {
+      if (stopRequested) break;
+      await sleep(at - waited);
+      waited = at;
+      say(t('ct.ladder.collecting', { host, secs: String(Math.round(at / 1000)) }));
+      await refreshLadder();
+    }
+    ladderRunning = false; running = false;
+    ladderBtn.disabled = false; stopBtn.disabled = true;
+    say(stopRequested ? t('ct.status.stopped') : t('ct.ladder.done', { host }));
+    syncCounter();
+  }
+
+  ladderBtn.addEventListener('click', () => { if (!ladderRunning && !running) runLadder(); });
 
   // --- running -------------------------------------------------------------
   const say = (text, bad = false) => { status.className = bad ? 'error small' : 'muted small'; status.textContent = text; };
@@ -8489,6 +8592,16 @@ async function connectionTestView() {
   // its target as host:port, which is also what keeps the :80 and :443 rows
   // apart — without it they would both show the same measurement.
   function resultFor(results, check, host) {
+    // The http check's target is a URL, not host:port — it is the one check
+    // whose probe addresses the SERVICE rather than the address, so it is
+    // matched on the URL's host instead of on the string the other rows use.
+    if (check.type === 'http') {
+      return results.find((r) => {
+        if (r.type !== 'http') return false;
+        try { return new URL(r.target).hostname.replace(/^\[|\]$/g, '').toLowerCase() === host.toLowerCase(); }
+        catch { return false; }
+      }) || null;
+    }
     const withPort = check.port ? `${host}:${check.port}` : null;
     return results.find((r) => r.type === check.type && (r.target === withPort || (!check.port && r.target === host))) || null;
   }
@@ -8602,6 +8715,10 @@ async function connectionTestView() {
     } else if (completed) {
       say(t('ct.status.done', { rounds: String(completed), checks: String(ids.length), host }));
     }
+    // A hand-picked run feeds the same rungs, so the verdict is refreshed from
+    // whatever it produced — with the checks that were not run reading "not
+    // tested" rather than dropping out of the ladder.
+    if (!stopRequested) await refreshLadder();
     syncCounter();
   }
 

@@ -96,6 +96,21 @@ an answer.
 
 ---
 
+### One namespace per TCP port
+
+A rule about a filter has to be able to name the application port. `tcp.*` is
+still the newest TCP row, and `tcp.port_<n>.*` is that port on its own — so
+`ping.ok == true && tcp.port_443.failure == 'timeout'` says what "ping works but
+443 does not" actually means, instead of "some TCP probe failed".
+
+`tcp.port_*.failure` is the agent's own classification, and it is the
+distinction `firewall_acl` stands on: `'timeout'` is a packet dropped in
+silence, which is what a deny rule does; `'refused'` is the host answering with
+a reset, which rules a filter **out**. An agent too old to report it leaves the
+fact missing, the rule reads `unknown`, and nothing is confirmed on a guess.
+
+---
+
 ## The rule language
 
 `src/diagnose/expr.js` — a hand-written tokeniser and a recursive-descent
@@ -463,6 +478,7 @@ but an un-updated fleet cannot confirm an MTU blackhole.
 | `dns_resolution` | works by IP, not by name | DNS probe |
 | `l2_loop` | everything slow at once, in bursts | wild jitter, many ports busy together |
 | `duplex_mismatch` | slow, worse under load | late collisions; half duplex + collisions/frame errors on the host NIC; errors rising with utilisation |
+| `firewall_acl` | ping works and the application port does not | ICMP answered while TCP/443 is dropped **in silence** — `ping.ok` against `tcp.port_443.failure` |
 
 ---
 

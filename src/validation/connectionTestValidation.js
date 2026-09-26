@@ -114,4 +114,61 @@ function validateConnectionTestSchedule(body) {
   return Object.keys(errors).length ? { errors } : { value };
 }
 
-module.exports = { validateConnectionTestRun, validateConnectionTestSchedule, MAX_ROUNDS };
+// POST /walk — one destination, the whole ladder, plus what the operator says
+// is wrong. The symptom is free text and is treated as DATA everywhere it goes:
+// it is bounded here, echoed back beside the verdict, and written to the audit
+// detail. Nothing reads it to decide what to run — the ladder is fixed, so a
+// sentence typed into this field can never change which commands an agent is
+// asked to execute.
+const SYMPTOM_MAX = 500;
+
+function validateSymptom(raw, errors) {
+  if (raw === undefined || raw === null || raw === '') return null;
+  if (typeof raw !== 'string') { errors.symptom = 'symptom must be text'; return undefined; }
+  const s = raw.trim();
+  if (!s) return null;
+  if (s.length > SYMPTOM_MAX) { errors.symptom = `symptom must be at most ${SYMPTOM_MAX} characters`; return undefined; }
+  return s;
+}
+
+function validateConnectionTestWalk(body) {
+  const input = body && typeof body === 'object' && !Array.isArray(body) ? body : {};
+  const errors = {};
+  const value = {};
+
+  const agentId = validateAgentId(input.agentId, errors);
+  if (agentId !== undefined) value.agentId = agentId;
+  const host = validateHost(input.host, errors);
+  if (host !== undefined) value.host = host;
+  const symptom = validateSymptom(input.symptom, errors);
+  if (symptom !== undefined) value.symptom = symptom;
+
+  return Object.keys(errors).length ? { errors } : { value };
+}
+
+// GET /ladder — read the verdict for a destination from results already stored.
+// Same host rule as a run: a query that could name a host a run could not would
+// be a second, quietly different idea of what a destination is.
+function validateLadderQuery(query) {
+  const input = query && typeof query === 'object' ? query : {};
+  const errors = {};
+  const value = {};
+
+  const agentId = validateAgentId(input.agentId, errors);
+  if (agentId !== undefined) value.agentId = agentId;
+  const host = validateHost(input.host, errors);
+  if (host !== undefined) value.host = host;
+  const symptom = validateSymptom(input.symptom, errors);
+  if (symptom !== undefined) value.symptom = symptom;
+
+  return Object.keys(errors).length ? { errors } : { value };
+}
+
+module.exports = {
+  validateConnectionTestRun,
+  validateConnectionTestSchedule,
+  validateConnectionTestWalk,
+  validateLadderQuery,
+  MAX_ROUNDS,
+  SYMPTOM_MAX,
+};

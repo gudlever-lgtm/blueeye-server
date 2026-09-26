@@ -39,11 +39,25 @@ const CHECKS = [
   { id: 'traceroute', type: 'traceroute', available: true, appliesTo: 'any', spec: (host) => ({ type: 'traceroute', host, queries: 3 }) },
   { id: 'tcptraceroute', type: 'tcptraceroute', available: true, appliesTo: 'any', port: 443, spec: (host) => ({ type: 'tcptraceroute', host, port: 443, queries: 3 }) },
   { id: 'path_mtu', type: 'path_mtu', available: true, appliesTo: 'any', spec: (host) => ({ type: 'path_mtu', host, per_hop: true }) },
+  // The application itself. Everything above it says the packets arrive; this
+  // is the only check that says the service ANSWERED — a port that opens with a
+  // load balancer and no backend behind it passes tcp443 and fails here, which
+  // is the whole reason the row exists. https, because a check of :443 that
+  // spoke plaintext would be measuring a different service.
+  { id: 'http', type: 'http', available: true, appliesTo: 'any', port: 443, spec: (host) => ({ type: 'http', url: `https://${wrapHost(host)}/`, count: 1 }) },
 ];
 
 const CHECK_IDS = CHECKS.map((c) => c.id);
 
 const isIpLiteral = (host) => net.isIP(String(host || '').trim()) !== 0;
+
+// An IPv6 literal has to be bracketed inside a URL, or `https://::1/` parses as
+// a scheme-relative nonsense rather than a host. A name and an IPv4 literal go
+// in untouched.
+const wrapHost = (host) => {
+  const h = String(host || '').trim();
+  return net.isIP(h) === 6 ? `[${h}]` : h;
+};
 
 // Is this check worth running against this target? An unavailable check never
 // is; a hostname-only check is not, against an IP literal.
@@ -87,4 +101,4 @@ function specsFor(host, ids) {
   return { specs, skipped };
 }
 
-module.exports = { CHECKS, CHECK_IDS, catalogue, specsFor, checkApplies, isIpLiteral };
+module.exports = { CHECKS, CHECK_IDS, catalogue, specsFor, checkApplies, isIpLiteral, wrapHost };

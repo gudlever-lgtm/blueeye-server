@@ -739,6 +739,9 @@ function createApiRouter({
   if (agentsRepo) {
     router.use('/api/connection-test', createConnectionTestRouter({
       agentsRepo, agentCommander, testPackagesRepo: testPackagesRepo || null, usageService, auditLogger,
+      // The ladder reads what the probes already stored rather than measuring
+      // again, and asks the neighbour table whether ARP is even on the path.
+      probeResultsRepo: probeResultsRepo || null, arpEntriesRepo: arpEntriesRepo || null,
     }));
   }
   if (transactionsRepo) {

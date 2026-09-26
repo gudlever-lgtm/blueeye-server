@@ -370,8 +370,9 @@ A single vanilla-JS SPA. Key building blocks:
   `drift` (version + the bulk update, traffic source, data quality) and
   `hardware` (ports, port faults, link, NIC, firmware drift — all but the NIC
   figures already in `health.metrics`). A row opens a **drawer** (verdict +
-  evidence, measurements, the port table, NIC cards, identity, the context
-  hand-offs), addressed as `?agent=12`. The Health set also carries the compact
+  evidence, measurements, the port table — counters AND the card behind each
+  port, one row per interface — identity, the context hand-offs), addressed as
+  `?agent=12`. The Health set also carries the compact
   `networkPath` strip, the fleet-wide **traffic map** (`trafficMapCard`, colored
   directional flow arrows; arc click → Flows→Map scoped to the site, pin click →
   the location page) and the gated **“Open issues”** rollup (`fleetIssues()`,
@@ -398,10 +399,14 @@ A single vanilla-JS SPA. Key building blocks:
   (server-configured EU/self-hosted tiles).
 - `render()` — mounts the current view + its `hero()`; stops per-view pollers
   (`stopOverview`/`stopProbes`/`stopFleet`/`stopAgent`/`stopGeo`) when leaving.
-- Shared renderers `interfaceTable()` / `interfaceForecastTable()` / `nicTable()` /
+- Shared renderers `interfaceTable()` / `interfaceForecastTable()` /
   `probeLatestTable()` / `probeDetail()` back the Fleet drawer and the combined
-  agent page — `public/views/interfaces.js` and `public/views/nics.js` export the
-  tables, and neither draws a page of its own any more. `probeLatestTable()` carries ONE
+  agent page — `public/views/interfaces.js` exports the tables and draws no page
+  of its own. `interfaceTable(interfaces, source, agent, nics)` takes the
+  agent's reported cards as an optional fourth argument and puts each card's
+  driver/version/firmware under its port's name; a card with no measurement yet
+  gets a dimmed row. There is no separate per-agent NIC table — `views/nics.js`
+  is the fleet inventory only. `probeLatestTable()` carries ONE
   adaptive **Measured** column (`probeMeasured()` — latency+loss for a ping, hop count
   for a trace, packet size + recommended MSS for a path-MTU check) rather than the fixed
   RTT/Loss/Jitter triple that fitted ping and left four of the nine types blank. A row
@@ -514,7 +519,7 @@ A single vanilla-JS SPA. Key building blocks:
 | Probe findings + alerting | `src/analysis/probeFindings.js` (verdict→findings, reuses `health/probeHealth.js`) + `probePipeline.js` (runs on probe-results ingest in `routes/agentReports.js`) |
 | AI assistant (explain + location summary) | `src/analysis/assistant.js` (OpenAI-compatible; opt-in; reads enable/provider/key/model/baseUrl live from the analysis config) + `src/routes/assistant.js`; provider presets (EU: Mistral/Scaleway/OVHcloud/IONOS/Aleph Alpha · US: OpenAI/Anthropic/Gemini/Groq/Together/OpenRouter/Azure · DeepSeek · Ollama self-hosted · custom — every entry region-tagged, admin's choice) = `src/analysis/assistantProviders.js` (`azure`/`custom` need an admin base URL). Runtime config (enable + provider + API key + model + custom endpoint): `settingsService.getAssistant/setAssistant` (`src/services/settings.js`), `PUT /api/settings/assistant`, UI `assistantSettingsCard` in its own **Settings → AI** tab (`settingsAiView`) |
 | Fleet health (overview + verdicts) | `src/health/probeHealth.js` (`computeAgentHealth`/`mergeHealth`/`computeFleet`, median+MAD — folds in interface health), `src/routes/fleet.js`; UI `views.fleet` (all three column sets read it) / `views.agent`. `mergeHealth` also writes `ifaceStatus`/`ifaceCount`/`ifaceIssues`/`worstIface` into `health.metrics`, which is what the Hardware set draws |
-| NIC firmware inventory / drift | `src/health/nicInventory.js` (`computeNicInventory`, groups by driver+PCI id, flags firmware outliers) from agent-reported `capabilities.nic`; HTTP `GET /api/fleet/nics` in `src/routes/fleet.js`; UI `views.nicInventory` (Administration) + the NIC section of the Fleet drawer + the per-agent NIC card in `views.agent`. Agent side in blueeye-agent `src/nicInfo.js` (`ethtool -i`) |
+| NIC firmware inventory / drift | `src/health/nicInventory.js` (`computeNicInventory`, groups by driver+PCI id, flags firmware outliers) from agent-reported `capabilities.nic`; HTTP `GET /api/fleet/nics` in `src/routes/fleet.js`; UI `views.nicInventory` (Administration) for the FLEET view — which models are deployed and which firmware is the outlier. One agent's cards are not a view of their own: they ride on that agent's port rows (`interfaceTable`), in the Fleet drawer and on the agent page. Agent side in blueeye-agent `src/nicInfo.js` (`ethtool -i`) |
 | Interface health | `src/health/interfaceHealth.js` (`computeInterfaceHealth`/`interfaceHealthSummary`); HTTP in `src/routes/interfaces.js` — agent side in blueeye-agent |
 | Run a saved test on chosen agents | `POST /api/test-packages/:id/run` with `{ agentIds: [...] }` (`validateRunTargets` in `src/validation/testPackageValidation.js`, `resolveTargetIds(pkg, agents, overrideIds)` in `src/services/testPackageRunner.js`). A ONE-OFF override: the package's saved targets are never written back, and the recorded run carries `adhoc: true` so a subset run does not read as a broken schedule. UI both ways — **Run on…** on the packages table (`runTestPackageOn`, an agent multi-select in a drawer) and **Run here** in the agent page's Tests fold |
 | Agent offline (runtime stale sweep, one finding per offline episode, dead-agent vs network-down verdict) | Pure verdict `src/health/agentOffline.js` (`assessAgentOffline`: site peers, other agents' probes to its IPs, switch port via ARP→FDB→`device_interfaces`/`link.down`, WS connection evidence); job `src/health/agentOfflineMonitor.js` (backgroundJobs in `server.js`; `agentsRepo.sweepStaleOffline`/`peerProbesTowards`; `agentWs.connectedAgentIds`). Metric `agent.offline`; verdict on the changes-feed row and the connection modal (`ag.offline.*`). Config `AGENT_STALE_OFFLINE_SEC`/`AGENT_OFFLINE_*`. See `docs/agent-connection.md` |

@@ -211,9 +211,16 @@ test('a 404 is reported, not drawn as an empty inventory', async (t) => {
   assert.match(err.textContent, /Not Found|404/i);
 });
 
-test('the agent page draws the same card table, from the same module', async (t) => {
+test('there is no per-agent card table left — the ports table carries the cards', async (t) => {
+  // One agent's cards are the ports that agent has, so they belong on the port
+  // rows rather than in a second table beside them. The agent page hands its
+  // NIC list to the interface table, and this module draws the fleet inventory
+  // and nothing else.
   const src = fs.readFileSync(path.join(PUBLIC, 'app.js'), 'utf8');
-  assert.match(src, /function nicTable\(nics\) \{[\s\S]*?return v\.nicTable\(nics\);/);
-  assert.doesNotMatch(src, /class: 'iface-table' \}, el\('thead'/);
+  assert.doesNotMatch(src, /nicTable/, 'the per-agent card table is still wired up');
+  assert.match(src, /interfaceTable\(data\.interfaces, data\.source, agent, nics\)/,
+    'the agent page does not hand its NICs to the port table');
+  const view = fs.readFileSync(path.join(PUBLIC, 'views', 'nics.js'), 'utf8');
+  assert.doesNotMatch(view, /nicTable/, 'the module still exports a per-agent table');
   void t;
 });

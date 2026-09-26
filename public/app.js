@@ -7768,10 +7768,13 @@ function getInterfacesPage() {
 // drawer — so it is asked for here rather than copied into either.
 // `agent` is the admin record, when the caller has it: the flow-source empty
 // state uses it to open that agent's Edit form rather than navigating to Fleet.
-function interfaceTable(interfaces, source = null, agent = null) {
+// `nics` is the agent's reported hardware. Ports and NICs are one table now —
+// the card's driver and firmware ride under the interface name — so the caller
+// that has the NIC list hands it over here.
+function interfaceTable(interfaces, source = null, agent = null, nics = null) {
   const v = getInterfacesPage();
   if (!v) return el('div', { class: 'empty error' }, t('iface.err.title'));
-  return v.table(interfaces, source, agent);
+  return v.table(interfaces, source, agent, nics);
 }
 
 // The capacity forecast: where each link will be in a fortnight. It reads two
@@ -9747,7 +9750,6 @@ function getFleetView() {
     // The drawer's own read, and the only one it makes.
     fetchInterfaces: (id) => api(`/api/interfaces?agentId=${encodeURIComponent(id)}`),
     interfaceTable,
-    nicTable,
     contextActions,
     // Version arithmetic stays in app.js, where the update flows read it too.
     selfUpdatable: agentSelfUpdatable,
@@ -10472,7 +10474,7 @@ function agentDetailFolds(id, agent) {
     let data;
     try { data = await api(`/api/interfaces?agentId=${encodeURIComponent(id)}`); } catch (e) { ifaceHost.replaceChildren(el('div', { class: 'error' }, e.message)); return; }
     ifaceStatus.textContent = data.ts ? `source: ${data.source} · measured ${fmtTimeShort(new Date(data.ts).getTime())}` : 'no measurements yet';
-    ifaceHost.replaceChildren(interfaceTable(data.interfaces, data.source, agent));
+    ifaceHost.replaceChildren(interfaceTable(data.interfaces, data.source, agent, nics));
   }
 
   // ---- Capacity forecast ----
@@ -10527,7 +10529,6 @@ function agentDetailFolds(id, agent) {
 
   // ---- NIC firmware (driver/firmware inventory the agent reported) ----
   const nics = agent.capabilities && Array.isArray(agent.capabilities.nic) ? agent.capabilities.nic : [];
-  const nicSummary = el('span', { class: 'muted' }, nics.length ? `· ${nics.length} interface(s)` : '· none reported');
 
   // ---- Tests (what this agent can run, and what already runs on it) ----
   //
@@ -10633,7 +10634,6 @@ function agentDetailFolds(id, agent) {
       el('h4', {}, t('ad.tests.scheduled')), packagesHost),
     el('details', { class: 'sec', open: true }, el('summary', {}, 'Interfaces ', ifaceStatus), ifaceHost,
       el('h4', {}, t('fc.title')), forecastHost),
-    el('details', { class: 'sec' }, el('summary', {}, 'NIC firmware ', nicSummary), nicTable(nics)),
     el('details', { class: 'sec' }, el('summary', {}, 'Traffic ', el('span', { class: 'muted' }, '· recent bandwidth')), trafficHost),
   ];
   // Neither the forecast nor the test catalogue is in the poller: both are read
@@ -10685,13 +10685,6 @@ function getNicsPage() {
     openAgent,
   });
   return nicsPage;
-}
-
-// The agent page's NIC fold and the Fleet drawer list the same cards.
-function nicTable(nics) {
-  const v = getNicsPage();
-  if (!v) return el('div', { class: 'empty error' }, t('nic.err.title'));
-  return v.nicTable(nics);
 }
 
 views.nicInventory = async () => {

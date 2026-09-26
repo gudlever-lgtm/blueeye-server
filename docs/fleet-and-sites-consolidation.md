@@ -180,7 +180,7 @@ and the row's `aria-selected`.
 │ VERDICT       health.reason + health.evidence             │
 │ MEASUREMENTS  loss / rtt / jitter / targets / speedtest    │
 │ PORTS (7)     the shared interface table  [ Refresh ]      │
-│ NIC (2)       the shared NIC table                         │
+│               — counters AND the card behind each port     │
 │ IDENTITY      platform · version · source · site · report  │
 │ Investigate:  [Probe] [Diagnose] [Investigate] [Log]       │
 ├───────────────────────────────────────────────────────────┤
@@ -188,10 +188,19 @@ and the row's `aria-selected`.
 └───────────────────────────────────────────────────────────┘
 ```
 
-Almost all of it is reuse: `interfaces.table()` and `nics.nicTable()` are
-already exported for the agent page, `contextActions()` already builds the
-hand-off row, and the ⋯ menu is the agent row menu. The only call the drawer
-makes on its own is the port list.
+Almost all of it is reuse: `interfaces.table()` is already exported for the
+agent page, `contextActions()` already builds the hand-off row, and the ⋯ menu
+is the agent row menu. The only call the drawer makes on its own is the port
+list.
+
+The drawer carried a second table under PORTS for a while — `NIC (n)`, the
+cards the agent reported. Two tables described the same physical interfaces:
+counters in one, driver and firmware in the other, and the reader joined them
+by eye on the interface name. They are one table now. `ens192` carries
+`vmxnet3 · 1.4.7.0 · fw 1.0` under its name, the bus id is on the hover, and a
+card the measurement has not covered yet gets a dimmed row rather than
+disappearing with its table. `interfaces.table()` takes the NIC list as an
+optional fourth argument; a caller without it gets the counters alone.
 
 **Rules**
 
@@ -274,8 +283,9 @@ unchanged.
   its table as a body the shell can host.
 * `public/views/interfaces.js` — keeps the shared table and the forecast table,
   loses its own page.
-* `public/views/nics.js` — the models inventory only; its per-agent tab is the
-  drawer now.
+* `public/views/nics.js` — the fleet models inventory only. It has no per-agent
+  table at all: one agent's cards are its ports, so they are rows in
+  `interfaces.table()`.
 * `public/index.html` — the nav rail.
 * `public/app.js` — the view wiring, `PAGE_INFO`, `VIEW_LABELS`, the teardown
   table, the cross-links in the help drawers.

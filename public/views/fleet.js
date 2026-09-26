@@ -338,6 +338,13 @@
       }
 
       function nicsOf(a) { return (nicByAgentId && nicByAgentId[a.agentId]) || null; }
+      // The ports section counts the cards too now that it lists them: an agent
+      // with no measurement yet but one reported NIC has a row, and a header
+      // reading "Ports" with no number over a table with a row in it is wrong.
+      function portCount(a) {
+        var n = nicsOf(a);
+        return Math.max(metricsOf(a).ifaceCount || 0, n ? n.length : 0);
+      }
       function hasDrift(a) { return !!(nicOutliers && nicOutliers[a.agentId]); }
 
       function firmwareCell(a) {
@@ -662,7 +669,10 @@
                 : t('iface.neverMeasured')),
               // The admin record goes with it: on a flow source the table is
               // empty by design, and its button changes THIS agent's source.
-              deps.interfaceTable(d.interfaces, d.source, adminOf(a)));
+              // The NICs go with it too: the drawer used to carry a second
+              // table saying which card sits behind each of these ports, and
+              // joining two tables on the interface name was the reader's job.
+              deps.interfaceTable(d.interfaces, d.source, adminOf(a), nicsOf(a)));
           }, function (e) {
             // A failed port read must not take the drawer with it: the verdict
             // and the measurements above are still true and still useful.
@@ -721,7 +731,6 @@
 
       function openRowDrawer(a, tr) {
         var adm = adminOf(a);
-        var nics = nicsOf(a);
         deps.setDrawerAgent(a.agentId);
         var ctx = deps.contextActions ? deps.contextActions({ agentId: Number(a.agentId) }) : null;
         // The two places the acknowledgement shows are patched in place rather
@@ -745,11 +754,8 @@
           sections: [
             ui.drawerSection(t('fleet.dw.verdict'), verdictHost),
             ui.drawerSection(t('fleet.dw.measurements'), measurementBlock(a)),
-            ui.drawerSection(t('fleet.dw.ports') + (metricsOf(a).ifaceCount ? ' (' + metricsOf(a).ifaceCount + ')' : ''),
+            ui.drawerSection(t('fleet.dw.ports') + (portCount(a) ? ' (' + portCount(a) + ')' : ''),
               portsSection(a)),
-            nics && nics.length
-              ? ui.drawerSection(t('fleet.dw.nic') + ' (' + nics.length + ')', deps.nicTable(nics))
-              : null,
             ui.drawerSection(t('fleet.dw.identity'), identityBlock(a)),
             ctx ? ui.drawerSection(t('ctx.label'), ctx) : null,
           ],

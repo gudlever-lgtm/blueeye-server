@@ -73,6 +73,33 @@ const EVALUATION = {
   ],
 };
 
+
+// The guided walk-through, as the server returns it: the measurements ordered
+// cheapest-and-most-decisive first, then the screens, then the verdict.
+const WALKTHROUGH = {
+  sessionId: 42, target: '8.8.8.8', total: 4, position: 1, done: 0, stalled: false, verdict: null,
+  steps: [
+    {
+      n: 1, id: 'measure-1', kind: 'measure', status: 'pending', probeType: 'ping', direction: 'forward',
+      target: '8.8.8.8', params: { count: 20 }, testIds: [102], resultIds: [], measurements: [], causeIds: ['upstream-loss'],
+      why: 'Does anything answer at all', outcome: 'waiting', decided: [], detail: null,
+    },
+    {
+      n: 2, id: 'measure-2', kind: 'measure', status: 'pending', probeType: 'path_mtu', direction: 'forward',
+      target: '8.8.8.8', params: {}, testIds: [101], resultIds: [], measurements: [], causeIds: ['mtu-blackhole'],
+      why: 'How big a packet the path carries', outcome: 'waiting', decided: [], detail: null,
+    },
+    {
+      n: 3, id: 'look-3', kind: 'look', status: 'pending', view: { view: 'probes', params: { tab: 'run' } },
+      why: 'a path MTU below 1500', causeIds: ['mtu-blackhole'], testIds: [], outcome: null, decided: [], detail: null,
+    },
+    {
+      n: 4, id: 'decide-4', kind: 'decide', status: 'pending', verdict: null, causeIds: [],
+      why: null, testIds: [], outcome: null, decided: [], detail: null,
+    },
+  ],
+};
+
 function boot({ t, routes = {}, url = 'http://server.test/diagnose', role = 'operator' } = {}) {
   const errors = [];
   const vc = new VirtualConsole();
@@ -112,6 +139,7 @@ const SESSION = (over = {}) => Object.assign({
   'GET /api/diagnose/42': SESSION_ROWS,
   'POST /api/diagnose/42/run': { dispatched: 2, total: 2 },
   'POST /api/diagnose/42/evaluate': EVALUATION,
+  'GET /api/diagnose/42/walkthrough': WALKTHROUGH,
 }, over);
 
 const askBtn = (doc) => [...doc.querySelectorAll('#view .form-actions-ui .btn-primary')][0];
@@ -286,4 +314,153 @@ test('"open this view" still navigates where the cause says to look', async (t) 
   open.dispatchEvent(new window.Event('click', { bubbles: true }));
   await settle();
   assert.equal(window.location.pathname, '/probes/run', `went to ${window.location.pathname}`);
+});
+
+// ---------------------------------------------------------- the walk-through
+
+const walkSteps = (doc) => [...doc.querySelectorAll('#view .diag-step')];
+
+test('the walk-through comes first, and only the current step has controls', async (t) => {
+  // "What do I do now" is the question the reader has; the plan answers "what
+  // is this about". A list where every row has a button is the plan again.
+  const { doc, window, errors } = boot({ t, routes: SESSION() });
+  await settle();
+  await askFor(doc, window, 'large transfers stall over the tunnel');
+  await settle();
+  assert.deepEqual(errors, []);
+
+  const all = panels(doc);
+  const walkIdx = all.findIndex(function (p) { return /Walk me through it/.test(p.textContent); });
+  const causesIdx = all.findIndex(function (p) { return /MTU black hole/.test(p.textContent); });
+  assert.ok(walkIdx !== -1, 'no walk-through panel');
+  assert.ok(walkIdx < causesIdx, 'the plan came before the sequence');
+
+  const steps = walkSteps(doc);
+  assert.ok(steps.length >= 1, 'no steps rendered');
+  // The server ordered ping before path_mtu; the screen must not reorder it.
+  assert.match(steps[0].textContent, /ping/);
+  assert.equal(doc.querySelectorAll('#view .diag-step-now').length, 1, 'exactly one step is "now"');
+  assert.equal(doc.querySelectorAll('#view .diag-step-actions').length, 1, 'more than one step has buttons');
+});
+
+test('running the current step dispatches ONLY that step\'s tests', async (t) => {
+  const { doc, window, log } = boot({ t, routes: SESSION() });
+  await settle();
+  await askFor(doc, window, 'large transfers stall over the tunnel');
+  await settle();
+
+  const run = [...doc.querySelectorAll('#view .diag-step-actions .btn-primary')][0];
+  assert.ok(run, 'the current step has no Run control');
+  run.dispatchEvent(new window.Event('click', { bubbles: true }));
+  await settle();
+
+  const posted = log.filter((x) => x.key === 'POST /api/diagnose/42/run');
+  assert.equal(posted.length, 1);
+  assert.deepEqual(JSON.parse(posted[0].body), { testIds: [102] });
+  // And it re-reads the walk-through afterwards, so the step's own answer is
+  // what moves the sequence on rather than a guess made here.
+  assert.ok(log.filter((x) => x.key === 'GET /api/diagnose/42/walkthrough').length >= 2);
+});
+
+test('a viewer sees the sequence and cannot press anything on it', async (t) => {
+  const { doc, window } = boot({ t, role: 'viewer', routes: SESSION({ 'GET /me': { id: 2, email: 'v@y.dk', role: 'viewer', preferences: {} } }) });
+  await settle();
+  await askFor(doc, window, 'large transfers stall over the tunnel');
+  await settle();
+  assert.ok(walkSteps(doc).length >= 1, 'a viewer lost the walk-through entirely');
+  assert.equal(doc.querySelectorAll('#view .diag-step-actions .btn-primary').length, 0);
+});
+
+test('a finished step shows the measurement beside the verdict', async (t) => {
+  // A verdict nobody can check is an assertion. The size sweep in particular:
+  // the row's own loss column describes the SMALLEST size, so "0% loss" is
+  // exactly what a probe that found an MTU ceiling reports there.
+  const done = JSON.parse(JSON.stringify(WALKTHROUGH));
+  done.steps[0].status = 'done';
+  done.steps[0].outcome = 'signal';
+  done.steps[0].resultIds = [500];
+  done.steps[0].measurements = [{
+    id: 500, type: 'ping', target: '8.8.8.8', ts: '2026-01-01T00:00:00.000Z', ok: true,
+    rttMs: 12.4,
+    sizes: [
+      { size: 64, lossPct: 0, measured: true, mtuHint: null },
+      { size: 1472, lossPct: 100, measured: true, mtuHint: 1400 },
+    ],
+  }];
+  done.steps[0].decided = [{ ruleId: 'loss_size_dependent', effect: 'confirm', because: 'Small packets pass and large ones do not.', result: true }];
+  done.position = 2;
+  const { doc, window, errors } = boot({ t, routes: SESSION({ 'GET /api/diagnose/42/walkthrough': done }) });
+  await settle();
+  await askFor(doc, window, 'large transfers stall over the tunnel');
+  await settle();
+  assert.deepEqual(errors, []);
+
+  const step = walkSteps(doc)[0];
+  assert.match(step.textContent, /Small packets pass and large ones do not/, 'the verdict is missing');
+  assert.ok(step.querySelector('.kv-ui'), 'the measurement is not rendered');
+  assert.match(step.textContent, /12\.4 ms/);
+  assert.match(step.textContent, /Loss at 64 bytes/);
+  assert.match(step.textContent, /Loss at 1472 bytes/);
+  assert.match(step.textContent, /a router said 1400/);
+});
+
+test('a step with no measurement renders no empty measurement block', async (t) => {
+  const { doc, window } = boot({ t, routes: SESSION() });
+  await settle();
+  await askFor(doc, window, 'large transfers stall over the tunnel');
+  await settle();
+  assert.equal(walkSteps(doc)[0].querySelectorAll('.kv-ui').length, 0);
+});
+
+test('a stalled walk-through says so instead of showing a spinner forever', async (t) => {
+  const stalled = JSON.parse(JSON.stringify(WALKTHROUGH));
+  stalled.stalled = true;
+  stalled.steps[0].status = 'failed';
+  stalled.steps[0].outcome = 'failed';
+  stalled.steps[0].detail = 'agent is not connected';
+  const { doc, window } = boot({ t, routes: SESSION({ 'GET /api/diagnose/42/walkthrough': stalled }) });
+  await settle();
+  await askFor(doc, window, 'large transfers stall over the tunnel');
+  await settle();
+  const walk = panels(doc).find(function (p) { return /Walk me through it/.test(p.textContent); });
+  assert.ok(walk, 'no walk-through panel');
+  assert.match(walk.textContent, /cannot move on its own/);
+  assert.match(walk.textContent, /agent is not connected/);
+});
+
+test('a walk-through the server cannot build costs the sequence, never the plan', async (t) => {
+  const { doc, window, errors, log } = boot({ t, routes: SESSION({ 'GET /api/diagnose/42/walkthrough': { status: 500, body: { error: 'boom' } } }) });
+  await settle();
+  await askFor(doc, window, 'large transfers stall over the tunnel');
+  await settle();
+  assert.deepEqual(errors, []);
+  // The causes and the tests are still there — the plan does not depend on it.
+  assert.ok(panels(doc).some((p) => /MTU black hole/.test(p.textContent)));
+  assert.ok(testRows(doc).length >= 2);
+
+  // AND IT ASKS ONCE. The lazy fetch ends by redrawing, and the redraw comes
+  // straight back through the same branch — so a failed request that did not
+  // record having been tried would start another, fail, redraw, forever. It
+  // hung this suite before it was caught, and it would spin a real browser.
+  const asked = log.filter((x) => x.key === 'GET /api/diagnose/42/walkthrough');
+  assert.equal(asked.length, 1, 'the failed walk-through fetch retried on its own');
+
+  const walk = panels(doc).find((p) => /Walk me through it/.test(p.textContent));
+  assert.ok(walk, 'no walk-through panel');
+  assert.match(walk.textContent, /boom|could not be built/i);
+});
+
+test('Retry on a failed walk-through asks again, exactly once more', async (t) => {
+  const { doc, window, log } = boot({ t, routes: SESSION({ 'GET /api/diagnose/42/walkthrough': { status: 500, body: { error: 'boom' } } }) });
+  await settle();
+  await askFor(doc, window, 'large transfers stall over the tunnel');
+  await settle();
+
+  const walk = panels(doc).find((p) => /Walk me through it/.test(p.textContent));
+  const retry = [...walk.querySelectorAll('.btn')].find((b) => /retry|prøv/i.test(b.textContent));
+  assert.ok(retry, 'the failure offers no way back');
+  retry.dispatchEvent(new window.Event('click', { bubbles: true }));
+  await settle();
+  assert.equal(log.filter((x) => x.key === 'GET /api/diagnose/42/walkthrough').length, 2,
+    'Retry asked more than once, or not at all');
 });

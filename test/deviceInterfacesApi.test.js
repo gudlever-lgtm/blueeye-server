@@ -28,6 +28,7 @@ const {
   makeAgentTokensRepo,
   makeSnmpDevicesRepo,
   makeDeviceInterfacesRepo,
+  makeSnmpNeighborsRepo,
   authHeader,
   throwingAsync,
 } = require('../test-support/fakes');
@@ -253,4 +254,130 @@ test('an interface-store failure does not cost the forwarding table', async () =
   assert.equal(res.body.stored, 1);
   assert.equal(res.body.fdbRows, 1, 'the part somebody is waiting for still landed');
   assert.equal(res.body.interfaceRows, 0);
+});
+
+// ============================================ the MTU, and the link it decides
+test('ifMtu is stored as the device reported it, and an unanswered one is null', async () => {
+  // Migration 139. The port's configured MTU is the other half of an MTU fault:
+  // `path_mtu` measures what a PATH carries, this says what each port was told
+  // to carry. Null and never 0 — the mismatch rule compares two ends, and a
+  // fabricated 0 would make every silent port a finding.
+  const deviceInterfacesRepo = makeDeviceInterfacesRepo();
+  const app = makeApp({
+    agentsRepo: agentsRepo(), agentTokensRepo: agentToken(),
+    snmpDevicesRepo: await seededDevices(), deviceInterfacesRepo,
+  });
+
+  const res = await submit(app, [
+    IF({ mtu: 9216 }),
+    IF({ ifIndex: 10002, ifName: 'GigabitEthernet0/2', mtu: 0 }),
+    IF({ ifIndex: 10003, ifName: 'GigabitEthernet0/3' }),
+  ]);
+  assert.equal(res.status, 202);
+  const byName = Object.fromEntries(deviceInterfacesRepo.rows.map((r) => [r.if_name, r]));
+  assert.equal(byName['GigabitEthernet0/1'].mtu, 9216);
+  assert.equal(byName['GigabitEthernet0/2'].mtu, null, 'zero is "did not say", not an MTU');
+  assert.equal(byName['GigabitEthernet0/3'].mtu, null, 'an absent column is not a guess');
+});
+
+test('an MTU past the sanity bound is refused rather than stored', async () => {
+  // 65535 is IPv4's whole theoretical datagram; past it a device is answering
+  // nonsense, and storing it would put the nonsense in a finding.
+  const deviceInterfacesRepo = makeDeviceInterfacesRepo();
+  const app = makeApp({
+    agentsRepo: agentsRepo(), agentTokensRepo: agentToken(),
+    snmpDevicesRepo: await seededDevices(), deviceInterfacesRepo,
+  });
+  await submit(app, [IF({ mtu: 4294967295 }), IF({ ifIndex: 2, ifName: 'Gi0/2', mtu: -1500 })]);
+  for (const r of deviceInterfacesRepo.rows) assert.equal(r.mtu, null);
+});
+
+test('two linked ports with different MTUs raise ONE finding naming both ends', async () => {
+  // The fault the MTU probe cannot attribute, answered from the inventory:
+  // LLDP says these two ports are cabled together and they are configured 7716
+  // bytes apart. Small frames pass, so every counter on both switches is clean;
+  // the first full-size frame is where an application stalls with no message.
+  const deviceInterfacesRepo = makeDeviceInterfacesRepo();
+  const snmpNeighborsRepo = makeSnmpNeighborsRepo();
+  // BOTH switches polled by the same agent, so one topology cycle carries the
+  // two ends of the cable.
+  const snmpDevicesRepo = makeSnmpDevicesRepo();
+  await snmpDevicesRepo.create({ agentId: 9, host: '10.14.0.11', displayName: 'Core switch', community: 'public' });
+  await snmpDevicesRepo.create({ agentId: 9, host: '10.14.0.12', displayName: 'Access switch', community: 'public' });
+  const raised = [];
+  const app = makeApp({
+    agentsRepo: agentsRepo(), agentTokensRepo: agentToken(),
+    snmpDevicesRepo, deviceInterfacesRepo, snmpNeighborsRepo,
+    deviceFindingSink: { emit: async (f) => { raised.push(f); return f; } },
+  });
+
+  // Each switch names its OWN port and identifies the far end by chassis MAC,
+  // which is how LLDP actually arrives.
+  const res = await request(app).post('/agents/me/snmp-topology')
+    .set('Authorization', 'Bearer agent-tok')
+    .send({
+      devices: [
+        {
+          deviceId: 1,
+          supported: ['if', 'lldp'],
+          interfaces: [IF({ ifName: 'Gi0/1', ifIndex: 1, mtu: 9216, physAddress: 'aa:bb:cc:00:00:01' })],
+          neighbours: [{
+            localIfName: 'Gi0/1', remoteChassisId: 'aa:bb:cc:00:00:02',
+            remotePortId: 'Gi0/24', remoteSysName: 'Access switch', protocol: 'lldp',
+          }],
+        },
+        {
+          deviceId: 2,
+          supported: ['if', 'lldp'],
+          interfaces: [IF({ ifName: 'Gi0/24', ifIndex: 24, mtu: 1500, physAddress: 'aa:bb:cc:00:00:02' })],
+          neighbours: [{
+            localIfName: 'Gi0/24', remoteChassisId: 'aa:bb:cc:00:00:01',
+            remotePortId: 'Gi0/1', remoteSysName: 'Core switch', protocol: 'lldp',
+          }],
+        },
+      ],
+    });
+  assert.equal(res.status, 202);
+  assert.equal(res.body.linkMtuFindings, 1, 'the same cable must not be raised once per end');
+
+  const [f] = raised.filter((x) => /mtu\.mismatch/.test(x.metric));
+  assert.ok(f, 'the mismatch never reached the finding sink');
+  assert.equal(f.severity, 'WARN');
+  assert.equal(f.observed, 1500, 'the link carries what its smaller end carries');
+  assert.equal(f.baseline, 9216);
+  assert.equal(f.deviceId, 2, 'attributed to the end that decides the limit');
+  for (const must of ['Gi0/1', 'Gi0/24', 'Core switch', 'Access switch']) {
+    assert.ok(f.explanation.includes(must), `the explanation never mentions ${must}`);
+  }
+});
+
+test('a far end nobody polls is no second MTU, so it is not a finding', async () => {
+  // An access point, a phone or an unmanaged switch. There is no row for the
+  // other end of the cable — and an unmeasured far end must never be assumed
+  // to be 1500, which would make a jumbo uplink a fault on every site.
+  const deviceInterfacesRepo = makeDeviceInterfacesRepo();
+  const snmpNeighborsRepo = makeSnmpNeighborsRepo();
+  const raised = [];
+  const app = makeApp({
+    agentsRepo: agentsRepo(), agentTokensRepo: agentToken(),
+    snmpDevicesRepo: await seededDevices(), deviceInterfacesRepo, snmpNeighborsRepo,
+    deviceFindingSink: { emit: async (f) => { raised.push(f); return f; } },
+  });
+
+  const res = await request(app).post('/agents/me/snmp-topology')
+    .set('Authorization', 'Bearer agent-tok')
+    .send({
+      devices: [{
+        deviceId: 1,
+        supported: ['if', 'lldp'],
+        interfaces: [IF({ ifName: 'Gi0/5', ifIndex: 5, mtu: 9216 })],
+        neighbours: [{
+          localIfName: 'Gi0/5', remoteChassisId: '00:11:22:33:44:55',
+          remotePortId: 'eth0', remoteSysName: 'ap-lobby', protocol: 'lldp',
+        }],
+      }],
+    });
+  assert.equal(res.status, 202);
+  assert.equal(res.body.linkMtuFindings, 0);
+  assert.equal(raised.filter((x) => /mtu\.mismatch/.test(x.metric)).length, 0);
 });

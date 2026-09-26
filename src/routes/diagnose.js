@@ -11,6 +11,7 @@ const { selectPlaybooks } = require('../diagnose/llm');
 const { buildPlan } = require('../diagnose/plan');
 const { buildFacts } = require('../diagnose/facts');
 const { evaluateSession } = require('../diagnose/evaluate');
+const { buildWalkthrough } = require('../diagnose/walkthrough');
 const { localize, DEFAULT_LOCALE } = require('../diagnose/catalog');
 const { computeInterfaceHealth } = require('../health/interfaceHealth');
 const { ecmpAnalysis, PATH_PROBE_TYPES } = require('../analysis/pathGraph');
@@ -333,7 +334,73 @@ function createDiagnoseRouter({
     res.json({ sessionId: id, ...evaluation });
   }));
 
+  // GET /api/diagnose/:id/walkthrough — the same session as ONE ORDERED LIST of
+  // steps: what to do now, why, what the last step showed and what is left.
+  //
+  // A READ, so viewer+ like the plan itself. It dispatches nothing and decides
+  // nothing: it arranges what POST /diagnose planned and POST /evaluate
+  // concluded. The verdict stays the evaluation's, which is what keeps this
+  // from becoming a second, quieter place where a cause gets confirmed.
+  //   400 bad id · 404 unknown session · 503 no storage
+  router.get('/diagnose/:id/walkthrough', requireAuth, reader, asyncHandler(async (req, res) => {
+    const id = parseId(req.params.id);
+    if (id === null) return res.status(400).json({ error: 'id must be a positive integer' });
+    if (!sessionsRepo) return unavailable(res);
+    const session = await sessionsRepo.findById(id);
+    if (!session) return notFound(res, 'Diagnosis session');
+    const tests = await sessionsRepo.listTests(id);
+    const walkthrough = buildWalkthrough({
+      session,
+      tests,
+      // The measurements behind the finished steps. Each step already knows
+      // which probe_results row it produced (the evaluation attached it); this
+      // reads those rows so the step can show the numbers next to the verdict
+      // rather than asserting one and sending the reader elsewhere to check.
+      //
+      // Scoped to the test's OWN agent on every read: a result id that belongs
+      // to another agent must read as absent, not as somebody else's
+      // measurement rendered under this session's step.
+      results: await loadStepResults(tests),
+      // The LAST evaluation, or none. A walk-through before anything has been
+      // evaluated is still a walk-through — it is the list of steps with none
+      // of them answered yet, which is exactly what somebody starting out
+      // needs — so a missing evaluation is not an error here.
+      evaluation: session.evaluation || null,
+      locale: req.query.locale || session.locale || DEFAULT_LOCALE,
+    });
+    res.json({ sessionId: id, target: session.target ?? null, agentId: session.agentId ?? null, ...walkthrough });
+  }));
+
   // --- helpers ---------------------------------------------------------------
+
+  // The stored results the finished walk-through steps produced, by id.
+  //
+  // Best effort, and bounded by the plan: a session has at most MAX_TESTS rows
+  // and only the ones an evaluation has already linked are read, so this is a
+  // handful of primary-key lookups rather than a scan. A read that fails costs
+  // the numbers on one step, never the walk-through — the sequence and its
+  // verdicts do not depend on them.
+  async function loadStepResults(tests) {
+    if (!probeResultsRepo || typeof probeResultsRepo.findRunById !== 'function') return [];
+    const wanted = [];
+    const seen = new Set();
+    for (const t of tests || []) {
+      if (!t || t.probeResultId == null || seen.has(t.probeResultId)) continue;
+      seen.add(t.probeResultId);
+      wanted.push(t);
+    }
+    const out = [];
+    for (const t of wanted) {
+      try {
+        // eslint-disable-next-line no-await-in-loop
+        const row = await probeResultsRepo.findRunById(t.probeResultId, { agentId: t.agentId ?? null });
+        if (row) out.push(row);
+      } catch (err) {
+        logger.warn(`diagnose: could not read probe result ${t.probeResultId} for the walk-through (${err.message})`);
+      }
+    }
+    return out;
+  }
 
   // A probe_results row in the shape buildFacts() reads. The repository's own
   // mapper is not used here because this endpoint reads raw rows straight out of

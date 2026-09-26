@@ -220,6 +220,10 @@
               { key: 'fcs', label: t('snmpdev.col.fcs'), width: '80px', num: true },
               { key: 'lateColl', label: t('snmpdev.col.lateColl'), width: '90px', num: true },
               { key: 'duplex', label: t('snmpdev.col.duplex'), width: '80px' },
+              // The port's configured MTU (ifMtu). It belongs next to duplex:
+              // both are settings rather than measurements, and both are faults
+              // that leave every counter on this row looking clean.
+              { key: 'mtu', label: t('snmpdev.col.mtu'), width: '80px', num: true },
               { key: 'alias', label: t('snmpdev.col.alias') },
             ],
             rows: ports_.map(function (p) {
@@ -253,6 +257,9 @@
                   fcs: rateCell(c.fcsPps),
                   lateColl: rateCell(c.lateCollPps),
                   duplex: duplexCell(c),
+                  // NULL, not 0, for the same reason as speed: a device that
+                  // did not report an MTU has not configured one of zero.
+                  mtu: p.mtu == null ? '–' : String(p.mtu),
                   alias: p.ifAlias || '',
                 },
                 raw: p,

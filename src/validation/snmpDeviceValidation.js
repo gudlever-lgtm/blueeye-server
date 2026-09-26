@@ -75,6 +75,12 @@ const MAX_INVENTORY_PER_DEVICE = 48;
 const OID_RE = /^\d+(\.\d+){1,127}$/;
 const MAX_VLANS_PER_DEVICE = 4096;
 const MAX_INTERFACES_PER_DEVICE = 4096;
+// An upper sanity bound on ifMtu. Not a hardware limit — jumbo ports report
+// 9216 and some platforms report far more for internal interfaces — just the
+// line past which a device is answering nonsense rather than reporting an MTU.
+// IPv4's own theoretical maximum datagram is 65535, so nothing above it is a
+// packet size any interface can mean.
+const MAX_MTU = 65535;
 const MAX_DEVICES_PER_BATCH = 200;
 
 // The counter batch. A chassis with a thousand ports is real, and the agent
@@ -385,6 +391,7 @@ function validateDeviceTopology(raw) {
     if (Number.isInteger(ifIndex) && ifIndex > 0 && ifName) {
       const speed = Number(row.speedMbps);
       const ifType = Number(row.ifType);
+      const mtu = Number(row.mtu);
       const mac = normalizeMac(row.physAddress);
       interfaces.push({
         ifIndex,
@@ -399,6 +406,13 @@ function validateDeviceTopology(raw) {
         // 0 is what a device reports for a port whose speed it does not know.
         // Storing it as 0 would make "unknown" look like "stalled".
         speedMbps: Number.isInteger(speed) && speed > 0 ? speed : null,
+        // ifMtu (migration 139) — what this port was configured to carry. Same
+        // rule as the speed above and for a sharper reason: the link-MTU
+        // mismatch rule compares the two ends of a cable, so a 0 coerced from a
+        // port the device stayed silent about would raise a finding against a
+        // port nobody has measured. MAX_MTU is a sanity bound, not a hardware
+        // one — anything past it is a device answering nonsense.
+        mtu: Number.isInteger(mtu) && mtu > 0 && mtu <= MAX_MTU ? mtu : null,
         adminStatus: IF_STATUSES.includes(row.adminStatus) ? row.adminStatus : null,
         operStatus: IF_STATUSES.includes(row.operStatus) ? row.operStatus : null,
         physAddress: mac && isUsableMac(mac) ? mac : null,

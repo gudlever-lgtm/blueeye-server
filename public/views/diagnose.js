@@ -176,6 +176,15 @@
             st.testRows = null;
             st.selectedTests = null;
             st.selectionSeeded = false;
+            // A new plan is a new sequence. Keeping the old one would show the
+            // previous session's steps against this session's causes, which is
+            // the one mistake a walk-through cannot survive.
+            st.walkthrough = null;
+            st.walkPending = false;
+            st.walkTried = false;
+            st.walkSkipped = {};
+            st.walkAll = false;
+            st.walkError = null;
             drawPlan();
           })
           .catch(function (e) {
@@ -254,6 +263,256 @@
         return el('div', { class: 'diag-cause' }, head, body);
       }
 
+      // ---- the guided walk-through ------------------------------------------
+      //
+      // The same session as ONE ORDERED LIST: what to do now, why, what the
+      // last step showed, what is left. The plan below it is still the whole
+      // answer; this is the answer arranged as a sequence, for the reader who
+      // does not already know which measurement settles which question.
+      //
+      // It is a READ. Every action on it — run these tests, open that screen,
+      // evaluate — goes through the same endpoints the plan's own controls use,
+      // so nothing here is a second way to change something.
+      var STEP_TONE = { done: 'ok', failed: 'crit', blocked: 'warn', waiting: 'info', current: 'info', pending: 'neutral' };
+      var OUTCOME_TONE = { signal: 'crit', clear: 'ok', failed: 'crit', unread: 'neutral', waiting: 'info' };
+
+      function stepLabel(step) {
+        if (step.kind === 'measure' || step.kind === 'blocked') {
+          return t('diag.walk.step.measure', {
+            probe: step.probeType,
+            target: step.target || t('diag.walk.step.noTarget'),
+          });
+        }
+        if (step.kind === 'look') return t('diag.walk.step.look', { view: step.view.view });
+        if (step.kind === 'decide') return t('diag.walk.step.decide');
+        return t('diag.walk.step.fix');
+      }
+
+      // The measurement behind a finished step, as the few numbers a reader
+      // would otherwise go to Probes to look up. Not the whole row: the step
+      // shows what it decided AND what it decided from, and anything past that
+      // turns the sequence back into the dump it replaces.
+      function measurementBlock(m) {
+        var pairs = [];
+        pairs.push([t('diag.walk.m.answered'), m.ok ? t('diag.walk.m.yes') : t('diag.walk.m.no')]);
+        if (m.status != null) pairs.push([t('diag.walk.m.status'), String(m.status)]);
+        if (m.rttMs != null) pairs.push([t('diag.walk.m.rtt'), m.rttMs + ' ms']);
+        // Only where there is no size sweep: a sweep's own rows say it better,
+        // and the row's loss column describes the SMALLEST size, which reads as
+        // "0% loss" on exactly the probe that found an MTU ceiling.
+        if (m.lossPct != null && !(m.sizes && m.sizes.length)) pairs.push([t('diag.walk.m.loss'), m.lossPct + ' %']);
+        if (m.hopCount != null) pairs.push([t('diag.walk.m.hops'), String(m.hopCount)]);
+        if (m.mtu) {
+          if (m.mtu.pathMtu != null) pairs.push([t('diag.walk.m.pathMtu'), m.mtu.pathMtu + ' B']);
+          pairs.push([t('diag.walk.m.blackhole'),
+            m.mtu.blackholeDetected ? t('diag.walk.m.yes') : t('diag.walk.m.no')]);
+          if (m.mtu.mtuDropAtHop != null) pairs.push([t('diag.walk.m.dropAtHop'), String(m.mtu.mtuDropAtHop)]);
+          if (m.mtu.recommendedMss != null) pairs.push([t('diag.walk.m.mss'), m.mtu.recommendedMss + ' B']);
+        }
+        // One row per SIZE. This is the whole measurement for an MTU fault and
+        // the one a single loss figure hides: 64 through and 1472 gone is not
+        // a lossy link, it is an MTU.
+        (m.sizes || []).forEach(function (z) {
+          pairs.push([t('diag.walk.m.size', { size: String(z.size) }),
+            z.measured === false ? t('diag.walk.m.notMeasured')
+              : (z.lossPct == null ? '–' : z.lossPct + ' %')
+                + (z.mtuHint != null ? ' · ' + t('diag.walk.m.hint', { mtu: String(z.mtuHint) }) : '')]);
+        });
+        if (m.errorCode) pairs.push([t('diag.walk.m.error'), String(m.errorCode)]);
+        if (m.detail) pairs.push([t('diag.walk.m.detail'), m.detail]);
+        return ui.keyValues(pairs);
+      }
+
+      function stepBlock(step, walk) {
+        var isNow = step.n === walk.position;
+        var head = el('div', { class: 'diag-step-head' },
+          el('strong', {}, stepLabel(step)),
+          ui.badge(STEP_TONE[step.status] || 'neutral', t('diag.walk.status.' + step.status)));
+        if (step.outcome && step.status === 'done') {
+          head.append(ui.badge(OUTCOME_TONE[step.outcome] || 'neutral', t('diag.walk.outcome.' + step.outcome)));
+        }
+        if (step.direction === 'reverse') head.append(ui.badge('info', t('diag.tests.reverse')));
+
+        var main = el('div', { class: 'diag-step-main' }, head);
+        if (step.why) main.append(ui.meta(step.why));
+        if (step.detail) main.append(ui.inlineNote(step.detail, 'crit'));
+        if (step.fix) {
+          main.append(step.fix.complete
+            ? el('div', { class: 'diag-fix' }, step.fix.text)
+            : ui.inlineNote(step.fix.text, 'warn'));
+        }
+
+        // What it measured, beside what it decided. The verdict comes first
+        // because that is the answer; the numbers are underneath because a
+        // verdict nobody can check is an assertion.
+        (step.measurements || []).forEach(function (m) {
+          main.append(measurementBlock(m));
+        });
+
+        // What this step DECIDED — the rules its measurement settled, each with
+        // the playbook's own sentence. Not what it measured: a number the
+        // reader has to interpret is the thing a walk-through exists to remove.
+        (step.decided || []).forEach(function (d) {
+          main.append(el('div', { class: 'diag-rule' },
+            ui.badge(d.result === true ? 'crit' : 'ok',
+              t('diag.evidence.' + (d.result === true ? 'fired' : 'notFired'))),
+            ui.metaXs(d.because)));
+        });
+
+        if (step.verdict) {
+          main.append(ui.inlineNote(t('diag.counts', {
+            confirmed: step.verdict.confirmed.length,
+            ruled_out: step.verdict.ruledOut.length,
+            inconclusive: step.verdict.open.length,
+          }), 'info'));
+          step.verdict.confirmed.forEach(function (c) {
+            main.append(el('div', { class: 'diag-fix' }, c.title));
+          });
+        }
+
+        // Only the CURRENT step gets controls. A list where every row has a
+        // button is a plan again, and the reader is back to choosing.
+        if (isNow) {
+          var actions = [];
+          if (step.kind === 'measure' && step.testIds.length && !deps.isViewer()) {
+            actions.push(ui.button('primary', t('diag.walk.run'), {
+              size: 'xs',
+              onclick: function () { runStep(step); },
+            }));
+          }
+          if (step.kind === 'look' && step.view) {
+            actions.push(ui.button('secondary', t('diag.reading.open', { view: step.view.view }), {
+              size: 'xs',
+              onclick: function () { deps.navigate(step.view, st); },
+            }));
+          }
+          if (step.kind === 'decide' && !deps.isViewer()) {
+            actions.push(ui.button('primary', t('diag.walk.check'), {
+              size: 'xs',
+              onclick: evaluateAndRefresh,
+            }));
+          }
+          // Skipping is allowed and recorded nowhere: it moves the reader on
+          // without pretending the step was answered, which is the honest way
+          // to handle a step they know is pointless here.
+          if (step.kind !== 'decide') {
+            actions.push(ui.button('ghost', t('diag.walk.skip'), {
+              size: 'xs',
+              onclick: function () { st.walkSkipped[step.id] = true; drawPlan(); },
+            }));
+          }
+          if (actions.length) main.append(el('div', { class: 'diag-step-actions' }, actions));
+        }
+
+        var cls = 'diag-step'
+          + (isNow ? ' diag-step-now' : '')
+          + (step.status === 'done' ? ' diag-step-done' : '');
+        return el('div', { class: cls },
+          el('div', { class: 'diag-step-n' }, String(step.n)),
+          main);
+      }
+
+      function runStep(step) {
+        st.walkBusy = true;
+        drawPlan();
+        deps.runTests(st.plan.sessionId, { testIds: step.testIds })
+          .then(function () { return refreshWalkthrough(); })
+          .catch(function (e) { st.walkError = deps.errText(e); })
+          .then(function () { st.walkBusy = false; drawPlan(); });
+      }
+
+      function evaluateAndRefresh() {
+        st.walkBusy = true;
+        drawPlan();
+        deps.evaluate(st.plan.sessionId)
+          .then(function (res) { st.evaluation = res; return refreshWalkthrough(); })
+          .catch(function (e) { st.walkError = deps.errText(e); })
+          .then(function () { st.walkBusy = false; drawPlan(); });
+      }
+
+      function refreshWalkthrough() {
+        if (!st.plan || !st.plan.sessionId || !deps.fetchWalkthrough) return Promise.resolve();
+        return deps.fetchWalkthrough(st.plan.sessionId)
+          .then(function (w) { st.walkthrough = w; st.walkError = null; })
+          .catch(function (e) { st.walkError = deps.errText(e); });
+      }
+
+      function walkPanel() {
+        if (!st.plan || !st.plan.sessionId || !st.plan.causes || !st.plan.causes.length) return null;
+        if (!st.walkSkipped) st.walkSkipped = {};
+        var walk = st.walkthrough;
+        if (!walk) {
+          // Fetched ONCE per plan, lazily: the plan renders immediately and the
+          // walk-through fills in, rather than the screen waiting on a second
+          // request before it shows anything.
+          //
+          // `walkTried` is what makes it once. The fetch ends by redrawing, and
+          // the redraw comes straight back through here — so a request that
+          // FAILED would find no walk-through, start another, fail, and redraw
+          // again, forever. Pending is not enough to stop that: it is already
+          // false by then. A failure is shown with a Retry the reader presses,
+          // which is also the only honest offer: nothing about redrawing makes
+          // the next attempt more likely to work.
+          if (!st.walkPending && !st.walkTried) {
+            st.walkPending = true;
+            refreshWalkthrough().then(function () {
+              st.walkPending = false;
+              st.walkTried = true;
+              drawPlan();
+            });
+          }
+          return ui.panel({
+            title: t('diag.walk.title'),
+            children: [st.walkError
+              ? ui.errorState({
+                title: t('diag.walk.err'),
+                body: st.walkError,
+                detail: 'GET /api/diagnose/' + st.plan.sessionId + '/walkthrough',
+                onRetry: function () { st.walkTried = false; st.walkError = null; drawPlan(); },
+              })
+              : ui.emptyState({ title: t('diag.walk.loading') })],
+          });
+        }
+
+        // A skipped step is finished as far as the sequence is concerned, so the
+        // position moves past it — the server's `position` is recomputed here
+        // rather than asked for again, because skipping is this screen's idea
+        // and nothing on the server should have to remember it.
+        var position = walk.position;
+        var steps = walk.steps;
+        for (var i = 0; i < steps.length; i += 1) {
+          if (steps[i].n < position) continue;
+          if (!st.walkSkipped[steps[i].id]) { position = steps[i].n; break; }
+          position = steps.length;
+        }
+        var view = { position: position };
+        var shown = st.walkAll ? steps : steps.filter(function (s) {
+          return s.n <= position || s.status === 'done';
+        });
+
+        var children = [
+          el('div', { class: 'panel-body' },
+            ui.metaXs(t('diag.walk.progress', { done: String(walk.done), total: String(walk.total) })),
+            walk.stalled ? ui.inlineNote(t('diag.walk.stalled'), 'warn') : null,
+            st.walkError ? ui.inlineNote(st.walkError, 'crit') : null,
+            st.walkBusy ? ui.inlineNote(t('diag.walk.working'), 'info') : null),
+          el('div', { class: 'panel-body' }, shown.map(function (s) { return stepBlock(s, view); })),
+        ];
+        if (steps.length > shown.length || st.walkAll) {
+          children.push(el('div', { class: 'panel-body' }, ui.formActions([], [
+            ui.button('ghost', st.walkAll ? t('diag.walk.showLess') : t('diag.walk.showAll'), {
+              size: 'xs',
+              onclick: function () { st.walkAll = !st.walkAll; drawPlan(); },
+            }),
+          ])));
+        }
+        return ui.panel({
+          title: t('diag.walk.title'),
+          note: t('diag.walk.note'),
+          children: children,
+        });
+      }
+
       function drawPlan() {
         var plan = st.plan;
         if (!plan) { outHost.replaceChildren(); return; }
@@ -295,7 +554,12 @@
             el('div', { class: 'panel-body' }, ordered.map(function (o) { return causeBlock(o.cause, o.verdict); })),
           ].filter(Boolean),
         });
-        outHost.replaceChildren(causesPanel, testsPanel(plan));
+        var walk = walkPanel();
+        // The walk-through goes FIRST when there is one: it is the answer to
+        // "what do I do now", and the plan below it is the answer to "what is
+        // this about". A reader who wants the second one scrolls; a reader who
+        // wants the first one should not have to.
+        outHost.replaceChildren.apply(outHost, [walk, causesPanel, testsPanel(plan)].filter(Boolean));
       }
 
       // ---- the tests ---------------------------------------------------------

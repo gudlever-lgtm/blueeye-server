@@ -256,27 +256,120 @@
       var invHost = el('div', {});
       var info = deps.help();
 
-      function input(id, value, placeholder) {
-        var i = el('input', { id: id, type: 'text', placeholder: placeholder, autocomplete: 'off', spellcheck: 'false' });
-        i.value = value || '';
-        return i;
+      // ---- what the fields offer ------------------------------------------
+      //
+      // The endpoint fields take free text on purpose — a MAC this server has
+      // never seen is still a fair question. But the answer is usually a
+      // machine it already knows, and nobody remembers an agent id, so the
+      // fields suggest as you type.
+      //
+      // Two sources, because they are gated differently: the agent list is
+      // viewer+ (every reader gets its own fleet offered, as `agent:<id>` —
+      // the one form of the value that can never be ambiguous), and the device
+      // inventory is operator+ (switches, discovered hosts and ARP entries,
+      // offered by IP or MAC). A viewer simply gets the agents; the inventory
+      // call is not made at all rather than made and 403'd.
+      var agentsOnce = null;
+      function allAgents() {
+        if (!agentsOnce) {
+          agentsOnce = Promise.resolve()
+            .then(function () { return deps.fetchAgents(); })
+            .catch(function () { return []; });
+        }
+        return agentsOnce;
+      }
+
+      function agentName(a) {
+        return a.display_name || a.hostname || ('agent:' + a.id);
+      }
+      // `agent:7` and `7` both mean the same agent to the server, so both match.
+      function agentMatches(a, q) {
+        var bare = q.indexOf('agent:') === 0 ? q.slice(6) : q;
+        return String(a.id) === bare
+          || String(agentName(a)).toLowerCase().indexOf(q) !== -1
+          || String(a.hostname || '').toLowerCase().indexOf(q) !== -1
+          || String(a.location_name || '').toLowerCase().indexOf(q) !== -1;
+      }
+
+      function agentOptions(q) {
+        return allAgents().then(function (list) {
+          return (list || []).filter(function (a) { return agentMatches(a, q); }).slice(0, 6)
+            .map(function (a) {
+              return {
+                value: 'agent:' + a.id,
+                label: agentName(a),
+                badge: tr('l2p.kind.agent', {}, 'agent'),
+                meta: [('agent:' + a.id), a.location_name].filter(Boolean).join(' · '),
+              };
+            });
+        });
+      }
+
+      // An inventory row is offered by the address the path lookup can resolve:
+      // its IP first, its MAC second. A row with neither is not offered at all
+      // — filling the field with a name the server cannot resolve would be a
+      // suggestion that fails the moment it is used.
+      function inventoryOptions(q) {
+        if (!deps.canInventory()) return Promise.resolve([]);
+        return Promise.resolve()
+          .then(function () { return deps.fetchInventory({ limit: 6, offset: 0, q: q }); })
+          .then(function (data) {
+            return ((data && data.items) || []).map(function (i) {
+              var mac = i.macs && i.macs[0] && i.macs[0].mac;
+              var value = i.kind === 'agent' && i.id != null
+                ? 'agent:' + i.id
+                : ((i.ips && i.ips[0]) || mac || null);
+              if (!value) return null;
+              return {
+                value: value,
+                label: i.name || value,
+                badge: tr('l2p.kind.' + i.kind, {}, i.kind),
+                // The meta column says what the field will be filled with —
+                // the value, not a prettier name for it.
+                meta: [value, i.site && i.site.name].filter(Boolean).join(' · '),
+              };
+            }).filter(Boolean);
+          })
+          .catch(function () { return []; });
+      }
+
+      function suggest(raw) {
+        var q = String(raw || '').trim().toLowerCase();
+        if (!q) return Promise.resolve([]);
+        return Promise.all([agentOptions(q), inventoryOptions(q)]).then(function (parts) {
+          var seen = {};
+          return parts[0].concat(parts[1]).filter(function (o) {
+            var k = o.value.toLowerCase();
+            if (seen[k]) return false;
+            seen[k] = true;
+            return true;
+          }).slice(0, 8);
+        });
+      }
+
+      // The wrap is what the form holds; `.input` is the real field, so the
+      // value is read (and written, from the inventory table below) through it.
+      function input(id, value, placeholder, onEnter) {
+        return ui.suggestInput({
+          id: id, value: value || '', placeholder: placeholder,
+          suggest: suggest, emptyText: t('l2p.sug.none'), onEnter: onEnter,
+        });
       }
 
       // ---- the path panel ----
-      var fromIn = input('l2p-from', state.from, t('l2p.placeholder'));
-      var toIn = input('l2p-to', state.to, t('l2p.placeholder'));
-      var gwIn = input('l2p-gw', state.gateway, t('l2p.placeholder'));
+      // Enter still runs the lookup — unless a suggestion is highlighted, where
+      // the component takes Enter to pick it and hands the run back on the next.
+      var fromIn = input('l2p-from', state.from, t('l2p.placeholder'), function () { runPath(); });
+      var toIn = input('l2p-to', state.to, t('l2p.placeholder'), function () { runPath(); });
+      var gwIn = input('l2p-gw', state.gateway, t('l2p.placeholder'), function () { runPath(); });
       var pathErr = el('span', {});
       var findBtn = ui.button('primary', t('l2p.path.run'), { onclick: runPath });
-      [fromIn, toIn, gwIn].forEach(function (i) {
-        i.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); runPath(); } });
-      });
       var pathResult = el('div', { class: 'l2p-result' });
 
       function runPath() {
-        state.from = fromIn.value.trim();
-        state.to = toIn.value.trim();
-        state.gateway = gwIn.value.trim();
+        state.from = fromIn.input.value.trim();
+        state.to = toIn.input.value.trim();
+        state.gateway = gwIn.input.value.trim();
         if (!state.from || !state.to) {
           pathErr.replaceChildren(el('span', { class: 'field-error' }, t('l2p.path.need')));
           return Promise.resolve();
@@ -296,14 +389,13 @@
       }
 
       // ---- the locate panel ----
-      var qIn = input('l2p-q', state.q, t('l2p.placeholder'));
+      var qIn = input('l2p-q', state.q, t('l2p.placeholder'), function () { runLocate(); });
       var locErr = el('span', {});
       var locBtn = ui.button('secondary', t('l2p.locate.run'), { onclick: runLocate });
-      qIn.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); runLocate(); } });
       var locResult = el('div', { class: 'l2p-result' });
 
       function runLocate() {
-        state.q = qIn.value.trim();
+        state.q = qIn.input.value.trim();
         if (!state.q) {
           locErr.replaceChildren(el('span', { class: 'field-error' }, t('l2p.locate.need')));
           return Promise.resolve();
@@ -395,7 +487,7 @@
             onOpen: function (row) {
               var i = row.item;
               var q = (i.ips && i.ips[0]) || (i.macs && i.macs[0] && i.macs[0].mac) || i.name;
-              qIn.value = q;
+              qIn.input.value = q;
               runLocate();
             },
           }) : ui.emptyState({ kind: inv.q || inv.kind ? 'nodata' : 'none', title: t('l2p.inv.empty') }),

@@ -631,6 +631,27 @@
 .ui .ms-tick { width: 1em; color: var(--accent); }
 .ui .ms-list .ms-none { padding: var(--s-3); }
 
+/* ---- SuggestInput ---- */
+/* A free-text field with an anchored list of what this server already knows.
+   The list overlays the form (it must not push the fields below it down as you
+   type), which is what --z-inline is reserved for. */
+.ui .ui-sug { position: relative; display: block; }
+.ui .ui-sug-input { width: 100%; }
+.ui .ui-sug-list { position: absolute; top: calc(100% + var(--s-1)); left: 0; right: 0;
+  z-index: var(--z-inline); max-height: 240px; overflow-y: auto; display: grid;
+  border: 1px solid var(--border); border-radius: var(--radius);
+  background: var(--surface); box-shadow: var(--shadow-lg); }
+.ui .ui-sug-opt { display: flex; align-items: baseline; gap: var(--s-2);
+  padding: var(--s-2) var(--s-3); color: var(--fg); font-size: var(--fs-sm); cursor: pointer; }
+.ui .ui-sug-opt + .ui-sug-opt { border-top: 1px solid var(--border-weak, var(--border)); }
+.ui .ui-sug-opt:hover, .ui .ui-sug-opt.is-on { background: var(--row-hover, var(--accent-weak)); }
+.ui .ui-sug-label { font-weight: 600; white-space: nowrap; }
+/* The value the field will be filled with — the part that matters most once the
+   reader is scanning, so it is allowed the room and truncates rather than wraps. */
+.ui .ui-sug-meta { color: var(--muted); font-size: var(--fs-xs); margin-left: auto;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ui .ui-sug-none { padding: var(--s-3); color: var(--muted); font-size: var(--fs-xs); }
+
 /* ---- Path & location (views/pathLocation.js) ---- */
 /* The L2 path as a vertical line of steps: endpoint, switch, …, endpoint. The
    rule down the left edge is the "cable"; a GAP breaks it into a dashed

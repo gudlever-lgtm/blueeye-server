@@ -292,6 +292,122 @@
       return box;
     }
 
+    // A text input that suggests what you can type into it.
+    //
+    // The fields it exists for take "an IP, a MAC, a hostname or agent:<id>" —
+    // a free-text endpoint. Nobody remembers an agent id, and the hostname is
+    // the one the machine reports, not the one on the label. So the input stays
+    // free text (a MAC nothing has ever heard of is still a valid thing to ask
+    // about) and an anchored list offers what this server already knows, per
+    // keystroke.
+    //
+    // opts: { id, placeholder, value, ariaLabel,
+    //         suggest(q) -> Promise<[{ value, label, meta, badge }]>,
+    //         onPick(item), onEnter(), minChars = 1,
+    //         emptyText, busyText }
+    //
+    // Returns the wrap; `wrap.input` is the real <input> (the id goes on it, so
+    // ui.field({ id, control: wrap }) still labels the right node).
+    function suggestInput(opts) {
+      var o = opts || {};
+      var listId = 'sug-' + Math.random().toString(36).slice(2, 8);
+      var input = el('input', {
+        id: o.id || null, type: 'text', class: 'ui-sug-input', autocomplete: 'off',
+        spellcheck: 'false', role: 'combobox', 'aria-expanded': 'false',
+        'aria-controls': listId, 'aria-autocomplete': 'list',
+        'aria-label': o.ariaLabel || null, placeholder: o.placeholder || null,
+      });
+      input.value = o.value || '';
+      var list = el('div', { class: 'ui-sug-list', id: listId, role: 'listbox', hidden: 'hidden' });
+      var wrap = el('div', { class: 'ui-sug' }, input, list);
+      wrap.input = input;
+
+      var items = [];
+      var active = -1;
+      var timer = null;
+      var seq = 0;         // an older lookup must never overwrite a newer one
+      var minChars = o.minChars == null ? 1 : o.minChars;
+
+      function close() {
+        list.hidden = true;
+        list.replaceChildren();
+        input.setAttribute('aria-expanded', 'false');
+        items = [];
+        active = -1;
+      }
+
+      function highlight(next) {
+        if (!items.length) return;
+        active = (next + items.length) % items.length;
+        Array.prototype.forEach.call(list.children, function (row, i) {
+          row.classList.toggle('is-on', i === active);
+          row.setAttribute('aria-selected', i === active ? 'true' : 'false');
+        });
+        var row = list.children[active];
+        if (row && row.scrollIntoView) row.scrollIntoView({ block: 'nearest' });
+      }
+
+      function pick(i) {
+        var it = items[i];
+        if (!it) return;
+        input.value = it.value;
+        close();
+        if (o.onPick) o.onPick(it);
+      }
+
+      function optionEl(it, i) {
+        var row = el('div', { class: 'ui-sug-opt', role: 'option', 'aria-selected': 'false' },
+          el('span', { class: 'ui-sug-label' }, it.label || it.value),
+          it.badge ? badge('neutral', it.badge) : null,
+          el('span', { class: 'ui-sug-meta' }, it.meta || it.value));
+        // mousedown, not click: the input's blur would close the list first.
+        row.addEventListener('mousedown', function (e) { e.preventDefault(); pick(i); });
+        row.addEventListener('mouseenter', function () { highlight(i); });
+        return row;
+      }
+
+      function draw(found) {
+        items = found || [];
+        list.replaceChildren.apply(list, items.length
+          ? items.map(optionEl)
+          : [el('div', { class: 'ui-sug-none' }, o.emptyText || 'Nothing matches')]);
+        list.hidden = false;
+        input.setAttribute('aria-expanded', items.length ? 'true' : 'false');
+        active = -1;
+      }
+
+      function run(q) {
+        if (!o.suggest) return;
+        var my = ++seq;
+        Promise.resolve()
+          .then(function () { return o.suggest(q); })
+          .then(function (found) { if (my === seq) draw(found); })
+          // A lookup that fails is not the reader's problem: the field is free
+          // text and still works. It just offers nothing.
+          .catch(function () { if (my === seq) close(); });
+      }
+
+      input.addEventListener('input', function () {
+        var q = input.value.trim();
+        clearTimeout(timer);
+        if (q.length < minChars) { seq++; close(); return; }
+        timer = setTimeout(function () { run(q); }, 200);
+      });
+      input.addEventListener('keydown', function (e) {
+        if (e.key === 'ArrowDown') { e.preventDefault(); highlight(active + 1); }
+        else if (e.key === 'ArrowUp') { e.preventDefault(); highlight(active - 1); }
+        else if (e.key === 'Escape') { if (!list.hidden) { e.preventDefault(); e.stopPropagation(); } close(); }
+        else if (e.key === 'Enter') {
+          e.preventDefault();
+          if (active >= 0) pick(active);
+          else { close(); if (o.onEnter) o.onEnter(); }
+        }
+      });
+      input.addEventListener('blur', function () { setTimeout(close, 120); });
+
+      return wrap;
+    }
+
     // The values a select currently holds, always as an array — so a caller
     // does not branch on whether it was built `multiple` or not.
     function selected(node) {
@@ -958,6 +1074,7 @@
       filter: filter,
       select: select,
       multiSelect: multiSelect,
+      suggestInput: suggestInput,
       selected: selected,
       panel: panel,
       panelGrid: panelGrid,

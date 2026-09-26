@@ -118,6 +118,26 @@
                 id: 'ks-d', label: t('ks.form.number'),
                 control: el('input', { id: 'ks-d', type: 'number', value: '3', min: '1', max: '20' }),
               }),
+              // Type two letters to see the list: the specimen answers from a
+              // fixed set, so the component is shown without a server.
+              ui.field({
+                id: 'ks-e', label: t('ks.form.suggest'), hint: t('ks.form.suggestHint'),
+                control: ui.suggestInput({
+                  id: 'ks-e', placeholder: 'IP, MAC, hostname or agent:<id>',
+                  emptyText: t('ks.form.suggestNone'),
+                  suggest: function (q) {
+                    var all = [
+                      { value: 'agent:7', label: 'oslo-edge-01', badge: 'Agent', meta: 'agent:7 · Oslo' },
+                      { value: '10.1.10.6', label: 'cph-core-02', badge: 'Switch', meta: '10.1.10.6 · Copenhagen' },
+                      { value: 'aa:bb:cc:dd:ee:07', label: 'sto-branch-07', badge: 'Host', meta: 'aa:bb:cc:dd:ee:07' },
+                    ];
+                    var needle = String(q).toLowerCase();
+                    return all.filter(function (o) {
+                      return o.label.toLowerCase().indexOf(needle) !== -1 || o.value.indexOf(needle) !== -1;
+                    });
+                  },
+                }),
+              }),
             ],
           }),
           ui.formActions([ui.meta(t('ks.form.actionsLeft'))], [

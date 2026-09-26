@@ -7183,6 +7183,9 @@ function getPathLocationPage() {
     fetchPath: (p) => api(`/api/topology/l2-path?${qs(p)}`),
     fetchLocate: (q) => api(`/api/devices/locate?${qs({ q })}`),
     fetchInventory: (p) => api(`/api/devices/inventory?${qs(p)}`),
+    // Feeds the endpoint fields' suggestions. viewer+, so every reader gets
+    // their own fleet offered even without the (operator+) device inventory.
+    fetchAgents: () => api('/agents'),
     canInventory: () => roleAtLeast('operator'),
     openSwitch: (id) => openSnmpDevice(id),
     openAgent: (id) => openAgent(id),

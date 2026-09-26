@@ -226,3 +226,95 @@ test('universal search offers the jump to Path & location for an IP hit', async 
   assert.ok(log.includes('GET /api/devices/locate?q=10.1.10.5'), 'arrives with the question asked');
   assert.equal(doc.getElementById('l2p-q').value, '10.1.10.5');
 });
+
+// ---- suggestions -------------------------------------------------------------
+// The endpoint fields stay free text, but they offer what the server already
+// knows: agents (viewer+, as agent:<id>) and, for an operator, the device
+// inventory by IP or MAC.
+const AGENTS = [
+  { id: 7, hostname: 'oslo-edge-01.corp', display_name: 'oslo-edge-01', location_name: 'Oslo', status: 'online' },
+  { id: 9, hostname: 'cph-branch-09.corp', display_name: null, location_name: 'Copenhagen', status: 'offline' },
+];
+const options = (doc, id) => [...doc.getElementById(id).parentNode.querySelectorAll('.ui-sug-opt')];
+
+test('typing into an endpoint field offers agents, and picking one fills agent:<id>', async (t) => {
+  const { doc, log } = boot({ t, routes: SESSION('viewer', { 'GET /agents': AGENTS }) });
+  await settle();
+  fill(doc, 'l2p-from', 'oslo');
+  await settle();
+  assert.ok(log.includes('GET /agents'), 'the agent list is fetched for the suggestions');
+  assert.ok(!log.some((l) => l.startsWith('GET /api/devices/inventory')), 'a viewer never asks the operator-only inventory');
+  const opts = options(doc, 'l2p-from');
+  assert.equal(opts.length, 1);
+  assert.match(opts[0].textContent, /oslo-edge-01/);
+  assert.match(opts[0].textContent, /agent:7/);
+  assert.match(opts[0].textContent, /Oslo/);
+  opts[0].dispatchEvent(new doc.defaultView.MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+  assert.equal(doc.getElementById('l2p-from').value, 'agent:7');
+  assert.equal(options(doc, 'l2p-from').length, 0, 'the list closes once picked');
+});
+
+test('a hostname, a site or the bare id all find the agent', async (t) => {
+  const { doc } = boot({ t, routes: SESSION('viewer', { 'GET /agents': AGENTS }) });
+  await settle();
+  for (const [typed, expected] of [['cph-branch', 'cph-branch-09.corp'], ['copenhagen', 'cph-branch-09.corp'], ['9', 'cph-branch-09.corp']]) {
+    fill(doc, 'l2p-from', typed);
+    await settle();
+    const opts = options(doc, 'l2p-from');
+    assert.equal(opts.length, 1, typed);
+    assert.match(opts[0].textContent, new RegExp(expected), typed);
+  }
+});
+
+test('an operator is also offered the device inventory, by the address the lookup resolves', async (t) => {
+  const { doc, log } = boot({
+    t,
+    role: 'operator',
+    routes: SESSION('operator', {
+      'GET /agents': AGENTS,
+      'GET /api/devices/inventory': (q) => (q.get('q') === 'sw-a'
+        ? { items: [{ key: 'd:2', kind: 'switch', id: 2, name: 'sw-a', ips: ['10.0.0.2'], macs: [{ mac: '00:11:22:33:44:02' }], site: { name: 'HQ' } }], total: 1, offset: 0 }
+        : DATA.inventory),
+    }),
+  });
+  await settle();
+  fill(doc, 'l2p-to', 'sw-a');
+  await settle();
+  assert.ok(log.some((l) => l.startsWith('GET /api/devices/inventory?limit=6&offset=0&q=sw-a')));
+  const opts = options(doc, 'l2p-to');
+  assert.equal(opts.length, 1);
+  assert.match(opts[0].textContent, /sw-a/);
+  assert.match(opts[0].textContent, /10\.0\.0\.2 · HQ/);
+  opts[0].dispatchEvent(new doc.defaultView.MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+  assert.equal(doc.getElementById('l2p-to').value, '10.0.0.2');
+});
+
+test('the field stays free text: an unknown value still runs the lookup, and Enter picks the highlighted suggestion', async (t) => {
+  const { doc, log } = boot({ t, routes: SESSION('viewer', { 'GET /agents': AGENTS }) });
+  await settle();
+  const ev = (id, key) => doc.getElementById(id).dispatchEvent(new doc.defaultView.KeyboardEvent('keydown', { key, bubbles: true }));
+  // Nothing matches — the list says so and Enter still runs the path.
+  fill(doc, 'l2p-from', 'de:ad:be:ef:00:01');
+  fill(doc, 'l2p-to', '10.1.10.6');
+  await settle();
+  assert.match(doc.getElementById('l2p-from').parentNode.textContent, /Nothing on this server matches/);
+  ev('l2p-to', 'Enter');
+  await settle();
+  assert.ok(log.includes('GET /api/topology/l2-path?from=de%3Aad%3Abe%3Aef%3A00%3A01&to=10.1.10.6'));
+  // With a suggestion highlighted, Enter picks it instead of running.
+  fill(doc, 'l2p-from', 'oslo');
+  await settle();
+  ev('l2p-from', 'ArrowDown');
+  ev('l2p-from', 'Enter');
+  assert.equal(doc.getElementById('l2p-from').value, 'agent:7');
+});
+
+test('a failing agent list leaves the field working', async (t) => {
+  const { doc, errors } = boot({ t, routes: SESSION('viewer', { 'GET /agents': { status: 500, body: { error: 'boom' } } }) });
+  await settle();
+  fill(doc, 'l2p-q', 'oslo');
+  await settle();
+  assert.deepEqual(errors, []);
+  assert.equal(options(doc, 'l2p-q').length, 0);
+  assert.equal(doc.getElementById('l2p-q').value, 'oslo');
+});

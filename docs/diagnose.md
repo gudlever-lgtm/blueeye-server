@@ -73,6 +73,20 @@ fault in Danish, silently.
 }
 ```
 
+### `rungs` — the join to the ladder
+
+A playbook may declare which **ladder rungs** it explains:
+
+```jsonc
+"rungs": ["firewall"]
+```
+
+The ladder (see [connection-test.md](connection-test.md)) says WHERE the
+communication stops; this is what lets its verdict offer the playbook that says
+WHY and WHAT TO DO, opened in place under the verdict. Checked at load against
+the rung ids the ladders declare, so a typo fails the build. Optional — a
+playbook explaining a fault no rung measures is still matchable by symptom.
+
 ### Adding one takes no code change
 
 Drop a file in `src/diagnose/playbooks/`. It is picked up at boot, validated,

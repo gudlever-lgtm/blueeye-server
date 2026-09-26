@@ -2120,6 +2120,18 @@ button.ghost.small:has(> .icon-glyph) {
 .ct-verdict-head { font-weight: 700; font-size: 13px; }
 .ct-verdict-text { font-size: 13px; margin-top: 3px; }
 .ct-verdict-symptom { margin-top: 6px; }
+/* The playbook behind a verdict: why the rung broke, and what to do. Opens in
+   place, because the operator is already looking at the answer. */
+.ct-playbook { margin-top: 10px; border-top: 1px solid var(--hairline); padding-top: 8px; }
+.ct-playbook-head {
+  background: none; border: none; padding: 0; font: inherit; color: inherit;
+  cursor: pointer; text-align: left; font-size: 13px;
+}
+.ct-playbook-head:hover { text-decoration: underline; }
+.ct-playbook-body { font-size: 13px; margin-top: 6px; }
+.ct-playbook-body h4 { margin: 10px 0 4px; font-size: 13px; }
+.ct-playbook-fixes { margin: 0; padding-left: 20px; }
+.ct-playbook-fixes li { margin-bottom: 4px; }
 .ct-rungs {
   list-style: none; margin: 10px 0 0; padding: 0;
   border: 1px solid var(--hairline); border-radius: var(--radius); overflow: hidden;

@@ -363,3 +363,47 @@ test('a disabled rung is reported as disabled on every ladder, in both languages
     }
   }
 });
+
+// ------------------------------------ the join to the playbook catalogue
+
+test('every playbook rung is a rung some ladder actually declares', () => {
+  // The catalogue validates this at load, so this asserts the join is WIRED
+  // rather than that the validator exists — a playbook tagged with a rung no
+  // ladder has could never be offered, and nothing else would say so.
+  const { loadCatalog } = require('../src/diagnose/catalog');
+  const catalog = loadCatalog();
+  const known = new Set(ladders.catalogue().flatMap((d) => d.layers));
+  let tagged = 0;
+  for (const id of catalog.ids()) {
+    const pb = catalog.get(id);
+    for (const r of pb.rungs) {
+      assert.ok(known.has(r), `${id} names rung "${r}", which no ladder declares`);
+      tagged += 1;
+    }
+  }
+  assert.ok(tagged >= 10, `only ${tagged} playbook-to-rung links — the catalogue is not wired`);
+});
+
+test('a playbook naming a rung that does not exist fails the build', () => {
+  const { parsePlaybook, CatalogError } = require('../src/diagnose/catalog');
+  const fs = require('fs');
+  const path = require('path');
+  const good = fs.readFileSync(path.join(__dirname, '..', 'src', 'diagnose', 'playbooks', 'firewall_acl.json'), 'utf8');
+  const doc = JSON.parse(good);
+  doc.rungs = ['firewal']; // the typo this check exists for
+  assert.throws(
+    () => parsePlaybook('firewall_acl.json', JSON.stringify(doc)),
+    (e) => e instanceof CatalogError && /is not a rung of any ladder/.test(e.message)
+  );
+});
+
+test('the rung a playbook explains is reachable from the rung id', () => {
+  const { loadCatalog } = require('../src/diagnose/catalog');
+  const catalog = loadCatalog();
+  assert.deepEqual(catalog.forRung('firewall').map((p) => p.id), ['firewall_acl']);
+  assert.deepEqual(catalog.forRung('duplex').map((p) => p.id), ['duplex_mismatch']);
+  // A rung nothing explains is an empty list, never undefined — the caller
+  // renders "nothing further to read", not a crash.
+  assert.deepEqual(catalog.forRung('tls'), []);
+  assert.deepEqual(catalog.forRung('nope'), []);
+});

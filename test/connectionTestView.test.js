@@ -532,3 +532,30 @@ test('a two-way diagnosis runs from both ends and names the direction', async (t
   assert.ok(rungs.some((r) => /Direction of loss/.test(r.textContent)));
   assert.deepEqual(errors, []);
 });
+
+test('the verdict offers the playbook that explains the rung, and opens it in place', async (t) => {
+  const { doc, errors } = await boot(t, { app: appWith({ probeRows: FILTERED_ROWS }) });
+  await open(doc);
+  await setTarget(doc, 'example.com');
+  assert.ok(await until(() => doc.querySelector('.ct-verdict'), 15000), 'no verdict');
+
+  const head = doc.querySelector('.ct-playbook-head');
+  assert.ok(head, 'the verdict offered nothing to read');
+  assert.match(head.textContent, /Why this happens/);
+  assert.match(head.textContent, /firewall or ACL/i);
+
+  // Closed until asked: a verdict that offers three playbooks must not fetch
+  // three bodies nobody reads.
+  assert.equal(doc.querySelector('.ct-playbook-body').hidden, true);
+  head.click();
+  assert.ok(await until(() => doc.querySelector('.ct-playbook-fixes'), 15000), 'the playbook body never loaded');
+  const body = doc.querySelector('.ct-playbook-body');
+  assert.equal(body.hidden, false);
+  assert.match(body.textContent, /ICMP and TCP are different traffic/);
+  assert.ok(body.querySelectorAll('.ct-playbook-fixes li').length >= 3, 'no fixes listed');
+
+  // And it closes again without re-fetching.
+  head.click();
+  assert.equal(doc.querySelector('.ct-playbook-body').hidden, true);
+  assert.deepEqual(errors, []);
+});

@@ -38,7 +38,7 @@ const {
 } = require('../validation/connectionTestValidation');
 const { validateTestPackageInput } = require('../validation/testPackageValidation');
 
-function createConnectionTestRouter({ agentsRepo, agentCommander, probeResultsRepo = null, arpEntriesRepo = null, testPackagesRepo = null, usageService = null, auditLogger = null, settingsService = null, deviceLocator = null, interfaceHealthFor = null }) {
+function createConnectionTestRouter({ agentsRepo, agentCommander, probeResultsRepo = null, arpEntriesRepo = null, testPackagesRepo = null, usageService = null, auditLogger = null, settingsService = null, deviceLocator = null, interfaceHealthFor = null, diagnoseCatalog = null }) {
   const router = express.Router();
   const validationError = (res, details) => res.status(400).json({ error: 'Validation failed', details });
 
@@ -62,6 +62,26 @@ function createConnectionTestRouter({ agentsRepo, agentCommander, probeResultsRe
 
   // The probe rows one agent holds about one target.
   const rowsFor = async (agentId) => (probeResultsRepo ? probeResultsRepo.latestByAgent(agentId, 200) : []);
+
+  // The playbooks that explain the rung a verdict stopped at. The ladder says
+  // WHERE the communication stops; a playbook says WHY and WHAT TO DO, and
+  // until now an operator had to know the second screen existed and describe
+  // the fault again in their own words. This is that hop, made for them.
+  //
+  // The join is the playbook's own `rungs` field, so a new playbook wires
+  // itself to the rung it belongs to. A rung nothing explains yet returns an
+  // empty list — the verdict still says where it stops, it just has nothing
+  // further to offer, which is honest and not a gap worth hiding.
+  const playbooksFor = (verdict, locale) => {
+    if (!diagnoseCatalog || typeof diagnoseCatalog.forRung !== 'function') return [];
+    if (!verdict || !verdict.layer) return [];
+    const loc = locale === 'da' ? 'da' : 'en';
+    return diagnoseCatalog.forRung(verdict.layer).map((pb) => ({
+      id: pb.id,
+      title: pb.title[loc] ?? pb.title.en,
+      summary: pb.summary ? (pb.summary[loc] ?? pb.summary.en) : null,
+    }));
+  };
 
   // The catalogue. `?host=` is optional: with one, each entry also says whether
   // it APPLIES to that target (a DNS lookup of an IP literal does not), so the
@@ -315,7 +335,13 @@ function createConnectionTestRouter({ agentsRepo, agentCommander, probeResultsRe
         peerAgentId: value.peerAgentId || null,
         host: value.host || null,
         device: value.device || null,
-        ...ladders.walk({ ladder: def, ctx, config, locale: value.locale, symptom: value.symptom }),
+        ...(() => {
+          const out = ladders.walk({ ladder: def, ctx, config, locale: value.locale, symptom: value.symptom });
+          // Offered for the rung it STOPPED at, and for a `suspect` when
+          // nothing is broken — the two cases where an operator has a reason
+          // to read further. A healthy ladder offers nothing to read.
+          return { ...out, playbooks: playbooksFor(out.verdict, value.locale) };
+        })(),
       });
     })
   );

@@ -555,3 +555,64 @@ test('GET /ladder: every ladder rejects a missing or hostile input without a 500
     assert.ok(res.body.details && Object.keys(res.body.details).length, q);
   }
 });
+
+// ------------------------------------- the join between a verdict and its why
+
+test('the verdict carries the playbook that explains the rung it stopped at', async () => {
+  const res = await request(ladderApp()).get('/api/connection-test/ladder?agentId=1&host=example.com').set('Authorization', viewer());
+  assert.equal(res.status, 200);
+  assert.equal(res.body.stopsAt, 'firewall');
+  assert.deepEqual(res.body.playbooks.map((p) => p.id), ['firewall_acl']);
+  assert.ok(res.body.playbooks[0].title.length > 5);
+  assert.ok(res.body.playbooks[0].summary.length > 5);
+});
+
+test('the playbook comes back in the locale the verdict was asked for', async () => {
+  const da = await request(ladderApp()).get('/api/connection-test/ladder?agentId=1&host=example.com&locale=da').set('Authorization', viewer());
+  assert.match(da.body.playbooks[0].title, /firewall eller ACL/);
+  const en = await request(ladderApp()).get('/api/connection-test/ladder?agentId=1&host=example.com').set('Authorization', viewer());
+  assert.match(en.body.playbooks[0].title, /firewall or ACL/);
+});
+
+test('a ladder that is not broken offers nothing to read', async () => {
+  const clean = [
+    { type: 'dns', target: 'example.com', ok: true, rttMs: 7 },
+    { type: 'ping', target: 'example.com', ok: true, lossPct: 0, rttMs: 12 },
+    { type: 'tcp', target: 'example.com:443', ok: true, rttMs: 11 },
+  ];
+  const res = await request(ladderApp(clean)).get('/api/connection-test/ladder?agentId=1&host=example.com').set('Authorization', viewer());
+  assert.equal(res.status, 200);
+  assert.equal(res.body.stopsAt, null);
+  assert.deepEqual(res.body.playbooks, []);
+});
+
+test('a rung nothing explains yet still gets a verdict, with an empty list', async () => {
+  // TLS has no playbook. The ladder must still say where it stops — an
+  // unexplained rung is not a reason to withhold the answer.
+  const tlsBroken = [
+    { type: 'dns', target: 'example.com', ok: true, rttMs: 7 },
+    { type: 'ping', target: 'example.com', ok: true, lossPct: 0, rttMs: 12 },
+    { type: 'tcp', target: 'example.com:443', ok: true, rttMs: 11 },
+    { type: 'tls', target: 'example.com:443', ok: false, detail: 'certificate expired' },
+  ];
+  const res = await request(ladderApp(tlsBroken)).get('/api/connection-test/ladder?agentId=1&host=example.com').set('Authorization', viewer());
+  assert.equal(res.body.stopsAt, 'tls');
+  assert.deepEqual(res.body.playbooks, []);
+});
+
+test('a deployment with no playbook catalogue still answers', async () => {
+  const express = require('express');
+  const { createConnectionTestRouter } = require('../src/routes/connectionTest');
+  const bare = express();
+  bare.use(express.json());
+  bare.use('/api/connection-test', createConnectionTestRouter({
+    agentsRepo: agentsRepo(),
+    agentCommander: makeAgentCommander(),
+    probeResultsRepo: makeProbeResultsRepo({ latestByAgent: async () => LADDER_ROWS }),
+    diagnoseCatalog: null,
+  }));
+  const res = await request(bare).get('/api/connection-test/ladder?agentId=1&host=example.com').set('Authorization', viewer());
+  assert.equal(res.status, 200);
+  assert.equal(res.body.stopsAt, 'firewall');
+  assert.deepEqual(res.body.playbooks, []);
+});

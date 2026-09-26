@@ -60,6 +60,10 @@
       "delvis"
     ]
   },
+  "rungs": [
+    "routing",
+    "nat_lb"
+  ],
   "tests": [
     {
       "type": "traceroute",

@@ -306,6 +306,44 @@ table at all ⇒ `unknown`.
 No agent change was needed for any of it: agents have reported their ARP tables
 since the `arp_entries` work (see [arp-identity.md](arp-identity.md)).
 
+## The verdict links to its explanation
+
+The ladder says **where** the communication stops. A playbook says **why** and
+**what to do**. The join between them is data: each playbook declares the rungs
+it explains.
+
+```jsonc
+// src/diagnose/playbooks/firewall_acl.json
+"rungs": ["firewall"]
+```
+
+Validated at load against the rung ids the ladders actually declare, so a typo
+(`firewal`) fails the build rather than producing a playbook that can never be
+offered. Optional: a playbook that explains a fault no rung measures is still a
+playbook, it is just not reachable from a verdict.
+
+`GET /api/connection-test/ladder` returns the matching playbooks for the rung it
+stopped at, in the same locale as the verdict, and the screen opens them **in
+place** under the verdict — title, explanation and the fixes. The operator is
+already looking at the answer; sending them to another screen to describe the
+same fault a second time is the hop this removes.
+
+| Rung | Playbook |
+| --- | --- |
+| `firewall` | `firewall_acl` |
+| `dns`, `resolver` | `dns_resolution` |
+| `routing` | `hop_packet_loss`, `ecmp_member_link` |
+| `symmetry`, `direction` | `asymmetric_routing` |
+| `errors`, `counters` | `physical_errors`, `congestion`, `l2_loop` |
+| `duplex` | `duplex_mismatch` |
+| `mtu` | `mtu_blackhole` |
+| `nat_lb` | `ecmp_member_link` |
+
+A rung nothing explains yet — `tls`, `arp`, `identity`, `port` — returns an empty
+list. The verdict still says where it stops; it just has nothing further to
+offer, which is honest and not a gap worth hiding. **Adding a playbook for one
+is a `rungs` entry in its JSON and nothing else.**
+
 ## The symptom is data
 
 The free-text box travels as a JSON string value, is bounded at 500 characters,

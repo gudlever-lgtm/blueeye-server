@@ -97,6 +97,9 @@
       "tabt"
     ]
   },
+  "rungs": [
+    "mtu"
+  ],
   "tests": [
     {
       "type": "ping",

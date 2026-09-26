@@ -28,6 +28,13 @@ const PLAYBOOK_DIR = path.join(__dirname, 'playbooks');
 // Imported rather than restated: the day a probe type is added or removed, this
 // list moves with it instead of drifting away from it.
 const { PROBE_TYPES, validateProbeSpec } = require('../validation/probeValidation');
+const ladders = require('../connectionTest/ladders');
+
+// Every rung id any ladder declares. A playbook's `rungs` is checked against
+// this, so the join between a verdict and its explanation cannot be wired to a
+// rung that does not exist — a typo fails the build instead of producing a
+// playbook that can never be offered.
+const LADDER_RUNGS = new Set(ladders.catalogue().flatMap((d) => d.layers));
 
 // Dashboard views a playbook may deep-link to. Deliberately a short allowlist
 // rather than "any string": a link that goes nowhere is worse than no link,
@@ -79,7 +86,7 @@ function i18nList(file, field, value, maxItems) {
 // Bounds. A playbook is a page of text, not a document.
 const LIMITS = {
   id: 64, title: 120, summary: 200, symptoms: 30, keywords: 60,
-  explanation: 1000, tests: 8, views: 8, rules: 12, fixes: 8,
+  explanation: 1000, tests: 8, views: 8, rules: 12, fixes: 8, rungs: 8,
   text: 500,
 };
 
@@ -160,6 +167,31 @@ function parsePlaybook(file, raw) {
     return { type: t.type, params, why };
   });
 
+  // --- rungs ----------------------------------------------------------------
+  //
+  // Which ladder rung this playbook explains. The ladder says WHERE the
+  // communication stops; a playbook says WHY and WHAT TO DO. This is the join
+  // between them, and it is data rather than a lookup table in the ladder —
+  // so a new playbook wires itself to the rung it belongs to, and nobody has
+  // to remember to edit a second file.
+  //
+  // Validated against the rung ids the ladders actually declare, so a typo
+  // (`firewal`) fails the build rather than producing a playbook that can
+  // never be offered. Optional: a playbook that explains a fault no rung
+  // measures is still a playbook, it just is not reachable from a verdict.
+  if (doc.rungs !== undefined) {
+    if (!Array.isArray(doc.rungs)) throw new CatalogError(file, 'rungs must be an array of ladder rung ids');
+    if (doc.rungs.length > LIMITS.rungs) throw new CatalogError(file, `more than ${LIMITS.rungs} rungs`);
+  }
+  const rungs = (doc.rungs || []).map((r, i) => {
+    if (!isStr(r)) throw new CatalogError(file, `rungs[${i}] must be a non-empty string`);
+    const id = lower(r);
+    if (!LADDER_RUNGS.has(id)) {
+      throw new CatalogError(file, `rungs[${i}] "${r}" is not a rung of any ladder (${[...LADDER_RUNGS].join(', ')})`);
+    }
+    return id;
+  });
+
   // --- views ---------------------------------------------------------------
   if (!Array.isArray(doc.views)) throw new CatalogError(file, 'views must be an array');
   if (doc.views.length > LIMITS.views) throw new CatalogError(file, `more than ${LIMITS.views} views`);
@@ -238,6 +270,7 @@ function parsePlaybook(file, raw) {
     views,
     rules,
     fixes,
+    rungs,
   };
 }
 
@@ -256,12 +289,25 @@ function loadCatalog({ dir = PLAYBOOK_DIR, readDir = fs.readdirSync, readFile = 
     byId.set(pb.id, pb);
   }
   const all = [...byId.values()];
+  // rung id -> the playbooks that explain it. Built once at boot, because the
+  // ladder asks this on every verdict and the answer never changes.
+  const byRung = new Map();
+  for (const pb of all) {
+    for (const r of pb.rungs) {
+      if (!byRung.has(r)) byRung.set(r, []);
+      byRung.get(r).push(pb);
+    }
+  }
   return {
     list: () => all,
     get: (id) => byId.get(String(id)) || null,
     has: (id) => byId.has(String(id)),
     ids: () => [...byId.keys()],
     size: all.length,
+    // The playbooks that explain one ladder rung: what to read once the ladder
+    // has said WHERE the communication stops. Empty for a rung nothing
+    // explains yet, which is an honest answer — the ladder still says where.
+    forRung: (rung) => [...(byRung.get(String(rung)) || [])],
     // The compact form the LLM is shown: enough to choose from, and nothing it
     // could quote back as though it were a measurement.
     summaries: (locale = DEFAULT_LOCALE) => all.map((p) => ({
@@ -291,6 +337,7 @@ function localize(pb, locale = DEFAULT_LOCALE) {
     views: pb.views.map((v) => ({ view: v.view, params: v.params, look_for: pick(v.look_for) })),
     rules: pb.rules.map((r) => ({ id: r.id, effect: r.effect, when: r.when, because: pick(r.because) })),
     fixes: pb.fixes.map(pick),
+    rungs: [...pb.rungs],
   };
 }
 

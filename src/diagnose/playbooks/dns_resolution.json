@@ -59,6 +59,10 @@
       "siden"
     ]
   },
+  "rungs": [
+    "dns",
+    "resolver"
+  ],
   "tests": [
     {
       "type": "dns",

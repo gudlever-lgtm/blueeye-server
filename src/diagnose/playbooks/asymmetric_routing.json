@@ -57,6 +57,10 @@
       "rpf"
     ]
   },
+  "rungs": [
+    "symmetry",
+    "direction"
+  ],
   "tests": [
     {
       "type": "ping",

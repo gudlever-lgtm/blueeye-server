@@ -8603,6 +8603,45 @@ async function connectionTestView() {
   peerSel.addEventListener('change', () => refreshLadder());
   deviceInput.addEventListener('change', () => refreshLadder());
 
+  // The playbook that explains the rung the ladder stopped at. The ladder says
+  // WHERE; this says WHY and WHAT TO DO — and it opens IN PLACE, because the
+  // operator is already looking at the answer and sending them to another
+  // screen to describe the same fault a second time is the hop this removes.
+  //
+  // The body is fetched once, on first open: a verdict that offers three
+  // playbooks should not cost three requests nobody reads.
+  function playbookNode(pb) {
+    const caret = el('span', { class: 'ct-caret' }, '▸');
+    const body = el('div', { class: 'ct-playbook-body', hidden: true });
+    let loaded = false;
+    const head = el('button', { class: 'ct-playbook-head', type: 'button', 'aria-expanded': 'false' },
+      caret, ' ', el('strong', {}, t('ct.ladder.why')), ' ', el('span', {}, pb.title));
+    head.addEventListener('click', async () => {
+      const open = head.getAttribute('aria-expanded') === 'true';
+      head.setAttribute('aria-expanded', String(!open));
+      body.hidden = open;
+      caret.textContent = open ? '▸' : '▾';
+      if (open || loaded) return;
+      body.replaceChildren(el('div', { class: 'muted small' }, t('ct.ladder.loading')));
+      try {
+        const r = await api(`/api/playbooks/${encodeURIComponent(pb.id)}?locale=${encodeURIComponent(window.I18n.getLocale())}`);
+        const p = r.playbook || r;
+        body.replaceChildren(
+          p.explanation ? el('p', {}, p.explanation) : null,
+          (p.fixes || []).length
+            ? el('div', {},
+              el('h4', {}, t('ct.ladder.fixes')),
+              el('ul', { class: 'ct-playbook-fixes' }, ...p.fixes.map((f) => el('li', {}, f))))
+            : null,
+          el('div', { class: 'muted small' }, t('ct.ladder.playbookNote')));
+        loaded = true;
+      } catch (e) {
+        body.replaceChildren(el('div', { class: 'error small' }, errText(e)));
+      }
+    });
+    return el('div', { class: 'ct-playbook' }, head, body);
+  }
+
   // Recompute the verdict from what is already stored. Safe to call at any
   // moment: a rung with nothing behind it reads "not tested", never "fine".
   async function refreshLadder(quiet = true) {
@@ -8618,7 +8657,8 @@ async function connectionTestView() {
       el('div', { class: `ct-verdict ${v.verdict.outcome}` },
         el('div', { class: 'ct-verdict-head' }, t(`ct.ladder.outcome.${v.verdict.outcome}`)),
         el('div', { class: 'ct-verdict-text' }, v.verdict.text),
-        v.symptom ? el('div', { class: 'muted small ct-verdict-symptom' }, t('ct.ladder.youSaid', { symptom: v.symptom })) : null),
+        v.symptom ? el('div', { class: 'muted small ct-verdict-symptom' }, t('ct.ladder.youSaid', { symptom: v.symptom })) : null,
+        ...(v.playbooks || []).map(playbookNode)),
       el('ol', { class: 'ct-rungs' }, ...v.layers.map(rungNode)));
   }
 

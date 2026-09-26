@@ -63,6 +63,10 @@
       "uden trafik"
     ]
   },
+  "rungs": [
+    "errors",
+    "counters"
+  ],
   "tests": [
     {
       "type": "ping",

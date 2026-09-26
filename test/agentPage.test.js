@@ -176,17 +176,20 @@ test('the health résumé shows every number behind the verdict', async (t) => {
   assert.match(health.textContent, /480/);
 });
 
-test('the five folds are there, and the probe form is in one of them', async (t) => {
+test('the four folds are there, and the probe form is in one of them', async (t) => {
   const { doc } = boot({ t, routes: SESSION() });
   await settle();
   const folds = [...doc.querySelectorAll('#view details.sec')];
-  assert.equal(folds.length, 5);
+  // There were five. The NIC fold is gone: one agent's cards are the ports that
+  // agent has, so the driver and firmware ride on the port rows inside
+  // Interfaces rather than in a second table under it.
+  assert.equal(folds.length, 4);
   // Each summary carries a status line after its name; the name is the first word.
   assert.deepEqual(folds.map((f) => f.querySelector('summary').textContent.trim().split(/[\s·]/)[0]),
-    ['Probes', 'Tests', 'Interfaces', 'NIC', 'Traffic']);
+    ['Probes', 'Tests', 'Interfaces', 'Traffic']);
   assert.ok(folds[0].querySelector('select'), 'the probe form is gone');
   // Probes and Interfaces open by default; the rest do not.
-  assert.deepEqual(folds.map((f) => f.open), [true, false, true, false, false]);
+  assert.deepEqual(folds.map((f) => f.open), [true, false, true, false]);
 });
 
 // The Tests fold answers BEFORE the run. A test the agent said it cannot run is
@@ -274,7 +277,7 @@ test('a failed health read costs the résumé, never the page', async (t) => {
   await settle();
   assert.deepEqual(errors, []);
   assert.ok(doc.querySelector('#view .page-head h1'), 'the page went down with the verdict');
-  assert.equal(doc.querySelectorAll('#view details.sec').length, 5, 'the folds went with it');
+  assert.equal(doc.querySelectorAll('#view details.sec').length, 4, 'the folds went with it');
 });
 
 test('the record marks itself in the rail and in the breadcrumb', async (t) => {

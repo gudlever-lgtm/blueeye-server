@@ -660,3 +660,48 @@
 .ui .l2p-dir { min-width: 3em; color: var(--text-muted); font-size: var(--fs-xs); text-transform: uppercase; }
 .ui .l2p-ifname { font-family: var(--mono); font-size: var(--fs-sm); }
 .ui .l2p-pager { display: flex; align-items: center; justify-content: flex-end; gap: var(--s-2); margin-top: var(--s-3); }
+
+/* ---- The trust-key alarm ---------------------------------------------------
+   The banner that appears above every view when the licence trust anchor or the
+   agent signing key has changed. It is the loudest surface in the dashboard on
+   purpose: the failure it describes is silent everywhere else, and it lands on
+   machines nobody is looking at.
+
+   Colour comes from --bad/--bad-weak like every other danger surface; nothing
+   here is a new hex. What makes it read as urgent is the weight and the space,
+   not a redder red. */
+.trust-banner {
+  margin: 0 0 var(--s-4);
+  padding: var(--s-4);
+  border: 2px solid var(--bad);
+  border-radius: var(--radius);
+  background: var(--bad-weak);
+}
+.trust-banner.hidden { display: none; }
+.trust-banner-title {
+  margin: 0 0 var(--s-2);
+  font-size: 1.05rem;
+  color: var(--bad);
+}
+.trust-banner-item { margin: 0 0 var(--s-3); }
+.trust-banner-item p { margin: 0 0 var(--s-1); }
+.trust-banner-key { font-weight: 600; }
+.trust-banner-impact { font-weight: 600; color: var(--bad); }
+.trust-banner-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-2);
+}
+
+/* The Settings → Agent key panel rows: one per trust key, its fingerprint, and
+   how many agents are pinned to it. A drifted row borrows the danger border so
+   the panel and the banner are visibly the same subject. */
+.trust-key-row {
+  padding: var(--s-3) 0;
+  border-top: 1px solid var(--hairline);
+}
+.trust-key-row:first-of-type { border-top: 0; }
+.trust-key-row.error { border-left: 3px solid var(--bad); padding-left: var(--s-3); }
+.trust-key-name { margin: 0 0 var(--s-1); font-weight: 600; }
+.trust-key-row code { font-family: var(--mono); font-size: 0.85em; word-break: break-all; }
+.trust-key-impact { margin: var(--s-2) 0 0; padding-left: 1.2em; }

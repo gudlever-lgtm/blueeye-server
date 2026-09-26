@@ -72,6 +72,37 @@ function createAgentsRepository(db) {
     return Number(rows[0] && rows[0].n) || 0;
   }
 
+  // How the fleet's PINNED release keys line up against a fingerprint.
+  //
+  // Every agent from 0.28 onwards reports the fingerprint of the release key it
+  // has pinned, in `capabilities.releaseKeyFingerprint`. That is the only way the
+  // server can answer the one question an operator asks when a signing key moves:
+  // how many machines am I about to lose. Older agents report nothing and are
+  // counted as `unknown` — never as matching, because a guess in the reassuring
+  // direction is the wrong guess to make here.
+  //
+  // `current` and/or `previous` may be null (no key configured, or no prior one);
+  // a null simply matches nothing.
+  async function countByReleaseKeyFingerprint({ current = null, previous = null } = {}) {
+    const [rows] = await pool.query(
+      `SELECT LOWER(JSON_UNQUOTE(JSON_EXTRACT(capabilities, '$.releaseKeyFingerprint'))) AS fp,
+              COUNT(*) AS n
+         FROM agents
+        GROUP BY fp`
+    );
+    const out = { total: 0, pinnedToCurrent: 0, pinnedToPrevious: 0, pinnedToOther: 0, unknown: 0 };
+    for (const row of rows) {
+      const n = Number(row.n) || 0;
+      out.total += n;
+      const fp = row.fp === null || row.fp === 'null' ? null : String(row.fp);
+      if (!fp) out.unknown += n;
+      else if (current && fp === String(current).toLowerCase()) out.pinnedToCurrent += n;
+      else if (previous && fp === String(previous).toLowerCase()) out.pinnedToPrevious += n;
+      else out.pinnedToOther += n;
+    }
+    return out;
+  }
+
   // Agents as internal map hosts: { hostId, siteName, lat, lng, status }. Site
   // coordinates come from the joined location (manually set; nullable). This is
   // host/site metadata — never GeoIP. Optionally filtered to one host.
@@ -288,6 +319,7 @@ function createAgentsRepository(db) {
     findAll,
     findById,
     count,
+    countByReleaseKeyFingerprint,
     findForGeo,
     updateManaged,
     setPosition,

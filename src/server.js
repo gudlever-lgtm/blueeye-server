@@ -45,6 +45,8 @@ const { createAgentSourceStore } = require('./enroll/agentSourceStore');
 const { createAgentBinaryStore } = require('./enroll/agentBinaryStore');
 const { createAgentReleaseStore } = require('./enroll/agentReleaseStore');
 const { createAgentReleaseKeyRepository } = require('./repositories/agentReleaseKeyRepository');
+const { createTrustKeyIdentityRepository } = require('./repositories/trustKeyIdentityRepository');
+const { createKeyIdentityGuard, fingerprintOfPem, KIND_LICENSE, KIND_AGENT_RELEASE } = require('./license/keyIdentity');
 const { createReleaseKeyService } = require('./enroll/releaseKeyService');
 const { publishSignedReleaseFromSource } = require('./enroll/publishSignedRelease');
 const { attachAgentWebSocket } = require('./ws/agentSocket');
@@ -504,6 +506,50 @@ function start() {
   // env/embedded key, so deployments that set AGENT_RELEASE_PUBLIC_KEY keep working.
   const agentReleaseKeyRepo = createAgentReleaseKeyRepository(db);
   const releaseKeyService = createReleaseKeyService({ repo: agentReleaseKeyRepo, secretBox, logger });
+
+  // Whether those two keys are the SAME ones this server was running with last
+  // time. Nothing else checks that. Both keys are already used correctly, and a
+  // change to either breaks nothing here — the server boots, the dashboard loads,
+  // codes still generate — while every agent in the field quietly stops accepting
+  // updates, one at a time, as each is next asked to take one. The guard turns
+  // that into a warning on the day it happens. It warns; it never blocks.
+  const trustKeyIdentityRepo = createTrustKeyIdentityRepository(db);
+  const keyIdentityGuard = createKeyIdentityGuard({ repo: trustKeyIdentityRepo, logger });
+
+  // Re-run the comparison against what the server holds right now. Called at
+  // startup and from GET /system/trust-keys, so a key generated or deleted a
+  // moment ago shows up without a restart.
+  //
+  // The impact count is only gathered for the agent signing key: the licence
+  // anchor is not what agents pin, so an agent's reported fingerprint says
+  // nothing about it.
+  // Throttled: the dashboard asks on every render, and the answer cannot change
+  // between two of them — a key moves when an admin generates or deletes one, not
+  // on a timer. Without this a fleet-wide GROUP BY runs once per page view per
+  // signed-in user.
+  let keyIdentityCheckedAt = 0;
+  const KEY_IDENTITY_MIN_INTERVAL_MS = 10_000;
+
+  async function refreshKeyIdentity({ force = false } = {}) {
+    if (!force && Date.now() - keyIdentityCheckedAt < KEY_IDENTITY_MIN_INTERVAL_MS) {
+      return keyIdentityGuard.status();
+    }
+    keyIdentityCheckedAt = Date.now();
+    const agentFp = fingerprintOfPem(releaseKeyService.getPublicKey());
+    const recorded = await trustKeyIdentityRepo.get(KIND_AGENT_RELEASE).catch(() => null);
+    const previous = recorded && recorded.fingerprint && recorded.fingerprint !== agentFp
+      ? recorded.fingerprint
+      : (recorded && recorded.previous_fingerprint) || null;
+    let impact = null;
+    try {
+      impact = await agentsRepo.countByReleaseKeyFingerprint({ current: agentFp, previous });
+    } catch (err) {
+      logger.warn(`trust keys: could not count the agents pinned to each key (${err.message}).`);
+    }
+    await keyIdentityGuard.check({ kind: KIND_LICENSE, fingerprint: fingerprintOfPem(config.license.publicKey) });
+    await keyIdentityGuard.check({ kind: KIND_AGENT_RELEASE, fingerprint: agentFp, impact });
+    return keyIdentityGuard.status();
+  }
 
   // Commands left for an agent that is not connected right now (migration 137),
   // and the one place that decides WHAT an update pushes. Both are shared by the
@@ -1384,6 +1430,8 @@ function start() {
     agentCommander,
     systemInfo,
     serverUpdateService,
+    keyIdentityGuard,
+    refreshKeyIdentity,
     licenseManager,
     findingStore,
     analysisPipeline,
@@ -1508,6 +1556,38 @@ function start() {
       for (const b of bad) {
         logger.error(`releases: agent ${b.version} cannot be served — ${b.reason}. `
           + 'Agents would reject it as a checksum mismatch; re-upload that release (POST /agents/releases).');
+      }
+    })
+    // Now that the key is loaded, ask the one question nothing else asks: are
+    // these the same two keys this server was running with last time? The guard
+    // logs TRUST_KEY_CHANGED itself; what is added here is the banner an operator
+    // will actually see, and the audit row that dates the change.
+    .then(() => refreshKeyIdentity({ force: true }))
+    .then((trust) => {
+      if (!trust || !trust.drift) return;
+      for (const entry of Object.values(trust.keys)) {
+        if (!entry.drift) continue;
+        logger.error('================================================================');
+        logger.error(`  TRUST KEY CHANGED — ${entry.kind}`);
+        logger.error(`  ${entry.message}`);
+        logger.error('  Agents do not recover from this on their own. Dashboard: Settings -> Agent key.');
+        logger.error('================================================================');
+        if (auditEventsRepo && typeof auditEventsRepo.record === 'function') {
+          Promise.resolve(auditEventsRepo.record({
+            actorType: 'system',
+            actorLabel: 'trust key guard',
+            action: 'trust_key_changed',
+            targetType: 'trust_key',
+            targetId: entry.kind,
+            targetLabel: entry.kind === 'license' ? 'licence trust anchor' : 'agent signing key',
+            detail: {
+              message: entry.message,
+              fingerprint: entry.fingerprint,
+              previous: entry.previous,
+              impact: entry.impact,
+            },
+          })).catch((err) => logger.warn(`trust keys: audit record failed (${err.message}).`));
+        }
       }
     })
     .catch((err) => logger.warn(`agent release key: startup load/publish failed: ${err.message}`));

@@ -4,6 +4,7 @@ const express = require('express');
 const { asyncHandler } = require('../middleware/asyncHandler');
 const { requireAuth, requireRole } = require('../auth/middleware');
 const { ROLES } = require('../auth/roles');
+const { KINDS: TRUST_KEY_KINDS } = require('../license/keyIdentity');
 
 const isAdmin = (req) => Boolean(req.user && req.user.role === ROLES.ADMIN);
 
@@ -44,6 +45,14 @@ function createSystemRouter({
   // SERVER_UPDATE_COMMAND is configured (see services/serverUpdateService.js).
   serverUpdateService = null,
   auditLogger = null,
+  // Watches the two keys the whole trust chain rests on (the licence anchor and
+  // the agent signing key) and says when one has moved. See
+  // src/license/keyIdentity.js — it warns, it never blocks.
+  keyIdentityGuard = null,
+  // Re-runs that comparison against what the server holds RIGHT NOW, so the
+  // dashboard sees a key that was generated or deleted a moment ago without a
+  // restart. Wired in src/server.js.
+  refreshKeyIdentity = null,
 } = {}) {
   const router = express.Router();
 
@@ -233,6 +242,69 @@ function createSystemRouter({
         });
       }
       res.status(202).json({ ...serverUpdateService.status(), targetVersion: target });
+    })
+  );
+
+  // --- Trust keys ------------------------------------------------------------
+  //
+  // The two Ed25519 public keys everything else hangs off: the licence trust
+  // anchor this server verifies vendor proofs against, and the agent signing key
+  // every installed agent has PINNED. Neither is meant to ever change. When one
+  // does, the server keeps working and the fleet quietly stops accepting updates
+  // — so this route is what turns that into something visible, with the count of
+  // agents that will refuse the new key.
+  //
+  // viewer+: a key fingerprint is a public value (it is served unauthenticated at
+  // /enroll/agent-release-key), and the whole point is that nobody has to be an
+  // admin to notice the fleet is about to go deaf.
+  router.get(
+    '/trust-keys',
+    requireAuth,
+    requireRole(ROLES.VIEWER, ROLES.OPERATOR, ROLES.ADMIN),
+    asyncHandler(async (req, res) => {
+      if (!keyIdentityGuard) {
+        // Not wired (tests, a stripped deploy). Say so rather than reporting a
+        // reassuring "no drift" the server never actually checked.
+        return res.json({ available: false, drift: false, unacknowledgedDrift: false, keys: {} });
+      }
+      if (refreshKeyIdentity) {
+        try { await refreshKeyIdentity(); } catch (err) { req.log.warn(`trust keys: refresh failed (${err.message}); reporting the last known state.`); }
+      }
+      res.json({ available: true, ...keyIdentityGuard.status() });
+    })
+  );
+
+  // An admin has read the warning and accepts this key. The acknowledgement is
+  // stored against the FINGERPRINT, so it silences today's change and nothing
+  // else — the next one is loud again. 404 when there is nothing in drift for
+  // that kind, so a stale dashboard cannot dismiss a warning that has already
+  // been resolved by putting the old key back.
+  router.post(
+    '/trust-keys/:kind/acknowledge',
+    requireAuth,
+    requireRole(ROLES.ADMIN),
+    asyncHandler(async (req, res) => {
+      // The kind is validated FIRST: a request naming a key that does not exist
+      // is malformed whether or not monitoring happens to be wired here, and a
+      // 503 for it would tell the caller to retry something that can never work.
+      const kind = String(req.params.kind || '');
+      if (!TRUST_KEY_KINDS.includes(kind)) {
+        return res.status(400).json({ error: 'Unknown trust key', kind, expected: TRUST_KEY_KINDS });
+      }
+      if (!keyIdentityGuard) return res.status(503).json({ error: 'Trust-key monitoring is not available on this server' });
+      const entry = await keyIdentityGuard.acknowledge({
+        kind,
+        userId: (req.user && (req.user.id || req.user.sub)) || null,
+      });
+      if (!entry) return res.status(404).json({ error: 'There is no unacknowledged change for that key', kind });
+      if (auditLogger) {
+        await auditLogger.record(req, {
+          category: 'system',
+          action: 'trust_key_acknowledge',
+          detail: `${kind} ${entry.state} ${entry.fingerprint || 'none'}`,
+        });
+      }
+      res.json({ available: true, ...keyIdentityGuard.status() });
     })
   );
 

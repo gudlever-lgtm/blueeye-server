@@ -124,6 +124,8 @@ function createApp({
   // Runs the host's update script from Settings → Updates (opt-in; null unless
   // SERVER_UPDATE_COMMAND is configured).
   serverUpdateService = null,
+  keyIdentityGuard = null,
+  refreshKeyIdentity = null,
   testPackagesRepo,
   testPackageRunner,
   transactionsRepo,
@@ -346,6 +348,8 @@ function createApp({
       releasePublicKey,
       releaseKeyService,
       serverUpdateService,
+      keyIdentityGuard,
+      refreshKeyIdentity,
       testPackagesRepo,
       testPackageRunner,
       transactionsRepo,

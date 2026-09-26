@@ -1,5 +1,47 @@
 # Changelog
 
+## 0.207.2 — The two keys that must never change, and a loud alarm when one does
+
+Two Ed25519 public keys decide whether an agent will ever accept anything from
+this server again: the **licence trust anchor** it verifies vendor proofs
+against, and the **agent signing key** every installed agent has pinned. Both
+were already used correctly. What nothing watched was whether they are the same
+ones as yesterday.
+
+That gap is quiet in the worst way. A key change breaks nothing here — the
+server boots, the dashboard loads, enrollment codes still generate — and the
+damage lands on the agents one at a time, as `signature did not verify` in a log
+on a host nobody is looking at. By the time somebody notices, the change is weeks
+old and nobody remembers making it.
+
+- **The fingerprints are recorded and compared on every boot**
+  (`trust_key_identity`, migration 140; the decision is the pure
+  `src/license/keyIdentity.js`). A difference produces a boxed `TRUST KEY
+  CHANGED` block in the server log, a `trust_key_changed` audit row that dates
+  it, and a red banner above **every** dashboard view — a key that moved is not a
+  property of the page you happen to be on.
+- **With the number that matters.** Agents report the key they pinned
+  (`capabilities.releaseKeyFingerprint`), so the warning says "47 of 52 agents
+  have the old key pinned" rather than "this cannot be undone". Agents too old to
+  report one are counted as unknown, never as matching: a guess in the
+  reassuring direction would understate how many hosts the change strands.
+- **It warns; it never blocks.** An admin recovering a server from backup, or
+  rotating after a compromise, is doing the right thing and must not be locked
+  out by the alarm about it. The delete confirm on Settings → Agent key now names
+  the count instead of speaking in the abstract.
+- **Delete-then-generate reads as a change**, because that is what the fleet
+  experiences. A deleted key keeps the last real fingerprint alongside the
+  deletion, so the key generated afterwards is judged against it rather than
+  against nothing.
+- **Acknowledgement is per fingerprint**, not a flag
+  (`POST /system/trust-keys/:kind/acknowledge`, admin). Dismissing today's change
+  cannot silence tomorrow's, and an acknowledged deletion does not re-alarm on
+  every restart.
+
+New: `GET /system/trust-keys` (viewer+ — a fingerprint is a public value, and
+nobody should have to be an admin to notice the fleet going deaf). Docs:
+`docs/trust-keys.md`.
+
 ## 0.205.4 — About, Documentation and the Guides catch up with the week
 
 The in-app text had fallen behind the code. Three gaps, closed:

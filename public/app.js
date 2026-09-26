@@ -822,6 +822,96 @@ function installModalA11y() {
   });
 }
 
+
+// ---- The trust-key alarm ---------------------------------------------------
+// Two Ed25519 public keys decide whether an agent will ever accept anything from
+// this server again: the licence trust anchor it verifies vendor proofs against,
+// and the agent signing key every installed agent has PINNED. Neither is meant
+// to change, ever.
+//
+// When one does, nothing here breaks. The server boots, this dashboard loads,
+// enrollment codes still generate — and the fleet quietly stops accepting
+// updates, one host at a time, as each is next asked to take one. Weeks later
+// somebody finds "signature did not verify" in an agent log and nobody remembers
+// the change that caused it.
+//
+// So the warning is deliberately the loudest thing on the page, it sits above
+// every view rather than on one, and it does NOT go away by itself: an admin
+// dismisses it by saying they made the change, and that dismissal is recorded
+// against the fingerprint, so the next change is loud again.
+let trustBannerLast = '';
+
+function trustKeyLabel(kind) {
+  return kind === 'license' ? t('trustKey.banner.license') : t('trustKey.banner.agent');
+}
+
+// The one number an operator wants: how many machines am I about to lose.
+// Agents too old to report a pinned key are named separately rather than folded
+// in — a guess in the reassuring direction is the wrong guess to make here.
+function trustImpactLines(impact) {
+  if (!impact) return [];
+  const lines = [];
+  if (impact.pinnedToPrevious > 0) {
+    lines.push(plural('trustKey.banner.impact', impact.pinnedToPrevious, { total: impact.total }));
+  } else {
+    lines.push(t('trustKey.banner.impactNone'));
+  }
+  if (impact.unknown > 0) lines.push(plural('trustKey.banner.impactUnknown', impact.unknown));
+  return lines;
+}
+
+async function refreshTrustBanner() {
+  const host = $('#trust-banner');
+  if (!host) return;
+  let trust = null;
+  try { trust = await api('/system/trust-keys'); }
+  catch { return; } // transient — leave whatever is on screen and retry next render
+  const drifted = trust && trust.available
+    ? Object.values(trust.keys || {}).filter((k) => k && k.drift && !k.acknowledged)
+    : [];
+  // Redrawing an identical banner on every render would steal focus from the
+  // dismiss button and re-announce itself to a screen reader on every poll.
+  const signature = drifted.map((k) => `${k.kind}:${k.fingerprint || 'none'}`).join('|');
+  if (signature === trustBannerLast) return;
+  trustBannerLast = signature;
+  if (!drifted.length) {
+    host.replaceChildren();
+    host.classList.add('hidden');
+    return;
+  }
+  host.classList.remove('hidden');
+  const body = [el('h2', { class: 'trust-banner-title' }, `\u26a0 ${t('trustKey.banner.title')}`)];
+  for (const k of drifted) {
+    body.push(el('div', { class: 'trust-banner-item' },
+      el('p', { class: 'trust-banner-key' }, trustKeyLabel(k.kind)),
+      el('p', {}, k.message || ''),
+      ...trustImpactLines(k.impact).map((line) => el('p', { class: 'trust-banner-impact' }, line))));
+  }
+  const actions = el('div', { class: 'trust-banner-actions' },
+    el('button', { type: 'button', class: 'ghost', onclick: () => { settingsTab = 'agentkey'; currentView = 'settings'; render(); } }, t('trustKey.banner.open')));
+  // Only an admin can acknowledge; everyone else sees the warning and the way in.
+  if (role === 'admin') {
+    actions.append(el('button', {
+      type: 'button',
+      class: 'danger',
+      onclick: async (e) => {
+        e.target.disabled = true;
+        try {
+          for (const k of drifted) await api(`/system/trust-keys/${encodeURIComponent(k.kind)}/acknowledge`, { method: 'POST' });
+          toast(t('trustKey.banner.ackDone'));
+          trustBannerLast = '';
+          await refreshTrustBanner();
+        } catch (err) {
+          toast(t('trustKey.banner.ackFailed', { reason: errText(err) }), true);
+          e.target.disabled = false;
+        }
+      },
+    }, t('trustKey.banner.ack')));
+  }
+  body.push(actions);
+  host.replaceChildren(...body);
+}
+
 // ---- First-run prompt: the agent signing key ------------------------------
 // On an admin's first authenticated render, if no agent signing key exists yet, pop
 // a prompt to generate it — it's required before any agent can be onboarded. Shown
@@ -13483,6 +13573,60 @@ function settingsLicence(tabKey) {
   };
 }
 
+// Settings → Agent key: the two trust keys, as they stand and as they stood.
+//
+// A fingerprint on its own tells an operator nothing — it is 64 characters that
+// look the same as any other 64. What means something is whether it is the SAME
+// one as before, and how many agents are pinned to it. That is what this panel
+// is: not "a key exists", but "this key, unchanged since March, trusted by 52
+// agents".
+function trustKeysPanel(trust) {
+  const box = el('div', { class: 'settings-card wide' });
+  box.append(el('div', { class: 'section-head' }, el('h3', {}, t('trustKey.panel.title'))));
+  box.append(el('p', { class: 'muted' }, t('trustKey.panel.intro')));
+  if (!trust || !trust.available) {
+    box.append(el('div', { class: 'empty' }, t('trustKey.panel.unavailable')));
+    return box;
+  }
+  for (const kind of ['license', 'agent_release']) {
+    const k = (trust.keys || {})[kind];
+    if (!k) continue;
+    const row = el('div', { class: `trust-key-row${k.drift ? ' error' : ''}` });
+    row.append(el('p', { class: 'trust-key-name' }, trustKeyLabel(kind)));
+    if (k.fingerprint) {
+      row.append(el('p', {}, el('strong', {}, `${t('trustKey.panel.current')}: `), el('code', {}, k.fingerprint)));
+    }
+    if (k.previous) {
+      row.append(el('p', {}, el('strong', {}, `${t('trustKey.panel.previous')}: `), el('code', {}, k.previous)));
+    }
+    // The state line. A stable key says so plainly — silence would read as "this
+    // has not been checked", which is the thing the panel exists to rule out.
+    const stateText = {
+      unchanged: t('trustKey.panel.stable'),
+      restored: t('trustKey.panel.restored'),
+      first: t('trustKey.panel.first'),
+      absent: t('trustKey.panel.absent'),
+      cleared: t('trustKey.panel.cleared'),
+      changed: k.message || '',
+    }[k.state] || '';
+    if (stateText) row.append(el('p', { class: k.drift ? 'error' : 'muted' }, stateText));
+    const when = k.drift && k.changedAt ? t('trustKey.panel.changedAt', { date: fmtDate(k.changedAt) })
+      : (k.firstSeenAt ? t('trustKey.panel.since', { date: fmtDate(k.firstSeenAt) }) : '');
+    if (when) row.append(el('p', { class: 'muted small' }, when));
+    // Only the agent key is one agents pin, so only it has a pinned-agent count.
+    if (k.impact) {
+      const bits = [];
+      if (k.impact.pinnedToCurrent) bits.push(plural('trustKey.pinned.current', k.impact.pinnedToCurrent));
+      if (k.impact.pinnedToPrevious) bits.push(plural('trustKey.pinned.previous', k.impact.pinnedToPrevious));
+      if (k.impact.pinnedToOther) bits.push(plural('trustKey.pinned.elsewhere', k.impact.pinnedToOther));
+      if (k.impact.unknown) bits.push(plural('trustKey.pinned.unknown', k.impact.unknown));
+      if (bits.length) row.append(el('ul', { class: 'trust-key-impact' }, ...bits.map((b) => el('li', {}, b))));
+    }
+    box.append(row);
+  }
+  return box;
+}
+
 // Settings → Agent key: generate / show / delete the agent-release SIGNING key.
 // Generated on the server; the private key is never shown or downloadable — the page
 // only reports that a key exists (+ a non-secret fingerprint). It's the trust anchor
@@ -13506,6 +13650,12 @@ async function settingsAgentKeyView() {
   // beats one that fails because the licence server was briefly unreachable.
   let ver = null;
   try { ver = await api('/system/version'); } catch { ver = null; }
+  // Whether these are the SAME two keys this server was running with last time.
+  // Nothing else on this page asks that, and it is the difference between a key
+  // that works and a fleet that has quietly stopped listening.
+  let trust = null;
+  try { trust = await api('/system/trust-keys'); } catch { trust = null; }
+  root.append(trustKeysPanel(trust));
 
   if (status.configured) {
     root.append(el('div', { class: 'section-head' }, el('h3', {}, 'Agent signing key'), el('span', { class: 'badge active' }, 'Created ✓')));
@@ -13577,7 +13727,12 @@ async function settingsAgentKeyView() {
   }
 
   async function removeKey() {
-    if (!confirm('Delete the agent signing key?\n\nThis CANNOT be undone. Afterwards you will NOT be able to add new agents, and existing agents can no longer be upgraded from the server, until you generate a new key. (Agents already enrolled keep running.)')) return;
+    // The count is the whole point of the confirm: "this cannot be undone" is
+    // abstract, "47 of 52 agents stop accepting updates" is not.
+    const impact = (trust && trust.keys && trust.keys.agent_release && trust.keys.agent_release.impact) || null;
+    const n = impact ? impact.pinnedToCurrent : 0;
+    const total = impact ? impact.total : 0;
+    if (!confirm(t('trustKey.delete.confirm', { n, total }))) return;
     try {
       await api('/api/settings/agent-release-key', { method: 'DELETE' });
       toast('Signing key deleted — agent management is disabled until a new key is generated.');
@@ -19630,6 +19785,9 @@ async function render({ silent = false } = {}) {
   stampFooter(); // sidebar foot: BlueEyes server · version · release date
   // Admin-only, once per session: nudge to set the agent signing key if it's missing.
   maybePromptSigningKey();
+  // ...and, on every render, whether either trust key has moved. Above the view,
+  // not in it: a key that changed is not a property of the page you are on.
+  refreshTrustBanner();
 
   // The kitchen sink owns its drawer, popover and row menu; they are appended
   // to <body>, so leaving the view does not remove them.

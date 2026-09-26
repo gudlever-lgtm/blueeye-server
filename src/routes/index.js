@@ -221,6 +221,8 @@ function createApiRouter({
   // Runs the host's configured update script from Settings → Updates (null =
   // no SERVER_UPDATE_COMMAND, so the panel only shows the manual command).
   serverUpdateService = null,
+  keyIdentityGuard = null,
+  refreshKeyIdentity = null,
   testPackagesRepo,
   testPackageRunner,
   transactionsRepo,
@@ -363,6 +365,9 @@ function createApiRouter({
     // Update awareness: newest published versions ride in the signed licence
     // proof, and (opt-in) the host's deploy script can be run from the dashboard.
     licenseManager, serverUpdateService, auditLogger,
+    // Whether the two keys the trust chain rests on are still the ones this
+    // server was running with last time (src/license/keyIdentity.js).
+    keyIdentityGuard, refreshKeyIdentity,
   }));
   // Shared per-target timeline service (Phase 1 merge/fan-out) — powers both the
   // /api/targets timeline and the /api/findings/:id/context change-diff.

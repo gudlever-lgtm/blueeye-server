@@ -240,6 +240,12 @@
              ("Loading Fleet", "Fleet failed to load"). It is visually hidden,
              never rendered into by a view, and separate from #toast so a page
              transition cannot stomp an unrelated notification. -->
+        <!-- The trust-key alarm. Static markup render() never touches, so it
+             survives a page change: a key that moved is not a property of the
+             page you happen to be on. Filled from GET /system/trust-keys via
+             t(), so it carries no data-i18n of its own. role="alert" because it
+             appears without the user having asked for anything. -->
+        <div id="trust-banner" class="trust-banner hidden" role="alert" aria-live="assertive"></div>
         <p id="view-status" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></p>
         <main id="view" tabindex="-1"></main>
       </div>

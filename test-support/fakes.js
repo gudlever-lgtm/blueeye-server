@@ -4288,6 +4288,12 @@ function makeApp(overrides = {}) {
     // Only wired when a test supplies one: with no update command configured the
     // real server passes an inert service, which is what null models here.
     serverUpdateService: overrides.serverUpdateService || null,
+    // Trust-key drift monitoring. Absent by default, exactly like the real
+    // server before its startup check has run: GET /system/trust-keys then
+    // answers `available:false` rather than a reassuring "no drift" nobody
+    // checked for.
+    keyIdentityGuard: overrides.keyIdentityGuard || null,
+    refreshKeyIdentity: overrides.refreshKeyIdentity || null,
     // Both absent by default (the real server builds them from disk/config);
     // a test that exercises GeoIP auto-update or the pre-built agent binaries
     // passes its own.

@@ -97,3 +97,43 @@ test('peerProbesTowards without targets or a lower bound does not query at all',
   assert.deepEqual(await repo.peerProbesTowards({ targets: [], from: new Date() }), []);
   assert.deepEqual(await repo.peerProbesTowards({ targets: ['10.0.0.1'] }), []);
 });
+
+// ---- Which key is the fleet pinned to --------------------------------------
+// The one number an operator wants when a signing key moves: how many machines
+// am I about to lose. See src/license/keyIdentity.js.
+
+test('countByReleaseKeyFingerprint buckets the fleet by the key each agent pinned', async () => {
+  const A = 'a'.repeat(64);
+  const B = 'b'.repeat(64);
+  const pool = fakePool((sql) => {
+    assert.match(sql, /JSON_UNQUOTE\(JSON_EXTRACT\(capabilities, '\$\.releaseKeyFingerprint'\)\)/);
+    assert.match(sql, /GROUP BY fp/);
+    return [[
+      { fp: A, n: 40 },
+      { fp: B, n: 7 },
+      { fp: 'c'.repeat(64), n: 1 },
+      { fp: null, n: 4 },
+    ]];
+  });
+  const repo = createAgentsRepository({ pool });
+  const out = await repo.countByReleaseKeyFingerprint({ current: B, previous: A });
+  assert.deepEqual(out, { total: 52, pinnedToCurrent: 7, pinnedToPrevious: 40, pinnedToOther: 1, unknown: 4 });
+});
+
+test('an agent too old to report a key counts as unknown, never as a match', async () => {
+  // A guess in the reassuring direction is the wrong guess to make here: it
+  // would understate how many hosts a key change is about to strand.
+  const pool = fakePool(() => [[{ fp: null, n: 3 }, { fp: 'null', n: 2 }]]);
+  const repo = createAgentsRepository({ pool });
+  const out = await repo.countByReleaseKeyFingerprint({ current: 'a'.repeat(64) });
+  assert.equal(out.unknown, 5, "MySQL's JSON null comes back as the string 'null'");
+  assert.equal(out.pinnedToCurrent, 0);
+});
+
+test('countByReleaseKeyFingerprint compares case-insensitively and survives a null key', async () => {
+  const A = 'a'.repeat(64);
+  const pool = fakePool(() => [[{ fp: A, n: 2 }]]);
+  const repo = createAgentsRepository({ pool });
+  assert.equal((await repo.countByReleaseKeyFingerprint({ current: A.toUpperCase() })).pinnedToCurrent, 2);
+  assert.equal((await repo.countByReleaseKeyFingerprint()).pinnedToOther, 2, 'no key configured: nothing matches');
+});

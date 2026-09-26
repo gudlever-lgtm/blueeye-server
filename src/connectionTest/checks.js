@@ -39,11 +39,25 @@ const CHECKS = [
   { id: 'traceroute', type: 'traceroute', available: true, appliesTo: 'any', spec: (host) => ({ type: 'traceroute', host, queries: 3 }) },
   { id: 'tcptraceroute', type: 'tcptraceroute', available: true, appliesTo: 'any', port: 443, spec: (host) => ({ type: 'tcptraceroute', host, port: 443, queries: 3 }) },
   { id: 'path_mtu', type: 'path_mtu', available: true, appliesTo: 'any', spec: (host) => ({ type: 'path_mtu', host, per_hop: true }) },
+  // The application itself. Everything above it says the packets arrive; this
+  // is the only check that says the service ANSWERED — a port that opens with a
+  // load balancer and no backend behind it passes tcp443 and fails here, which
+  // is the whole reason the row exists. https, because a check of :443 that
+  // spoke plaintext would be measuring a different service.
+  { id: 'http', type: 'http', available: true, appliesTo: 'any', port: 443, spec: (host) => ({ type: 'http', url: `https://${wrapHost(host)}/`, count: 1 }) },
 ];
 
 const CHECK_IDS = CHECKS.map((c) => c.id);
 
 const isIpLiteral = (host) => net.isIP(String(host || '').trim()) !== 0;
+
+// An IPv6 literal has to be bracketed inside a URL, or `https://::1/` parses as
+// a scheme-relative nonsense rather than a host. A name and an IPv4 literal go
+// in untouched.
+const wrapHost = (host) => {
+  const h = String(host || '').trim();
+  return net.isIP(h) === 6 ? `[${h}]` : h;
+};
 
 // Is this check worth running against this target? An unavailable check never
 // is; a hostname-only check is not, against an IP literal.
@@ -72,7 +86,7 @@ function catalogue(host = null) {
 // anything that does not apply to this target. Returns `{ specs, skipped }` so
 // the caller can tell the operator what was left out and why — a check that
 // quietly disappears is the same bug as one that quietly fails.
-function specsFor(host, ids) {
+function specsFor(host, ids, { ports = null } = {}) {
   const want = new Set(ids || []);
   const specs = [];
   const skipped = [];
@@ -84,7 +98,18 @@ function specsFor(host, ids) {
     }
     specs.push({ id: c.id, probe: c.spec(host) });
   }
+  // Extra TCP ports the ladder is configured for. They ride alongside the
+  // catalogue's own rows rather than replacing them, so a run still produces
+  // every check the screen listed — and an estate on 8443 gets a firewall rung
+  // about 8443 instead of one about a port nobody uses. The id is derived from
+  // the port so a result can still be matched back to the row that asked.
+  const extra = (Array.isArray(ports) ? ports : [])
+    .filter((p) => Number.isInteger(p) && p > 0 && p <= 65535)
+    .filter((p) => !CHECKS.some((c) => c.type === 'tcp' && c.port === p));
+  if (want.has('tcp80') || want.has('tcp443')) {
+    for (const p of new Set(extra)) specs.push({ id: `tcp${p}`, probe: { type: 'tcp', host, port: p, count: 1 } });
+  }
   return { specs, skipped };
 }
 
-module.exports = { CHECKS, CHECK_IDS, catalogue, specsFor, checkApplies, isIpLiteral };
+module.exports = { CHECKS, CHECK_IDS, catalogue, specsFor, checkApplies, isIpLiteral, wrapHost };

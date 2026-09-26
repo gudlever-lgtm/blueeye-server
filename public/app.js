@@ -8260,6 +8260,11 @@ const CT_MAX_ROUNDS = 20;
 // round-trips in a second or two; a traceroute takes longer, so the last look
 // is late enough to catch it without the screen sitting still in between.
 const CT_POLL_MS = [2200, 4200, 7000];
+// The ladder runs the WHOLE catalogue, and a traceroute, a TCP traceroute and a
+// path-MTU sweep each take tens of seconds. These are the moments the verdict is
+// recomputed, not a timeout: every look is a complete answer over whatever has
+// come back so far, and the rungs fill in as the agent reports.
+const CT_LADDER_POLL_MS = [3000, 8000, 16000, 28000, 45000];
 
 async function connectionTestView() {
   const root = el('div', { class: 'probes connection-test' });
@@ -8275,6 +8280,10 @@ async function connectionTestView() {
   let catalogue = [];
   try { catalogue = (await api('/api/connection-test/checks')).checks || []; }
   catch (e) { root.append(el('div', { class: 'error' }, errText(e))); return root; }
+  // The ladders the server can walk. A failure here is not fatal: the check
+  // list and Run still work, and the ladder controls simply do not appear.
+  let ladderCat = [];
+  try { ladderCat = (await api('/api/connection-test/ladders')).ladders || []; } catch { /* no ladders offered */ }
 
   const agentSel = el('select', {}, ...agents.map((a) => el('option', { value: String(a.id) }, a.display_name || a.hostname)));
   const target = el('input', { type: 'text', placeholder: t('ct.targetPlaceholder'), spellcheck: 'false' });
@@ -8284,6 +8293,29 @@ async function connectionTestView() {
   const repeatBtn = el('button', { class: 'small ghost' }, t('ct.repeat'));
   const status = el('span', { class: 'muted small' });
   const scheduleChip = el('span', { class: 'ct-chip', hidden: true });
+
+  // The ladder's own controls, declared with the rest because the page is laid
+  // out before the ladder's functions are defined further down.
+  //
+  // Four ladders, and each needs different things before it can run — a second
+  // agent, a destination, a device, or nothing. The catalogue the server serves
+  // (GET /api/connection-test/ladders) says which, and the fields follow it, so
+  // a ladder added on the server appears here without the screen being taught
+  // about it.
+  const symptom = el('input', {
+    type: 'text', class: 'ct-symptom', spellcheck: 'false', maxlength: '500',
+    placeholder: t('ct.symptom.placeholder'), 'aria-label': t('ct.symptom.label'),
+  });
+  const ladderSel = el('select', { class: 'ct-ladder-pick', 'aria-label': t('ct.ladder.pick') });
+  const peerSel = el('select', {}, ...agents.map((a) => el('option', { value: String(a.id) }, a.display_name || a.hostname)));
+  const peerWrap = el('label', { class: 'inline muted ct-peer', hidden: true }, t('ct.ladder.peer'), ' ', peerSel);
+  const deviceInput = el('input', { type: 'text', spellcheck: 'false', maxlength: '255', placeholder: t('ct.ladder.device.placeholder') });
+  const deviceWrap = el('label', { class: 'inline muted ct-device', hidden: true }, t('ct.ladder.device'), ' ', deviceInput);
+  const ladderBtn = el('button', { class: 'small' }, t('ct.ladder.run'));
+  const ladderPanel = el('div', { class: 'ct-ladder', hidden: true });
+  const ladderCatalogue = ladderCat;
+  ladderSel.replaceChildren(...ladderCatalogue.map((l) => el('option', { value: l.id }, t(`set.ladder.name.${l.id}`))));
+  const currentLadder = () => ladderCatalogue.find((l) => l.id === ladderSel.value) || null;
 
   // The run count lives INSIDE the button — "Run [3] tests" is one control, and
   // the label follows the number so it never reads "Run 3 test".
@@ -8475,17 +8507,164 @@ async function connectionTestView() {
       catalogue = (await api(`/api/connection-test/checks${q}`)).checks || catalogue;
       renderRows();
     } catch { /* keep the catalogue we have — the target is checked again on run */ }
+    // The verdict is computed from results that are already stored, so a new
+    // target shows whatever this agent last measured against it — including for
+    // a viewer, who cannot dispatch anything but can read where it stopped.
+    if (host) await refreshLadder();
   }
   target.addEventListener('change', refreshCatalogue);
 
   root.append(el('div', { class: 'history-controls' },
     el('label', { class: 'inline muted' }, t('ct.agent'), ' ', agentSel),
     el('label', { class: 'inline muted ct-target' }, t('ct.target'), ' ', target)));
+  if (canWrite() && ladderCatalogue.length) {
+    root.append(el('div', { class: 'history-controls ct-ladder-row' },
+      el('label', { class: 'inline muted' }, t('ct.ladder.pick'), ' ', ladderSel), peerWrap, deviceWrap));
+    root.append(el('div', { class: 'history-controls ct-symptom-row' },
+      el('label', { class: 'inline muted ct-symptom-label' }, t('ct.symptom.label'), ' ', symptom), ladderBtn));
+  }
+  root.append(ladderPanel);
   root.append(el('div', { class: 'history-controls ct-actions' },
     runBtn, stopBtn, canWrite() ? repeatBtn : null, scheduleChip, status));
   root.append(el('div', { class: 'ct-toggle-row' }, toggle, counter), listWrap,
     el('div', { class: 'muted small ct-note' }, t('ct.stopNote'), ' ', t('ct.resultsNote')));
   renderRows();
+  if (ladderCatalogue.length) syncLadderFields();
+
+  // --- the ladder ----------------------------------------------------------
+  //
+  // Say what is wrong and let the server walk the layers a packet goes through
+  // — DNS, ARP, routing, firewall, TCP, NAT/load balancer, TLS, the application
+  // — and name the first one that breaks. The check list above answers nine
+  // questions; this answers the one the operator actually asked.
+  //
+  // The rung sentences are written by the server (src/connectionTest/ladder.js)
+  // in the same way a probe failure's explanation is, because they ARE the
+  // reading of a measurement and have to say the same thing wherever they are
+  // shown. Everything around them — the labels, the layer names, the outcome —
+  // is translated here.
+  let ladderRunning = false;
+
+  function rungNode(l) {
+    const label = t(`ct.ladder.layer.${l.layer}`);
+    return el('li', { class: `ct-rung ${l.status}` },
+      el('span', { class: 'ct-rung-name' }, label),
+      el('span', { class: `ct-state ${l.status === 'ok' ? 'ok' : l.status === 'failed' ? 'failed' : 'skipped'}` },
+        t(`ct.ladder.status.${l.status}`)),
+      el('div', { class: 'ct-rung-because' }, l.because));
+  }
+
+  // What each ladder needs, built from the catalogue the server serves rather
+  // than a list here — so a ladder that needs something new asks for it without
+  // this function being changed. Returns null when something required is blank.
+  function ladderQuery() {
+    const def = currentLadder();
+    if (!def) return null;
+    const q = new URLSearchParams({ ladder: def.id });
+    // The rung sentences are rendered on the SERVER, so the locale travels with
+    // the request — the browser's current language, not a server-wide one.
+    q.set('locale', window.I18n.getLocale());
+    if (def.needs.agents >= 1) q.set('agentId', String(agentSel.value));
+    if (def.needs.agents >= 2) {
+      if (!peerSel.value || peerSel.value === agentSel.value) return null;
+      q.set('peerAgentId', String(peerSel.value));
+    }
+    if (def.needs.target === 'host') {
+      const host = target.value.trim();
+      if (!host) return null;
+      q.set('host', host);
+    }
+    if (def.needs.target === 'device') {
+      const d = deviceInput.value.trim();
+      if (!d) return null;
+      q.set('device', d);
+    }
+    return q;
+  }
+
+  // Show only the fields the chosen ladder uses. A field that does nothing for
+  // the selected ladder is worse than a missing one: it invites an operator to
+  // fill it in and then ignores it.
+  function syncLadderFields() {
+    const def = currentLadder();
+    if (!def) return;
+    peerWrap.hidden = def.needs.agents < 2;
+    deviceWrap.hidden = def.needs.target !== 'device';
+    root.querySelector('.ct-target').hidden = def.needs.target !== 'host';
+    // Device location measures nothing new — there is nothing to run, only a
+    // verdict to read, so the button says so.
+    ladderBtn.replaceChildren(def.dispatches ? t('ct.ladder.run') : t('ct.ladder.read'));
+    refreshLadder();
+  }
+  ladderSel.addEventListener('change', syncLadderFields);
+  peerSel.addEventListener('change', () => refreshLadder());
+  deviceInput.addEventListener('change', () => refreshLadder());
+
+  // Recompute the verdict from what is already stored. Safe to call at any
+  // moment: a rung with nothing behind it reads "not tested", never "fine".
+  async function refreshLadder(quiet = true) {
+    const q = ladderQuery();
+    if (!q) return;
+    const note = symptom.value.trim();
+    if (note) q.set('symptom', note);
+    let v;
+    try { v = await api(`/api/connection-test/ladder?${q.toString()}`); }
+    catch (e) { if (!quiet) { ladderPanel.hidden = false; ladderPanel.replaceChildren(el('div', { class: 'error' }, errText(e))); } return; }
+    ladderPanel.hidden = false;
+    ladderPanel.replaceChildren(
+      el('div', { class: `ct-verdict ${v.verdict.outcome}` },
+        el('div', { class: 'ct-verdict-head' }, t(`ct.ladder.outcome.${v.verdict.outcome}`)),
+        el('div', { class: 'ct-verdict-text' }, v.verdict.text),
+        v.symptom ? el('div', { class: 'muted small ct-verdict-symptom' }, t('ct.ladder.youSaid', { symptom: v.symptom })) : null),
+      el('ol', { class: 'ct-rungs' }, ...v.layers.map(rungNode)));
+  }
+
+  async function runLadder() {
+    const def = currentLadder();
+    const q = ladderQuery();
+    if (!def || !q) { say(t('ct.ladder.needs'), true); return; }
+    // A ladder that dispatches nothing has nothing to run — reading it IS the
+    // answer, and it is already stored.
+    if (!def.dispatches) { await refreshLadder(false); return; }
+    const host = q.get('host') || q.get('device') || (peerSel.selectedOptions[0] || {}).textContent || '';
+    ladderRunning = true; running = true;
+    ladderBtn.disabled = true; runBtn.disabled = true; stopBtn.disabled = false; stopRequested = false;
+    say(t('ct.ladder.dispatching', { host }));
+    try {
+      await api('/api/connection-test/walk', {
+        method: 'POST',
+        body: {
+          ladder: def.id,
+          agentId: Number(agentSel.value),
+          ...(def.needs.agents >= 2 ? { peerAgentId: Number(peerSel.value) } : {}),
+          ...(def.needs.target === 'host' ? { host: q.get('host') } : {}),
+          symptom: symptom.value.trim() || undefined,
+        },
+      });
+    } catch (e) {
+      say(e.status === 409 ? t('ct.status.notConnected') : errText(e), true);
+      ladderRunning = false; running = false; ladderBtn.disabled = false; stopBtn.disabled = true; syncCounter();
+      return;
+    }
+    // Show the ladder straight away, with what is already known and the
+    // operator's own words on it, rather than leaving the screen still for
+    // three seconds while the first probes come back.
+    await refreshLadder();
+    let waited = 0;
+    for (const at of CT_LADDER_POLL_MS) {
+      if (stopRequested) break;
+      await sleep(at - waited);
+      waited = at;
+      say(t('ct.ladder.collecting', { host, secs: String(Math.round(at / 1000)) }));
+      await refreshLadder();
+    }
+    ladderRunning = false; running = false;
+    ladderBtn.disabled = false; stopBtn.disabled = true;
+    say(stopRequested ? t('ct.status.stopped') : t('ct.ladder.done', { host }));
+    syncCounter();
+  }
+
+  ladderBtn.addEventListener('click', () => { if (!ladderRunning && !running) runLadder(); });
 
   // --- running -------------------------------------------------------------
   const say = (text, bad = false) => { status.className = bad ? 'error small' : 'muted small'; status.textContent = text; };
@@ -8495,6 +8674,16 @@ async function connectionTestView() {
   // its target as host:port, which is also what keeps the :80 and :443 rows
   // apart — without it they would both show the same measurement.
   function resultFor(results, check, host) {
+    // The http check's target is a URL, not host:port — it is the one check
+    // whose probe addresses the SERVICE rather than the address, so it is
+    // matched on the URL's host instead of on the string the other rows use.
+    if (check.type === 'http') {
+      return results.find((r) => {
+        if (r.type !== 'http') return false;
+        try { return new URL(r.target).hostname.replace(/^\[|\]$/g, '').toLowerCase() === host.toLowerCase(); }
+        catch { return false; }
+      }) || null;
+    }
     const withPort = check.port ? `${host}:${check.port}` : null;
     return results.find((r) => r.type === check.type && (r.target === withPort || (!check.port && r.target === host))) || null;
   }
@@ -8608,6 +8797,10 @@ async function connectionTestView() {
     } else if (completed) {
       say(t('ct.status.done', { rounds: String(completed), checks: String(ids.length), host }));
     }
+    // A hand-picked run feeds the same rungs, so the verdict is refreshed from
+    // whatever it produced — with the checks that were not run reading "not
+    // tested" rather than dropping out of the ladder.
+    if (!stopRequested) await refreshLadder();
     syncCounter();
   }
 
@@ -12701,7 +12894,7 @@ const SETTINGS_GROUPS = [
   ['Access & security', [['users', 'Users', true], ['auth', 'Authentication', true], ['apitokens', 'API tokens', true], ['agentkey', 'Agent key', true]]],
   ['Detection & alerts', [['analyse', 'Analysis', true], ['alerting', 'Alerting', true], ['severity', 'Severity rules', true], ['thresholds', () => t('thr.tab'), true], ['runbooks', 'Runbooks', true], ['events', () => t('set.tab.events'), true], ['integrations', 'ITSM', true], ['cmdb', 'CMDB', true], ['ai', 'AI', true], ['maintenance', 'Maintenance', true]]],
   ['Data', [['database', 'Database', true], ['retention', 'Retention', true], ['types', 'Traffic types', true], ['map', 'Map', true]]],
-  ['System', [['setup', 'Setup', true], ['updates', 'Updates', true], ['agents', 'Agents', true], ['snmp', 'SNMP devices', true], ['snmpcommunities', 'SNMP communities', true], ['screening', 'Test Settings', true], ['assurance', 'Service Assurance', true]]],
+  ['System', [['setup', 'Setup', true], ['updates', 'Updates', true], ['agents', 'Agents', true], ['snmp', 'SNMP devices', true], ['snmpcommunities', 'SNMP communities', true], ['screening', 'Test Settings', true], ['assurance', 'Service Assurance', true], ['ladder', () => t('set.tab.ladder'), true]]],
   ['Personal', [['appearance', 'Appearance', false], ['license', 'License', false]]],
 ];
 // ---- Logs (admin-only operational + client-error view) ----------------------
@@ -13477,6 +13670,7 @@ const SETTINGS_SECTIONS = {
   apitokens: settingsApiTokensView,
   screening: () => views.screening({ embedded: true }),
   assurance: settingsAssuranceView,
+  ladder: settingsLadderView,
 };
 
 // A section label is a string, or a function for one that goes through t() —
@@ -14958,6 +15152,128 @@ function agentUpdatePolicyCard(a) {
         hint: 'How many agents one fleet rollout moves at a time (Settings → Updates). A bad release then costs a batch rather than the fleet — run it with 1 first as a canary, look, then continue.' },
     ],
   });
+}
+
+// Settings → Diagnostics. Which rungs the Connection test's ladder walks, in
+// what order, against which ports, at which thresholds.
+//
+// The defaults ARE the shipped ladder, so a deployment that never opens this
+// screen behaves exactly as it did before it existed.
+//
+// WHY THE ORDER IS ONLY HALF EDITABLE. Six of the rungs are a causal chain —
+// each is only reachable because the one before it worked. Move TLS above TCP
+// and the ladder reports "stops at TLS" for a host whose port never opened,
+// which is a confident wrong answer and worse than no answer. Those six are
+// locked to each other and say so; ARP and NAT/LB are observations ABOUT the
+// path rather than steps along it, so they move freely. The server validates
+// the same rule (PUT /api/settings/ladder answers 400 and names the pair), so
+// this is a screen that cannot ask for something the server would refuse — not
+// a screen that is trusted to behave.
+async function settingsLadderView() {
+  const root = el('div', { class: 'settings-grid' });
+  let cfgs;
+  let cat;
+  try {
+    cfgs = (await api('/api/settings')).ladders;
+    cat = (await api('/api/connection-test/ladders')).ladders || [];
+  } catch (e) { root.append(el('div', { class: 'error' }, errText(e))); return root; }
+  if (!cfgs || !cat.length) { root.append(el('div', { class: 'empty' }, t('set.ladder.unavailable'))); return root; }
+
+  root.append(el('p', { class: 'muted settings-intro' }, t('set.ladder.lead')));
+  for (const def of cat) root.append(ladderCard(def, cfgs[def.id] || def.defaults));
+  return root;
+}
+
+// One ladder's card. The order is only half editable, and the card says which
+// half: the causal chain is marked fixed and its ▲▼ are disabled, because a
+// ladder walked out of causal order produces a confident wrong answer — see
+// docs/connection-test.md.
+function ladderCard(def, cfg) {
+  const order = [...(cfg.order || def.layers)];
+  const enabled = { ...(cfg.enabled || def.defaults.enabled) };
+  const status = el('span', { class: 'muted small' });
+  const list = el('ol', { class: 'ladder-order' });
+
+  const legal = (next) => {
+    const chain = next.filter((l) => def.locked.includes(l));
+    return chain.every((l, i) => l === def.locked[i]);
+  };
+  const moved = (i, delta) => {
+    const next = [...order];
+    const [x] = next.splice(i, 1);
+    next.splice(i + delta, 0, x);
+    return next;
+  };
+
+  function renderOrder() {
+    list.replaceChildren(...order.map((id, i) => {
+      const locked = def.locked.includes(id);
+      const up = el('button', { class: 'small ghost', type: 'button', 'aria-label': t('set.ladder.up') }, '▲');
+      const down = el('button', { class: 'small ghost', type: 'button', 'aria-label': t('set.ladder.down') }, '▼');
+      up.disabled = i === 0 || !legal(moved(i, -1));
+      down.disabled = i === order.length - 1 || !legal(moved(i, 1));
+      up.addEventListener('click', () => { order.splice(0, order.length, ...moved(i, -1)); renderOrder(); });
+      down.addEventListener('click', () => { order.splice(0, order.length, ...moved(i, 1)); renderOrder(); });
+      const box = el('input', { type: 'checkbox', ...(enabled[id] ? { checked: 'checked' } : {}) });
+      box.addEventListener('change', () => { enabled[id] = box.checked; });
+      return el('li', { class: `ladder-rung${locked ? ' locked' : ''}` },
+        box,
+        el('span', { class: 'ladder-rung-name' }, t(`ct.ladder.layer.${id}`)),
+        locked
+          ? el('span', { class: 'ladder-lock', title: t('set.ladder.locked.hint') }, t('set.ladder.locked'))
+          : el('span', { class: 'ladder-free' }, t('set.ladder.movable')),
+        el('span', { class: 'ladder-move' }, up, down));
+    }));
+  }
+  renderOrder();
+
+  // The numeric and port settings this ladder actually has. Rendered from the
+  // server's own `defaults`, so a ladder that gains a knob gains a field here
+  // without the screen being taught about it.
+  const fields = [];
+  const inputs = {};
+  for (const [key, value] of Object.entries(def.defaults)) {
+    if (key === 'order' || key === 'enabled') continue;
+    const isPorts = key === 'ports';
+    const input = isPorts
+      ? el('input', { type: 'text', spellcheck: 'false', value: (cfg[key] || value).join(', ') })
+      : el('input', { type: 'number', step: Number.isInteger(value) ? '1' : '0.1', value: String(cfg[key] ?? value) });
+    inputs[key] = { input, isPorts, integer: Number.isInteger(value) };
+    fields.push(el('label', {},
+      t(`set.ladder.field.${key}`),
+      input,
+      el('span', { class: 'muted small' }, t(`set.ladder.field.${key}.hint`))));
+  }
+
+  const save = el('button', { class: 'small' }, t('set.ladder.save'));
+  save.addEventListener('click', async () => {
+    save.disabled = true;
+    status.className = 'muted small';
+    status.textContent = t('set.ladder.saving');
+    const body = { order, enabled };
+    for (const [key, f] of Object.entries(inputs)) {
+      body[key] = f.isPorts
+        ? String(f.input.value).split(/[,\s]+/).filter(Boolean).map(Number)
+        : Number(f.input.value);
+    }
+    try {
+      await api(`/api/settings/ladder/${encodeURIComponent(def.id)}`, { method: 'PUT', body });
+      status.textContent = t('set.ladder.saved');
+    } catch (e) {
+      status.className = 'error small';
+      // The server names the pair it refused; that sentence is more use than
+      // "validation failed", so it is what the screen shows.
+      status.textContent = errText(e);
+    } finally { save.disabled = false; }
+  });
+
+  return el('div', { class: 'card' },
+    el('h3', {}, t(`set.ladder.name.${def.id}`)),
+    el('p', { class: 'muted' }, t(`set.ladder.about.${def.id}`)),
+    list,
+    el('p', { class: 'muted small' }, t('set.ladder.offHint')),
+    fields.length ? el('div', { class: 'ladder-fields' }, ...fields) : null,
+    el('div', { class: 'history-controls' }, save, status));
 }
 
 function throughputSettingsCard(t) {

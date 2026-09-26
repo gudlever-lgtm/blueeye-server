@@ -1,0 +1,188 @@
+{
+  "id": "firewall_acl",
+  "title": {
+    "en": "A firewall or ACL permits ping and denies the port",
+    "da": "En firewall eller ACL tillader ping og nægter porten"
+  },
+  "summary": {
+    "en": "The host answers ping and the application port does not open.",
+    "da": "Værten svarer på ping, og applikationsporten åbner ikke."
+  },
+  "explanation": {
+    "en": "ICMP and TCP are different traffic and are filtered separately. A firewall rule, a router ACL or a cloud security group can permit ping and deny TCP/443, and when it does the network looks perfect while the application is unreachable. The evidence is the divergence: the host answers ICMP, so it is up and the path to it works, and the port is dropped in silence. A port that answers with a reset means the opposite — the packet arrived and the host said no, which is the service, not a filter.",
+    "da": "ICMP og TCP er forskellig trafik og filtreres hver for sig. En firewall-regel, en router-ACL eller en security group i skyen kan tillade ping og nægte TCP/443, og så ser netværket perfekt ud, mens applikationen er uopnåelig. Beviset er forskellen: værten svarer på ICMP, så den er oppe og vejen til den virker, og porten smides lydløst væk. En port der svarer med en reset betyder det modsatte — pakken kom frem, og værten sagde nej, hvilket er tjenesten og ikke et filter."
+  },
+  "symptoms": {
+    "en": [
+      "ping works but the application does not",
+      "ping works but port 443 does not",
+      "the server is reachable but the service is down",
+      "the network is up but the application is down",
+      "connection times out but ping replies",
+      "the port does not open",
+      "telnet to the port hangs"
+    ],
+    "da": [
+      "ping virker men applikationen gør ikke",
+      "ping virker men port 443 gør ikke",
+      "serveren kan nås men tjenesten er nede",
+      "netværket er oppe men applikationen er nede",
+      "forbindelsen timer ud men ping svarer",
+      "porten åbner ikke",
+      "telnet til porten hænger"
+    ]
+  },
+  "keywords": {
+    "en": [
+      "firewall",
+      "acl",
+      "blocked",
+      "filtered",
+      "port",
+      "443",
+      "denied",
+      "security group",
+      "timeout",
+      "icmp",
+      "ping",
+      "tcp",
+      "handshake",
+      "unreachable"
+    ],
+    "da": [
+      "firewall",
+      "acl",
+      "blokeret",
+      "filtreret",
+      "port",
+      "443",
+      "nægtet",
+      "security group",
+      "timeout",
+      "icmp",
+      "ping",
+      "tcp",
+      "håndtryk",
+      "lukket"
+    ]
+  },
+  "tests": [
+    {
+      "type": "ping",
+      "params": {
+        "count": 4
+      },
+      "why": {
+        "en": "Does the host answer ICMP at all. A host that answers is up, so a port that does not open is not a host that is down.",
+        "da": "Svarer værten overhovedet på ICMP. En vært der svarer er oppe, så en port der ikke åbner er ikke en vært der er nede."
+      }
+    },
+    {
+      "type": "tcp",
+      "params": {
+        "port": 443,
+        "count": 1
+      },
+      "why": {
+        "en": "Does the handshake complete, and when it does not, how it failed — a silent drop is a filter, a reset is the host answering.",
+        "da": "Fuldføres håndtrykket, og når det ikke gør, hvordan fejlede det — et lydløst drop er et filter, en reset er værten der svarer."
+      }
+    },
+    {
+      "type": "tcptraceroute",
+      "params": {
+        "port": 443,
+        "queries": 3
+      },
+      "why": {
+        "en": "Which hop the SYN reaches before it disappears — that hop, or the one after it, is where the rule lives.",
+        "da": "Hvilket hop SYN-pakken når før den forsvinder — det hop, eller det næste, er hvor reglen ligger."
+      }
+    }
+  ],
+  "views": [
+    {
+      "view": "probes",
+      "params": {
+        "tab": "connection"
+      },
+      "look_for": {
+        "en": "The ladder verdict: ICMP answered, TCP/443 dropped, and the hop the TCP trace stops at.",
+        "da": "Stigens dom: ICMP svarede, TCP/443 blev droppet, og hoppet hvor TCP-sporingen stopper."
+      }
+    },
+    {
+      "view": "findings",
+      "params": {},
+      "look_for": {
+        "en": "Whether other destinations behind the same firewall started failing at the same moment — one rule usually breaks more than one service.",
+        "da": "Om andre destinationer bag den samme firewall begyndte at fejle samtidig — én regel ødelægger som regel mere end én tjeneste."
+      }
+    }
+  ],
+  "rules": [
+    {
+      "id": "icmp_ok_port_dropped",
+      "when": "ping.ok == true && tcp.port_443.ok == false && tcp.port_443.failure == 'timeout'",
+      "effect": "confirm",
+      "because": {
+        "en": "The host answers ICMP and TCP/443 is dropped without an answer. A host that was down could not have answered the ping, so something between the two is discarding the SYN.",
+        "da": "Værten svarer på ICMP, og TCP/443 droppes uden svar. En vært der var nede kunne ikke have svaret på ping, så noget mellem de to smider SYN-pakken væk."
+      }
+    },
+    {
+      "id": "icmp_ok_port_unreachable",
+      "when": "ping.ok == true && tcp.port_443.ok == false && tcp.port_443.failure == 'unreachable'",
+      "effect": "confirm",
+      "because": {
+        "en": "The host answers ICMP and the SYN came back administratively unreachable — a router or firewall rejecting the port by name.",
+        "da": "Værten svarer på ICMP, og SYN-pakken kom tilbage som administrativt uopnåelig — en router eller firewall der afviser porten."
+      }
+    },
+    {
+      "id": "port_refused",
+      "when": "tcp.port_443.failure == 'refused'",
+      "effect": "rule_out",
+      "because": {
+        "en": "The port answered with a reset. The packet arrived and the host said no, so nothing is filtering it — the service is not listening.",
+        "da": "Porten svarede med en reset. Pakken kom frem, og værten sagde nej, så intet filtrerer den — tjenesten lytter ikke."
+      }
+    },
+    {
+      "id": "port_opens",
+      "when": "tcp.port_443.ok == true",
+      "effect": "rule_out",
+      "because": {
+        "en": "The handshake completes, so nothing on the path is denying the application port.",
+        "da": "Håndtrykket fuldføres, så intet på vejen nægter applikationsporten."
+      }
+    },
+    {
+      "id": "icmp_fails_too",
+      "when": "ping.ok == false && tcp.port_443.ok == false",
+      "effect": "rule_out",
+      "because": {
+        "en": "Neither ICMP nor TCP comes back. Both directions are broken, which is the path or the host — not a rule that permits one and denies the other.",
+        "da": "Hverken ICMP eller TCP kommer tilbage. Begge retninger er i stykker, hvilket er vejen eller værten — ikke en regel der tillader den ene og nægter den anden."
+      }
+    }
+  ],
+  "fixes": [
+    {
+      "en": "Read the rule set on the hop the TCP trace stops at, for TCP/443 to this destination — that hop, or the one after it, is where the SYN is discarded.",
+      "da": "Læs regelsættet på det hop hvor TCP-sporingen stopper, for TCP/443 til denne destination — det hop, eller det næste, er hvor SYN-pakken smides væk."
+    },
+    {
+      "en": "In a cloud network check the security group and the network ACL separately: the group permits, the ACL can still deny, and ICMP is often allowed in both while the application port is only allowed in one.",
+      "da": "I et cloud-netværk skal du tjekke security group og network ACL hver for sig: gruppen tillader, ACL'en kan stadig nægte, og ICMP er ofte tilladt i begge, mens applikationsporten kun er tilladt i den ene."
+    },
+    {
+      "en": "Check whether the rule is stateful and the return traffic is what is being dropped — an asymmetric path takes the answer through a firewall that never saw the SYN.",
+      "da": "Tjek om reglen er stateful, og om det er returtrafikken der droppes — en asymmetrisk vej fører svaret gennem en firewall der aldrig så SYN-pakken."
+    },
+    {
+      "en": "Do not go to the firewall team on a reset. A reset is the host answering, so the path is open and the service is what is not running.",
+      "da": "Gå ikke til firewall-teamet på en reset. En reset er værten der svarer, så vejen er åben, og det er tjenesten der ikke kører."
+    }
+  ]
+}

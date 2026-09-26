@@ -26,6 +26,11 @@ function createSettingsRouter({ settingsService, featureGate, dispatcher, analys
       alerting: settingsService ? await settingsService.getAlertingSafe() : (dispatcher ? dispatcher.describe() : null),
       retention: settingsService ? await settingsService.getRetention() : (retentionConfig || null),
       throughput: settingsService ? await settingsService.getThroughput() : null,
+      // Every ladder's effective configuration, keyed by id. `ladder` is kept
+      // as the reachability one so a screen written before the registry
+      // existed still reads what it expects.
+      ladders: settingsService ? await settingsService.getLadders() : null,
+      ladder: settingsService ? await settingsService.getLadder() : null,
       agents: settingsService ? await settingsService.getAgents() : null,
       events: settingsService ? await settingsService.getEvents() : null,
       assistant: settingsService ? await settingsService.getAssistantSafe() : null,
@@ -150,6 +155,34 @@ function createSettingsRouter({ settingsService, featureGate, dispatcher, analys
   router.put('/throughput', ...admin, asyncHandler(async (req, res) => {
     try {
       res.json({ throughput: await settingsService.setThroughput(req.body || {}) });
+    } catch (err) {
+      if (err.statusCode === 400) return res.status(400).json({ error: 'Validation failed', details: err.details || {} });
+      throw err;
+    }
+  }));
+
+  // PUT /api/settings/ladder/:id — one diagnostic ladder: which rungs run, in
+  // what order, against which ports, at which thresholds. The ids are the
+  // registry's (reachability, two_way, local_host, device_location).
+  // { order: string[], enabled: {rung: bool}, ports: number[], certWarnDays, lossThresholdPct }.
+  // An order that breaks the causal chain (TLS above TCP, routing above DNS) is
+  // a 400 that names the pair, not a silent fallback — the screen must never
+  // show an order the server is not walking.
+  router.put('/ladder/:id', ...admin, asyncHandler(async (req, res) => {
+    try {
+      res.json({ ladder: req.params.id, config: await settingsService.setLadder(req.params.id, req.body || {}) });
+    } catch (err) {
+      if (err.statusCode === 400) return res.status(400).json({ error: 'Validation failed', details: err.details || {} });
+      throw err;
+    }
+  }));
+
+  // Without an id, the reachability ladder — the one that existed before there
+  // were four, so a caller written against the old route keeps working.
+  router.put('/ladder', ...admin, asyncHandler(async (req, res) => {
+    try {
+      const { REACHABILITY } = require('../connectionTest/ladders');
+      res.json({ ladder: await settingsService.setLadder(REACHABILITY, req.body || {}) });
     } catch (err) {
       if (err.statusCode === 400) return res.status(400).json({ error: 'Validation failed', details: err.details || {} });
       throw err;

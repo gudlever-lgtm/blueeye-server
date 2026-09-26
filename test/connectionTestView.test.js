@@ -170,7 +170,11 @@ test('Run dispatches the selected checks, and a cleared check is not dispatched'
   await tick(600);
   assert.ok(sent.length > 0, 'nothing was dispatched');
   assert.ok(sent.every((c) => c.name === 'run-probe'), 'something other than a probe was pushed');
-  assert.ok(sent.every((c) => c.probe.host === 'example.com'));
+  // Every dispatched check addresses the destination that was typed. The http
+  // check is the one that addresses the SERVICE rather than the address, so it
+  // carries a URL — the same destination, said the way an http probe needs it.
+  assert.ok(sent.every((c) => c.probe.host === 'example.com' || c.probe.url === 'https://example.com/'),
+    `dispatched to: ${sent.map((c) => c.probe.host || c.probe.url).join(', ')}`);
   const types = sent.map((c) => c.probe.type);
   assert.ok(types.includes('ping') && types.includes('dns'), `dispatched: ${types.join(', ')}`);
   assert.ok(!types.includes('path_mtu'), 'a cleared check was dispatched anyway');
@@ -371,4 +375,160 @@ test('the screen is fully translated — no raw keys in either language', async 
   await tick(100);
   assert.ok(!/\bct\.[a-z]/i.test(text()), 'untranslated key in Danish');
   assert.match(text(), /Kør/, 'the Danish screen still reads English');
+});
+
+// ----------------------------------------------------------------- the ladder
+
+// A destination that answers ping and drops TCP/443 — the case the ladder
+// exists for. Shaped the way probe_results hands rows to the screen.
+const FILTERED_ROWS = [
+  { id: 1, type: 'dns', target: 'example.com', ok: true, rttMs: 7, ts: new Date().toISOString() },
+  { id: 2, type: 'ping', target: 'example.com', ok: true, lossPct: 0, rttMs: 12, ts: new Date().toISOString() },
+  { id: 3, type: 'tcp', target: 'example.com:443', ok: false, failure: 'timeout', ts: new Date().toISOString() },
+  { id: 4, type: 'tcp', target: 'example.com:80', ok: true, rttMs: 9, ts: new Date().toISOString() },
+  { id: 5, type: 'traceroute', target: 'example.com', ok: true, ts: new Date().toISOString(), hops: [{ hop: 1, ip: '10.0.0.1', lossPct: 0 }, { hop: 2, ip: '93.184.216.34', lossPct: 0 }] },
+];
+
+test('an operator can say what is wrong and get the rung it stops at', async (t) => {
+  const sent = [];
+  const { doc, errors } = await boot(t, { app: appWith({ sent, probeRows: FILTERED_ROWS }) });
+  await open(doc);
+  await setTarget(doc, 'example.com');
+
+  const symptom = doc.querySelector('.connection-test .ct-symptom');
+  assert.ok(symptom, 'no symptom field');
+  symptom.value = 'the site loads for nobody since this morning';
+
+  const btn = byText(doc, '.ct-symptom-row button', /Find where it stops/);
+  assert.ok(btn, 'no ladder button');
+  btn.click();
+
+  // The whole catalogue goes out, not a selection. (The panel itself may
+  // already be on screen: typing a target renders whatever was last measured,
+  // so waiting on the panel would not prove the dispatch happened.)
+  assert.ok(await until(() => sent.length >= 9, 20000), `only ${sent.length} checks dispatched`);
+  assert.ok(sent.every((c) => c.name === 'run-probe'));
+
+  const ok = await until(() => !doc.querySelector('.ct-ladder').hidden && doc.querySelector('.ct-verdict'), 20000);
+  assert.ok(ok, 'the ladder panel never rendered');
+
+  const verdict = doc.querySelector('.ct-verdict');
+  assert.ok(verdict.classList.contains('stops'), `verdict was ${verdict.className}`);
+  assert.match(verdict.textContent, /stops here/i);
+  assert.match(verdict.textContent, /firewall/i);
+  // The operator's own words come back next to the answer.
+  assert.match(verdict.textContent, /the site loads for nobody since this morning/);
+
+  const rungs = [...doc.querySelectorAll('.ct-rung')];
+  assert.equal(rungs.length, 8, `${rungs.length} rungs rendered`);
+  const firewall = rungs.find((r) => /Firewall/.test(r.textContent));
+  assert.ok(firewall.classList.contains('failed'), 'the firewall rung is not the one marked');
+  // Every rung says why, on the rung.
+  for (const r of rungs) assert.ok(r.querySelector('.ct-rung-because').textContent.length > 10, r.textContent);
+  // The rung above the break is not green.
+  assert.ok(rungs.find((r) => /TCP handshake/.test(r.textContent)).classList.contains('unreached'));
+
+  assert.deepEqual(errors, []);
+});
+
+test('a viewer reads the verdict but is offered nothing that dispatches', async (t) => {
+  const { doc, errors } = await boot(t, { role: 'viewer', app: appWith({ probeRows: FILTERED_ROWS }) });
+  await open(doc);
+  assert.equal(doc.querySelector('.connection-test .ct-symptom'), null, 'a viewer was offered a field that dispatches commands');
+  // The verdict is computed from results that are already stored, so typing a
+  // target is enough to read where it last stopped.
+  await setTarget(doc, 'example.com');
+  const ok = await until(() => !doc.querySelector('.ct-ladder').hidden && doc.querySelector('.ct-verdict'), 10000);
+  assert.ok(ok, 'a viewer got no verdict for a destination the fleet has measured');
+  assert.match(doc.querySelector('.ct-verdict').textContent, /firewall/i);
+  assert.deepEqual(errors, []);
+});
+
+test('the screen offers every ladder the server can walk, and asks for what each needs', async (t) => {
+  const { doc, errors } = await boot(t, { app: appWith({ probeRows: FILTERED_ROWS }) });
+  await open(doc);
+  const pick = doc.querySelector('.ct-ladder-pick');
+  assert.ok(pick, 'no ladder picker');
+  assert.deepEqual([...pick.options].map((o) => o.value),
+    ['reachability', 'two_way', 'local_host', 'device_location']);
+
+  const peer = doc.querySelector('.ct-peer');
+  const device = doc.querySelector('.ct-device');
+  const target = doc.querySelector('.connection-test .ct-target');
+  const choose = async (id) => {
+    pick.value = id;
+    pick.dispatchEvent(new doc.defaultView.Event('change', { bubbles: true }));
+    await tick(150);
+  };
+
+  // Reaching a destination: a target, and nothing else.
+  assert.equal(target.hidden, false);
+  assert.equal(peer.hidden, true);
+  assert.equal(device.hidden, true);
+
+  // Between two agents: a far end, and no destination to type.
+  await choose('two_way');
+  assert.equal(peer.hidden, false, 'no far-end picker for a two-way test');
+  assert.equal(target.hidden, true, 'a two-way test asked for a destination it does not use');
+
+  // This host itself: neither.
+  await choose('local_host');
+  assert.equal(peer.hidden, true);
+  assert.equal(target.hidden, true);
+  assert.equal(device.hidden, true);
+
+  // Where a device is plugged in: a device, and a button that says it only
+  // reads — the ladder dispatches nothing.
+  await choose('device_location');
+  assert.equal(device.hidden, false);
+  assert.match(doc.querySelector('.ct-symptom-row button').textContent, /Read what is known/);
+
+  assert.deepEqual(errors, []);
+});
+
+test('a two-way diagnosis runs from both ends and names the direction', async (t) => {
+  const sent = [];
+  const AGENTS2 = [
+    { id: 1, hostname: 'probe-01', display_name: 'probe-01', status: 'online', capabilities: { ips: ['10.0.0.10'] }, meta: {}, monitor_config: {} },
+    { id: 2, hostname: 'probe-02', display_name: 'probe-02', status: 'online', capabilities: { ips: ['10.9.0.20'] }, meta: {}, monitor_config: {} },
+  ];
+  const rows = {
+    1: [{ id: 1, type: 'ping', target: '10.9.0.20', ok: true, lossPct: 0, rttMs: 12, ts: new Date().toISOString() }],
+    2: [{ id: 2, type: 'ping', target: '10.0.0.10', ok: true, lossPct: 40, rttMs: 13, ts: new Date().toISOString() }],
+  };
+  const app = makeApp({
+    agentsRepo: makeAgentsRepo({
+      findAll: async () => AGENTS2,
+      findById: async (id) => AGENTS2.find((a) => a.id === Number(id)) || null,
+    }),
+    agentCommander: { sendCommand: (id, cmd) => { sent.push({ id, cmd }); return 1; } },
+    probeResultsRepo: { latestByAgent: async (id) => rows[Number(id)] || [], findByAgent: async () => [] },
+  });
+  const { doc, errors } = await boot(t, { app });
+  await open(doc);
+
+  const pick = doc.querySelector('.ct-ladder-pick');
+  pick.value = 'two_way';
+  pick.dispatchEvent(new doc.defaultView.Event('change', { bubbles: true }));
+  await tick(150);
+  // The far end has to be a different agent from the near one.
+  const peerSel = doc.querySelector('.ct-peer select');
+  peerSel.value = '2';
+  peerSel.dispatchEvent(new doc.defaultView.Event('change', { bubbles: true }));
+
+  doc.querySelector('.ct-symptom-row button').click();
+  assert.ok(await until(() => sent.length >= 6, 20000), `only ${sent.length} probes dispatched`);
+  // Each end probes the other's address.
+  assert.ok(sent.filter((x) => x.id === 1).every((x) => x.cmd.probe.host === '10.9.0.20'));
+  assert.ok(sent.filter((x) => x.id === 2).every((x) => x.cmd.probe.host === '10.0.0.10'));
+
+  assert.ok(await until(() => doc.querySelector('.ct-verdict'), 20000), 'no verdict rendered');
+  const verdict = doc.querySelector('.ct-verdict');
+  assert.match(verdict.textContent, /probe-02 → probe-01/);
+  assert.match(verdict.textContent, /return path/i);
+  // Six rungs, named in the screen's own language.
+  const rungs = [...doc.querySelectorAll('.ct-rung')];
+  assert.equal(rungs.length, 6);
+  assert.ok(rungs.some((r) => /Direction of loss/.test(r.textContent)));
+  assert.deepEqual(errors, []);
 });

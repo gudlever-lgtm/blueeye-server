@@ -2100,6 +2100,62 @@ button.ghost.small:has(> .icon-glyph) {
 .ct-state.failed { color: var(--bad); border-color: var(--bad); background: var(--bad-weak); }
 .ct-state.skipped { opacity: .6; }
 .ct-note { margin-top: 10px; }
+
+/* --- the ladder -------------------------------------------------------------
+   The layers a packet goes through, in order, with the first broken one called
+   out. Every rung carries its own reason under it, because a red rung whose
+   explanation lives elsewhere is what this screen exists to replace. */
+.ct-symptom-row { align-items: center; }
+.ct-symptom-label { flex: 1 1 340px; }
+.ct-symptom { flex: 1; min-width: 220px; }
+.ct-ladder { margin: 12px 0 4px; }
+.ct-verdict {
+  border: 1px solid var(--hairline); border-left-width: 4px; border-radius: var(--radius);
+  background: var(--panel-2); padding: 10px 14px;
+}
+.ct-verdict.stops { border-left-color: var(--bad); }
+.ct-verdict.suspect, .ct-verdict.partial { border-left-color: var(--warn); }
+.ct-verdict.clear { border-left-color: var(--ok); }
+.ct-verdict.untested { border-left-color: var(--hairline); }
+.ct-verdict-head { font-weight: 700; font-size: 13px; }
+.ct-verdict-text { font-size: 13px; margin-top: 3px; }
+.ct-verdict-symptom { margin-top: 6px; }
+.ct-rungs {
+  list-style: none; margin: 10px 0 0; padding: 0;
+  border: 1px solid var(--hairline); border-radius: var(--radius); overflow: hidden;
+}
+.ct-rung {
+  display: grid; grid-template-columns: 150px 1fr; gap: 4px 12px; align-items: baseline;
+  padding: 8px 12px; border-bottom: 1px solid var(--hairline);
+}
+.ct-rung:last-child { border-bottom: none; }
+.ct-rung .ct-state { grid-column: 2; justify-self: start; }
+.ct-rung-name { font-weight: 600; font-size: 13px; }
+.ct-rung-because { grid-column: 2; font-size: 12px; color: var(--muted); }
+/* The rung the communication stops at is the answer, so it is the one thing on
+   the list that is allowed to shout. */
+.ct-rung.failed { background: var(--bad-weak); }
+.ct-rung.failed .ct-rung-because { color: var(--text); }
+.ct-rung.unreached, .ct-rung.unknown, .ct-rung.not_applicable { opacity: .6; }
+
+/* Settings → Diagnostics: the ladder's own order, with the causal chain marked
+   as fixed rather than merely refusing to move. */
+.ladder-order { list-style: none; margin: 10px 0; padding: 0; border: 1px solid var(--hairline); border-radius: var(--radius); }
+.ladder-rung {
+  display: grid; grid-template-columns: 22px 1fr auto auto; gap: 10px; align-items: center;
+  padding: 8px 12px; border-bottom: 1px solid var(--hairline);
+}
+.ladder-rung:last-child { border-bottom: none; }
+.ladder-rung input[type="checkbox"] { width: 16px; height: 16px; accent-color: var(--accent); }
+.ladder-rung-name { font-weight: 600; font-size: 13px; }
+.ladder-lock, .ladder-free {
+  font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted);
+  border: 1px solid var(--hairline); border-radius: var(--radius-pill); padding: 1px 8px; white-space: nowrap;
+}
+.ladder-rung.locked { background: var(--panel-2); }
+.ladder-move { display: flex; gap: 4px; }
+.ladder-fields { display: grid; gap: 12px; margin-top: 12px; }
+.ladder-fields label { display: grid; gap: 4px; font-size: 13px; }
 .ct-chip {
   display: inline-flex; align-items: center; gap: 6px; font-size: 12px;
   border: 1px solid var(--accent); color: var(--accent); background: var(--accent-weak);

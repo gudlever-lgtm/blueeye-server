@@ -51,6 +51,19 @@ const FACT_SCHEMA = [
   'dns.ok', 'dns.rtt_ms', 'dns.loss_pct',
   'http.ok', 'http.status', 'http.rtt_ms',
   'tcp.ok', 'tcp.rtt_ms', 'tcp.loss_pct',
+  // Why a TCP connect failed, as the agent classified it (0.33+): 'refused',
+  // 'timeout', 'unreachable', 'error'. The distinction a filter finding stands
+  // on — a reset is the host answering, a timeout is a packet dropped in
+  // silence — so it is a fact in its own right and not a detail string.
+  'tcp.failure',
+  // One namespace per port asked for, so a playbook can read ICMP against ONE
+  // application port. Without this a rule could only say "some TCP probe
+  // failed", which is not what "ping works but 443 does not" means.
+  'tcp.port_*.ok', 'tcp.port_*.rtt_ms', 'tcp.port_*.failure', 'tcp.port_*.loss_pct',
+  // The certificate (agent 0.27+, the two halves apart since 0.40). `ok` is the
+  // whole verdict; the rest is what made it.
+  'tls.ok', 'tls.rtt_ms', 'tls.expiry_days', 'tls.expired',
+  'tls.chain_trusted', 'tls.hostname_matches', 'tls.protocol',
   // The interface the agent sits behind.
   'iface.err_per_sec', 'iface.drop_per_sec', 'iface.util_pct', 'iface.speed_mbps',
   'iface.link_down', 'iface.busy_port_count',
@@ -254,6 +267,41 @@ const simpleFacts = (r) => defined({
   status: num(r.status),
 });
 
+// A TCP probe's target is `host:port`, and the port is the whole point: a rule
+// about a filter has to name the application port, because "ping works but TCP
+// does not" is only a finding when the two are about the same destination and
+// the same service. Returns the port, or null for a row that does not carry one.
+function portOf(target) {
+  const m = /:(\d+)$/.exec(String(target || ''));
+  return m ? Number(m[1]) : null;
+}
+
+const tcpFacts = (r) => defined({
+  ok: typeof r.ok === 'boolean' ? r.ok : undefined,
+  rtt_ms: num(r.rttMs),
+  loss_pct: num(r.lossPct),
+  // Only the agent's own classification. A row an older agent wrote carries
+  // none, and a rule over it then reads `unknown` — which is the honest answer
+  // for "we could not tell a reset from a drop", and the one thing a filter
+  // finding must never assume.
+  failure: typeof r.failure === 'string' && r.failure ? r.failure : undefined,
+});
+
+const tlsFacts = (r) => {
+  const t = r.tls && typeof r.tls === 'object' ? r.tls : {};
+  return defined({
+    ok: typeof r.ok === 'boolean' ? r.ok : undefined,
+    rtt_ms: num(r.rttMs),
+    expiry_days: num(r.certExpiryDays) ?? num(t.expiryDays),
+    expired: typeof t.expired === 'boolean' ? t.expired : undefined,
+    chain_trusted: typeof t.chainTrusted === 'boolean' ? t.chainTrusted : undefined,
+    // Tri-state at the source: false is a mismatch, null is "not checked"
+    // (an IP probed without SNI). Only the boolean is a measurement.
+    hostname_matches: typeof t.hostnameMatches === 'boolean' ? t.hostnameMatches : undefined,
+    protocol: typeof t.protocol === 'string' && t.protocol ? t.protocol : undefined,
+  });
+};
+
 const SHAPERS = {
   ping: pingFacts,
   path_mtu: pathMtuFacts,
@@ -261,7 +309,8 @@ const SHAPERS = {
   tcptraceroute: tracerouteFacts,
   dns: simpleFacts,
   http: simpleFacts,
-  tcp: simpleFacts,
+  tcp: tcpFacts,
+  tls: tlsFacts,
 };
 
 // Interface health for the agent, from the shape src/health/interfaceHealth.js
@@ -378,6 +427,20 @@ function buildFacts({ results = [], reverse = [], interfaces = null, branchCount
       if (!r || typeof r.type !== 'string') continue;
       const shape = SHAPERS[r.type];
       if (!shape) continue;
+      // TCP is the one type where one namespace is not enough: a session tests
+      // :80 and :443 and a rule has to be able to name one of them. Each port
+      // gets `tcp.port_<n>`, and the bare `tcp.*` keys stay as the newest row,
+      // so the rules written before ports existed still read what they always
+      // did.
+      if (r.type === 'tcp') {
+        const v = shape(r, {});
+        if (!hasAny(v)) continue;
+        const port = portOf(r.target);
+        const slot = into.tcp || (into.tcp = {});
+        if (port !== null && slot[`port_${port}`] === undefined) slot[`port_${port}`] = v;
+        for (const [k, val] of Object.entries(v)) if (slot[k] === undefined) slot[k] = val;
+        continue;
+      }
       // First result of a type wins. Callers pass newest-first, and a session
       // that ran the same probe twice means the operator re-ran it: the later
       // answer is the one they are looking at.
@@ -423,4 +486,4 @@ function readFact(facts, path) {
   return cur === null ? undefined : cur;
 }
 
-module.exports = { buildFacts, readFact, isKnownFactPath, sustainedLossFromHop, comparePaths, ifaceFacts, FACT_SCHEMA, SAME_PATH_RATIO, MIN_RUNS_FOR_SINGLE_PATH };
+module.exports = { buildFacts, readFact, portOf, isKnownFactPath, sustainedLossFromHop, comparePaths, ifaceFacts, FACT_SCHEMA, SAME_PATH_RATIO, MIN_RUNS_FOR_SINGLE_PATH };

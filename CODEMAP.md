@@ -154,7 +154,8 @@ public/                # dependency-free dashboard SPA
 migrations/NNN_*.sql   # numbered, tracked in schema_migrations; the source of truth
 schema.sql             # full snapshot, GENERATED from migrations/ (npm run build-schema)
 docs/                  # per-feature docs (analysis, geo, alerting, retention, diagnose, ...)
-scripts/               # seed-superadmin.js, seed-demo.js, dev-bootstrap.js, deploy.sh, build-schema.js
+scripts/               # install-server.sh (new customer host), deploy.sh (update it),
+                       # seed-superadmin.js, seed-demo.js, dev-bootstrap.js, build-schema.js
 test/, test-support/   # node --test specs + fakes (makeApp, makeXRepo, authHeader)
 test/gate/             # pre-build gate: security / ui / validation sweeps (scripts/gate.sh, docs/gate.md)
 ```

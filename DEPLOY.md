@@ -23,6 +23,14 @@ server validates its license against the license server**.
 
 ## 1) Bootstrap (once)
 
+> **Installing at a real customer?** Use
+> [`scripts/install-server.sh`](scripts/install-server.sh) instead of everything
+> below — it asks for the licence key, generates the secrets, starts the stack
+> and smoke-tests it (200 / 404 / 401), without the demo seeds and the private
+> signing key that `dev-bootstrap.js` writes. See
+> [SETUP.md](SETUP.md#2-on-prem-server-per-customer). The rest of this document
+> is the one-host **demo**.
+
 From `blueeye-server/`, generate the Ed25519 license key pair + demo `.env`:
 
 ```bash

@@ -65,6 +65,38 @@ server in step 2.
 
 ## 2. On-prem server (per customer)
 
+### The short way: `scripts/install-server.sh`
+
+On a host with Docker, the whole of this step is one command. Clone
+`blueeye-server` and `blueeye-agent` as siblings (**not** `blueeye-licens` — it
+holds the signing key), then:
+
+```bash
+cd blueeye-server
+./scripts/install-server.sh
+```
+
+It asks for the handful of values a customer install actually needs — the
+licence key above all — generates the rest (MySQL passwords, JWT secret), writes
+`.env` (mode 0600), builds and starts the stack, and smoke-tests the result:
+`/health` must answer **200**, an unknown path **404** and an unauthenticated
+API call **401**. Anything else and it prints the server log and stops rather
+than reporting success.
+
+Unlike `scripts/dev-bootstrap.js` it writes no signing key, no demo seeds and no
+trust-anchor override, so what it produces is a customer-safe `.env`. Every
+prompt has an env override for unattended provisioning:
+
+```bash
+BLUEEYE_LICENSE_KEY=CUST-… BLUEEYE_PUBLIC_URL=https://blueeye.kunde.dk \
+  ./scripts/install-server.sh --non-interactive
+```
+
+`--dry-run` writes the `.env` and stops; `--help` lists every variable. Run it
+once per host — later updates are `scripts/deploy.sh`.
+
+### The manual way
+
 ```bash
 cd blueeye-server
 npm install

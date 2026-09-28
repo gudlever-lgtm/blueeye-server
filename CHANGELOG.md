@@ -1,5 +1,42 @@
 # Changelog
 
+## 0.214.0 — One command to stand up a customer server
+
+Installing at a new customer meant reading SETUP.md, copying `.env.example`,
+inventing three secrets by hand and hoping the right ones were left blank. The
+one script that did anything like it, `scripts/dev-bootstrap.js`, is the wrong
+one: it writes the vendor's **private** licence signing key, a `DEMO-…` licence
+and demo seeds into `.env`, none of which may exist on a customer host.
+
+`scripts/install-server.sh` is the missing half. It asks only for what a
+customer install actually needs — the licence key, the public URL, the first
+admin, the ports — and generates the rest.
+
+- **What it writes is customer-safe by construction.** No `LICENSE_SIGNING_KEY`,
+  no `LICENSE_PUBLIC_KEY`/`TRUST_ANCHOR_OVERRIDE_ACK` (the trust anchor is the
+  key embedded in `src/license/publicKey.js`), no `LICENSE_SERVER_ID` (the
+  server derives a stable host id and licens binds it on first validation), and
+  `SEED_DEMO=0`. `test/installServerScript.test.js` asserts each of those
+  absences, because the failure mode is silent: an install that works fine and
+  trusts the wrong key.
+- **The secrets are generated, not defaulted.** MySQL root + user passwords and
+  the JWT secret come from `openssl`/`/dev/urandom`/node, fresh per run and
+  single-quoted into `.env`, so a password with a `$` or a space in it does not
+  fail later as a wrong DB password.
+- **It does not claim success it has not checked.** After `docker compose up` it
+  waits for `/health` **200**, then requires **404** on an unknown path and
+  **401** on an unauthenticated `/license/status`. On anything else it prints
+  the last 40 lines of the server log and exits non-zero — a server answering
+  500 is not installed, it is broken.
+- **Safe to re-run.** An existing `.env` stops it with a pointer to
+  `scripts/deploy.sh` (this script creates an install; that one updates it);
+  `--force` overwrites and keeps a timestamped backup. `--dry-run` writes the
+  `.env` and stops, `--non-interactive` + the `BLUEEYE_*` env overrides cover
+  unattended provisioning.
+- Opting in wires `SERVER_UPDATE_COMMAND` to `scripts/deploy.sh`, so Settings →
+  Updates gets its "Run update" button on day one instead of after someone
+  remembers to edit `.env`.
+
 ## 0.207.2 — The two keys that must never change, and a loud alarm when one does
 
 Two Ed25519 public keys decide whether an agent will ever accept anything from

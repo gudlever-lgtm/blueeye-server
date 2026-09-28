@@ -34,6 +34,11 @@ needed.
 
 ## Getting started
 
+Installing at a customer, on Docker? Run
+[`scripts/install-server.sh`](scripts/install-server.sh) — it asks for the
+licence key, generates the secrets, starts the stack and smoke-tests it. The
+steps below are the manual/development path.
+
 ```bash
 # 1) Install dependencies
 npm install

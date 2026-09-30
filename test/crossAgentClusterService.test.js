@@ -584,7 +584,9 @@ test('a finding-store failure is swallowed (never throws to the sweep)', async (
     now: () => T,
   });
   const summary = await svc.detectAndPersist();
-  assert.deepEqual(summary, { created: 0, updated: 0 });
+  // The summary carries every outcome a sweep has, so a caller reading it does
+  // not have to know which ones exist: nothing was read, so nothing happened.
+  assert.deepEqual(summary, { created: 0, updated: 0, reopened: 0, suppressed: 0 });
 });
 
 test('unrelated findings spread beyond the window create no cluster', async () => {
@@ -598,4 +600,114 @@ test('unrelated findings spread beyond the window create no cluster', async () =
   const summary = await svc.detectAndPersist();
   assert.equal(summary.created, 0);
   assert.equal(repo.rows.length, 0);
+});
+
+// ---- a resolve has to mean something --------------------------------------
+//
+// listOpen() returns open + acknowledged, so a resolved cluster was invisible
+// to the sweep and a still-firing pattern was persisted as a BRAND-NEW
+// situation on the very next pass. The operator resolved #18735, #18736
+// appeared a minute later with the same members, and Resolve read as a button
+// that does nothing. These pin the two halves of the rule: quiet during the
+// cooldown, the SAME story back after it.
+
+// Seeds a repo holding one resolved cluster over the given members.
+async function repoWithResolved(memberFindingIds, resolvedAt) {
+  const repo = makeEventClustersRepo();
+  const id = await repo.create({
+    confidence: 'high', memberFindingIds, suspectedCommonCause: 'site',
+    groupingBasis: null, status: 'open', detectedAt: new Date(resolvedAt.getTime() - 60000),
+  });
+  await repo.resolve(id, { by: 7, note: 'known maintenance', at: resolvedAt });
+  return { repo, id };
+}
+
+const twoFindings = () => [
+  finding({ id: 'a', hostId: '1', metric: 'probe.loss', createdAt: ago(90000) }),
+  finding({ id: 'b', hostId: '2', metric: 'probe.loss', createdAt: ago(30000) }),
+];
+
+test('a pattern still firing right after a resolve does NOT become a second situation', async () => {
+  // Resolved ten minutes ago; the findings never stopped.
+  const { repo, id } = await repoWithResolved(['a', 'b'], ago(10 * 60 * 1000));
+  const { svc } = svcWith({ findings: twoFindings(), clustersRepo: repo });
+
+  const summary = await svc.detectAndPersist();
+  assert.equal(summary.created, 0, 'this is the duplicate that made Resolve look broken');
+  assert.equal(summary.suppressed, 1);
+  assert.equal(repo.rows.length, 1, 'still one situation, not two');
+  assert.equal(repo.rows[0].id, id);
+  assert.equal(repo.rows[0].status, 'resolved', 'the operator resolved it; it stays resolved');
+});
+
+test('past the cooldown the SAME situation re-opens, rather than a duplicate appearing', async () => {
+  const { repo, id } = await repoWithResolved(['a'], ago(3 * 60 * 60 * 1000)); // 3h ago
+  const { svc, published } = svcWith({ findings: twoFindings(), clustersRepo: repo });
+
+  const summary = await svc.detectAndPersist();
+  assert.equal(summary.created, 0);
+  assert.equal(summary.reopened, 1);
+  assert.equal(repo.rows.length, 1, 'the story continues under one id');
+  assert.equal(repo.rows[0].id, id);
+  assert.equal(repo.rows[0].status, 'open');
+  assert.equal(repo.rows[0].resolved_at, null);
+  assert.deepEqual(repo.rows[0].member_finding_ids.slice().sort(), ['a', 'b'], 'the new evidence joined the old set');
+  // The history is the point of re-opening rather than re-creating.
+  assert.equal(repo.rows[0].resolution_note, 'known maintenance', 'why it was resolved is worth keeping');
+  assert.equal(published.length, 1);
+  assert.equal(published[0].id, id);
+});
+
+test('an unrelated pattern still opens its own situation while another sits resolved', async () => {
+  const { repo } = await repoWithResolved(['x', 'y'], ago(10 * 60 * 1000));
+  const { svc } = svcWith({ findings: twoFindings(), clustersRepo: repo });
+
+  const summary = await svc.detectAndPersist();
+  assert.equal(summary.created, 1, 'the cooldown is per situation, not a global mute');
+  assert.equal(summary.suppressed, 0);
+  assert.equal(repo.rows.length, 2);
+});
+
+test('a cluster closed for good is never re-opened by the sweep', async () => {
+  const { repo, id } = await repoWithResolved(['a'], ago(3 * 60 * 60 * 1000));
+  await repo.updateStatus(id, { from: 'resolved', to: 'closed', at: ago(60 * 60 * 1000) });
+  const { svc } = svcWith({ findings: twoFindings(), clustersRepo: repo });
+
+  const summary = await svc.detectAndPersist();
+  assert.equal(summary.reopened, 0);
+  assert.equal(repo.rows.find((r) => r.id === id).status, 'closed');
+  // Closed is out of the dormant set entirely, so this is a new situation —
+  // which is right: somebody decided that story was over.
+  assert.equal(summary.created, 1);
+});
+
+test('a repository without the new methods still sweeps (older deployment)', async () => {
+  const repo = makeEventClustersRepo();
+  delete repo.listRecentlyResolved;
+  delete repo.reopen;
+  const { svc } = svcWith({ findings: twoFindings(), clustersRepo: repo });
+
+  const summary = await svc.detectAndPersist();
+  assert.equal(summary.created, 1);
+  assert.equal(summary.suppressed, 0);
+});
+
+test('a failing listRecentlyResolved never breaks the sweep', async () => {
+  const repo = makeEventClustersRepo({ listRecentlyResolved: async () => { throw new Error('db down'); } });
+  const { svc } = svcWith({ findings: twoFindings(), clustersRepo: repo });
+
+  const summary = await svc.detectAndPersist();
+  assert.equal(summary.created, 1, 'a read that fails must not stop detection');
+});
+
+test('past living memory the pattern gets a situation of its own again', async () => {
+  // Resolved three days ago: the same fault returning next week is not last
+  // week's story continued.
+  const { repo, id } = await repoWithResolved(['a'], ago(3 * 24 * 60 * 60 * 1000));
+  const { svc } = svcWith({ findings: twoFindings(), clustersRepo: repo });
+
+  const summary = await svc.detectAndPersist();
+  assert.equal(summary.reopened, 0);
+  assert.equal(summary.created, 1);
+  assert.equal(repo.rows.find((r) => r.id === id).status, 'resolved', 'the old one is history, and stays that way');
 });

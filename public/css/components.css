@@ -139,8 +139,18 @@
 .ui .hostlink:hover { text-decoration: underline; }
 
 /* ---- Panel --------------------------------------------------------------- */
-.ui .panel-ui { background: var(--surface); border: 1px solid var(--border);
-  border-radius: var(--r-panel); overflow: hidden; }
+/* A panel is a surface laid ON the page, not a box drawn on it: hairline plus
+   the resting elevation. It used to carry the border alone, which is why a
+   migrated screen read as a wireframe — every section the same plane as the
+   background behind it, separated only by a 1px line. Level 1 is the whole
+   difference between "a page with lines on it" and "a page with things on
+   it". */
+.ui .panel-ui { background: var(--elev-surface-1); border: 1px solid var(--border);
+  border-radius: var(--r-panel); overflow: hidden; box-shadow: var(--elev-1); }
+/* A panel that is a link to somewhere lifts to level 2 under the pointer. */
+.ui .panel-ui.is-interactive { cursor: pointer;
+  transition: box-shadow 160ms var(--ease), border-color 160ms var(--ease); }
+.ui .panel-ui.is-interactive:hover { box-shadow: var(--elev-2); border-color: var(--border-strong); }
 .ui .panel-head { display: flex; align-items: center; gap: var(--s-2) var(--s-3); flex-wrap: wrap;
   padding: var(--s-4) var(--s-5); border-bottom: 1px solid var(--hairline); }
 .ui .panel-head h2 { margin: 0; flex: 0 0 auto; font-size: var(--fs-md); font-weight: 650; }

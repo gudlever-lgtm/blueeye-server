@@ -10,6 +10,34 @@ const silentLogger = { info() {}, warn() {}, error() {}, debug() {} };
 // Medium/high clusters are the ones worth an AI advisory (and, later, an alert).
 const ADVISORY_CONFIDENCE = new Set(['medium', 'high']);
 
+// How long a manual resolve is respected before the same pattern is allowed to
+// come back.
+//
+// WHY THIS EXISTS. listOpen() returns open + acknowledged, so a resolved
+// cluster was invisible to the sweep — and a pattern that is still firing was
+// therefore persisted as a BRAND-NEW situation on the very next pass. The
+// operator resolved #18735, #18736 appeared a minute later with the same five
+// agents and the same cause, and Resolve read as a button that does nothing.
+// The findings had not stopped; that is exactly the case where an operator
+// resolves, because they have decided what it is.
+//
+// So a resolve buys quiet: for this long, a candidate that overlaps a
+// resolved cluster is dropped rather than re-created. After it, the SAME
+// cluster re-opens — the story continues under one id, with its resolution
+// note still attached, instead of a second row about the same thing. A
+// condition that is still broken an hour later is something the shift should
+// see again; one that is genuinely handled produces no candidate to match.
+const RESOLVE_COOLDOWN_MS = 60 * 60 * 1000;
+
+// How long a resolved situation is still "the same story" when the pattern
+// comes back. Inside the cooldown a match is dropped; between the cooldown and
+// this, it re-opens the same row; past it, the pattern gets a situation of its
+// own. A day is the line because it is the shift boundary: the same fault
+// returning this afternoon is the morning's story continued, and the same
+// fault next week is not — re-opening a row from last Tuesday would bury the
+// new occurrence under history nobody is looking at.
+const RESOLVE_MEMORY_MS = 24 * 60 * 60 * 1000;
+
 // Orchestrates the cross-agent correlator against the live finding store: loads the
 // recent findings across ALL agents, runs the detector, then persists each candidate
 // as an `event_clusters` row — DEDUPING against still-open clusters so a recurring
@@ -313,7 +341,7 @@ function createCrossAgentClusterService({
   // candidate clusters, then create-or-update each (deduped). Returns a summary
   // { created, updated } for the caller/tests. Never throws.
   async function detectAndPersist() {
-    const summary = { created: 0, updated: 0 };
+    const summary = { created: 0, updated: 0, reopened: 0, suppressed: 0 };
     let recent = [];
     try {
       // TWO windows back: two related findings may sit up to one window apart,
@@ -346,6 +374,19 @@ function createCrossAgentClusterService({
     } catch (err) {
       logger.warn(`cross-agent: could not list open clusters (${err.message})`);
       open = [];
+    }
+
+    // The dormant set: resolved within living memory. Without it the sweep
+    // cannot tell "already dealt with" from "never seen", and answers both the
+    // same way — by creating a row.
+    let dormant = [];
+    if (typeof clustersRepo.listRecentlyResolved === 'function') {
+      try {
+        dormant = await clustersRepo.listRecentlyResolved(new Date(now().getTime() - RESOLVE_MEMORY_MS));
+      } catch (err) {
+        logger.warn(`cross-agent: could not list resolved clusters (${err.message})`);
+        dormant = [];
+      }
     }
 
     for (const candidate of candidates) {
@@ -384,6 +425,46 @@ function createCrossAgentClusterService({
               await maybeAlert(existing.id, { ...mergedCandidate, advisory }, membersOf(merged, membersById));
             }
           }
+        } else if (findOverlap(candidate, dormant)) {
+          const prior = findOverlap(candidate, dormant);
+          const resolvedAtMs = prior.resolvedAt ? Date.parse(prior.resolvedAt) : NaN;
+          const ageMs = Number.isFinite(resolvedAtMs) ? now().getTime() - resolvedAtMs : Infinity;
+
+          if (ageMs < RESOLVE_COOLDOWN_MS) {
+            // Inside the cooldown: the operator has dealt with this. Dropping
+            // the candidate is the whole point — creating the row here is the
+            // bug that made Resolve look broken.
+            summary.suppressed += 1;
+            continue;
+          }
+
+          // Past it, and still firing. The same story re-opens rather than a
+          // duplicate being created, so the history, the resolution note and
+          // the id the shift has been quoting all survive.
+          const merged = [...new Set([...prior.memberFindingIds, ...candidate.memberFindingIds])];
+          const reopened = typeof clustersRepo.reopen === 'function'
+            ? await clustersRepo.reopen(prior.id, { at: candidate.detectedAt })
+            : false;
+          if (!reopened) {
+            // Somebody closed it for good, or re-opened it first. Either way it
+            // is not ours to touch; the next sweep sees it in `open`.
+            summary.suppressed += 1;
+            continue;
+          }
+          await clustersRepo.updateMembership(prior.id, {
+            confidence: candidate.confidence,
+            memberFindingIds: merged,
+            suspectedCommonCause: candidate.suspectedCommonCause,
+            groupingBasis: mergeGrouping(prior.groupingBasis, candidate.grouping),
+            detectedAt: candidate.detectedAt,
+          });
+          summary.reopened += 1;
+          // It is live again, so later candidates in this same sweep must see
+          // it as open rather than dormant.
+          dormant = dormant.filter((c) => c.id !== prior.id);
+          open.push({ ...prior, status: 'open', memberFindingIds: merged });
+          await linkCases(prior.id, merged, membersById);
+          publishCluster({ ...candidate, id: prior.id, status: 'open', memberFindingIds: merged, updated: true });
         } else {
           const id = await clustersRepo.create({
             confidence: candidate.confidence,

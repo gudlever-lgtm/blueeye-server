@@ -662,6 +662,45 @@ class FindingStore {
     return Number(result.affectedRows || 0);
   }
 
+  // Every open finding that belongs to one event case, accepted in one write.
+  //
+  // This is what closes the loop between an event case and THE RED BAR. The
+  // bar counts open attack-indication findings (see attackIndication above),
+  // and acknowledging is how it clears — but an operator working the event
+  // screen resolves the CASE, which used to leave its findings open and the
+  // bar lit with no control anywhere on that screen to put it out. Concluding
+  // the case is the operator saying "seen", so the findings it was built from
+  // are accepted with it.
+  //
+  // `acked = 0` in the WHERE means the count is what this call changed, and it
+  // makes a second close (or a reopen and re-close) a no-op rather than a
+  // rewrite. Re-opening deliberately does NOT un-acknowledge: the rows were
+  // seen, and un-seeing them is not a thing an operator can do.
+  async ackByEventCase(eventCaseId) {
+    const id = Number(eventCaseId);
+    if (!Number.isInteger(id) || id <= 0) return 0;
+    const [result] = await this.pool.query(
+      'UPDATE findings SET acked = 1 WHERE acked = 0 AND event_case_id = ?',
+      [id],
+    );
+    return Number(result.affectedRows || 0);
+  }
+
+  // The same thing for a bulk transition that moved rows by FILTER rather than
+  // by id: updateStatusWhere reports a count, not which cases it touched, so
+  // the set is described the only way it can be — every open finding whose
+  // case has concluded. Idempotent, so running it after a bulk action that
+  // moved nothing costs one indexed UPDATE and changes no rows.
+  async ackConcludedEventCases() {
+    const [result] = await this.pool.query(
+      `UPDATE findings f
+         JOIN event_cases e ON e.id = f.event_case_id
+          SET f.acked = 1
+        WHERE f.acked = 0 AND e.status IN ('resolved', 'closed')`,
+    );
+    return Number(result.affectedRows || 0);
+  }
+
   // Persists the correlation links for a finding (the ids of the other findings
   // the correlator grouped it with). Stored as JSON. Returns true if a row was
   // updated, false if no finding has that id.

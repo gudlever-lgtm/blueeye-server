@@ -1961,6 +1961,29 @@ function makeEventClustersRepo(overrides = {}) {
       .filter((r) => LIVE.includes(r.status))
       .sort((a, b) => new Date(b.detected_at) - new Date(a.detected_at) || b.id - a.id)
       .map(mapOut)),
+    // Resolved inside the lookback, newest first. The detector needs these to
+    // tell "the operator dealt with this" from "never seen": without them a
+    // still-firing pattern is persisted as a brand-new situation on the sweep
+    // right after a resolve.
+    listRecentlyResolved: overrides.listRecentlyResolved || (async (since, limit = 500) => {
+      const at = since instanceof Date ? since : new Date(since);
+      if (Number.isNaN(at.getTime())) return [];
+      return rows
+        .filter((r) => r.status === 'resolved' && r.resolved_at && new Date(r.resolved_at).getTime() >= at.getTime())
+        .sort((a, b) => new Date(b.resolved_at) - new Date(a.resolved_at) || b.id - a.id)
+        .slice(0, limit)
+        .map(mapOut);
+    }),
+    // The same story continued, not a second row about it. Guarded on
+    // `resolved`, so one closed for good or already re-opened is left alone.
+    reopen: overrides.reopen || (async (id, { at = null } = {}) => {
+      const r = rows.find((x) => x.id === Number(id) && x.status === 'resolved');
+      if (!r) return false;
+      r.status = 'open';
+      r.resolved_at = null;
+      if (at) r.detected_at = at;
+      return true;
+    }),
     updateMembership: overrides.updateMembership || (async (id, { confidence, memberFindingIds, suspectedCommonCause, groupingBasis = null, detectedAt }) => {
       const r = rows.find((x) => x.id === Number(id) && LIVE.includes(x.status));
       if (!r) return false;
@@ -3160,6 +3183,30 @@ function makeFindingStore(overrides = {}) {
       let n = 0;
       for (const f of rows) {
         if (!f.acked && match(f)) { f.acked = true; n += 1; }
+      }
+      return n;
+    }),
+    // Concluding an event case accepts the findings behind it — the write that
+    // puts the red attack-indication bar out. Counts only what it changed, so
+    // a second close is a no-op, like the real store's `acked = 0` predicate.
+    ackByEventCase: overrides.ackByEventCase || (async (eventCaseId) => {
+      const id = Number(eventCaseId);
+      if (!Number.isInteger(id) || id <= 0) return 0;
+      let n = 0;
+      for (const f of rows) {
+        if (!f.acked && Number(f.eventCaseId) === id) { f.acked = true; n += 1; }
+      }
+      return n;
+    }),
+    // The filter-scoped bulk form: the router does not know which cases moved,
+    // so the set is "every open finding on a case that has concluded". The
+    // fake needs the cases to answer that, and is given them by the caller.
+    ackConcludedEventCases: overrides.ackConcludedEventCases || (async () => {
+      const cases = typeof overrides.eventCases === 'function' ? overrides.eventCases() : [];
+      const done = new Set(cases.filter((c) => c.status === 'resolved' || c.status === 'closed').map((c) => Number(c.id)));
+      let n = 0;
+      for (const f of rows) {
+        if (!f.acked && f.eventCaseId != null && done.has(Number(f.eventCaseId))) { f.acked = true; n += 1; }
       }
       return n;
     }),

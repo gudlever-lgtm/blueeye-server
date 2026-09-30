@@ -34,11 +34,16 @@ input, select, textarea {
   background: var(--bg);
   border: 1px solid var(--border);
   color: var(--text);
-  border-radius: var(--radius-sm);
+  border-radius: var(--r-btn);
+  /* One control height (--control-h) for a field, the same as the contract's
+     own inputs, so a legacy screen and a migrated one line up. A textarea is
+     sized by its rows and only takes the floor. */
+  min-height: var(--control-h);
   padding: 9px 12px;
   font: inherit;
   transition: border-color .15s var(--ease), box-shadow .15s var(--ease);
 }
+textarea { min-height: 0; }
 input:focus, select:focus, textarea:focus {
   outline: none; border-color: var(--accent); box-shadow: var(--ring);
 }
@@ -47,7 +52,8 @@ button {
   background: var(--accent);
   color: var(--btn-fg);
   border: 1px solid transparent;
-  border-radius: var(--radius-sm);
+  border-radius: var(--r-btn);
+  min-height: var(--control-h);
   padding: 8px 14px;
   font: inherit;
   font-weight: 600;
@@ -62,7 +68,9 @@ button {
 button.ghost { background: var(--panel); color: var(--text); border-color: var(--border); font-weight: 500; }
 button.ghost:hover:not(:disabled) { background: var(--panel-2); border-color: var(--border-strong); }
 button.danger { background: var(--bad); color: var(--btn-fg); }
-button.small { padding: 4px 8px; font-size: 12px; }
+/* A row action or an inline control is not a toolbar control: it sits inside a
+   44px table row, so it takes the small height rather than the full one. */
+button.small { min-height: var(--control-h-sm); padding: 4px 8px; font-size: 12px; }
 button:disabled { opacity: 0.5; cursor: not-allowed; }
 
 /* ===== App shell: fixed sidebar + topbar + content =======================
@@ -234,7 +242,7 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .nav-group.collapsed button[data-view] { display: none; }
 .tabs button.role-hidden { display: none; }
 .tabs button { display: flex; align-items: center; justify-content: flex-start; width: 100%;
-  min-height: var(--control-h); position: relative; text-align: left;
+  min-height: var(--control-h-sm); position: relative; text-align: left;
   padding: var(--s-2) var(--s-3); border-radius: var(--radius-sm);
   background: transparent; color: var(--muted); font-size: var(--fs-sm); font-weight: 500;
   transition: background .13s var(--ease), color .13s var(--ease); }
@@ -278,11 +286,12 @@ main#view { width: 100%; max-width: var(--content-max); margin-inline: auto;
    content panels: they must fill the available width and share one padding scale
    with the other panels (.settings-card, …) instead of a much roomier
    320px column (Discovery, Investigation, agent detail, the Overview cards …). */
-main#view .card { width: auto; padding: 18px 20px; box-shadow: var(--shadow); }
-.section-head { display: flex; align-items: center; gap: 12px; margin: 0 0 14px; }
+main#view .card { width: auto; padding: var(--s-5); box-shadow: var(--elev-1); }
+.section-head { display: flex; align-items: center; gap: var(--s-3); margin: 0 0 var(--s-5); }
 
 /* Traffic overview: the big live chart (history view reuses .overview-chart). */
-.overview-chart { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px; }
+.overview-chart { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: var(--s-4); box-shadow: var(--elev-1); }
 /* Inside a contract Panel the chart is the panel's content, not a second card:
    Traffic mounts multiChart() into ui.panel() while the plotter is unmigrated. */
 .ui .overview-chart { background: transparent; border: 0; border-radius: 0; padding: 0; }
@@ -724,7 +733,9 @@ label.check input { width: auto; }
 
 /* Table */
 table { width: 100%; border-collapse: collapse; background: var(--panel); border-radius: var(--radius); overflow: hidden; }
-th, td { text-align: left; padding: 11px 14px; border-bottom: 1px solid var(--hairline); vertical-align: top; }
+th, td { text-align: left; padding: var(--s-3) var(--s-4); border-bottom: 1px solid var(--hairline); vertical-align: top; }
+tbody tr { height: var(--row-h); }
+tbody tr:hover { background: var(--hover); }
 th { color: var(--muted); font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: .06em; }
 /* The header row keeps the full-strength border so it reads as a header while
    the body rows are separated by hairlines only. */
@@ -743,10 +754,10 @@ table.kv, .adv-table, .probe-hops, .fs-mini, .pl-waterfall,
    the card's edges. The card carries the frame, so the table drops its own. */
 main#view .data-card { padding: 0; overflow: hidden; }
 .data-card > .dc-head { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap;
-  padding: 14px 18px 12px; }
-.data-card > .dc-head h3 { margin: 0; font-size: 15px; }
+  padding: var(--s-4) var(--s-5) var(--s-3); }
+.data-card > .dc-head h3 { margin: 0; font-size: var(--fs-lg); font-weight: 600; }
 .data-card > .dc-head .dc-actions { margin-left: auto; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.data-card > .dc-note { margin: 0; padding: 0 18px 14px; font-size: 13px; }
+.data-card > .dc-note { margin: 0; padding: 0 var(--s-5) var(--s-4); font-size: var(--fs-sm); }
 .data-card > table, .data-card > .tablewrap > table { border: 0; border-radius: 0; box-shadow: none; }
 .data-card > .tablewrap { border: 0; border-radius: 0; box-shadow: none; background: transparent; }
 .data-card > .empty { padding: 8px 18px 24px; }

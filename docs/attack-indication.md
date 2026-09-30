@@ -488,3 +488,22 @@ still leaves the flag to a human.
   `securitySteps()`): seven steps covering what each detector measures, the two
   settings to touch on the first day of an install, and the red line. See
   `docs/guides.md`.
+
+
+## Concluding an event puts the bar out
+
+The bar counts findings with `acked = 0`. Acknowledging is how it clears — and
+resolving or closing the **event case** the bar points at now accepts the
+findings behind it, on every path that concludes a case (`PATCH
+/api/events/:id`, `POST /api/events/bulk-status` by ids, and the filter-scoped
+bulk form). Before this an operator could resolve the very event the bar was
+about and be left with the bar still lit and no control on that screen that
+could touch it.
+
+Re-opening a case does **not** un-accept: those rows were seen, and un-seeing
+them is not something an operator can do. The transition's response carries
+`ackedFindings` so the screen can say what else it did, and the audit row
+records the count alongside the status change.
+
+Migration 143 does the same thing once for the backlog — the cases that were
+concluded before this existed.

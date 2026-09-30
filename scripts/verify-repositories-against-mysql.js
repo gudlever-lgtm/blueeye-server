@@ -1205,6 +1205,123 @@ check('flows: VLAN and exporter in/out ifIndex land in their columns (migration 
   ]);
 });
 
+// The scan detector's fleet-wide read (src/analysis/scanDetector.js). The
+// HAVING is over two COUNT(DISTINCT ...) aliases, which MySQL allows and the
+// scripted-pool spec can never confirm.
+check('flows: scan candidates count distinct ports and hosts per (agent, source) and honour both thresholds', async (pool) => {
+  const flows = repoOf('flowsRepository', 'createFlowsRepository')({ pool });
+  const agentId = await newAgent(pool, 'be-scan');
+  const other = await newAgent(pool, 'be-scan-2');
+  const at = ago(120000);
+  const rows = [];
+  // A port sweep: one source, one target, 60 ports.
+  for (let p = 1; p <= 60; p += 1) {
+    rows.push({ agentId, ts: at, srcIp: '10.40.0.9', dstIp: '10.40.0.20', dstPort: p, proto: 'tcp', bytes: 60, packets: 1, flows: 1, internal: true });
+  }
+  // A fan-out: one source, one port, 55 targets.
+  for (let h = 1; h <= 55; h += 1) {
+    rows.push({ agentId, ts: at, srcIp: '10.40.0.10', dstIp: `10.40.1.${h}`, dstPort: 445, proto: 'tcp', bytes: 10, packets: 1, flows: 1, internal: true });
+  }
+  // Ordinary traffic, and a source with no address at all.
+  rows.push({ agentId, ts: at, srcIp: '10.40.0.11', dstIp: '10.40.0.20', dstPort: 443, proto: 'tcp', bytes: 900, packets: 2, flows: 1, internal: true });
+  rows.push({ agentId, ts: at, srcIp: null, dstIp: '10.40.0.20', dstPort: 443, proto: 'tcp', bytes: 1, packets: 1, flows: 1, internal: true });
+  // The same address seen by a DIFFERENT agent: a separate candidate row.
+  rows.push({ agentId: other, ts: at, srcIp: '10.40.0.9', dstIp: '10.40.0.30', dstPort: 22, proto: 'tcp', bytes: 1, packets: 1, flows: 1, internal: true });
+  // Outside the window.
+  rows.push({ agentId, ts: ago(3 * 3600000), srcIp: '10.40.0.12', dstIp: '10.40.0.20', dstPort: 1, proto: 'tcp', bytes: 1, packets: 1, flows: 1, internal: true });
+  await flows.insertMany(rows);
+
+  const found = await flows.scanCandidates({ from: ago(600000), to: new Date(), portThreshold: 50, hostThreshold: 50 });
+  const mine = found.filter((r) => r.agentId === agentId).sort((a, b) => (a.srcIp < b.srcIp ? -1 : 1));
+  assert.deepStrictEqual(mine.map((r) => [r.srcIp, r.distinctPorts, r.distinctHosts]), [
+    ['10.40.0.10', 1, 55],
+    ['10.40.0.9', 60, 1],
+  ], 'ordinary traffic or a NULL source reached the candidate list');
+  assert.strictEqual(mine[1].bytes, 3600);
+  assert.strictEqual(mine[1].flowCount, 60);
+  assert.ok(mine[1].firstSeen instanceof Date && mine[1].lastSeen instanceof Date, 'the burst window is missing');
+  assert.strictEqual(mine[1].internal, true);
+  assert.ok(found.some((r) => r.agentId === other) === false, 'one flow from a second agent crossed a threshold');
+
+  // Raising the thresholds takes both out; the agent filter narrows.
+  assert.deepStrictEqual(await flows.scanCandidates({ from: ago(600000), to: new Date(), portThreshold: 500, hostThreshold: 500 }), []);
+  const one = await flows.scanCandidates({ from: ago(600000), to: new Date(), agentId: other, portThreshold: 1, hostThreshold: 1 });
+  assert.deepStrictEqual(one.map((r) => r.srcIp), ['10.40.0.9']);
+});
+
+// The new-peer detector's hourly read (src/analysis/newPeerDetector.js).
+check('flows: external peers group by (agent, asn, country) and never include internal traffic (migration 142)', async (pool) => {
+  const flows = repoOf('flowsRepository', 'createFlowsRepository')({ pool });
+  const agentId = await newAgent(pool, 'be-peer');
+  const at = ago(120000);
+  await flows.insertMany([
+    { agentId, ts: at, srcIp: '10.41.0.5', extIp: '8.8.8.8', dstIp: '8.8.8.8', proto: 'tcp', bytes: 100, packets: 1, flows: 1, internal: false, asn: 15169, asnName: 'Google LLC', country: 'US' },
+    { agentId, ts: at, srcIp: '10.41.0.6', extIp: '8.8.4.4', dstIp: '8.8.4.4', proto: 'tcp', bytes: 400, packets: 1, flows: 2, internal: false, asn: 15169, asnName: 'Google LLC', country: 'US' },
+    { agentId, ts: at, srcIp: '10.41.0.5', extIp: '1.1.1.1', dstIp: '1.1.1.1', proto: 'udp', bytes: 50, packets: 1, flows: 1, internal: false, asn: 13335, asnName: 'Cloudflare', country: 'AU' },
+    // No ASN and no country: nothing to be new about.
+    { agentId, ts: at, srcIp: '10.41.0.5', extIp: '203.0.113.9', dstIp: '203.0.113.9', proto: 'tcp', bytes: 1, packets: 1, flows: 1, internal: false },
+    // Internal: never geolocated, never a peer.
+    { agentId, ts: at, srcIp: '10.41.0.5', dstIp: '10.41.0.9', proto: 'tcp', bytes: 9999, packets: 1, flows: 1, internal: true },
+  ]);
+
+  const peers = await flows.externalPeersSince({ from: ago(600000), to: new Date(), agentId });
+  const byAsn = new Map(peers.map((p) => [p.asn, p]));
+  assert.deepStrictEqual([...byAsn.keys()].sort((a, b) => Number(a) - Number(b)), [13335, 15169], 'an internal flow or an unenriched one became a peer');
+  assert.strictEqual(byAsn.get(15169).bytes, 500, 'the two Google flows did not fold into one peer');
+  assert.strictEqual(byAsn.get(15169).flowCount, 3);
+  assert.strictEqual(byAsn.get(15169).country, 'US');
+  assert.strictEqual(byAsn.get(15169).asnName, 'Google LLC');
+  assert.ok(byAsn.get(15169).srcIp && byAsn.get(15169).extIp, 'the evidence addresses are missing');
+  assert.deepStrictEqual(await flows.externalPeersSince({ from: ago(600000), to: ago(300000), agentId }), []);
+});
+
+// Migration 142: the new-peer detector's long memory.
+check('known peers: per-scope reads by kind, an upsert that keeps first_seen and never ages last_seen, the 400-day purge', async (pool) => {
+  const repo = repoOf('knownPeersRepository', 'createKnownPeersRepository')({ pool });
+  const { createRetentionRepo } = require(path.join(ROOT, 'src/analysis/retention/repo'));
+  const first = new Date(Math.floor(ago(10 * DAY).getTime() / 1000) * 1000);
+  const later = new Date(Math.floor(Date.now() / 1000) * 1000);
+
+  assert.strictEqual((await repo.knownPeers({ scope: 'site:142', peers: [{ kind: 'asn', key: 64500 }] })).size, 0);
+  assert.strictEqual(await repo.oldestFirstSeen('site:142'), null);
+
+  await repo.touchMany('site:142', [
+    { kind: 'asn', key: 64500, name: 'Example AS', srcIp: '10.42.0.1', extIp: '198.51.100.1' },
+    { kind: 'country', key: 'dk' },
+  ], first);
+  await repo.touchMany('agent:142', [{ kind: 'asn', key: 64500 }], first);
+
+  const known = await repo.knownPeers({
+    scope: 'site:142',
+    peers: [{ kind: 'asn', key: 64500 }, { kind: 'asn', key: 64501 }, { kind: 'country', key: 'DK' }, { kind: 'country', key: 'SE' }],
+  });
+  assert.deepStrictEqual([...known].sort(), ['asn|64500', 'country|DK']);
+  const otherScope = await repo.knownPeers({ scope: 'agent:142', peers: [{ kind: 'asn', key: 64500 }, { kind: 'country', key: 'DK' }] });
+  assert.deepStrictEqual([...otherScope], ['asn|64500'], 'the scopes leak into each other');
+  assert.strictEqual((await repo.oldestFirstSeen('site:142')).getTime(), first.getTime());
+
+  await repo.touchMany('site:142', [{ kind: 'asn', key: 64500, name: 'Example AS (renamed)', srcIp: '10.42.0.7', extIp: '198.51.100.7' }], later);
+  // A replayed older hour must not age the row or overwrite its evidence.
+  await repo.touchMany('site:142', [{ kind: 'asn', key: 64500, name: 'Stale', srcIp: '10.42.0.99' }], first);
+  const [[row]] = await pool.query(
+    'SELECT first_seen, last_seen, peer_name, last_src_ip FROM known_peers WHERE scope = ? AND peer_kind = ? AND peer_key = ?',
+    ['site:142', 'asn', '64500'],
+  );
+  assert.strictEqual(new Date(row.first_seen).getTime(), first.getTime(), 'first_seen moved');
+  assert.strictEqual(new Date(row.last_seen).getTime(), later.getTime(), 'last_seen went backwards');
+  assert.strictEqual(row.peer_name, 'Example AS (renamed)');
+  assert.strictEqual(row.last_src_ip, '10.42.0.7', 'an older sighting overwrote the evidence');
+
+  await pool.query(
+    "INSERT INTO known_peers (scope, peer_kind, peer_key, first_seen, last_seen) VALUES ('site:142', 'asn', '64999', ?, ?)",
+    [ago(500 * DAY), ago(401 * DAY)],
+  );
+  const purged = await createRetentionRepo({ pool }).purgeKnownPeersBefore(ago(400 * DAY));
+  assert.strictEqual(purged, 1);
+  const [[left]] = await pool.query("SELECT COUNT(*) AS n FROM known_peers WHERE scope = 'site:142'");
+  assert.strictEqual(Number(left.n), 2, 'the purge took a peer seen inside the window');
+});
+
 check('sFlow exporters: the upsert keeps first_seen, moves device/interfaces/last_seen, and the window reads it (migration 128)', async (pool) => {
   const repo = repoOf('sflowExportersRepository', 'createSflowExportersRepository')({ pool });
   const devices = createSnmpDevicesRepository({ pool }, { secretBox: fakeSecretBox });

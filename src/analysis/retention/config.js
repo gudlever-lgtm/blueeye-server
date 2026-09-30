@@ -92,6 +92,13 @@ function loadRetentionConfig(env = process.env) {
     // device used once a quarter — or once a year — is not "new" every time it
     // comes back. 400 days, the same horizon as the probe history.
     knownDeviceRetentionDays: toInt(env.RETENTION_KNOWN_DEVICE_DAYS, 400),
+    // The new-peer detector's memory of every external network a site has
+    // reached (known_peers, migration 142), aged on last_seen. Same horizon and
+    // the same reasoning as known_devices above: it answers "have we EVER
+    // talked to them", so a backup target used once a year must still be known
+    // when it comes back. Forgetting it early is not a lost row — it is a
+    // finding that says "never seen before" about something that has.
+    knownPeerRetentionDays: toInt(env.RETENTION_KNOWN_PEER_DAYS, 400),
     // Connection-table edges of agents that stopped reporting (a live agent
     // replaces its own rows on every report). Same as the ARP window.
     hostConnectionRetentionDays: toInt(env.RETENTION_HOST_CONNECTION_DAYS, 30),

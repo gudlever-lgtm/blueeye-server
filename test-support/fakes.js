@@ -3176,6 +3176,10 @@ function makeFlowsRepo(overrides = {}) {
     agentIdsForDestination: overrides.agentIdsForDestination || (async () => []),
     selectFlows: overrides.selectFlows || (async () => ({ byAsn: [], byDirection: [], byProto: [], series: [], totals: { bytes: 0, flowCount: 0, records: 0 } })),
     exploreFlows: overrides.exploreFlows || (async () => ({ topTalkers: [], byPort: [], byProto: [], series: [], scans: [], totals: { bytes: 0, packets: 0, flowCount: 0, records: 0 } })),
+    // Fleet-wide port-scan / fan-out candidates (src/analysis/scanDetector.js).
+    scanCandidates: overrides.scanCandidates || (async () => []),
+    // The external networks an hour of flows reached (src/analysis/newPeerDetector.js).
+    externalPeersSince: overrides.externalPeersSince || (async () => []),
     topologyEdges: overrides.topologyEdges || (async () => []),
     tcpServiceFlows: overrides.tcpServiceFlows || (async () => []),
     agentIdsForIp: overrides.agentIdsForIp || (async () => []),
@@ -3190,6 +3194,53 @@ function makeFlowsRepo(overrides = {}) {
         if (!last.has(r.agentId) || t > last.get(r.agentId)) last.set(r.agentId, t);
       }
       return [...last].map(([agentId, t]) => ({ agentId: Number(agentId), lastFlowAt: new Date(t).toISOString() }));
+    }),
+  };
+}
+
+// known_peers (migration 142) in memory — the new-peer detector's memory of
+// every external network a scope has reached. Keyed exactly like the real
+// repository, so a test that gets the scope string wrong fails here too.
+function makeKnownPeersRepo(overrides = {}) {
+  // scope -> Map('kind|key' -> { firstSeen, lastSeen, name, srcIp, extIp })
+  const rows = new Map();
+  return {
+    rows,
+    knownPeers: overrides.knownPeers || (async ({ scope, peers } = {}) => {
+      const have = rows.get(scope) || new Map();
+      const out = new Set();
+      for (const p of Array.isArray(peers) ? peers : []) {
+        const id = `${p.kind}|${p.key}`;
+        if (have.has(id)) out.add(id);
+      }
+      return out;
+    }),
+    touchMany: overrides.touchMany || (async (scope, peers, at = new Date()) => {
+      if (!scope) return 0;
+      if (!rows.has(scope)) rows.set(scope, new Map());
+      const have = rows.get(scope);
+      let n = 0;
+      for (const p of Array.isArray(peers) ? peers : []) {
+        const id = `${p.kind}|${p.key}`;
+        const prev = have.get(id);
+        have.set(id, {
+          firstSeen: prev ? prev.firstSeen : at,
+          // Never backwards, like the real ON DUPLICATE KEY UPDATE.
+          lastSeen: prev && prev.lastSeen > at ? prev.lastSeen : at,
+          name: p.name ?? (prev ? prev.name : null),
+          srcIp: p.srcIp ?? null,
+          extIp: p.extIp ?? null,
+        });
+        n += 1;
+      }
+      return n;
+    }),
+    oldestFirstSeen: overrides.oldestFirstSeen || (async (scope) => {
+      const have = rows.get(scope);
+      if (!have || !have.size) return null;
+      let oldest = null;
+      for (const r of have.values()) if (!oldest || r.firstSeen < oldest) oldest = r.firstSeen;
+      return oldest;
     }),
   };
 }
@@ -4263,6 +4314,10 @@ function makeApp(overrides = {}) {
     probePipeline: overrides.probePipeline || makeProbePipeline(),
     flowPipeline: overrides.flowPipeline || makeFlowPipeline(),
     flowsRepo: overrides.flowsRepo || makeFlowsRepo(),
+    // The shared port-scan thresholds (src/analysis/scanDetector.js). null by
+    // default, which is the deployment without them: the flow explorer then
+    // reports the historical 50/50.
+    scanConfig: overrides.scanConfig || null,
     lldpNeighborsRepo,
     serviceDependenciesRepo,
     hostConnectionsRepo,
@@ -4528,6 +4583,7 @@ module.exports = {
   makeAnalysisPipeline,
   makeProbePipeline,
   makeFlowsRepo,
+  makeKnownPeersRepo,
   makeFlowPipeline,
   makeAssistant,
   makeDispatcher,

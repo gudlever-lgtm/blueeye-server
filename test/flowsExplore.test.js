@@ -103,3 +103,36 @@ test('exploreFlows scan window omits the per-conversation port/peer filters', as
   // scan detection must look at ALL of the agent's sources, not just the filtered conversation
   assert.ok(!/src_ip = \?/.test(scan.sql) && !/src_port = \?/.test(scan.sql));
 });
+
+// The thresholds the detector job reads are the thresholds the screen applies
+// (src/analysis/scanDetector.js). An operator who raised the bar because a load
+// balancer trips it must not still see it listed as a scan here.
+test('GET /api/flows/explore applies the configured scan thresholds and says what they were', async () => {
+  let captured;
+  const flowsRepo = makeFlowsRepo({
+    exploreFlows: async (f) => {
+      captured = f;
+      return { topTalkers: [], byPort: [], byProto: [], series: [], scans: [], totals: { bytes: 0, packets: 0, flowCount: 0, records: 0 } };
+    },
+  });
+  const app = withAgent({ flowsRepo, scanConfig: { portThreshold: 200, hostThreshold: 300 } });
+  const res = await request(app).get('/api/flows/explore?agentId=9').set('Authorization', authHeader('viewer'));
+  assert.equal(res.status, 200);
+  assert.equal(captured.scanPortThreshold, 200);
+  assert.equal(captured.scanHostThreshold, 300);
+  assert.deepEqual(res.body.scanThresholds, { ports: 200, hosts: 300 });
+});
+
+test('without a scan config the route still answers, with the historical defaults', async () => {
+  let captured;
+  const flowsRepo = makeFlowsRepo({
+    exploreFlows: async (f) => {
+      captured = f;
+      return { topTalkers: [], byPort: [], byProto: [], series: [], scans: [], totals: { bytes: 0, packets: 0, flowCount: 0, records: 0 } };
+    },
+  });
+  const res = await request(withAgent({ flowsRepo })).get('/api/flows/explore?agentId=9').set('Authorization', authHeader('viewer'));
+  assert.equal(res.status, 200);
+  assert.equal(captured.scanPortThreshold, undefined, 'the route invented a threshold the repository did not ask for');
+  assert.deepEqual(res.body.scanThresholds, { ports: 50, hosts: 50 });
+});

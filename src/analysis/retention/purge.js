@@ -113,12 +113,13 @@ function createPurge({ repo, config, now = () => new Date() }) {
     const discoveredDevices = await byAge(config.discoveredDeviceRetentionDays, 'purgeStaleDiscoveredDevicesBefore');
     const hostConnections = await byAge(config.hostConnectionRetentionDays, 'purgeHostConnectionsBefore');
     const knownDevices = await byAge(config.knownDeviceRetentionDays, 'purgeKnownDevicesBefore');
+    const knownPeers = await byAge(config.knownPeerRetentionDays, 'purgeKnownPeersBefore');
     const auditEvents = await byAge(config.auditEventRetentionDays, 'purgeAuditEventsBefore');
     return {
       flowRollups, metricRollups, internalFlowRollups, findings, configSnapshots, arpEntries, deviceArpEntries, deviceEvents,
       fdbEntries, snmpNeighbors, deviceVlans, fdbMoves, burstRuns, deviceCounters, deviceInterfaces, interfaceTransitions, interfaceStates,
       probeResults, probeOutages, speedtestResults, transactionResults, transactionCaptures, topologyChanges, discoveredDevices,
-      hostConnections, knownDevices, auditEvents,
+      hostConnections, knownDevices, knownPeers, auditEvents,
     };
   }
 

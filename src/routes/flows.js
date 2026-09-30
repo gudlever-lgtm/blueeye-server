@@ -8,6 +8,10 @@ const { validateTimeRange } = require('../validation/resultsValidation');
 const { listCategories, buildIndex, classifyPort, classifyAsn } = require('../flows/categories');
 const { labelPorts } = require('../flows/services');
 const { parseId } = require('../validation/locationValidation');
+const {
+  DEFAULT_PORT_THRESHOLD: DEFAULT_SCAN_PORT_THRESHOLD,
+  DEFAULT_HOST_THRESHOLD: DEFAULT_SCAN_HOST_THRESHOLD,
+} = require('../analysis/scanDetector');
 
 // Filter sanitisers for the conversation explorer. Everything is bound as a
 // query parameter regardless; these just reject obviously-bad input early.
@@ -38,7 +42,13 @@ const DIRECTION_IMBALANCE = 0.2;
 // organisation categories (Facebook, Google, ...) come from the destination ASN
 // of geo-enriched flows. Both are metadata only — no payload/DPI. viewer+.
 
-function createFlowsRouter({ resultsRepo, agentsRepo, flowsRepo, getCategories, centroids = null }) {
+// The port-scan / fan-out thresholds the explorer's `scans` list uses. The
+// server hands in the ONE config the detector job also reads
+// (src/analysis/scanDetector.js), so the list on screen and the `net.scan`
+// finding that links to it agree about what counts as a scan. Without it — a
+// router built by a test, or by an older caller — the historical defaults
+// apply, which is what this route did before the thresholds were configurable.
+function createFlowsRouter({ resultsRepo, agentsRepo, flowsRepo, getCategories, centroids = null, scanConfig = null }) {
   const router = express.Router();
   // Categories are loaded per request so admin edits (via settings) take effect
   // without a restart. Falls back to the built-in defaults.
@@ -179,7 +189,10 @@ function createFlowsRouter({ resultsRepo, agentsRepo, flowsRepo, getCategories, 
 
     const empty = { topTalkers: [], byPort: [], byProto: [], series: [], scans: [], totals: { bytes: 0, packets: 0, flowCount: 0, records: 0 } };
     const data = (flowsRepo && typeof flowsRepo.exploreFlows === 'function')
-      ? await flowsRepo.exploreFlows({ agentId, from: new Date(fromMs), to: new Date(toMs), proto, port: portParsed.value, peer, direction, internal, bucketSec })
+      ? await flowsRepo.exploreFlows({
+        agentId, from: new Date(fromMs), to: new Date(toMs), proto, port: portParsed.value, peer, direction, internal, bucketSec,
+        ...(scanConfig ? { scanPortThreshold: scanConfig.portThreshold, scanHostThreshold: scanConfig.hostThreshold } : {}),
+      })
       : empty;
 
     res.json({
@@ -187,6 +200,11 @@ function createFlowsRouter({ resultsRepo, agentsRepo, flowsRepo, getCategories, 
       from: new Date(fromMs).toISOString(),
       to: new Date(toMs).toISOString(),
       filter: { port: portParsed.value, proto, peer, direction, internal: req.query.internal || null },
+      // What "a scan" meant for this answer, so the list is readable without
+      // knowing the server's environment.
+      scanThresholds: scanConfig
+        ? { ports: scanConfig.portThreshold, hosts: scanConfig.hostThreshold }
+        : { ports: DEFAULT_SCAN_PORT_THRESHOLD, hosts: DEFAULT_SCAN_HOST_THRESHOLD },
       ...data,
       // Name the traffic type per port (443 -> HTTPS) so the UI shows *what* is
       // talking, not just the number. Metadata only (static well-known lookup).

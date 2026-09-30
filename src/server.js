@@ -84,6 +84,7 @@ const { createArpEntriesRepository } = require('./repositories/arpEntriesReposit
 const { createDeviceEventsRepository } = require('./repositories/deviceEventsRepository');
 const { createDeviceEventsTsdbRepository } = require('./repositories/deviceEventsTsdbRepository');
 const { createDeviceEventIngest } = require('./devices/deviceEventIngest');
+const { createSecurityEventDetector, loadSecurityEventConfig } = require('./devices/securityEventDetector');
 const { createSnmpDevicesRepository } = require('./repositories/snmpDevicesRepository');
 const { createFdbEntriesRepository } = require('./repositories/fdbEntriesRepository');
 const { createSnmpNeighborsRepository } = require('./repositories/snmpNeighborsRepository');
@@ -110,6 +111,9 @@ const { createTopologyChangesRepository } = require('./repositories/topologyChan
 const { createTopologyChangeService } = require('./topology/topologyChangeService');
 const { createFlowPairBaselinesRepository } = require('./repositories/flowPairBaselinesRepository');
 const { createFlowPairBaselineJob } = require('./analysis/flowPairBaselineJob');
+const { createScanDetector, loadScanConfig } = require('./analysis/scanDetector');
+const { createNewPeerDetector, loadNewPeerConfig } = require('./analysis/newPeerDetector');
+const { createKnownPeersRepository } = require('./repositories/knownPeersRepository');
 const { createDiscoveredDevicesRepository } = require('./repositories/discoveredDevicesRepository');
 const { createDiscoverySweepJob } = require('./discovery/discoverySweepJob');
 const {
@@ -660,6 +664,11 @@ function start() {
   // detector pushes findings to the UI over the SAME WebSocket (agentWs is
   // assigned just below; the closure runs later, at ingest time).
   const analysisConfig = loadAnalysisConfig();
+  // Port-scan / fan-out thresholds. Read ONCE and shared by the detector job
+  // and the flow explorer's on-screen `scans` list, so tuning one moves both —
+  // an operator who raised the threshold because a load balancer trips it must
+  // not still see it listed as a scan on the screen the finding links to.
+  const scanConfig = loadScanConfig();
   const findingStore = new FindingStore({ db, severityRules: severityRulesRepo });
   const investigationsRepo = createInvestigationsRepository(db);
   const baselineCache = createBaselineFileCache(config.analysis.baselineCachePath);
@@ -878,6 +887,18 @@ function start() {
     deviceArpRepo,
     logger,
   });
+  // The security-rate rule over device_events
+  // (src/devices/securityEventDetector.js): a burst of auth.failure,
+  // acl.denied, port.security_violation or vpn.negotiation_failed from one
+  // sender becomes a finding. The equipment has always said this and the rows
+  // have always been stored; until now nothing counted them. Gated like the
+  // other finding producers (analysis flag + licence) via the shared sink.
+  const securityEventDetector = createSecurityEventDetector({
+    findingSink: deviceFindingSink,
+    licensed: () => !!analysisConfig.analysisEnabled && featureGate.isFeatureEnabled('analysis'),
+    config: loadSecurityEventConfig(process.env, logger),
+    logger,
+  });
   const deviceEventIngest = createDeviceEventIngest({
     deviceEventsRepo,
     agentsRepo,
@@ -885,6 +906,7 @@ function start() {
     snmpDevicesRepo,
     deviceInterfacesRepo,
     switchPortStateService,
+    securityEventDetector,
     logger,
   });
   // Interface counters. The second-largest write stream in the product after
@@ -919,6 +941,36 @@ function start() {
   // that emits deviations to the correlator as ordinary findings.
   const flowPairBaselinesRepo = createFlowPairBaselinesRepository(db);
   const flowPairBaselineJob = createFlowPairBaselineJob({ flowPairBaselinesRepo, flowsRepo, agentsRepo, findingStore, logger });
+  // Port-scan / fan-out detection (src/analysis/scanDetector.js). The same
+  // count the flow explorer has always shown on demand, run on a schedule
+  // across the fleet, as a `net.scan` finding. This server's OWN sweep
+  // addresses are ignored while discovery is enabled — the product ships the
+  // loudest scanner on the network and must not page on it.
+  const scanDetectorJob = createScanDetector({
+    flowsRepo,
+    findingSink: deviceFindingSink,
+    licensed: () => !!analysisConfig.analysisEnabled && featureGate.isFeatureEnabled('analysis'),
+    config: scanConfig,
+    discoveryEnabled: () => {
+      try { return !!settingsService.getDiscovery().enabled; } catch { return !!config.discovery.enabled; }
+    },
+    logger,
+  });
+  // New-peer detection (src/analysis/newPeerDetector.js) over known_peers
+  // (migration 142): an ASN or a country a site has never reached in 400 days
+  // of memory. The first detector here that answers "has this ever happened
+  // before" rather than "is this number unusual".
+  const knownPeersRepo = createKnownPeersRepository(db);
+  const newPeerDetectorJob = createNewPeerDetector({
+    flowsRepo,
+    knownPeersRepo,
+    agentsRepo,
+    locationsRepo,
+    findingSink: deviceFindingSink,
+    licensed: () => !!analysisConfig.analysisEnabled && featureGate.isFeatureEnabled('analysis'),
+    config: loadNewPeerConfig(),
+    logger,
+  });
   // Scheduled active discovery (admin-only). Probes the configured CIDR scope for
   // devices passive collection misses; candidates require admin promotion.
   const discoveredDevicesRepo = withDiscoveryDetection(discoveredDevicesStore, newDeviceDetector, { logger });
@@ -1294,6 +1346,10 @@ function start() {
     serviceDependencyJob,
     // Per-flow-pair volume baseline recompute + scoring (hourly, leader-only).
     flowPairBaselineJob,
+    // Port-scan / fan-out sweep over the raw flow records (leader-only).
+    scanDetectorJob,
+    // First-sighting check against the external-peer memory (hourly, leader-only).
+    newPeerDetectorJob,
     // Scheduled active-discovery sweep (leader-only; no-op unless enabled+scoped).
     discoverySweepJob,
     // Service Tests artefact retention (screenshots). Empty when no artefact
@@ -1420,6 +1476,11 @@ function start() {
     topologyChangeService,
     flowPairBaselinesRepo,
     flowPairBaselineJob,
+    scanConfig,
+    scanDetectorJob,
+    knownPeersRepo,
+    newPeerDetectorJob,
+    securityEventDetector,
     discoveredDevicesRepo,
     discoverySweepJob,
     discoveryConfig: config.discovery,

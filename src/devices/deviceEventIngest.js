@@ -103,6 +103,13 @@ function createDeviceEventIngest({
   snmpDevicesRepo = null,
   deviceInterfacesRepo = null,
   switchPortStateService = null,
+  // THE SECURITY-RATE PATH (src/devices/securityEventDetector.js). An
+  // `auth.failure` / `acl.denied` / `port.security_violation` /
+  // `vpn.negotiation_failed` is also a COUNT, and a count that runs away is
+  // worth a finding. Wired here rather than in a job because the rows arrive
+  // here and the rate is a question about the last ten minutes, not the last
+  // hour. Optional: without it the ingest behaves exactly as it did.
+  securityEventDetector = null,
   logger = null,
   foldBucketMs = FOLD_BUCKET_MS,
   resolverTtlMs = RESOLVER_TTL_MS,
@@ -293,7 +300,19 @@ function createDeviceEventIngest({
     } catch (err) {
       if (logger) logger.warn(`device-event ingest: switch-port history failed (${err.message})`);
     }
-    return { inserted, folded, resolved, unresolved, portTransitions };
+    // Same rule, same place in the order: the rows are stored, and a rate that
+    // crossed a threshold is reported on top of that. `prepared` rather than
+    // `rows` because the detector keys a sender by the ids resolved above.
+    let securityFindings = 0;
+    if (securityEventDetector && typeof securityEventDetector.observe === 'function') {
+      try {
+        const raised = await securityEventDetector.observe(agentId, prepared);
+        securityFindings = Array.isArray(raised) ? raised.length : 0;
+      } catch (err) {
+        if (logger) logger.warn(`device-event ingest: security rate check failed (${err.message})`);
+      }
+    }
+    return { inserted, folded, resolved, unresolved, portTransitions, securityFindings };
   }
 
   // Drops the cached resolver. Called when an agent is created or deleted so a

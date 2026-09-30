@@ -173,8 +173,8 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .user-menu-panel {
   position: absolute; top: calc(100% + 8px); right: 0; z-index: var(--z-popover);
   min-width: 224px; padding: 6px;
-  background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius);
-  box-shadow: var(--shadow-lg);
+  background: var(--elev-surface-3); border: 1px solid var(--border); border-radius: var(--radius);
+  box-shadow: var(--elev-3);
   display: flex; flex-direction: column; gap: 2px;
 }
 .user-menu-panel.hidden { display: none; }
@@ -513,8 +513,12 @@ main#view .card { width: auto; padding: 18px 20px; box-shadow: var(--shadow); }
 .fleet-cards { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin: 0 0 14px; }
 @media (max-width: 720px) { .fleet-cards { grid-template-columns: repeat(2, 1fr); } }
 .metric-card { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius);
-  padding: 13px 15px; cursor: pointer; user-select: none; transition: border-color 150ms ease, box-shadow 150ms ease; }
-.metric-card:hover { border-color: var(--border-strong); }
+  padding: 13px 15px; cursor: pointer; user-select: none; box-shadow: var(--elev-1);
+  transition: border-color 150ms ease, box-shadow 150ms ease; }
+/* Level 1 → 2 on hover. The lift is the shadow alone: a transform here would
+   nudge the card, and in a four-across grid that reads as the row twitching as
+   the pointer crosses it. */
+.metric-card:hover { border-color: var(--border-strong); box-shadow: var(--elev-2); }
 .metric-card:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .metric-card.active { border: 2px solid var(--border-accent); padding: 12px 14px; }
 .metric-card .mc-k { color: var(--muted); font-size: 12px; }
@@ -696,8 +700,8 @@ label.check input { width: auto; }
   transition: opacity .2s ease; z-index: var(--z-scrim); }
 .drawer-backdrop.open { opacity: 1; }
 .drawer { position: fixed; top: 0; right: 0; height: 100vh; width: min(420px, 92vw);
-  background: var(--panel); border-left: 1px solid var(--border);
-  box-shadow: var(--shadow-lg); padding: 22px 22px 28px;
+  background: var(--elev-surface-3); border-left: 1px solid var(--border);
+  box-shadow: var(--elev-3); padding: 22px 22px 28px;
   overflow: auto; transform: translateX(100%); transition: transform .25s ease; z-index: var(--z-modal); }
 .drawer.open { transform: translateX(0); }
 .drawer h3 { margin-top: 0; }
@@ -920,13 +924,14 @@ pre { padding: 10px; overflow: auto; }
 /* Toast + modal */
 .toast {
   position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
-  background: var(--panel-2); border: 1px solid var(--border); color: var(--text);
-  padding: 10px 16px; border-radius: var(--radius-sm); box-shadow: var(--shadow-lg);
+  background: var(--elev-surface-3); border: 1px solid var(--border); color: var(--text);
+  padding: 10px 16px; border-radius: var(--radius-sm); box-shadow: var(--elev-3);
 }
 .toast.bad { border-color: var(--bad); }
 .modal { position: fixed; inset: 0; z-index: var(--z-scrim); background: var(--scrim);
   backdrop-filter: blur(3px); display: grid; place-items: center; }
-.modal-card { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 20px; width: min(520px, 92vw); max-height: 86vh; overflow: auto; }
+.modal-card { background: var(--elev-surface-4); border: 1px solid var(--border); border-radius: var(--radius-lg);
+  box-shadow: var(--elev-4); padding: 20px; width: min(520px, 92vw); max-height: 86vh; overflow: auto; }
 .modal-card h3 { margin-top: 0; }
 .form-grid { display: flex; flex-direction: column; gap: 12px; }
 .form-actions { display: flex; gap: 8px; align-items: center; justify-content: flex-end; margin-top: 8px; }

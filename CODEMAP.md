@@ -354,9 +354,23 @@ A single vanilla-JS SPA. Key building blocks:
   under the `ui` marker class. `public/uiPreview.js` is the phase-1 example
   screens on `/ui-preview/changes` and `/ui-preview/probes` (admin only, removed
   when those two screens migrate). See docs/ui-contract.md.
+- **Elevation** — four levels in `public/css/tokens.css`, each a PAIR of a
+  shadow and a surface (`--elev-1…4` + `--elev-surface-1…4`): resting panel →
+  hovered card → menu/popover/drawer → modal. The surface half is what carries
+  the hierarchy on the seven dark palettes, where a shadow has nothing to
+  darken; the light ones keep `--panel` and let the shadow do it.
+  `--shadow`/`--shadow-md`/`--shadow-lg` are aliases of levels 1–3 for the
+  older rules — new code uses `--elev-N`. Seen side by side at
+  `/ui-kitchen-sink` → Tokens → Elevation. See docs/ui-contract.md → Elevation.
+- **Page-load line** — `#loading-bar` in `public/index.html`, styled
+  `.loading-bar` in `components.css` (`--loading`, cobalt, one hue in every
+  palette), driven by `public/loadingBar.js` from `api()` in `public/app.js`,
+  so every fetch is covered without a per-screen call. 150 ms before it
+  appears, creeps to 90% and never claims a fraction it cannot measure, counts
+  parallel callers. `logout()` resets it. `test/loadingBar.test.js`.
 - **Layers** — every `z-index` comes from the `--z-*` scale in
   `public/css/tokens.css` (sticky → inline → topbar → sidebar → popover →
-  rowmenu → scrim → modal → toast). A hand-picked number is a `ui:check`
+  rowmenu → scrim → modal → toast → loading). A hand-picked number is a `ui:check`
   finding; `test/layerScale.test.js` pins the order. Leaflet's own panes (400+)
   are clamped by `.leaflet-container { isolation: isolate }` — without it the map
   paints over the drawer, the modal and the toast.

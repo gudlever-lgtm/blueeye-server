@@ -194,7 +194,29 @@ function icon(name) {
   return svg;
 }
 
+// public/loadingBar.js, if it loaded. Every public/*.js here shares one global
+// scope, hence the spelled-out name.
+function pageLoadBar() { return typeof LoadingBar !== 'undefined' ? LoadingBar : null; }
+
+// Every fetch in the dashboard goes through api(), which is why the page-load
+// line is driven from here and nowhere else: wrapping this one function covers
+// every screen by construction, where a per-view call would cover the screens
+// somebody remembered. The counter lives in loadingBar.js, so the normal case —
+// a screen opening four endpoints at once — does not have the first reply
+// switching the line off while three are still out. And finally, not a trailing
+// call: a 500 or a dropped connection has to take the line down too, or it
+// creeps at 90% for the rest of the session.
 async function api(path, { method = 'GET', body } = {}) {
+  const bar = pageLoadBar();
+  if (bar) bar.start();
+  try {
+    return await apiRequest(path, { method, body });
+  } finally {
+    if (bar) bar.stop();
+  }
+}
+
+async function apiRequest(path, { method, body }) {
   const res = await fetch(path, {
     method,
     headers: {
@@ -626,6 +648,11 @@ async function loadProfile() {
 
 function logout() {
   disconnectLive();
+  // Anything still in flight belongs to the session that just ended. Its
+  // finally clauses will still fire, but the counter is dropped here so a
+  // request that never settles cannot leave the line creeping over the login
+  // screen.
+  if (typeof LoadingBar !== 'undefined') LoadingBar.reset();
   // The red line is about THIS network and this session; a signed-out browser
   // showing it would be a leak of the one fact the login screen is hiding.
   endAttackBarPolling();

@@ -70,6 +70,58 @@ pill rather than a badge.
 control heights (27, 32, 35, 37px) depending on which class a button happened to
 carry.
 
+### Elevation
+
+Four levels, and **each level is a pair**: a shadow *and* a surface.
+
+```
+0  the page                    no shadow
+1  a resting panel or card     --elev-1  + --elev-surface-1
+2  a lifted / hovered card     --elev-2  + --elev-surface-2
+3  a menu, popover, drawer     --elev-3  + --elev-surface-3
+4  a modal                     --elev-4  + --elev-surface-4
+```
+
+The pair is the whole point. A shadow is a dark smudge, so on the seven dark
+palettes it lands on a near-black page and says nothing: the popover and the
+panel underneath read as one plane. Raising the surface a step per level is
+what carries the hierarchy there, which is why `tokens.css` restates the
+surfaces for the dark palettes — once, derived from each palette's own
+`--panel` and `--text`, rather than seven hand-picked hexes that drift.
+
+On the light palettes it is the other way round: white on white has nowhere to
+go, the surface stays `--panel` at every level, and the shadow does the work.
+
+Two shadow layers at rest, three only on overlays. A dashboard has thirty
+panels on screen and every blur layer is repainted on scroll.
+
+`--shadow`, `--shadow-md` and `--shadow-lg` are the historical names the older
+rules read; they are aliases of levels 1, 2 and 3 now. **New code uses
+`--elev-N`.** Never pick a shadow by hand — an overlay that invents its own is
+the bug the scale exists to prevent.
+
+An interactive card lifts from 1 to 2 **on the shadow alone**. No `transform`:
+in a four-across grid a 1px nudge reads as the whole row twitching as the
+pointer crosses it, and it ignores `prefers-reduced-motion`.
+
+`/ui-kitchen-sink` → Tokens → Elevation shows the four levels side by side.
+That is where a palette that has lost the hierarchy shows up.
+
+### The page-load line
+
+`.loading-bar` — 2px across the top of the viewport whenever the dashboard is
+waiting on the server, in `--loading` (cobalt, one fixed hue in every palette:
+it is system feedback, not brand, and it is deliberately not `--accent`, which
+already means "you can press this").
+
+It is driven from `api()` in `app.js`, so every fetch is covered by
+construction. Three rules make it useful rather than noisy, and they live in
+[`public/loadingBar.js`](../public/loadingBar.js): it waits 150 ms before
+appearing, it creeps towards 90% and never claims a fraction it cannot measure,
+and it counts its callers so the first of four parallel fetches to land does not
+switch it off. It is also the one exception to the reduced-motion rule — a
+progress line that cannot move says nothing.
+
 ---
 
 ## Routing

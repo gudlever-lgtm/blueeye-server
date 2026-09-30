@@ -104,6 +104,12 @@ An interactive card lifts from 1 to 2 **on the shadow alone**. No `transform`:
 in a four-across grid a 1px nudge reads as the whole row twitching as the
 pointer crosses it, and it ignores `prefers-reduced-motion`.
 
+`ui:check` enforces it (rule `elevation`): a `box-shadow` outside `tokens.css`
+must come from `--elev-1…4`, `--shadow*` or `--ring`. A **ring** is exempt —
+every offset and the blur are zero (`0 0 0 3px …`) or the shadow is `inset`,
+which draws an outline rather than depth. Anything with a real offset or blur
+is depth, and depth comes from the scale.
+
 `/ui-kitchen-sink` → Tokens → Elevation shows the four levels side by side.
 That is where a palette that has lost the hierarchy shows up.
 

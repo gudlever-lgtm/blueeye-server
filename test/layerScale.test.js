@@ -27,7 +27,7 @@ function scale() {
 test('the layer scale is ordered: page chrome under overlays, toast on top', () => {
   const z = scale();
   const order = ['z-sticky', 'z-inline', 'z-topbar', 'z-sidebar', 'z-popover',
-    'z-rowmenu', 'z-scrim', 'z-modal', 'z-toast'];
+    'z-rowmenu', 'z-scrim', 'z-modal', 'z-toast', 'z-loading'];
   for (const name of order) assert.ok(typeof z[name] === 'number', `--${name} is missing from tokens.css`);
   for (let i = 1; i < order.length; i++) {
     assert.ok(z[order[i]] > z[order[i - 1]],
@@ -37,6 +37,9 @@ test('the layer scale is ordered: page chrome under overlays, toast on top', () 
   assert.ok(z['z-modal'] > z['z-sidebar'], 'the sidebar painted over the drawer');
   assert.ok(z['z-scrim'] > z['z-topbar'], 'the sticky topbar painted over the modal backdrop');
   assert.ok(z['z-toast'] > z['z-modal'], 'a toast raised from a modal must still be readable');
+  // Top of everything: a modal that is itself still fetching must not hide the
+  // one line saying so.
+  assert.ok(z['z-loading'] > z['z-toast'], 'the page-load line was painted over');
 });
 
 test('every stylesheet takes its layer from the scale', () => {

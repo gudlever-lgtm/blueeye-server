@@ -34,6 +34,18 @@
   --bad: #dc2626;
   --border: #e7e7e3;
   --btn-fg: #ffffff;
+  /* The page-load line (.loading-bar). Cobalt, and deliberately ONE colour in
+     every palette: it is system feedback, not brand, and "is it still
+     loading?" should look the same wherever you are. The dark palettes raise
+     the same hue below — cobalt on a near-black page is a dark line on a dark
+     line. It is not --accent on purpose: the accent means "you can press
+     this", and the reader should not have to learn two meanings for one
+     colour. It is declared here, with the palette, rather than in the scale
+     block further down: [data-theme="…"] and :root have the same specificity,
+     so a later :root would beat the dark override on source order alone.
+     --loading is therefore the one exception to "derived tokens live at the
+     end" — it is a base colour, not a derived one. */
+  --loading: #0047ab;
 
   /* ---- Derived & layout tokens -------------------------------------------
      The six semantic colours the UI needs — warning(--warn), danger(--bad),
@@ -79,11 +91,42 @@
   --radius: 12px;
   --radius-lg: 16px;
   --radius-pill: 999px;
-  /* Shadows. --shadow is the resting elevation for a panel, --shadow-md for a
-     lifted/hovered one, --shadow-lg for overlays (menus, drawers, modals). */
-  --shadow: 0 1px 2px rgba(15, 23, 42, .04), 0 1px 3px rgba(15, 23, 42, .03);
-  --shadow-md: 0 2px 4px rgba(15, 23, 42, .04), 0 10px 26px rgba(15, 23, 42, .07);
-  --shadow-lg: 0 10px 20px rgba(15, 23, 42, .08), 0 24px 60px rgba(15, 23, 42, .16);
+  /* ---- Elevation ----------------------------------------------------------
+     Four levels, and each one is a PAIR: a shadow AND a surface.
+
+       0  the page                       no shadow
+       1  a resting panel or card        --elev-1 + --elev-surface-1
+       2  a lifted / hovered card        --elev-2 + --elev-surface-2
+       3  a menu, popover or drawer      --elev-3 + --elev-surface-3
+       4  a modal                        --elev-4 + --elev-surface-4
+
+     The pair is the point. A shadow is a dark smudge, so on the seven dark
+     palettes it lands on a near-black page and says nothing — the popover and
+     the panel under it read as the same plane. Raising the surface one step
+     per level is what carries the hierarchy there, and it is why the dark
+     block below restates the surfaces rather than only the shadows.
+
+     On the light palettes the reverse holds: white on white has nowhere to go,
+     so the surface stays --panel at every level and the shadow does the work.
+
+     Two layers at rest, three only on overlays: a dashboard has thirty panels
+     on screen and every blur layer is repainted on scroll.
+
+     --shadow / --shadow-md / --shadow-lg are the historical names the app's
+     existing rules read. They are aliases now, so the whole surface picked up
+     the new scale in one edit; new code uses --elev-N. */
+  --elev-1: 0 1px 2px rgba(15, 23, 42, .05), 0 3px 10px rgba(15, 23, 42, .05);
+  --elev-2: 0 2px 4px rgba(15, 23, 42, .05), 0 8px 20px rgba(15, 23, 42, .08);
+  --elev-3: 0 4px 8px rgba(15, 23, 42, .06), 0 12px 28px rgba(15, 23, 42, .10);
+  --elev-4: 0 8px 16px rgba(15, 23, 42, .08), 0 24px 56px rgba(15, 23, 42, .14);
+  --elev-surface-1: var(--panel);
+  --elev-surface-2: var(--panel);
+  --elev-surface-3: var(--panel);
+  --elev-surface-4: var(--panel);
+
+  --shadow: var(--elev-1);
+  --shadow-md: var(--elev-2);
+  --shadow-lg: var(--elev-3);
   --ring: 0 0 0 3px var(--accent-weak);
   --ease: cubic-bezier(.4, 0, .2, 1);
 }
@@ -92,9 +135,19 @@
 [data-theme="dark"], [data-theme="midnight"], [data-theme="nord"],
 [data-theme="forest"], [data-theme="sunset"], [data-theme="solarized-dark"],
 [data-theme="contrast"] {
-  --shadow: 0 1px 2px rgba(0, 0, 0, .28), 0 1px 3px rgba(0, 0, 0, .22);
-  --shadow-md: 0 2px 6px rgba(0, 0, 0, .3), 0 12px 30px rgba(0, 0, 0, .34);
-  --shadow-lg: 0 10px 24px rgba(0, 0, 0, .36), 0 28px 70px rgba(0, 0, 0, .48);
+  --elev-1: 0 1px 2px rgba(0, 0, 0, .28), 0 1px 3px rgba(0, 0, 0, .22);
+  --elev-2: 0 2px 6px rgba(0, 0, 0, .3), 0 12px 30px rgba(0, 0, 0, .34);
+  --elev-3: 0 4px 10px rgba(0, 0, 0, .36), 0 16px 34px rgba(0, 0, 0, .4);
+  --elev-4: 0 10px 24px rgba(0, 0, 0, .4), 0 28px 70px rgba(0, 0, 0, .48);
+  /* The other half of the pair: one step of the theme's OWN text colour mixed
+     into its own panel per level. Written once for all seven dark palettes
+     rather than seven times, and it cannot drift from a palette because it is
+     derived from that palette. */
+  --elev-surface-2: color-mix(in srgb, var(--panel) 95%, var(--text));
+  --elev-surface-3: color-mix(in srgb, var(--panel) 91%, var(--text));
+  --elev-surface-4: color-mix(in srgb, var(--panel) 87%, var(--text));
+  /* Same hue, raised so it reads on a near-black page. */
+  --loading: #3d7fe0;
 }
 [data-theme="dark"] {
   --bg: #0f172a;
@@ -385,6 +438,8 @@
   --z-scrim: 70;      /* modal / drawer backdrop */
   --z-modal: 71;      /* modal card, drawer panel */
   --z-toast: 90;      /* always on top: a toast raised from a modal must show */
+  --z-loading: 100;   /* the page-load line: a modal must not hide the fact
+                         that the app is still fetching */
 
   /* DataTable row heights. Compact is the density toggle, not a second table. */
   --row-h: 44px;

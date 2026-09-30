@@ -105,10 +105,13 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .topbar {
   display: flex; align-items: center; gap: var(--s-3);
   padding: var(--s-3) var(--s-5); min-height: 56px;
-  /* Translucent + blurred so content scrolling underneath softens instead of
-     hard-clipping at the edge. Falls back to a solid panel without support. */
-  background: color-mix(in srgb, var(--panel) 86%, transparent);
-  backdrop-filter: saturate(1.4) blur(10px);
+  /* Solid, not translucent. The blurred bar looked expensive and read badly:
+     content sliding under it turned into a smear of the page's own colours, so
+     the crumb sat on a different background depending on what you had scrolled
+     past, and on the dark palettes a chart scrolling under it tinted the bar.
+     A hairline and a flat surface say "chrome" without any of that, and it is
+     one less compositor layer repainted on every scroll. */
+  background: var(--panel);
   border-bottom: 1px solid var(--hairline);
   position: sticky; top: 0; z-index: var(--z-topbar);
 }
@@ -134,7 +137,7 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 }
 .topbar-search.open:focus-within {
   border-color: var(--accent); background: var(--panel);
-  box-shadow: 0 0 0 3px var(--accent-weak);
+  box-shadow: var(--ring);
 }
 .topbar-search-icon { font-size: 14px; line-height: 1; }
 
@@ -150,7 +153,7 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .ar-switch::after { content: ''; position: absolute; top: 50%; left: 2px; transform: translateY(-50%);
   width: 14px; height: 14px; border-radius: 50%; background: var(--panel);
   box-shadow: var(--shadow); transition: left .15s ease; }
-.autorefresh:focus-within .ar-switch { box-shadow: 0 0 0 3px var(--accent-weak); }
+.autorefresh:focus-within .ar-switch { box-shadow: var(--ring); }
 .autorefresh:has(input:checked) .ar-switch { background: var(--accent); border-color: var(--accent); }
 .autorefresh:has(input:checked) .ar-switch::after { left: 16px; }
 
@@ -165,7 +168,7 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   transition: border-color .15s ease, box-shadow .15s ease;
 }
 .user-menu-trigger:hover { border-color: var(--accent); }
-.user-menu-trigger[aria-expanded="true"] { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-weak); }
+.user-menu-trigger[aria-expanded="true"] { border-color: var(--accent); box-shadow: var(--ring); }
 .user-menu-caret { font-size: 12px; line-height: 1; color: var(--muted); transition: transform .15s ease; transform: translateY(-1px); }
 .user-menu-trigger[aria-expanded="true"] .user-menu-caret { transform: rotate(180deg); }
 
@@ -173,8 +176,8 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .user-menu-panel {
   position: absolute; top: calc(100% + 8px); right: 0; z-index: var(--z-popover);
   min-width: 224px; padding: 6px;
-  background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius);
-  box-shadow: var(--shadow-lg);
+  background: var(--elev-surface-3); border: 1px solid var(--border); border-radius: var(--radius);
+  box-shadow: var(--elev-3);
   display: flex; flex-direction: column; gap: 2px;
 }
 .user-menu-panel.hidden { display: none; }
@@ -288,7 +291,11 @@ main#view .card { width: auto; padding: 18px 20px; box-shadow: var(--shadow); }
 
 /* NOC: KPI grid, alert banner, top agents */
 .kpi-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin: 0 0 16px; }
-@media (max-width: 720px) { .kpi-grid { grid-template-columns: repeat(2, 1fr); } }
+/* Four across, two on a tablet, one on a phone. It used to stop at two, which
+   on a 360px screen is two cards ~150px wide with the figure wrapping inside
+   each — the one thing a KPI card exists to prevent. */
+@media (max-width: 1080px) { .kpi-grid { grid-template-columns: repeat(2, 1fr); } }
+@media (max-width: 560px) { .kpi-grid { grid-template-columns: 1fr; } }
 .kpi { background: var(--panel); border: 1px solid var(--border); border-left: 3px solid var(--accent); border-radius: var(--radius); padding: 12px; }
 .kpi.rx { border-left-color: var(--series-0); }
 .kpi.tx { border-left-color: var(--series-1); }
@@ -511,10 +518,15 @@ main#view .card { width: auto; padding: 18px 20px; box-shadow: var(--shadow); }
    padding is trimmed by 1px so switching from the 1px resting border doesn't
    shift the layout. */
 .fleet-cards { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin: 0 0 14px; }
-@media (max-width: 720px) { .fleet-cards { grid-template-columns: repeat(2, 1fr); } }
+@media (max-width: 1080px) { .fleet-cards { grid-template-columns: repeat(2, 1fr); } }
+@media (max-width: 560px) { .fleet-cards { grid-template-columns: 1fr; } }
 .metric-card { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius);
-  padding: 13px 15px; cursor: pointer; user-select: none; transition: border-color 150ms ease, box-shadow 150ms ease; }
-.metric-card:hover { border-color: var(--border-strong); }
+  padding: 13px 15px; cursor: pointer; user-select: none; box-shadow: var(--elev-1);
+  transition: border-color 150ms ease, box-shadow 150ms ease; }
+/* Level 1 → 2 on hover. The lift is the shadow alone: a transform here would
+   nudge the card, and in a four-across grid that reads as the row twitching as
+   the pointer crosses it. */
+.metric-card:hover { border-color: var(--border-strong); box-shadow: var(--elev-2); }
 .metric-card:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .metric-card.active { border: 2px solid var(--border-accent); padding: 12px 14px; }
 .metric-card .mc-k { color: var(--muted); font-size: 12px; }
@@ -696,8 +708,8 @@ label.check input { width: auto; }
   transition: opacity .2s ease; z-index: var(--z-scrim); }
 .drawer-backdrop.open { opacity: 1; }
 .drawer { position: fixed; top: 0; right: 0; height: 100vh; width: min(420px, 92vw);
-  background: var(--panel); border-left: 1px solid var(--border);
-  box-shadow: var(--shadow-lg); padding: 22px 22px 28px;
+  background: var(--elev-surface-3); border-left: 1px solid var(--border);
+  box-shadow: var(--elev-3); padding: 22px 22px 28px;
   overflow: auto; transform: translateX(100%); transition: transform .25s ease; z-index: var(--z-modal); }
 .drawer.open { transform: translateX(0); }
 .drawer h3 { margin-top: 0; }
@@ -920,13 +932,14 @@ pre { padding: 10px; overflow: auto; }
 /* Toast + modal */
 .toast {
   position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
-  background: var(--panel-2); border: 1px solid var(--border); color: var(--text);
-  padding: 10px 16px; border-radius: var(--radius-sm); box-shadow: var(--shadow-lg);
+  background: var(--elev-surface-3); border: 1px solid var(--border); color: var(--text);
+  padding: 10px 16px; border-radius: var(--radius-sm); box-shadow: var(--elev-3);
 }
 .toast.bad { border-color: var(--bad); }
 .modal { position: fixed; inset: 0; z-index: var(--z-scrim); background: var(--scrim);
   backdrop-filter: blur(3px); display: grid; place-items: center; }
-.modal-card { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 20px; width: min(520px, 92vw); max-height: 86vh; overflow: auto; }
+.modal-card { background: var(--elev-surface-4); border: 1px solid var(--border); border-radius: var(--radius-lg);
+  box-shadow: var(--elev-4); padding: 20px; width: min(520px, 92vw); max-height: 86vh; overflow: auto; }
 .modal-card h3 { margin-top: 0; }
 .form-grid { display: flex; flex-direction: column; gap: 12px; }
 .form-actions { display: flex; gap: 8px; align-items: center; justify-content: flex-end; margin-top: 8px; }
@@ -1036,7 +1049,8 @@ button.active-btn { outline: 2px solid var(--accent); }
 .noc-head { display: flex; align-items: center; gap: 8px; margin: 0 0 12px; }
 .noc-kpis { display: grid; grid-template-columns: repeat(6, 1fr); gap: 12px; margin: 0 0 16px; }
 @media (max-width: 1180px) { .noc-kpis { grid-template-columns: repeat(3, 1fr); } }
-@media (max-width: 560px) { .noc-kpis { grid-template-columns: repeat(2, 1fr); } }
+@media (max-width: 860px) { .noc-kpis { grid-template-columns: repeat(2, 1fr); } }
+@media (max-width: 480px) { .noc-kpis { grid-template-columns: 1fr; } }
 /* KPI cards reuse the .kpi chrome; the status modifier recolours the rail and
    the value, always from the shared status tokens (ok/warn/bad/accent). */
 .noc-kpis .kpi { box-shadow: var(--shadow); }
@@ -1714,10 +1728,11 @@ ul.timeline-list li.tl .chg-open { margin-left: auto; flex: 0 0 auto; }
      - a hover state lifts (var(--shadow-md)); it does not thicken the border
      - anything that only holds state (bars, tracks, pills) is fully round */
 
-/* The translucent topbar needs the blur to look intentional. Without support
-   it falls back to the solid panel colour. */
+/* The scrims blur what is behind them so the page underneath stays legible as
+   context without competing with the dialog. Without support they are the flat
+   --scrim wash, which is the point of that token. (The topbar used to need a
+   fallback here too; it is solid now.) */
 @supports not ((backdrop-filter: blur(2px)) or (-webkit-backdrop-filter: blur(2px))) {
-  .topbar { background: var(--panel); }
   .modal, .drawer-backdrop { backdrop-filter: none; }
 }
 

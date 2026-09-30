@@ -45,13 +45,28 @@ test('the soft-surface token scale is defined on :root', async () => {
   for (const token of [
     '--radius-xs:', '--radius-sm:', '--radius:', '--radius-lg:', '--radius-pill:',
     '--shadow:', '--shadow-md:', '--shadow-lg:',
+    '--elev-1:', '--elev-2:', '--elev-3:', '--elev-4:',
+    '--elev-surface-1:', '--elev-surface-2:', '--elev-surface-3:', '--elev-surface-4:',
+    '--loading:',
     '--hairline:', '--hover:', '--ring:', '--ease:',
   ]) {
     assert.ok(css.includes(token), `${token} is part of the token scale`);
   }
-  // Dark palettes restate the elevation tokens (a light shadow disappears on a
-  // dark panel), so the dark override block must stay in place.
-  assert.match(css, /\[data-theme="midnight"\][\s\S]{0,200}--shadow:/);
+  // The historical three are aliases of the elevation scale now — every rule
+  // written before it reads them, so they may not be dropped, and they may not
+  // drift into a second set of shadows either.
+  for (const [alias, level] of [['--shadow', '--elev-1'], ['--shadow-md', '--elev-2'], ['--shadow-lg', '--elev-3']]) {
+    assert.match(css, new RegExp(`${alias}:\\s*var\\(${level}\\)`),
+      `${alias} must stay an alias of ${level}, not a shadow of its own`);
+  }
+  // Dark palettes restate BOTH halves of the pair: a light shadow disappears on
+  // a dark panel, and the surface step is what carries the hierarchy there
+  // instead. Losing either one flattens every menu on seven themes.
+  const dark = css.slice(css.indexOf('[data-theme="midnight"]'));
+  const darkBlock = dark.slice(0, dark.indexOf('}'));
+  for (const token of ['--elev-1:', '--elev-4:', '--elev-surface-2:', '--elev-surface-4:', '--loading:']) {
+    assert.ok(darkBlock.includes(token), `the dark override block lost ${token}`);
+  }
 });
 
 test('panel radii come from the token scale, not from literal pixels', async () => {

@@ -18,6 +18,9 @@
 //                    contract or not, and in any migrated view
 //   px-size          a raw px spacing or font-size outside the token files
 //   z-index          a hand-picked layer number outside tokens.css
+//   elevation        a hand-rolled drop shadow outside tokens.css (a ring —
+//                    zero offsets and blur, or inset — is an outline, not
+//                    depth, and is allowed)
 //   legacy-class     a class the contract replaced, still in use
 //   tab-pattern      buttons used as tabs
 //   chip-metadata    a chip carrying metadata or a host name
@@ -193,6 +196,36 @@ function checkCss() {
         if (/var\(--z-/.test(value) || value === 'auto' || value === '0') continue;
         report(rel, lineOf(src, m.index), 'z-index',
           `z-index: ${value} — use a --z-* token from css/tokens.css`);
+      }
+
+      // Same argument one layer up: depth is a scale, not a per-component
+      // guess. Four levels live in tokens.css (--elev-1…4, each paired with an
+      // --elev-surface-N); a shadow written by hand somewhere else is how a
+      // popover ends up resting at the same height as the panel beneath it.
+      //
+      // A RING is not elevation and is allowed: every offset and the blur are
+      // zero (`0 0 0 3px …`), or the shadow is `inset`. Those draw an outline,
+      // which is what focus states and swatch borders need. Anything with a
+      // real offset or blur is depth, and depth comes from the scale.
+      for (const m of src.matchAll(/box-shadow:\s*([^;{}]+)/g)) {
+        const value = m[1].trim();
+        if (value === 'none' || /var\(--(elev-\d|shadow|ring)/.test(value)) continue;
+        // Judge each comma-separated layer on its own.
+        const depth = value.split(/,(?![^(]*\))/).some((layer) => {
+          let part = layer.trim();
+          if (!part || /\binset\b/.test(part)) return false;
+          // Drop every function call first — var(--elev-1) and rgba(15, 23, 42,
+          // .05) are full of digits that are not lengths.
+          let prev;
+          do { prev = part; part = part.replace(/[\w-]*\([^()]*\)/g, ' '); } while (part !== prev);
+          // What is left is the length list: offset-x, offset-y, blur, spread.
+          // A ring is zero for the first three and carries only a spread.
+          const lengths = part.match(/-?\d*\.?\d+/g) || [];
+          return lengths.slice(0, 3).some((l) => parseFloat(l) !== 0);
+        });
+        if (!depth) continue;
+        report(rel, lineOf(src, m.index), 'elevation',
+          `box-shadow: ${value} — use --elev-1…4 (or --ring for an outline) from css/tokens.css`);
       }
     }
 

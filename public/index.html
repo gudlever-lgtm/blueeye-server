@@ -32,6 +32,15 @@
     <link rel="stylesheet" href="/css/components.css" />
   </head>
   <body>
+    <!-- The page-load line: 2px across the top of the viewport while the
+         dashboard is waiting on the server. Fixed and above every layer, so
+         it costs no space and a loading modal cannot hide it. Static markup
+         render() never touches, so — like the sidebar — it carries its label
+         as a data-i18n-aria-label key. Wiring: public/loadingBar.js, driven
+         by api() in app.js. -->
+    <div id="loading-bar" class="loading-bar" role="progressbar" aria-hidden="true"
+         data-i18n-aria-label="nav.loading" aria-label="Loading"><span></span></div>
+
     <!-- Login. Static markup render() never touches, so — like the sidebar — it
          carries data-i18n attributes that applyStaticTranslations() walks. It
          used to be hardcoded English, and the forced-change screen below it was
@@ -268,6 +277,7 @@
     <div id="toast" class="toast hidden" role="status" aria-live="polite" aria-atomic="true"></div>
     <div id="modal" class="modal hidden" role="dialog" aria-modal="true" aria-label="Dialog"><div class="modal-card" id="modal-card" tabindex="-1"></div></div>
 
+    <script src="/loadingBar.js"></script>
     <script src="/routes.js"></script>
     <script src="/i18n.js"></script>
     <script src="/baselineMetric.js"></script>

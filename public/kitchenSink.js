@@ -35,6 +35,11 @@
       var TYPE = ['--fs-xs', '--fs-sm', '--fs-md', '--fs-lg', '--fs-xl'];
       var SEV = ['--sev-crit', '--sev-warn', '--sev-info', '--sev-ok'];
       var SURFACE = ['--bg', '--surface', '--surface-alt', '--border', '--text', '--text-muted', '--accent'];
+      // Elevation is the one part of the scale that cannot be checked by
+      // reading the CSS: whether level 3 reads as floating above level 1
+      // depends on the palette, and there are sixteen of them. Four tiles side
+      // by side is how you see that a theme has lost the hierarchy.
+      var ELEV = ['1', '2', '3', '4'];
       var swatches = function (names) {
         return el('div', { class: 'ks-swatches' }, names.map(function (n) {
           return el('div', { class: 'ks-swatch' },
@@ -48,6 +53,10 @@
         children: [el('div', { class: 'panel-body' },
           specimen(t('ks.tokens.semantic'), null, swatches(SEV)),
           specimen(t('ks.tokens.surface'), null, swatches(SURFACE)),
+          specimen(t('ks.tokens.elevation'), t('ks.tokens.elevationNote'),
+            el('div', { class: 'ks-elevs' }, ELEV.map(function (n) {
+              return el('div', { class: 'ks-elev', 'data-level': n }, el('code', {}, '--elev-' + n));
+            }))),
           specimen(t('ks.tokens.spacing'), null, el('div', { class: 'ks-ruler' }, SPACE.map(function (n) {
             return el('div', { class: 'ks-rule' }, el('span', { class: 'ks-bar', 'data-token': n }), el('code', {}, n));
           }))),

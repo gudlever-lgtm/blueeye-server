@@ -42,8 +42,8 @@
 .ui .help-btn:hover { border-color: var(--accent); color: var(--accent); background: var(--surface); }
 
 .ui-popover { position: fixed; z-index: var(--z-popover); width: min(420px, calc(100vw - var(--s-6) * 2));
-  background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-panel);
-  box-shadow: var(--shadow-lg); padding: var(--s-5); }
+  background: var(--elev-surface-3); border: 1px solid var(--border); border-radius: var(--r-panel);
+  box-shadow: var(--elev-3); padding: var(--s-5); }
 .ui-popover h3 { margin: 0 0 var(--s-2); font-size: var(--fs-md); }
 .ui-popover p { margin: 0 0 var(--s-3); font-size: var(--fs-sm); color: var(--text-muted); line-height: 1.6; }
 .ui-popover p:last-of-type { margin-bottom: 0; }
@@ -189,8 +189,8 @@
 .ui .row-act .on-hover:focus-visible { opacity: 1; pointer-events: auto; }
 
 .ui-rowmenu { position: fixed; z-index: var(--z-rowmenu); min-width: 200px; padding: var(--s-1);
-  background: var(--surface); border: 1px solid var(--border);
-  border-radius: var(--r-panel); box-shadow: var(--shadow-lg); }
+  background: var(--elev-surface-3); border: 1px solid var(--border);
+  border-radius: var(--r-panel); box-shadow: var(--elev-3); }
 .ui-rowmenu button { display: block; width: 100%; text-align: left; background: none; border: 0;
   border-radius: var(--r-btn); padding: var(--s-2) var(--s-3); font: inherit;
   font-size: var(--fs-sm); color: var(--text); cursor: pointer; }
@@ -235,8 +235,8 @@
 /* ---- Drawer — row detail, right side, 480px ------------------------------ */
 .ui-scrim { position: fixed; inset: 0; z-index: var(--z-scrim); background: var(--scrim); }
 .ui-drawer { position: fixed; top: 0; right: 0; bottom: 0; z-index: var(--z-modal); width: 480px; max-width: 100%;
-  display: flex; flex-direction: column; background: var(--surface);
-  border-left: 1px solid var(--border); box-shadow: var(--shadow-lg); }
+  display: flex; flex-direction: column; background: var(--elev-surface-3);
+  border-left: 1px solid var(--border); box-shadow: var(--elev-3); }
 .ui-drawer .drawer-head { display: flex; align-items: flex-start; gap: var(--s-3);
   padding: var(--s-5); border-bottom: 1px solid var(--hairline); }
 .ui-drawer .drawer-head h2 { margin: 0 0 var(--s-2); font-size: var(--fs-lg);
@@ -297,9 +297,9 @@
   display: flex; flex-direction: column; gap: var(--s-2);
   width: 340px; max-width: calc(100vw - var(--s-6)); }
 .ui-toast { display: flex; align-items: flex-start; gap: var(--s-3); padding: var(--s-3) var(--s-4);
-  background: var(--surface); border: 1px solid var(--border);
+  background: var(--elev-surface-3); border: 1px solid var(--border);
   border-left: 3px solid var(--text-muted); border-radius: var(--r-panel);
-  box-shadow: var(--shadow-lg); font-size: var(--fs-sm); }
+  box-shadow: var(--elev-3); font-size: var(--fs-sm); }
 .ui-toast.ok { border-left-color: var(--sev-ok); }
 .ui-toast.err { border-left-color: var(--sev-crit); }
 .ui-toast .toast-tx { flex: 1; min-width: 0; }
@@ -389,6 +389,18 @@
 .ui .ks-ruler { display: flex; flex-direction: column; gap: var(--s-2); }
 .ui .ks-rule { display: flex; align-items: center; gap: var(--s-3); font-size: var(--fs-xs); }
 .ui .ks-bar { height: 12px; background: var(--accent); border-radius: 0; flex: 0 0 auto; }
+/* Elevation specimens: the four levels laid on the page background, each with
+   its own pair of shadow AND surface, so a palette that has lost the
+   hierarchy shows it here rather than in a drawer somebody opens later. */
+.ui .ks-elevs { display: flex; flex-wrap: wrap; gap: var(--s-5); padding: var(--s-2) 0 var(--s-4); }
+.ui .ks-elev { display: grid; place-items: center; width: 108px; height: 62px;
+  border: 1px solid var(--hairline); border-radius: var(--r-panel);
+  font-size: var(--fs-xs); color: var(--text-muted); }
+.ui .ks-elev[data-level="1"] { background: var(--elev-surface-1); box-shadow: var(--elev-1); }
+.ui .ks-elev[data-level="2"] { background: var(--elev-surface-2); box-shadow: var(--elev-2); }
+.ui .ks-elev[data-level="3"] { background: var(--elev-surface-3); box-shadow: var(--elev-3); }
+.ui .ks-elev[data-level="4"] { background: var(--elev-surface-4); box-shadow: var(--elev-4); }
+
 .ui .ks-bar[data-token="--s-1"] { width: var(--s-1); }
 .ui .ks-bar[data-token="--s-2"] { width: var(--s-2); }
 .ui .ks-bar[data-token="--s-3"] { width: var(--s-3); }
@@ -640,7 +652,7 @@
 .ui .ui-sug-list { position: absolute; top: calc(100% + var(--s-1)); left: 0; right: 0;
   z-index: var(--z-inline); max-height: 240px; overflow-y: auto; display: grid;
   border: 1px solid var(--border); border-radius: var(--radius);
-  background: var(--surface); box-shadow: var(--shadow-lg); }
+  background: var(--elev-surface-3); box-shadow: var(--elev-3); }
 .ui .ui-sug-opt { display: flex; align-items: baseline; gap: var(--s-2);
   padding: var(--s-2) var(--s-3); color: var(--fg); font-size: var(--fs-sm); cursor: pointer; }
 .ui .ui-sug-opt + .ui-sug-opt { border-top: 1px solid var(--border-weak, var(--border)); }
@@ -787,4 +799,57 @@
 @keyframes attack-bar-pulse {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.55; }
+}
+
+/* ---- Page-load line ------------------------------------------------------
+   Two pixels across the top of the viewport while the dashboard is waiting on
+   the server. Every screen here fetches on entry, some of them four or five
+   endpoints, and until now the only sign that anything was happening was that
+   the old data sat there looking current.
+
+   It is fixed to the viewport and sits above everything (--z-loading, one over
+   the toast layer): a modal that is itself still loading must not hide the
+   fact. It takes no layout space at any time, so nothing below it moves — the
+   same reason the attack bar above is 3px of nothing until it has something to
+   say.
+
+   Three behaviours are what separate this from a bar that annoys:
+     * it waits 150 ms before appearing, so a fast reply shows nothing at all
+       rather than a flash at every click;
+     * it creeps towards 90% and never reaches it on its own — the width is not
+       a measurement, and pretending otherwise would be a lie the reader can
+       catch;
+     * it counts its callers, so the first of four parallel fetches finishing
+       does not switch it off while three are still out.
+   The wiring is in public/loadingBar.js. */
+.loading-bar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  z-index: var(--z-loading);
+  pointer-events: none;
+  background: transparent;
+}
+.loading-bar > span {
+  display: block;
+  height: 100%;
+  width: 0;
+  opacity: 0;
+  background: var(--loading);
+  transition: width 240ms var(--ease), opacity 260ms var(--ease) 120ms;
+}
+.loading-bar.is-on > span { opacity: 1; }
+/* Fading out: the fade waits for the 100% dash to land, so the bar is seen to
+   finish rather than vanishing mid-travel. */
+.loading-bar.is-done > span {
+  opacity: 0;
+  transition: width 140ms var(--ease), opacity 260ms var(--ease) 140ms;
+}
+/* The one exception to the app's reduced-motion rule: here the movement IS the
+   information. A bar that cannot move says nothing, so it keeps its own
+   transition — and only its own — while everything else stops. */
+@media (prefers-reduced-motion: reduce) {
+  .loading-bar > span { transition: width 240ms linear, opacity 200ms linear; }
 }

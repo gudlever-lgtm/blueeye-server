@@ -38,6 +38,10 @@ function createSettingsRouter({ settingsService, featureGate, dispatcher, analys
       geoip: settingsService ? await settingsService.getGeoip() : null,
       flowCategories: settingsService ? await settingsService.getFlowCategories() : null,
       maintenance: settingsService ? await settingsService.getMaintenance() : null,
+      // The four detectors' effective configuration + which fields an admin
+      // has taken over from the environment (docs/attack-indication.md).
+      attackIndication: settingsService && typeof settingsService.getAttackIndication === 'function'
+        ? await settingsService.getAttackIndication() : null,
       tsdb: settingsService ? settingsService.getTsdb() : null,
       agentReleaseKey: releaseKeyService ? releaseKeyService.status() : { configured: false },
     });
@@ -145,6 +149,19 @@ function createSettingsRouter({ settingsService, featureGate, dispatcher, analys
   router.put('/retention', ...admin, asyncHandler(async (req, res) => {
     try {
       res.json({ retention: await settingsService.setRetention(req.body || {}) });
+    } catch (err) {
+      if (err.statusCode === 400) return res.status(400).json({ error: 'Validation failed', details: err.details || {} });
+      throw err;
+    }
+  }));
+
+  // PUT /api/settings/attack-indication — the four attack-indication detectors'
+  // thresholds and ignore lists (admin). Partial: a body carries only the
+  // section(s) the card being saved owns, and every other value is left alone.
+  // See docs/attack-indication.md.
+  router.put('/attack-indication', ...admin, asyncHandler(async (req, res) => {
+    try {
+      res.json({ attackIndication: await settingsService.setAttackIndication(req.body || {}) });
     } catch (err) {
       if (err.statusCode === 400) return res.status(400).json({ error: 'Validation failed', details: err.details || {} });
       throw err;

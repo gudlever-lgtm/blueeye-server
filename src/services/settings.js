@@ -17,6 +17,10 @@ const { MONITOR_SOURCES } = require('../validation/agentValidation');
 const { parseCidr } = require('../discovery/cidr');
 const { normalizeSecurity, validateSecurity, mergeSecurity } = require('../auth/securityPolicy');
 const { parseWindow } = require('../lib/updateWindow');
+const {
+  validateAttackIndication, checkCoherence, mergeAttackIndication, sourceOf: attackSourceOf,
+  SECTIONS: ATTACK_SECTIONS,
+} = require('./attackIndicationSettings');
 
 // Traffic sources that make sense as a fleet-wide default. SNMP is excluded: it
 // needs a per-device host, so it can only be configured per agent, never as a
@@ -65,7 +69,13 @@ function badRequest(message, details) {
 // the env defaults. The map tile source and the traffic-type categories are
 // editable from the UI; everything else stays env-driven. Validation lives here
 // so the route stays thin.
-function createSettingsService({ settingsRepo, config, liveAnalysis = null, liveRetention = null, liveAlerting = null, liveGeo = null, liveGeoCity = null, secretBox = null }) {
+// `liveAttack` is the attack-indication config the four detectors read on every
+// run — one mutable object per section, built from the environment at boot and
+// updated in place by setAttackIndication and applyStoredOverrides. The same
+// live-object seam liveAnalysis and liveAlerting use, and for the same reason:
+// the detectors run on timers and must not each hold a snapshot taken when the
+// process started.
+function createSettingsService({ settingsRepo, config, liveAnalysis = null, liveRetention = null, liveAlerting = null, liveGeo = null, liveGeoCity = null, liveAttack = null, secretBox = null }) {
   // Encrypt/decrypt the assistant API key for storage at rest (AES-256-GCM via
   // secretBox, the same scheme integration credentials + the LDAP bind password
   // use). When no box is wired (some tests) values pass through as plaintext. A
@@ -1301,6 +1311,10 @@ function createSettingsService({ settingsRepo, config, liveAnalysis = null, live
       }
     } catch { /* ignore */ }
     try {
+      const ai = await settingsRepo.get('attackIndication');
+      if (ai) applyAttackToLive(ai);
+    } catch { /* ignore */ }
+    try {
       const al = await settingsRepo.get('alerting');
       if (al && liveAlerting) applyAlertingToLive(normAlerting(al));
     } catch { /* ignore */ }
@@ -1387,6 +1401,74 @@ function createSettingsService({ settingsRepo, config, liveAnalysis = null, live
     return getDiscovery();
   }
 
+  // ---- Attack indication (Settings → Attack indication) -------------------
+  // The four detectors' thresholds and ignore lists: port scans, new external
+  // networks, beaconing and the security-event rate rules. Env is the floor;
+  // what an admin sets here overlays it and applies without a restart.
+  // Rules + merge live in ./attackIndicationSettings.js. See
+  // docs/attack-indication.md.
+  async function getAttackIndication() {
+    const override = await loadOverride('attackIndication');
+    const eff = mergeAttackIndication(attackDefaults(), override);
+    eff.source = attackSourceOf(override);
+    return eff;
+  }
+
+  // The environment-loaded floor. Read from the LIVE object when the server
+  // wired one, so a value already applied by a previous save is what the screen
+  // shows; the {} fallback keeps a service built without it (tests, an older
+  // wiring) answering a shape rather than throwing.
+  function attackDefaults() {
+    const a = liveAttack || {};
+    return {
+      scan: { ...(a.scan || {}) },
+      newPeer: { ...(a.newPeer || {}) },
+      beacon: { ...(a.beacon || {}) },
+      securityEvents: { ...(a.securityEvents || {}) },
+    };
+  }
+
+  async function setAttackIndication(patch) {
+    const { errors, value } = validateAttackIndication(patch || {});
+    if (errors) throw badRequest('invalid attack-indication settings', errors);
+    const current = (await loadOverride('attackIndication')) || {};
+    // Merge the patch into the STORED override (not into the effective config):
+    // what is persisted stays the admin's own decisions, so a default that
+    // moves in a later release still moves for a deployment that never set it.
+    // Sections the admin has never touched must not be frozen into the store by
+    // a save on another card, so only the keys actually present survive.
+    const stored = {};
+    for (const section of ATTACK_SECTIONS) {
+      const touched = { ...(current[section] || {}), ...(value[section] || {}) };
+      if (section === 'securityEvents') {
+        // The rule table merges per RULE, not as one object: tuning the failed
+        // login counts must not drop the ACL rule an admin set last month.
+        const rules = { ...((current.securityEvents || {}).rules || {}) };
+        for (const [type, r] of Object.entries((value.securityEvents || {}).rules || {})) {
+          rules[type] = { ...(rules[type] || {}), ...r };
+        }
+        if (Object.keys(rules).length) touched.rules = rules; else delete touched.rules;
+      }
+      if (Object.keys(touched).length) stored[section] = touched;
+    }
+    const coherence = checkCoherence(mergeAttackIndication(attackDefaults(), stored));
+    if (coherence) throw badRequest('invalid attack-indication settings', coherence);
+    await settingsRepo.set('attackIndication', stored);
+    applyAttackToLive(stored);
+    return getAttackIndication();
+  }
+
+  // Applies a stored override onto the live objects the detectors read. Mutates
+  // in place — the detectors hold a reference, not a copy.
+  function applyAttackToLive(override) {
+    if (!liveAttack) return;
+    const merged = mergeAttackIndication(attackDefaults(), override);
+    for (const section of ATTACK_SECTIONS) {
+      if (!liveAttack[section]) continue;
+      Object.assign(liveAttack[section], merged[section]);
+    }
+  }
+
   // ---- Baseline security (Settings → Authentication → Security) -----------
   // Password history depth, the opt-in password max age and the role-based IP
   // allowlist (migration 041). Always on, never licence-gated. The pure rules
@@ -1417,6 +1499,7 @@ function createSettingsService({ settingsRepo, config, liveAnalysis = null, live
     getAnalysis, setAnalysis, validateAnalysis,
     getRetention, setRetention, validateRetention,
     getDiscovery, setDiscovery, validateDiscovery,
+    getAttackIndication, setAttackIndication, validateAttackIndication,
     getSecurity, setSecurity, validateSecurity,
     getThroughput, setThroughput, validateThroughput,
     getLadder, getLadders, setLadder, validateLadderPatch,

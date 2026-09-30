@@ -1,7 +1,8 @@
 # The in-app guides (nav group: Guides)
 
-Five next-next walkthroughs in the dashboard itself — **Monitoring, Fleet,
-Diagnostics, Service Assurance, Insights** — one step per thing you actually do,
+Six next-next walkthroughs in the dashboard itself — **Monitoring, Fleet,
+Diagnostics, Service Assurance, Insights, Attack indication** — one step per
+thing you actually do,
 in the order the product needs them done, and, the part a handbook never gets
 right, **the values to put in**.
 
@@ -15,9 +16,9 @@ learning the product has a browser open on the screen they are stuck on.
   works is not the same permission as doing it); the Service Assurance entry
   additionally carries `data-feature="service_tests"`, because a guide to a
   module you have not bought is a brochure.
-- `public/guides.js` — the module (`window.Guides`). One engine, five step
+- `public/guides.js` — the module (`window.Guides`). One engine, six step
   arrays (`monitoringSteps()`, `fleetSteps()`, `diagnosticsSteps()`,
-  `assuranceSteps()`, `insightsSteps()`). A step is `{ id, title(), body() }`
+  `assuranceSteps()`, `insightsSteps()`, `securitySteps()`). A step is `{ id, title(), body() }`
   and carries its own title, so adding one never means editing a lookup
   somewhere else.
 - `public/app.js` — `views.guide` mounts it with the shared helpers (`el`,
@@ -29,7 +30,7 @@ learning the product has a browser open on the screen they are stuck on.
 - `public/serviceAssurance.css` — the `.guide-*` block.
 - `public/i18n.js` — every string, `guide.*`, in **en and da**.
 
-## The five tracks
+## The six tracks
 
 | Track | Steps | Covers |
 | --- | --- | --- |
@@ -38,6 +39,7 @@ learning the product has a browser open on the screen they are stuck on.
 | `diagnostics` | 6 | Which tool answers which question, which probe for which symptom, saved tests and transaction tests, Flows/Topology, the outage screen |
 | `assurance` | 15 | The Service Assurance module end to end: application, allowlist, discovery, tests, journeys, schedules, runs, health, incidents, **monitors** (mail delivery, DNS, blacklists, directory, clocks, certificates on other ports), alerts, every setting |
 | `insights` | 7 | The vocabulary (finding / event / situation / report), how a finding is made, events and situations, alerting, retention, reporting |
+| `security` | 7 | The four attack-indication detectors (scans, beaconing, networks never reached, the equipment's own security log), **the two settings to touch on the first day of an install**, and the red line at the top of the screen. Carries `data-feature="analysis"`, like the module it describes. See [docs/attack-indication.md](attack-indication.md) |
 
 ## Two design rules
 
@@ -126,8 +128,8 @@ accepts.
 
 ## RBAC and licence
 
-Viewer+ for all five. The Service Assurance track follows `service_tests` like
-the module it describes, and its step 2 tells a viewer in as many words that
+Viewer+ for all six. The Service Assurance track follows `service_tests` and the
+Attack indication track follows `analysis`, like the modules they describe, and its step 2 tells a viewer in as many words that
 their role can read the guide but not create anything. Reading a guide never
 writes; the action cards above are the only writes, and each is gated at the
 role its endpoint requires.

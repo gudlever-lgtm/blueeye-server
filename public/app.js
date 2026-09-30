@@ -626,6 +626,9 @@ async function loadProfile() {
 
 function logout() {
   disconnectLive();
+  // The red line is about THIS network and this session; a signed-out browser
+  // showing it would be a leak of the one fact the login screen is hiding.
+  endAttackBarPolling();
   invalidateFeatures();
   profileLoaded = false;
   token = null;
@@ -858,6 +861,96 @@ function trustImpactLines(impact) {
   }
   if (impact.unknown > 0) lines.push(plural('trustKey.banner.impactUnknown', impact.unknown));
   return lines;
+}
+
+// ---- Attack indication: the red line at the top -----------------------------
+// Three pixels across the top of the content column whenever an open,
+// WARN-or-worse finding on the attack-indication list exists
+// (docs/attack-indication.md). Clicking it opens the event the finding was
+// grouped into — or, when it has none yet, the Analysis screen filtered to that
+// metric, which is the same set of rows one level out.
+//
+// ABOVE THE VIEW, NOT IN IT. Something scanning the network is not a property
+// of the page you happen to be on, and an operator reading the Traffic screen
+// is exactly the person who should see it. So it lives on the shell, like the
+// trust-key banner, and is refreshed from three places: every render, every
+// live finding pushed over the dashboard socket, and a slow poll for the hours
+// nobody touches the keyboard.
+let attackBarLast = null;
+let attackBarTimer = null;
+let attackBarTarget = null;
+
+// The poll. Slow on purpose: the socket is what makes this feel instant, and
+// the timer is only there so a dashboard left open overnight is still right in
+// the morning.
+const ATTACK_BAR_POLL_MS = 60000;
+
+function startAttackBarPolling() {
+  if (attackBarTimer) return;
+  attackBarTimer = setInterval(() => { refreshAttackBar().catch(() => {}); }, ATTACK_BAR_POLL_MS);
+}
+
+// NOT a stopX()/VIEW_RESOURCES teardown, and deliberately not named like one.
+// That table releases resources a SCREEN owns, torn down by render() when you
+// leave it; this poller belongs to the SESSION — the bar is on the shell, above
+// whichever view is open — so it is released by logout(), alongside the live
+// socket, and the gate's stopX sweep is not the rule that governs it.
+function endAttackBarPolling() {
+  if (attackBarTimer) { clearInterval(attackBarTimer); attackBarTimer = null; }
+  attackBarLast = null;
+  attackBarTarget = null;
+  const host = typeof document !== 'undefined' ? $('#attack-bar') : null;
+  if (host) host.hidden = true;
+}
+
+// Opens what the bar is about. An event case when the finding has one (the
+// place the whole correlated story lives), else the findings list narrowed to
+// that metric — never a dead end, and never a screen the reader then has to
+// filter themselves.
+function openAttackTarget() {
+  const target = attackBarTarget;
+  if (!target) return;
+  if (target.eventCaseId != null) { openEvent(target.eventCaseId); return; }
+  findingsState.metric = target.metric || '';
+  findingsState.severity = '';
+  currentView = 'findings';
+  render();
+}
+
+async function refreshAttackBar() {
+  const host = typeof document !== 'undefined' ? $('#attack-bar') : null;
+  if (!host) return;
+  let data = null;
+  try { data = await api('/api/findings/attack-indication'); }
+  catch { return; } // transient — leave whatever is on screen and retry next render
+  const worst = data && data.count ? (data.worst || 'WARN') : null;
+  const top = (data && Array.isArray(data.findings) && data.findings[0]) || null;
+  // Redrawing an identical bar on every render would re-announce it to a screen
+  // reader once a minute and restart the pulse mid-cycle.
+  const signature = worst ? `${worst}|${data.count}|${top ? top.id : ''}` : '';
+  if (signature === attackBarLast) return;
+  attackBarLast = signature;
+
+  if (!worst || !top) {
+    host.hidden = true;
+    host.classList.remove('crit');
+    attackBarTarget = null;
+    return;
+  }
+  attackBarTarget = top;
+  host.hidden = false;
+  host.classList.toggle('crit', worst === 'CRIT');
+  const label = $('#attack-bar-label');
+  const detail = $('#attack-bar-detail');
+  // One key, both forms: I18n.plural picks .one or .other and fills {count},
+  // so the bar says "1 attack indication" rather than "1 attack indication(s)".
+  if (label) label.textContent = I18n.plural('attack.bar.count', data.count, { count: data.count });
+  if (detail) {
+    // The metric name, then the sentence the detector wrote. Truncated by the
+    // server already; the strip is one or two lines even expanded.
+    detail.textContent = ` — ${top.metric}${top.explanation ? `: ${top.explanation}` : ''}`;
+  }
+  host.setAttribute('title', t('attack.bar.title'));
 }
 
 async function refreshTrustBanner() {
@@ -13032,7 +13125,7 @@ let guideTrack = null;
 // tab is [key, label, adminOnly]; non-admins only ever see the personal section.
 const SETTINGS_GROUPS = [
   ['Access & security', [['users', 'Users', true], ['auth', 'Authentication', true], ['apitokens', 'API tokens', true], ['agentkey', 'Agent key', true]]],
-  ['Detection & alerts', [['analyse', 'Analysis', true], ['alerting', 'Alerting', true], ['severity', 'Severity rules', true], ['thresholds', () => t('thr.tab'), true], ['runbooks', 'Runbooks', true], ['events', () => t('set.tab.events'), true], ['integrations', 'ITSM', true], ['cmdb', 'CMDB', true], ['ai', 'AI', true], ['maintenance', 'Maintenance', true]]],
+  ['Detection & alerts', [['analyse', 'Analysis', true], ['alerting', 'Alerting', true], ['severity', 'Severity rules', true], ['thresholds', () => t('thr.tab'), true], ['runbooks', 'Runbooks', true], ['events', () => t('set.tab.events'), true], ['attack', () => t('set.tab.attack'), true], ['integrations', 'ITSM', true], ['cmdb', 'CMDB', true], ['ai', 'AI', true], ['maintenance', 'Maintenance', true]]],
   ['Data', [['database', 'Database', true], ['retention', 'Retention', true], ['types', 'Traffic types', true], ['map', 'Map', true]]],
   ['System', [['setup', 'Setup', true], ['updates', 'Updates', true], ['agents', 'Agents', true], ['snmp', 'SNMP devices', true], ['snmpcommunities', 'SNMP communities', true], ['screening', 'Test Settings', true], ['assurance', 'Service Assurance', true], ['ladder', () => t('set.tab.ladder'), true]]],
   ['Personal', [['appearance', 'Appearance', false], ['license', 'License', false]]],
@@ -13824,6 +13917,7 @@ const SETTINGS_SECTIONS = {
   agentkey: settingsAgentKeyView,
   agents: settingsAgentsView,
   events: settingsEventsView,
+  attack: settingsAttackView,
   setup: settingsSetupView,
   snmp: settingsSnmpDevicesView,
   snmpcommunities: settingsSnmpCommunitiesView,
@@ -15239,6 +15333,151 @@ async function settingsSnmpCommunitiesView() {
 // server: each id in a bulk request costs a read, a guarded write and an audit
 // row, and what that adds up to depends on the database behind it. The screen
 // that made this necessary had 989 events selected against a cap of 500.
+// ---- Settings → Attack indication ------------------------------------------
+// The four detectors' thresholds and ignore lists in one place
+// (docs/attack-indication.md). Every card PUTs its own section of
+// /api/settings/attack-indication, and the server merges — so saving the scan
+// thresholds never restates the beacon ones.
+//
+// THE TWO FIELDS THIS SCREEN EXISTS FOR are the warm-up on the first day
+// (newPeer.baselineHours) and the list of addresses allowed to sweep
+// (scan.ignoreSources). Both were environment variables, which on a customer's
+// on-prem box means a change window for a threshold. The rest are here because
+// once the screen exists, leaving half the knobs in .env is the confusing
+// answer.
+const ATTACK_SEVERITY_OPTIONS = [['INFO', 'INFO'], ['WARN', 'WARN'], ['CRIT', 'CRIT']];
+
+// The security-event rules, in the order the cards show them: the stored key,
+// and the label key for the row. A type the server's catalogue has not heard of
+// can still be tuned through the API; this screen shows the four that ship.
+const ATTACK_RULES = [
+  ['auth.failure', 'set.attack.rule.auth_failure'],
+  ['acl.denied', 'set.attack.rule.acl_denied'],
+  ['port.security_violation', 'set.attack.rule.port_security'],
+  ['vpn.negotiation_failed', 'set.attack.rule.vpn_failed'],
+];
+
+async function settingsAttackView() {
+  const data = await api('/api/settings');
+  const a = data.attackIndication || {};
+  const section = (key) => a[key] || {};
+  return el('div', { class: 'settings-grid' },
+    el('p', { class: 'muted' }, t('set.attack.intro')),
+    attackScanCard(section('scan')),
+    attackPeerCard(section('newPeer')),
+    attackBeaconCard(section('beacon')),
+    attackEventsCard(section('securityEvents')),
+    attackRulesCard(section('securityEvents')));
+}
+
+function attackScanCard(v) {
+  return settingsFormCard({
+    title: t('set.attack.scan.title'),
+    values: v,
+    endpoint: '/api/settings/attack-indication',
+    wrap: (body) => ({ scan: body }),
+    fields: [
+      { key: 'enabled', label: t('set.attack.scan.enabled'), type: 'checkbox', hint: t('set.attack.scan.enabled.hint') },
+      { key: 'portThreshold', label: t('set.attack.scan.portThreshold'), type: 'number', min: 2, max: 65535, step: 1, hint: t('set.attack.scan.portThreshold.hint') },
+      { key: 'hostThreshold', label: t('set.attack.scan.hostThreshold'), type: 'number', min: 2, max: 1000000, step: 1, hint: t('set.attack.scan.hostThreshold.hint') },
+      { key: 'critPortThreshold', label: t('set.attack.scan.critPortThreshold'), type: 'number', min: 2, max: 65535, step: 1, hint: t('set.attack.scan.critPortThreshold.hint') },
+      { key: 'critHostThreshold', label: t('set.attack.scan.critHostThreshold'), type: 'number', min: 2, max: 1000000, step: 1, hint: t('set.attack.scan.critHostThreshold.hint') },
+      { key: 'windowMinutes', label: t('set.attack.scan.windowMinutes'), type: 'number', min: 1, max: 1440, step: 1, hint: t('set.attack.scan.windowMinutes.hint') },
+      { key: 'cooldownMinutes', label: t('set.attack.scan.cooldownMinutes'), type: 'number', min: 1, max: 10080, step: 1, hint: t('set.attack.scan.cooldownMinutes.hint') },
+      { key: 'ignoreSources', label: t('set.attack.scan.ignoreSources'), type: 'text', placeholder: '10.0.0.5, 10.9.0.0/24', hint: t('set.attack.scan.ignoreSources.hint') },
+    ],
+  });
+}
+
+function attackPeerCard(v) {
+  return settingsFormCard({
+    title: t('set.attack.peer.title'),
+    values: v,
+    endpoint: '/api/settings/attack-indication',
+    wrap: (body) => ({ newPeer: body }),
+    fields: [
+      { key: 'enabled', label: t('set.attack.peer.enabled'), type: 'checkbox', hint: t('set.attack.peer.enabled.hint') },
+      { key: 'baselineHours', label: t('set.attack.peer.baselineHours'), type: 'number', min: 0, max: 720, step: 1, hint: t('set.attack.peer.baselineHours.hint') },
+      { key: 'asnEnabled', label: t('set.attack.peer.asnEnabled'), type: 'checkbox', hint: t('set.attack.peer.asnEnabled.hint') },
+      { key: 'countryEnabled', label: t('set.attack.peer.countryEnabled'), type: 'checkbox', hint: t('set.attack.peer.countryEnabled.hint') },
+      { key: 'asnSeverity', label: t('set.attack.peer.asnSeverity'), type: 'select', options: ATTACK_SEVERITY_OPTIONS, hint: t('set.attack.peer.asnSeverity.hint') },
+      { key: 'countrySeverity', label: t('set.attack.peer.countrySeverity'), type: 'select', options: ATTACK_SEVERITY_OPTIONS, hint: t('set.attack.peer.countrySeverity.hint') },
+      { key: 'maxPerScope', label: t('set.attack.peer.maxPerScope'), type: 'number', min: 1, max: 200, step: 1, hint: t('set.attack.peer.maxPerScope.hint') },
+    ],
+  });
+}
+
+function attackBeaconCard(v) {
+  return settingsFormCard({
+    title: t('set.attack.beacon.title'),
+    values: v,
+    endpoint: '/api/settings/attack-indication',
+    wrap: (body) => ({ beacon: body }),
+    fields: [
+      { key: 'enabled', label: t('set.attack.beacon.enabled'), type: 'checkbox', hint: t('set.attack.beacon.enabled.hint') },
+      { key: 'windowHours', label: t('set.attack.beacon.windowHours'), type: 'number', min: 1, max: 168, step: 1, hint: t('set.attack.beacon.windowHours.hint') },
+      { key: 'minObservations', label: t('set.attack.beacon.minObservations'), type: 'number', min: 4, max: 10000, step: 1, hint: t('set.attack.beacon.minObservations.hint') },
+      { key: 'minSpanMinutes', label: t('set.attack.beacon.minSpanMinutes'), type: 'number', min: 1, max: 10080, step: 1, hint: t('set.attack.beacon.minSpanMinutes.hint') },
+      { key: 'maxJitter', label: t('set.attack.beacon.maxJitter'), type: 'number', min: 0.001, max: 1, step: 0.01, hint: t('set.attack.beacon.maxJitter.hint') },
+      { key: 'critJitter', label: t('set.attack.beacon.critJitter'), type: 'number', min: 0, max: 1, step: 0.01, hint: t('set.attack.beacon.critJitter.hint') },
+      { key: 'cooldownMinutes', label: t('set.attack.beacon.cooldownMinutes'), type: 'number', min: 1, max: 20160, step: 1, hint: t('set.attack.beacon.cooldownMinutes.hint') },
+      { key: 'ignorePorts', label: t('set.attack.beacon.ignorePorts'), type: 'text', placeholder: '123', hint: t('set.attack.beacon.ignorePorts.hint') },
+      { key: 'ignoreDestinations', label: t('set.attack.beacon.ignoreDestinations'), type: 'text', placeholder: '198.51.100.7, 203.0.113.0/24', hint: t('set.attack.beacon.ignoreDestinations.hint') },
+      { key: 'ignoreAsns', label: t('set.attack.beacon.ignoreAsns'), type: 'text', placeholder: '15169, 13335', hint: t('set.attack.beacon.ignoreAsns.hint') },
+    ],
+  });
+}
+
+function attackEventsCard(v) {
+  return settingsFormCard({
+    title: t('set.attack.events.title'),
+    values: v,
+    endpoint: '/api/settings/attack-indication',
+    wrap: (body) => ({ securityEvents: body }),
+    fields: [
+      { key: 'enabled', label: t('set.attack.events.enabled'), type: 'checkbox', hint: t('set.attack.events.enabled.hint') },
+      { key: 'cooldownMinutes', label: t('set.attack.events.cooldownMinutes'), type: 'number', min: 1, max: 1440, step: 1, hint: t('set.attack.events.cooldownMinutes.hint') },
+    ],
+  });
+}
+
+// The rule table. Three numbers per event type, flattened into one card: the
+// field keys carry the rule in them (`auth.failure|warn`) and are folded back
+// into the nested { rules: { type: { warn, crit, windowMinutes } } } shape by
+// `wrap`, so the card stays an ordinary settings form.
+function attackRulesCard(v) {
+  const rules = (v && v.rules) || {};
+  const values = {};
+  const fields = [];
+  for (const [type, labelKey] of ATTACK_RULES) {
+    const r = rules[type] || {};
+    const name = t(labelKey);
+    for (const [part, suffixKey, max] of [['warn', 'set.attack.rule.warn', 1000000], ['crit', 'set.attack.rule.crit', 1000000], ['windowMinutes', 'set.attack.rule.window', 1440]]) {
+      const key = `${type}|${part}`;
+      values[key] = r[part];
+      fields.push({ key, label: `${name} — ${t(suffixKey)}`, type: 'number', min: 1, max, step: 1 });
+    }
+  }
+  return settingsFormCard({
+    title: t('set.attack.rules.title'),
+    note: t('set.attack.rules.hint'),
+    values,
+    endpoint: '/api/settings/attack-indication',
+    wrap: (body) => {
+      const out = {};
+      for (const [key, val] of Object.entries(body)) {
+        const [type, part] = key.split('|');
+        if (!type || !part) continue;
+        if (!Number.isFinite(val)) continue; // a field left blank is left alone
+        if (!out[type]) out[type] = {};
+        out[type][part] = val;
+      }
+      return { securityEvents: { rules: out } };
+    },
+    fields,
+  });
+}
+
 async function settingsEventsView() {
   const data = await api('/api/settings');
   return el('div', { class: 'settings-grid' }, eventsBulkCard(data.events));
@@ -16976,7 +17215,7 @@ async function settingsRetentionView() {
 // Generic "edit a few fields + Save" card. fields: { key, label, type:
 // 'number'|'checkbox', min, max, step, readonly, hint }. Read-only fields are
 // shown (greyed) but never sent; the server validates the rest.
-function settingsFormCard({ title, fields, values, endpoint }) {
+function settingsFormCard({ title, fields, values, endpoint, wrap = null, note = null }) {
   const v = values || {};
   const inputs = {};
   const rowEls = [];
@@ -16988,6 +17227,23 @@ function settingsFormCard({ title, fields, values, endpoint }) {
     } else if (f.type === 'select') {
       input = el('select', {}, ...(f.options || []).map(([val, lbl]) => el('option', { value: val }, lbl)));
       input.value = v[f.key] != null ? String(v[f.key]) : '';
+    } else if (f.type === 'text') {
+      // A free-text field, saved as a STRING. Until this branch existed every
+      // non-checkbox, non-select field was built as a number input and saved
+      // through Number(), so a text field rendered as a spinner and saved NaN
+      // (the agent auto-update window was the one that had it).
+      //
+      // An array value is joined for display: the list fields (ignore lists)
+      // are stored as arrays and typed as a comma-separated line, and the
+      // server accepts either form back.
+      const raw = v[f.key];
+      input = el('input', {
+        type: 'text',
+        value: Array.isArray(raw) ? raw.join(', ') : String(raw ?? ''),
+        maxlength: f.maxlength ?? null,
+        placeholder: f.placeholder ?? null,
+        spellcheck: 'false',
+      });
     } else {
       input = el('input', { type: 'number', value: String(v[f.key] ?? ''), min: f.min ?? null, max: f.max ?? null, step: f.step ?? null });
     }
@@ -17006,14 +17262,21 @@ function settingsFormCard({ title, fields, values, endpoint }) {
       if (f.readonly) continue;
       if (f.type === 'checkbox') body[f.key] = inputs[f.key].checked;
       else if (f.type === 'select') body[f.key] = inputs[f.key].value;
+      else if (f.type === 'text') body[f.key] = inputs[f.key].value.trim();
       else body[f.key] = Number(inputs[f.key].value);
     }
-    try { await api(endpoint, { method: 'PUT', body }); toast(`${title} saved`); }
+    // Some panels own a SECTION of a larger settings object rather than a flat
+    // one (Settings → Attack indication: four detectors under one key). `wrap`
+    // nests the collected fields under that section so one card saves its own
+    // values and never restates another's.
+    const payload = wrap ? wrap(body) : body;
+    try { await api(endpoint, { method: 'PUT', body: payload }); toast(`${title} saved`); }
     catch (e2) { err.textContent = errText(e2); }
     finally { btn.disabled = false; }
   }
   btn.addEventListener('click', save);
   return el('div', { class: 'settings-card' }, el('h3', {}, title),
+    note ? el('p', { class: 'muted small' }, note) : null,
     el('div', { class: 'form-grid' }, ...rowEls, err, el('div', { class: 'form-actions' }, btn)));
 }
 
@@ -17866,6 +18129,9 @@ function onLiveFinding(f) {
   // view decides whether the row passes the active filters and re-reads the
   // totals either way — they move whether or not the row is shown.
   if (currentView === 'findings' && onLiveFindingRow) onLiveFindingRow(f);
+  // The red line is driven by the socket first and the poll second, so a scan
+  // that starts while somebody is looking at the screen shows up at once.
+  refreshAttackBar().catch(() => {});
 }
 
 // ---- NIS2 Reporting Center ------------------------------------------------
@@ -20273,6 +20539,10 @@ async function render({ silent = false } = {}) {
   // ...and, on every render, whether either trust key has moved. Above the view,
   // not in it: a key that changed is not a property of the page you are on.
   refreshTrustBanner();
+  // ...and whether anything is indicating an attack. Same reasoning: a scan
+  // running right now is not a property of the page you are on.
+  refreshAttackBar();
+  startAttackBarPolling();
 
   // The kitchen sink owns its drawer, popover and row menu; they are appended
   // to <body>, so leaving the view does not remove them.
@@ -20599,6 +20869,14 @@ function setupNavGroups() {
   }
 }
 setupNavGroups();
+// The attack-indication bar: the whole 3px strip is the click target, and it
+// opens the event (or the filtered findings list) the top finding belongs to.
+// Wired here rather than inline, because the gate refuses an on* attribute in
+// index.html.
+{
+  const bar = $('#attack-bar');
+  if (bar) bar.addEventListener('click', () => openAttackTarget());
+}
 // Off-canvas sidebar (mobile/tablet): the ☰ button opens it; tapping the dimmed
 // backdrop or anything outside the sidebar closes it again.
 {

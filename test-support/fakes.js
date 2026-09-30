@@ -2969,6 +2969,27 @@ function makeFindingStore(overrides = {}) {
   return {
     rows,
     save: overrides.save || (async (f) => { const saved = { ...f, id: f.id || `f${rows.length + 1}`, acked: false }; rows.push(saved); return saved; }),
+    // The red bar's read (src/analysis/attackIndication.js): open, unacked,
+    // WARN-or-worse findings whose metric is on the attack list, worst first
+    // then newest. Modelled over `rows` rather than stubbed, so a test that
+    // gets the membership rule wrong fails here too.
+    attackIndication: overrides.attackIndication || (async ({ metrics = [], prefixes = [], severities = [], since = null, limit = 5 } = {}) => {
+      const member = (m) => metrics.includes(m) || prefixes.some((p) => String(m).startsWith(p));
+      if (!metrics.length && !prefixes.length) return { count: 0, bySeverity: {}, worst: null, findings: [] };
+      const hits = rows.filter((f) => !f.acked && member(f.metric)
+        && (!severities.length || severities.includes(f.severity))
+        && (!since || new Date(f.createdAt || 0) >= new Date(since)));
+      const bySeverity = {};
+      for (const h of hits) bySeverity[h.severity] = (bySeverity[h.severity] || 0) + 1;
+      const sorted = hits.slice().sort((a, b) => ((b.severity === 'CRIT') - (a.severity === 'CRIT'))
+        || String(b.createdAt).localeCompare(String(a.createdAt)));
+      return {
+        count: hits.length,
+        bySeverity,
+        worst: bySeverity.CRIT ? 'CRIT' : (bySeverity.WARN ? 'WARN' : null),
+        findings: sorted.slice(0, limit).map(lightFinding).map((f, i) => ({ ...f, explanation: sorted[i].explanation ?? null })),
+      };
+    }),
     // The explicit backfill. Matches the real store: unacknowledged findings
     // only, because one somebody has already read and acted on is history.
     applySeverityRule: overrides.applySeverityRule || (async (rule, { dryRun = true } = {}) => {
@@ -3180,6 +3201,12 @@ function makeFlowsRepo(overrides = {}) {
     scanCandidates: overrides.scanCandidates || (async () => []),
     // The external networks an hour of flows reached (src/analysis/newPeerDetector.js).
     externalPeersSince: overrides.externalPeersSince || (async () => []),
+    // The beacon detector's three reads (src/analysis/beaconDetector.js): how
+    // often each agent reports, which conversations repeat often enough to be
+    // worth timing, and the timings themselves.
+    reportCadence: overrides.reportCadence || (async () => new Map()),
+    beaconCandidates: overrides.beaconCandidates || (async () => []),
+    beaconTimestamps: overrides.beaconTimestamps || (async () => []),
     topologyEdges: overrides.topologyEdges || (async () => []),
     tcpServiceFlows: overrides.tcpServiceFlows || (async () => []),
     agentIdsForIp: overrides.agentIdsForIp || (async () => []),

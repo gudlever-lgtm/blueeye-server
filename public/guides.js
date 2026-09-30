@@ -30,7 +30,7 @@
   // somebody meets the product in: what changed, the machines behind it, the
   // tools for when one misbehaves, the services on top, and what all of it
   // adds up to.
-  var TRACKS = ['monitoring', 'fleet', 'diagnostics', 'assurance', 'insights'];
+  var TRACKS = ['monitoring', 'fleet', 'diagnostics', 'assurance', 'insights', 'security'];
   // Where the reader got to in EACH guide, remembered per browser. One key per
   // track: somebody halfway through Diagnostics who opens Insights should not
   // find it starting at step 5.
@@ -1268,6 +1268,131 @@
     // ---------------------------------------------------------------- tracks
     // One array per guide. A step is { id, title(), body() } — it carries its
     // own title so adding a step never means editing a lookup somewhere else.
+    // ---- Security: the attack-indication detectors --------------------------
+    // Six steps that answer the question the other five tracks do not: is
+    // something on this network behaving like an attack, what do the four
+    // detectors actually measure, and — the part a handbook never gets right —
+    // which two settings you have to touch on the first day of an install.
+    // See docs/attack-indication.md.
+    function securitySteps() { return [
+      {
+        id: 'intro',
+        title: function () { return t('guide.sec.step.intro'); },
+        body: function () {
+          return [
+            lead(t('guide.sec.intro.lead')),
+            table([t('guide.sec.col.detector'), t('guide.sec.col.says'), t('guide.sec.col.metric')], [
+              [t('guide.sec.intro.d1.n'), t('guide.sec.intro.d1.s'), 'net.scan'],
+              [t('guide.sec.intro.d2.n'), t('guide.sec.intro.d2.s'), 'net.beacon'],
+              [t('guide.sec.intro.d3.n'), t('guide.sec.intro.d3.s'), 'peer.new_asn / peer.new_country'],
+              [t('guide.sec.intro.d4.n'), t('guide.sec.intro.d4.s'), 'security.*'],
+            ]),
+            note(t('guide.sec.intro.note')),
+            actions(viewButton('findings', t('nav.view.findings')),
+              settingsTabButton('attack', t('guide.sec.btn.settings'))),
+          ];
+        },
+      },
+      {
+        id: 'firstday',
+        title: function () { return t('guide.sec.step.firstday'); },
+        body: function () {
+          return [
+            lead(t('guide.sec.firstday.lead')),
+            todo([t('guide.sec.firstday.do1'), t('guide.sec.firstday.do2'), t('guide.sec.firstday.do3')]),
+            values([
+              [t('guide.sec.firstday.r1.f'), t('guide.sec.firstday.r1.v'), t('guide.sec.firstday.r1.w')],
+              [t('guide.sec.firstday.r2.f'), t('guide.sec.firstday.r2.v'), t('guide.sec.firstday.r2.w')],
+            ]),
+            watch(t('guide.sec.firstday.watch')),
+            actions(settingsTabButton('attack', t('guide.sec.btn.settings'))),
+          ];
+        },
+      },
+      {
+        id: 'scan',
+        title: function () { return t('guide.sec.step.scan'); },
+        body: function () {
+          return [
+            lead(t('guide.sec.scan.lead')),
+            para(t('guide.sec.scan.how')),
+            values([
+              [t('guide.sec.scan.r1.f'), '50', t('guide.sec.scan.r1.w')],
+              [t('guide.sec.scan.r2.f'), '50', t('guide.sec.scan.r2.w')],
+              [t('guide.sec.scan.r3.f'), '15', t('guide.sec.scan.r3.w')],
+            ]),
+            note(t('guide.sec.scan.note')),
+            actions(viewButton('flows', t('nav.view.flows')),
+              settingsTabButton('attack', t('guide.sec.btn.settings'))),
+          ];
+        },
+      },
+      {
+        id: 'beacon',
+        title: function () { return t('guide.sec.step.beacon'); },
+        body: function () {
+          return [
+            lead(t('guide.sec.beacon.lead')),
+            para(t('guide.sec.beacon.how')),
+            code(t('guide.sec.beacon.example')),
+            values([
+              [t('guide.sec.beacon.r1.f'), '12', t('guide.sec.beacon.r1.w')],
+              [t('guide.sec.beacon.r2.f'), '0,15', t('guide.sec.beacon.r2.w')],
+              [t('guide.sec.beacon.r3.f'), '123', t('guide.sec.beacon.r3.w')],
+            ]),
+            watch(t('guide.sec.beacon.watch')),
+            actions(settingsTabButton('attack', t('guide.sec.btn.settings'))),
+          ];
+        },
+      },
+      {
+        id: 'peers',
+        title: function () { return t('guide.sec.step.peers'); },
+        body: function () {
+          return [
+            lead(t('guide.sec.peers.lead')),
+            para(t('guide.sec.peers.how')),
+            values([
+              [t('guide.sec.peers.r1.f'), 'INFO', t('guide.sec.peers.r1.w')],
+              [t('guide.sec.peers.r2.f'), 'WARN', t('guide.sec.peers.r2.w')],
+            ]),
+            note(t('guide.sec.peers.note')),
+            actions(settingsTabButton('attack', t('guide.sec.btn.settings'))),
+          ];
+        },
+      },
+      {
+        id: 'events',
+        title: function () { return t('guide.sec.step.events'); },
+        body: function () {
+          return [
+            lead(t('guide.sec.events.lead')),
+            table([t('guide.sec.col.event'), t('guide.sec.col.warn'), t('guide.sec.col.crit'), t('guide.sec.col.window')], [
+              [t('set.attack.rule.auth_failure'), '10', '50', '10 min'],
+              [t('set.attack.rule.acl_denied'), '50', '250', '10 min'],
+              [t('set.attack.rule.port_security'), '3', '10', '15 min'],
+              [t('set.attack.rule.vpn_failed'), '5', '20', '15 min'],
+            ]),
+            note(t('guide.sec.events.note')),
+            actions(viewButton('deviceLog', t('nav.view.deviceLog')),
+              settingsTabButton('attack', t('guide.sec.btn.settings'))),
+          ];
+        },
+      },
+      {
+        id: 'bar',
+        title: function () { return t('guide.sec.step.bar'); },
+        body: function () {
+          return [
+            lead(t('guide.sec.bar.lead')),
+            todo([t('guide.sec.bar.do1'), t('guide.sec.bar.do2'), t('guide.sec.bar.do3')]),
+            note(t('guide.sec.bar.note')),
+            actions(viewButton('findings', t('nav.view.findings'))),
+          ];
+        },
+      },
+    ]; }
+
     function assuranceSteps() { return [
       {
         id: 'intro',
@@ -1726,6 +1851,7 @@
       if (track === 'fleet') return fleetSteps();
       if (track === 'diagnostics') return diagnosticsSteps();
       if (track === 'insights') return insightsSteps();
+      if (track === 'security') return securitySteps();
       return assuranceSteps();
     }
     function trackTitle() {
@@ -1733,6 +1859,7 @@
       if (track === 'fleet') return t('guide.title.fleet');
       if (track === 'diagnostics') return t('guide.title.diagnostics');
       if (track === 'insights') return t('guide.title.insights');
+      if (track === 'security') return t('guide.title.security');
       return t('guide.title.assurance');
     }
     function trackSubtitle() {
@@ -1740,6 +1867,7 @@
       if (track === 'fleet') return t('guide.sub.fleet');
       if (track === 'diagnostics') return t('guide.sub.diagnostics');
       if (track === 'insights') return t('guide.sub.insights');
+      if (track === 'security') return t('guide.sub.security');
       return t('guide.sub.assurance');
     }
     var STEPS = stepsForTrack();

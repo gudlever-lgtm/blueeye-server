@@ -1,6 +1,6 @@
 # Attack indication
 
-Three detectors that answer a question the rest of the analysis module cannot:
+Four detectors that answer a question the rest of the analysis module cannot:
 **is something on this network behaving like an attack?**
 
 They are deliberately modest. BlueEyes is a fault and availability analyser —
@@ -13,6 +13,7 @@ its numbers, and the reader draws the conclusion:
 | --- | --- | --- |
 | `security.auth_failure` · `security.acl_denied` · `security.port_violation` · `security.vpn_failure` | this device reported N of these in M minutes | rate over `device_events` |
 | `net.scan` | this source address reached N distinct ports across M distinct hosts | threshold over `flow_records` |
+| `net.beacon` | this host called the same external address every N seconds for H hours | regularity over `flow_records` timings |
 | `peer.new_asn` · `peer.new_country` | this site has never reached that network before | first sighting against `known_peers` |
 
 All three raise ORDINARY findings through the shared sink
@@ -24,6 +25,15 @@ path and no new UI surface — a finding is a finding.
 They are gated like every other finding producer: the analysis feature flag
 (`ANALYSIS_ENABLED`) **and** the `analysis` licence feature, plus a per-detector
 switch of their own.
+
+**Everything here is tunable from the dashboard** — Settings → Attack
+indication — and applies without a restart. The environment variables named
+throughout are the FLOOR: they are what the process loads at boot, and what a
+deployment that never opens that screen keeps. See
+[Settings → Attack indication](#settings--attack-indication).
+
+**An open finding shows as a red line** across the top of every screen. See
+[The red line](#the-red-line).
 
 ---
 
@@ -158,7 +168,100 @@ answers with the thresholds it applied (`scanThresholds`).
 
 ---
 
-## 3. Networks this site has never reached
+## 3. Beaconing
+
+**`src/analysis/beaconDetector.js`** · finding `net.beacon`
+
+Everything else in the analysis module measures HOW MUCH: bytes against a
+baseline, a count against a threshold, a counter against its own history. A
+beacon is not loud. It is a few hundred bytes on a schedule, far below any
+volume baseline, to an address that may be perfectly ordinary. What gives it
+away is not the size but the **rhythm**, and nothing here was looking at rhythm.
+
+### What the signal actually is
+
+An agent sends a flow snapshot on its own cadence (`BLUEEYE_REPORT_INTERVAL_MS`,
+60 s by default), so `flow_records` holds one row per 5-tuple per interval that
+tuple was active in. Line up the distinct timestamps of one
+(internal host → external peer : port) conversation and look at the gaps:
+
+```
+a person browsing     37s    4s  900s   12s   61s  2100s   — ragged
+a session left open   60s   60s   60s   60s   60s    60s   — every interval
+a beacon             600s  600s  601s  600s  599s   600s   — every tenth
+```
+
+**The middle one is the trap**, and it is why this cannot use a fixed number. A
+conversation that never stops appears in every interval, perfectly regularly,
+and looks exactly like a beacon. The only thing that separates them is the
+agent's own reporting cadence — a beacon SKIPS intervals, a stream does not — so
+the cadence is **derived per agent** from the same table
+(`flowsRepository.reportCadence`) and a candidate must beat it by
+`minCadenceMultiple` before its regularity counts for anything. A hard-coded
+60 s would call every long-lived session on a five-minute agent a beacon.
+
+### The measure
+
+Median gap and a robust sigma over the gaps — median + MAD, the same statistics
+as every other detector here, no second definition of "typical". **Jitter** is
+`sigma / median`: a dimensionless number that is small when the gaps are all
+alike whatever their length. 0.15 by default, so a ten-minute beacon may wander
+about ninety seconds and still count.
+
+One inversion worth knowing: `robustSigma` answers `null` when every sample is
+identical. For a baseline that means "no scale exists"; here it means the
+opposite — gaps that never vary at all are the strongest beacon there is — so
+null is read as **zero jitter**, not as a missing measurement.
+
+A candidate is rejected, and the reason is counted in the job's log line, when
+it has too few calls, too short a span, no derivable cadence, a gap under the
+cadence multiple (`continuous`), or jitter over the limit (`irregular`).
+
+### Plenty of honest software beacons
+
+NTP, update checkers, monitoring agents, licence heartbeats, telemetry. The
+finding states the period, the jitter, how long it has been going on and how few
+bytes each call carried, and then stops. **Port 123 (NTP) is excluded by
+default** — its entire job is to call out on a fixed schedule, it is on every
+host, and leaving it in would mean every deployment's first finding is its own
+time service. **DNS is deliberately NOT excluded**: a resolver being called
+regularly is ordinary, but DNS is also the most-used covert channel there is,
+and excluding it by default would blind the detector to the case it is most
+needed for.
+
+The ignore lists are how an operator writes down what they already know, once,
+instead of acknowledging the same finding every day. `ignoreAsns` is usually the
+better answer than `ignoreDestinations`: a CDN-hosted update service is a moving
+set of addresses and one stable AS number.
+
+### Cost
+
+The candidate list is one grouped read; the timings are **one read per
+candidate**, which is the job's real cost. `maxCandidates` (100) bounds it, and
+an ignored destination is dropped *before* its timings are fetched.
+
+### Configuration
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `BEACON_ALERTS_ENABLED` | `true` | `false` turns the detector off |
+| `BEACON_WINDOW_HOURS` | `24` | how far back each run looks (stay inside `RETENTION_RAW_DAYS`) |
+| `BEACON_JOB_INTERVAL_MINUTES` | `60` | |
+| `BEACON_MIN_OBSERVATIONS` | `12` | calls before regularity means anything |
+| `BEACON_MIN_SPAN_MINUTES` | `120` | how long the pattern must have been running |
+| `BEACON_MIN_CADENCE_MULTIPLE` | `2` | the anti-stream rule, in multiples of the agent's reporting cadence |
+| `BEACON_MAX_JITTER` | `0.15` | sigma / median over the gaps |
+| `BEACON_CRIT_JITTER` | `0.05` | never above the WARN line |
+| `BEACON_MAX_CANDIDATES` | `100` | candidates pulled per run |
+| `BEACON_MAX_PER_RUN` | `20` | above it, one log line instead of a flood |
+| `BEACON_COOLDOWN_MINUTES` | `1440` | one finding per conversation per day |
+| `BEACON_IGNORE_PORTS` | `123` | **empty means ignore nothing**, unset means the default |
+| `BEACON_IGNORE_DESTINATIONS` | — | addresses and IPv4 CIDRs allowed to beacon |
+| `BEACON_IGNORE_ASNS` | — | AS numbers allowed to beacon |
+
+---
+
+## 4. Networks this site has never reached
 
 **`src/analysis/newPeerDetector.js`** · `known_peers` (migration 142) ·
 findings `peer.new_asn`, `peer.new_country`
@@ -239,6 +342,106 @@ everything is.
 
 ---
 
+## Settings → Attack indication
+
+Everything above is tunable from the dashboard, by an admin, without a restart.
+`PUT /api/settings/attack-indication`, stored under the `attackIndication`
+settings key, validated by `src/services/attackIndicationSettings.js`.
+
+### Why the screen exists
+
+Two of these knobs are ones a deployment cannot avoid touching, and both were
+"edit `.env` and restart the server" — which on a customer's on-prem box means
+a change window for a threshold:
+
+| Field | Why it cannot stay in `.env` |
+| --- | --- |
+| `newPeer.baselineHours` | How long a site stays silent while its memory of "networks we have reached" fills up. Too short on a fresh install and the first day is a siren. |
+| `scan.ignoreSources` | The addresses allowed to sweep the network. This server's own sweep is excluded automatically; a CUSTOMER's vulnerability scanner is not, and until it is listed it produces a CRIT on every run. |
+
+The rest are here because once the screen exists, leaving half the knobs in
+`.env` is the confusing answer.
+
+### How it applies without a restart
+
+`src/server.js` builds **one live object**, `attackConfig`, with a section per
+detector, from the environment. Each detector holds a *reference* to its section
+and re-reads it on every run (`config` may be a getter or a plain object). The
+settings service mutates those sections in place — on save, and again at boot
+through `applyStoredOverrides` — so a change lands on the next cycle. The same
+`attackConfig.scan` object is what the flow explorer's on-screen scan list
+reads, so tuning the threshold moves the finding and the list together.
+
+### The rules the validator enforces
+
+- **A patch carries only what it names.** Saving the scan card never restates
+  the beacon values, and the rule table merges **per rule** — tuning the failed
+  login counts does not drop the ACL rule somebody set last month.
+- **What is stored is the admin's own decisions**, not the effective config, so
+  a default that moves in a later release still moves for a deployment that
+  never set it. `source` in the response says which fields were taken over.
+- **A CRIT line below its WARN line is refused and named**, not silently
+  clamped the way the env loader does. Checked against the MERGED result, so
+  raising WARN in one save and CRIT in the next is not refused for a state that
+  only ever existed between two requests.
+- **Lists take a string or an array** — the UI sends a comma-separated line,
+  the API accepts either, and what is stored is always an array. Bad entries are
+  named, not counted.
+- **An unknown event type is accepted** in the rule table, because the agent's
+  classifier ships ahead of the server's catalogue.
+
+### Where the numbers live
+
+| Card | Section | Fields |
+| --- | --- | --- |
+| Port scans and fan-out | `scan` | enabled, port/host thresholds + their CRIT lines, window, cooldown, `ignoreSources` |
+| Networks never reached before | `newPeer` | enabled, `baselineHours`, ASN/country on-off + severities, `maxPerScope` |
+| Beaconing | `beacon` | enabled, window, min observations/span, jitter limits, cooldown, three ignore lists |
+| Security events from the equipment | `securityEvents` | enabled, cooldown |
+| Security event thresholds | `securityEvents.rules` | per event type: warn, crit, window |
+
+---
+
+## The red line
+
+A **3 px red line** across the top of the content column whenever an open,
+unacknowledged attack-indication finding of **WARN or worse** exists in the last
+24 hours. Hidden, and taking no space, when there is none — which is almost
+always.
+
+- **Why a line and not a banner.** It has to be visible from across a room on a
+  wall-mounted dashboard and cost nothing on every other day. A banner pushes
+  the page down, gets dismissed, and is then never seen again; three pixels at
+  the top edge are either there or not.
+- **The whole strip is a button.** Hovering or focusing it expands it into the
+  sentence the detector wrote; clicking opens the event case the finding was
+  grouped into, or — when it has none yet — the Analysis screen filtered to that
+  metric. It is a `<button>`, not a decorated `<div>`, so it is reachable by
+  keyboard and announced as a control.
+- **CRIT breathes, WARN does not.** Same colour, a slow pulse for the critical
+  one, behind `prefers-reduced-motion`.
+- **Acknowledging is how it clears.** There is no private dismiss: accepting the
+  finding is the existing act of saying "seen", and it leaves a record that
+  somebody did.
+- **INFO never raises it.** That is why `peer.new_asn` is INFO by default — and
+  why raising it, in Settings or with a severity rule, is also how you make the
+  line react to it.
+
+| Piece | Where |
+| --- | --- |
+| Which metrics count | `src/analysis/attackIndication.js` — the ONE list, also read by the changes feed and the event guide |
+| The query | `FindingStore.attackIndication()`, on `idx_findings_open` |
+| The endpoint | `GET /api/findings/attack-indication` (viewer+), mounted before `/:id` |
+| The markup | `#attack-bar` in `public/index.html` |
+| The behaviour | `refreshAttackBar()` in `public/app.js` — every render, every live finding over the dashboard socket, and a 60 s poll |
+| The styling | `.attack-bar` in `public/css/components.css` |
+
+The poller is session-scoped, not view-scoped: it is released by `logout()`
+alongside the live socket, which is why it is not in `VIEW_RESOURCES` and not
+named `stopX()`.
+
+---
+
 ## What this is not
 
 Worth saying plainly, because "attack detection" invites the assumption:
@@ -249,9 +452,9 @@ Worth saying plainly, because "attack detection" invites the assumption:
 - **No threat classification.** Nothing here labels traffic malicious, scores
   a threat, or maps to a technique taxonomy. `docs/flow-pair-baselines.md` made
   that a design choice and it still is.
-- **No beaconing / C2 detection.** That needs inter-arrival-interval statistics
-  over a (src, dst, port) series; the hourly rollups destroy the signal by
-  design.
+- **No C2 attribution.** `net.beacon` says the traffic keeps time. It cannot
+  say what the traffic is, because nothing here reads payload — an update
+  checker and a command channel are the same shape from the outside.
 - **No ARP-integrity model.** `arp_entries` is upserted per (agent, IP); an IP
   changing MAC is not an event yet.
 - **No allow/deny list for destinations.** Everything except
@@ -281,3 +484,7 @@ still leaves the flag to a human.
   first sightings, not verdicts.
 - **Alerting / ITSM** — through the normal dispatcher and integrations, with
   severity rules (`docs/severity-rules.md`) applied at store time as usual.
+- **The in-app guide** — Guides → Attack indication (`public/guides.js`,
+  `securitySteps()`): seven steps covering what each detector measures, the two
+  settings to touch on the first day of an install, and the red line. See
+  `docs/guides.md`.

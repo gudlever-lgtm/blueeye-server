@@ -104,6 +104,19 @@ An interactive card lifts from 1 to 2 **on the shadow alone**. No `transform`:
 in a four-across grid a 1px nudge reads as the whole row twitching as the
 pointer crosses it, and it ignores `prefers-reduced-motion`.
 
+### Which line a surface takes
+
+`--hairline` for a **surface** (panel, card, table, menu, drawer, modal,
+popover, and the dividers inside them). `--border` for a **control** (input,
+select, button, chip), where the edge is the affordance and has to be found.
+
+This is the difference between a page of floating surfaces and a page of
+boxes. A full-strength border is read before the shadow is, so the eye takes
+the hard edge as the boundary and the shadow becomes decoration — however
+carefully the shadow is tuned. Keeping both is right (the line is what holds
+the edge on a dark palette, where the shadow has nothing to darken); keeping
+both at full contrast is not.
+
 `ui:check` enforces it (rule `elevation`): a `box-shadow` outside `tokens.css`
 must come from `--elev-1…4`, `--shadow*` or `--ring`. A **ring** is exempt —
 every offset and the blur are zero (`0 0 0 3px …`) or the shadow is `inset`,
@@ -112,6 +125,22 @@ is depth, and depth comes from the scale.
 
 `/ui-kitchen-sink` → Tokens → Elevation shows the four levels side by side.
 That is where a palette that has lost the hierarchy shows up.
+
+### The help popover
+
+`.ui-popover` is a column: a fixed `.pop-head` (title + close) and a scrolling
+`.pop-body`. `placePopover()` in `public/ui.js` measures the room after the
+element is in the document and puts it where it **fits** — under the button by
+preference, above when below is too shallow and above is roomier, clamped
+inside the viewport either way, with `max-height` set to the room that is
+actually there. It used to be `top = button.bottom + 8` and nothing else,
+which left a long help text running off the bottom of the window with its last
+paragraphs unreachable.
+
+The module reads the viewport from `document.documentElement`, never from
+`window`: `document` is its only dependency on the host, which is what lets it
+mount under jsdom, and a throw inside the click handler leaves the popover open
+and un-tracked so the next press stacks a second one.
 
 ### The page-load line
 

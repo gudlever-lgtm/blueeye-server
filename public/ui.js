@@ -130,6 +130,48 @@
       openPopover = null;
     }
     function onPopoverKey(e) { if (e.key === 'Escape') closePopover(); }
+
+    // Puts the popover where it FITS, which is not the same as putting it under
+    // the button. It used to be top = button.bottom + 8 and nothing else, so a
+    // long help text ran off the bottom of the window with the last paragraphs
+    // unreachable — no scroll, no clamp, and the shadow that says "this floats"
+    // off-screen with them.
+    //
+    // Measured after the element is in the document, because the height depends
+    // on the text. Below the button is preferred (that is where the reader is
+    // looking); above is used only when below is genuinely too shallow AND
+    // above is roomier. Whichever side wins, the popover is clamped inside the
+    // viewport and its body takes the height that is left.
+    var POP_GAP = 8;       // between the button and the popover
+    var POP_MARGIN = 16;   // between the popover and the window edge
+    var POP_MIN = 160;     // below this, flipping is worth more than staying put
+    function placePopover(pop, anchor) {
+      var r = anchor.getBoundingClientRect();
+      // The viewport from documentElement, not from `window`: this module's
+      // only dependency on the host is `document` (that is what lets it mount
+      // under jsdom), and reaching for a global that is not there threw inside
+      // the click handler — which left the popover open and un-tracked, so the
+      // next press stacked a second one instead of toggling it shut.
+      var docEl = document.documentElement;
+      var vh = docEl.clientHeight || 0;
+      var vw = docEl.clientWidth || 0;
+      var below = vh - r.bottom - POP_GAP - POP_MARGIN;
+      var above = r.top - POP_GAP - POP_MARGIN;
+      var flip = below < POP_MIN && above > below;
+      var room = Math.max(POP_MIN, flip ? above : below);
+
+      pop.style.maxHeight = room + 'px';
+      var h = Math.min(pop.offsetHeight, room);
+      pop.style.top = (flip
+        ? Math.max(POP_MARGIN, r.top - POP_GAP - h)
+        // Math.max as well as Math.min: on a very short window the clamp can
+        // push it above the top edge, and off the top is no better than off
+        // the bottom.
+        : Math.max(POP_MARGIN, Math.min(r.bottom + POP_GAP, vh - POP_MARGIN - h))) + 'px';
+
+      var w = pop.offsetWidth;
+      pop.style.left = Math.max(POP_MARGIN, Math.min(r.left - POP_GAP, vw - POP_MARGIN - w)) + 'px';
+    }
     function onPopoverClick(e) {
       if (openPopover && !openPopover.contains(e.target) && !e.target.closest('.help-btn')) closePopover();
     }
@@ -139,17 +181,19 @@
         onclick: function (e) {
           e.stopPropagation();
           if (openPopover) { closePopover(); return; }
+          // Head and body are separate elements because the body is the part
+          // that scrolls: a help text long enough to need scrolling must not
+          // take its own close button out of reach on the way past.
           var pop = el('div', { class: 'ui ui-popover', role: 'dialog', 'aria-label': help.title },
-            el('button', {
-              class: 'btn btn-ghost btn-icon btn-xs pop-close', type: 'button',
-              'aria-label': t('ui.close'), onclick: closePopover,
-            }, '✕'),
-            el('h3', {}, help.title),
-            typeof help.body === 'function' ? help.body() : help.body);
+            el('div', { class: 'pop-head' },
+              el('h3', {}, help.title),
+              el('button', {
+                class: 'btn btn-ghost btn-icon btn-xs pop-close', type: 'button',
+                'aria-label': t('ui.close'), onclick: closePopover,
+              }, '✕')),
+            el('div', { class: 'pop-body' }, typeof help.body === 'function' ? help.body() : help.body));
           document.body.append(pop);
-          var r = btn.getBoundingClientRect();
-          pop.style.top = (r.bottom + 8) + 'px';
-          pop.style.left = Math.max(8, r.left - 8) + 'px';
+          placePopover(pop, btn);
           openPopover = pop;
           document.addEventListener('keydown', onPopoverKey);
           document.addEventListener('click', onPopoverClick, true);

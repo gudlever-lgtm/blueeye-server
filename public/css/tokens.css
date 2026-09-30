@@ -115,8 +115,8 @@
      --shadow / --shadow-md / --shadow-lg are the historical names the app's
      existing rules read. They are aliases now, so the whole surface picked up
      the new scale in one edit; new code uses --elev-N. */
-  --elev-1: 0 1px 2px rgba(15, 23, 42, .05), 0 3px 10px rgba(15, 23, 42, .05);
-  --elev-2: 0 2px 4px rgba(15, 23, 42, .05), 0 8px 20px rgba(15, 23, 42, .08);
+  --elev-1: 0 1px 2px rgba(15, 23, 42, .06), 0 5px 14px rgba(15, 23, 42, .07);
+  --elev-2: 0 2px 4px rgba(15, 23, 42, .06), 0 10px 24px rgba(15, 23, 42, .10);
   --elev-3: 0 4px 8px rgba(15, 23, 42, .06), 0 12px 28px rgba(15, 23, 42, .10);
   --elev-4: 0 8px 16px rgba(15, 23, 42, .08), 0 24px 56px rgba(15, 23, 42, .14);
   --elev-surface-1: var(--panel);
@@ -366,14 +366,21 @@
      --fs-xl: at 20px the card reads as a paragraph with a number in it. */
   --fs-stat: 26px;
 
-  /* One control height for every button, input and select in a Toolbar. */
-  --control-h: 32px;
+  /* One control height for every button, input and select in a Toolbar. 40px:
+     a 32px field is a comfortable target for a mouse and a poor one for
+     anything else, and it left the label, the field and the button beside it
+     all reading as the same weight. Controls that are not in a toolbar — the
+     nav rail, a row action, an inline chip — take --control-h-sm instead, so
+     the estate of a 40-item sidebar does not grow by 320px. */
+  --control-h: 40px;
+  --control-h-sm: 32px;
 
-  /* Radius. The contract proposed 6px; the decision was to keep the existing
-     softer scale, so these are the radii the app already shipped: --r-btn is
-     --radius-sm, --r-panel is --radius, and --r-badge sits between --radius-xs
-     and --r-btn because a 20px-tall badge at 8px reads as a pill. */
-  --r-btn: 10px;
+  /* Radius. The contract first proposed 6px and the decision then was to keep
+     the softer scale the app shipped; --r-btn is 8px now, which is the middle
+     of those two — a 40px control at 10px starts to read as a pill, and a pill
+     is reserved for status, tags and filters. --r-panel stays --radius, and
+     --r-badge sits below --r-btn because a 20px-tall badge at 8px IS a pill. */
+  --r-btn: 8px;
   --r-badge: 6px;
   --r-panel: 12px;
 
@@ -442,7 +449,7 @@
                          that the app is still fetching */
 
   /* DataTable row heights. Compact is the density toggle, not a second table. */
-  --row-h: 44px;
+  --row-h: 48px;
   --row-h-compact: 36px;
 }
 

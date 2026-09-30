@@ -288,3 +288,32 @@ partial/offline/failed) linking to the raw-text viewer.
 `src/evidence/evidenceRetention.js` ages out snapshots older than
 `RETENTION_EVIDENCE_DAYS` (default **90**) on a 6h job — **except** those on a cluster
 that still holds an **unacknowledged CRIT** finding (the same never-delete rule).
+
+## Resolving a situation means something
+
+`listOpen()` returns open + acknowledged, so a **resolved** situation used to be
+invisible to the sweep. A pattern that was still firing was therefore persisted
+as a brand-new situation on the very next pass: the operator resolved #18735,
+#18736 appeared a minute later with the same five agents and the same cause,
+and Resolve read as a button that does nothing. The findings had not stopped —
+that is exactly when an operator resolves, because they have decided what it
+is.
+
+Two windows now govern what happens when a candidate overlaps a resolved
+situation (`RESOLVE_COOLDOWN_MS` and `RESOLVE_MEMORY_MS` in
+`src/analysis/crossAgentClusterService.js`):
+
+| time since the resolve | what the sweep does | why |
+|---|---|---|
+| under 1 hour | drops the candidate (`suppressed`) | the operator has dealt with it; a resolve buys quiet |
+| 1–24 hours | re-opens the SAME situation with the merged members (`reopened`) | still broken hours later is worth seeing again — as the story continued, with its resolution note, not a second row |
+| over 24 hours | creates a new situation | the same fault next week is not last week's story; re-opening would bury it under history nobody is reading |
+
+A situation somebody **closed** is never re-opened by the sweep: closing is the
+decision that the story is over.
+
+The repository reads the dormant set with `listRecentlyResolved(since)` — an
+absolute cutoff, not a duration, because the sweep owns the clock (its injected
+`now()`) and a repository with a second one cannot be tested against it. Both
+methods are optional on the repository: an older deployment without them sweeps
+exactly as before.

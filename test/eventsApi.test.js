@@ -270,3 +270,126 @@ test('an unknown id is an EVENT that was not found', async () => {
   assert.equal(res.status, 404);
   assert.equal(res.body.error, 'Event not found');
 });
+
+// ---- Concluding a case accepts its findings (the red bar) ------------------
+//
+// The attack-indication bar counts findings with acked = 0. Resolving the
+// event the bar points at used to leave them open, so the bar stayed lit and
+// nothing on the event screen could put it out. These pin the write that
+// closes that loop, on each path that concludes a case.
+
+// Seeds an open event plus `n` open findings attached to it.
+async function withEventAndFindings(n = 3, status = 'open') {
+  const eventCasesRepo = makeEventCasesRepo();
+  const findingStore = makeFindingStore();
+  const id = await eventCasesRepo.create({
+    host_id: 'core-sw', title: 'CRIT security.portscan on core-sw', status,
+    severity: 'CRIT', primary_finding_id: 'f1',
+    first_event_at: new Date('2026-06-01T08:00:00Z'), last_event_at: new Date('2026-06-01T08:05:00Z'),
+  });
+  for (let i = 0; i < n; i += 1) {
+    // eslint-disable-next-line no-await-in-loop
+    const f = await findingStore.save({ hostId: 'core-sw', metric: 'security.portscan', severity: 'CRIT', createdAt: new Date() });
+    f.eventCaseId = id;
+  }
+  const app = makeApp({ eventCasesRepo, findingStore });
+  return { app, eventCasesRepo, findingStore, id };
+}
+
+const openCount = (store) => store.rows.filter((f) => !f.acked).length;
+
+test('PATCH /api/events/:id → resolved accepts the case\'s findings, so the red bar clears', async () => {
+  const { app, findingStore, id } = await withEventAndFindings(3);
+  assert.equal(openCount(findingStore), 3);
+
+  const res = await request(app).patch(`/api/events/${id}`)
+    .set('Authorization', authHeader('operator')).send({ status: 'resolved' });
+  assert.equal(res.status, 200);
+  assert.equal(res.body.event.status, 'resolved');
+  assert.equal(res.body.ackedFindings, 3, 'the response has to say what else the transition did');
+  assert.equal(openCount(findingStore), 0, 'the bar reads acked = 0; these are what keep it lit');
+});
+
+test('resolved → closed accepts nothing more, and reopening does not un-accept', async () => {
+  const { app, findingStore, id } = await withEventAndFindings(2);
+  await request(app).patch(`/api/events/${id}`)
+    .set('Authorization', authHeader('operator')).send({ status: 'resolved' });
+  assert.equal(openCount(findingStore), 0);
+
+  const closed = await request(app).patch(`/api/events/${id}`)
+    .set('Authorization', authHeader('operator')).send({ status: 'closed' });
+  assert.equal(closed.status, 200);
+  assert.equal(closed.body.ackedFindings, 0, 'already accepted — a second pass must not re-count them');
+
+  // Reopening is the operator saying "this is not over", not "I never saw it".
+  const reopened = await request(app).patch(`/api/events/${id}`)
+    .set('Authorization', authHeader('operator')).send({ status: 'open', comment: 'came back' });
+  assert.equal(reopened.status, 200);
+  assert.equal(openCount(findingStore), 0, 'a reopen must not un-accept what was seen');
+});
+
+test('a non-terminal transition leaves the findings alone', async () => {
+  const { app, findingStore, id } = await withEventAndFindings(2);
+  const res = await request(app).patch(`/api/events/${id}`)
+    .set('Authorization', authHeader('operator')).send({ status: 'investigating' });
+  assert.equal(res.status, 200);
+  assert.equal(res.body.ackedFindings, 0);
+  assert.equal(openCount(findingStore), 2, 'investigating is not a conclusion');
+});
+
+test('POST /api/events/bulk-status → resolved accepts the findings of every case it moved', async () => {
+  const eventCasesRepo = makeEventCasesRepo();
+  const findingStore = makeFindingStore();
+  const ids = [];
+  for (let i = 0; i < 3; i += 1) {
+    // eslint-disable-next-line no-await-in-loop
+    const id = await eventCasesRepo.create({
+      host_id: 'core-sw', title: `CRIT security.portscan #${i}`, status: 'open', severity: 'CRIT',
+      first_event_at: new Date('2026-06-01T08:00:00Z'), last_event_at: new Date('2026-06-01T08:05:00Z'),
+    });
+    ids.push(id);
+    // eslint-disable-next-line no-await-in-loop
+    const f = await findingStore.save({ hostId: 'core-sw', metric: 'security.portscan', severity: 'CRIT', createdAt: new Date() });
+    f.eventCaseId = id;
+  }
+  const app = makeApp({ eventCasesRepo, findingStore });
+  assert.equal(openCount(findingStore), 3);
+
+  const res = await request(app).post('/api/events/bulk-status')
+    .set('Authorization', authHeader('operator')).send({ ids, status: 'resolved' });
+  assert.equal(res.status, 200);
+  assert.equal(res.body.moved, 3);
+  assert.equal(openCount(findingStore), 0, 'a bulk resolve has to clear the bar too, or bulk is a trap');
+});
+
+test('a findings store without the method does not break the transition', async () => {
+  // An older deployment, or a store wired without it: the status change is the
+  // request and must still succeed.
+  const eventCasesRepo = makeEventCasesRepo();
+  const findingStore = makeFindingStore();
+  delete findingStore.ackByEventCase;
+  const id = await eventCasesRepo.create({
+    host_id: 'core-sw', title: 'CRIT cpu', status: 'open', severity: 'CRIT',
+    first_event_at: new Date('2026-06-01T08:00:00Z'), last_event_at: new Date('2026-06-01T08:05:00Z'),
+  });
+  const app = makeApp({ eventCasesRepo, findingStore });
+  const res = await request(app).patch(`/api/events/${id}`)
+    .set('Authorization', authHeader('operator')).send({ status: 'resolved' });
+  assert.equal(res.status, 200);
+  assert.equal(res.body.event.status, 'resolved');
+  assert.equal(res.body.ackedFindings, 0);
+});
+
+test('a store that throws on the accept still reports the transition as done', async () => {
+  const eventCasesRepo = makeEventCasesRepo();
+  const findingStore = makeFindingStore({ ackByEventCase: async () => { throw new Error('db gone'); } });
+  const id = await eventCasesRepo.create({
+    host_id: 'core-sw', title: 'CRIT cpu', status: 'open', severity: 'CRIT',
+    first_event_at: new Date('2026-06-01T08:00:00Z'), last_event_at: new Date('2026-06-01T08:05:00Z'),
+  });
+  const app = makeApp({ eventCasesRepo, findingStore });
+  const res = await request(app).patch(`/api/events/${id}`)
+    .set('Authorization', authHeader('operator')).send({ status: 'resolved' });
+  assert.equal(res.status, 200, 'tidying up behind the transition must not fail the transition');
+  assert.equal(res.body.event.status, 'resolved');
+});

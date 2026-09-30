@@ -91,6 +91,10 @@ function describeFilters(f) {
 // Follows the existing RBAC pattern (viewer < operator < admin): reads are
 // viewer+, status changes are operator/admin. Every transition is recorded in
 // the hash-chained audit_log via the injected auditLogger.
+// The statuses that end a case. Reaching one accepts the case's findings, so
+// the red attack-indication bar goes out with the story it was about.
+const TERMINAL_STATUSES = new Set(['resolved', 'closed']);
+
 function createEventsRouter({
   eventCasesRepo,
   findingStore,
@@ -592,6 +596,16 @@ function createEventsRouter({
       at: to === 'resolved' ? new Date() : null,
     });
 
+    // The filter form knows how many it moved, not which — so the findings are
+    // reconciled by the same description: open findings on a concluded case.
+    if (moved && TERMINAL_STATUSES.has(to) && findingStore && typeof findingStore.ackConcludedEventCases === 'function') {
+      try {
+        await findingStore.ackConcludedEventCases();
+      } catch (err) {
+        logger.warn(`events: could not accept findings of the concluded cases (${err && err.message})`);
+      }
+    }
+
     if (auditLogger) {
       const scope = describeFilters({ ...filters, status: froms.join('|') });
       await auditLogger.record(req, {
@@ -686,6 +700,19 @@ function createEventsRouter({
       if (!ok) { results.push({ id, outcome: 'conflict', from, to }); continue; }
       results.push({ id, outcome: 'moved', from, to });
 
+      // Same rule as the single transition: concluding a case accepts the
+      // findings behind it, so the red bar goes out with the story. Per event,
+      // because this loop moves them one at a time and a failure on one must
+      // not abandon the rest.
+      if (TERMINAL_STATUSES.has(to) && findingStore && typeof findingStore.ackByEventCase === 'function') {
+        try {
+          // eslint-disable-next-line no-await-in-loop
+          await findingStore.ackByEventCase(id);
+        } catch (err) {
+          logger.warn(`events: could not accept findings of event ${id} (${err && err.message})`);
+        }
+      }
+
       if (auditLogger) {
         const detail = `${from}→${to}${value.comment ? `: ${value.comment}` : ''} (bulk)`;
         // One row PER EVENT, not one for the batch: the audit log answers
@@ -730,13 +757,35 @@ function createEventsRouter({
       return res.status(409).json({ error: 'Event status changed concurrently; please retry' });
     }
 
+    // Concluding a case accepts the findings it was built from. Without this
+    // the red attack-indication bar stays lit after the operator has resolved
+    // the very event it points at — the bar counts findings with acked = 0,
+    // and the event screen has no control that touches them. Resolving IS the
+    // operator saying "seen", so it says it on the rows too.
+    //
+    // Best-effort and after the transition: the status change is the request,
+    // and a failure to tidy the findings behind it must not report the
+    // transition as failed when it has already happened. Reopening does not
+    // un-acknowledge — those rows were seen.
+    let acked = 0;
+    if (TERMINAL_STATUSES.has(to) && findingStore && typeof findingStore.ackByEventCase === 'function') {
+      try {
+        acked = await findingStore.ackByEventCase(id);
+      } catch (err) {
+        logger.warn(`events: could not accept findings of event ${id} (${err && err.message})`);
+      }
+    }
+
     if (auditLogger) {
-      const detail = `${from}→${to}${value.comment ? `: ${value.comment}` : ''}`;
+      const detail = `${from}→${to}${value.comment ? `: ${value.comment}` : ''}`
+        + (acked ? ` (accepted ${acked} finding${acked === 1 ? '' : 's'})` : '');
       await auditLogger.record(req, { category: 'event', action: 'event_status_change', target: String(id), detail });
     }
 
     const updated = await eventCasesRepo.findById(id);
-    return res.json({ event: updated });
+    // ackedFindings lets the screen say what else the transition did, rather
+    // than the reader discovering it on another page.
+    return res.json({ event: updated, ackedFindings: acked });
   }));
 
   // --- Work log (shift handover) --------------------------------------------

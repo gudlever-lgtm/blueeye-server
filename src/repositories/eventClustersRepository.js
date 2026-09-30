@@ -148,6 +148,50 @@ function createEventClustersRepository(db) {
     return hydrateByIds(rows.map((row) => row.id));
   }
 
+  // Clusters somebody RESOLVED within `sinceMs`, newest first. The detector
+  // needs them because a resolved cluster is invisible to listOpen, and a
+  // pattern that is still firing therefore used to be persisted as a BRAND-NEW
+  // situation on the very next sweep: the operator resolved #18735, #18736
+  // appeared a minute later with the same members, and Resolve read as a
+  // button that does nothing.
+  //
+  // Only manual resolutions are interesting here — an auto-resolve means the
+  // findings stopped, so nothing is about to overlap it anyway — but the
+  // column that tells them apart is resolved_by, and a resolve by the job
+  // leaves it null. Both are returned and the caller decides; the lookback is
+  // short enough that it makes no practical difference.
+  //
+  // `since` is an absolute cutoff, not a duration: the sweep owns the clock
+  // (its injected now()), and a repository with a second one cannot be tested
+  // against it.
+  async function listRecentlyResolved(since, limit = 500) {
+    const at = since instanceof Date ? since : new Date(since);
+    if (Number.isNaN(at.getTime())) return [];
+    const lim = Number.isInteger(limit) && limit > 0 && limit <= 2000 ? limit : 500;
+    const [rows] = await pool.query(
+      `SELECT id FROM event_clusters
+        WHERE status = 'resolved' AND resolved_at IS NOT NULL AND resolved_at >= ?
+        ORDER BY resolved_at DESC, id DESC LIMIT ?`,
+      [at, lim],
+    );
+    return hydrateByIds(rows.map((row) => row.id));
+  }
+
+  // Re-opens a resolved cluster: the SAME story, continued, rather than a
+  // second row about the same thing. Guarded on `resolved` so a cluster an
+  // operator closed for good, or one a colleague already re-opened, is left
+  // alone. resolved_at is cleared; the resolution note is kept, because "it
+  // was resolved with this reason and came back" is the useful history.
+  async function reopen(id, { at = null } = {}) {
+    const [res] = await pool.query(
+      `UPDATE event_clusters
+          SET status = 'open', resolved_at = NULL, detected_at = COALESCE(?, detected_at)
+        WHERE id = ? AND status = 'resolved'`,
+      [at, id],
+    );
+    return res.affectedRows > 0;
+  }
+
   // Re-evaluates a live cluster's membership: rewrites the member set, confidence
   // and cause and advances detected_at (never backwards). A grouping basis, when
   // given, replaces the stored one (the caller merges); omitted, it is kept.
@@ -301,7 +345,8 @@ function createEventClustersRepository(db) {
   }
 
   return {
-    create, findById, listOpen, updateMembership, setAdvisory, updateStatus,
+    create, findById, listOpen, listRecentlyResolved, reopen,
+    updateMembership, setAdvisory, updateStatus,
     listStaleOpen, list, count, acknowledge, resolve,
     updateAlertState, setItsmRef, setNis2Draft,
   };

@@ -1,5 +1,61 @@
 # Changelog
 
+## 0.215.0 — Is the network under attack? Three detectors that can answer
+
+Everything the analysis module did compared a number against a number: a
+z-score against a median, a rate against a threshold, a counter against its own
+history. It found faults well and it could not say a word about the one
+question every operator eventually asks. The raw material was all there and
+none of it was read.
+
+Three detectors, one doc — **[docs/attack-indication.md](docs/attack-indication.md)**.
+All three raise ORDINARY findings through the shared sink (`src/devices/findingSink.js`):
+stored, published, grouped into an event case, alerted, handed to ITSM. No second
+pipeline, no separate alert path, no new screen.
+
+- **The equipment's own security log became a signal.** The agents have always
+  parsed `auth.failure`, `acl.denied`, `port.security_violation` and
+  `vpn.negotiation_failed`, the catalogue has always grouped them under
+  `security`, and the rows have always landed in `device_events` — where they
+  were a screen. `src/devices/securityEventDetector.js` counts them per sender
+  over a sliding window and raises `security.*` when the count crosses a
+  threshold (10 failed logins in 10 minutes, 3 port-security violations in 15,
+  …), all of it overridable through `SECURITY_EVENT_RULES`. A rate rather than a
+  baseline on purpose: failed logins are zero almost all the time, so the robust
+  detector's "step off a constant" rule would page on the first one. Wired into
+  `deviceEventIngest` AFTER the write, like the switch-port history.
+- **The port-scan count runs itself now.** `flowsRepository.exploreFlows` has
+  labelled port-scans and fan-outs for a long time, on demand, for a technician
+  who already had the right agent and the right time window open. A scan at
+  03:00 was a query nobody ran. `src/analysis/scanDetector.js` runs the same
+  count as a leader-only job across the fleet and raises `net.scan`. The
+  thresholds moved out of the repository into one shared config, so tuning them
+  moves the finding and the on-screen list together. **This product ships the
+  loudest scanner on the network** (`src/discovery/scanner.js`), so this
+  server's own addresses are ignored while discovery is enabled, and
+  `SCAN_IGNORE_SOURCES` takes every other scanner an operator knowingly runs.
+- **The server can now answer "has this ever happened before".** `known_peers`
+  (migration 142) remembers every ASN and country a site has reached, for 400
+  days — the `known_devices` pattern one layer out, same scope string, same
+  horizon, seeded from the flow records that still exist.
+  `src/analysis/newPeerDetector.js` scores each hour against it and raises
+  `peer.new_country` (WARN) or `peer.new_asn` (INFO). Per site, not per host:
+  per host is hosts × networks rows and a finding every time a workstation opens
+  a new CDN, and `last_src_ip` keeps the address an investigation actually wants.
+  A scope stays silent until its memory is 24 hours old, so a fresh install is
+  not a siren.
+
+None of them classifies traffic as malicious, scores a threat or names a
+technique — the explanations state the counts, the window and the source, and
+say in as many words that a vulnerability scanner and an attacker look the same
+from here. `docs/attack-indication.md` also lists what is still missing
+(beaconing, ARP integrity, destination allow-lists) so the next person does not
+have to rediscover it.
+
+Supporting: a `security` condition family in the changes feed (`changes.indicates.security`,
+en + da) and a matching first step in the event guide — *identify the source
+before treating this as an incident*.
+
 ## 0.214.0 — One command to stand up a customer server
 
 Installing at a new customer meant reading SETUP.md, copying `.env.example`,

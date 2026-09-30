@@ -190,6 +190,9 @@ function createApiRouter({
   topologyChangeService,
   flowPairBaselinesRepo,
   flowPairBaselineJob,
+  // The shared port-scan thresholds (src/analysis/scanDetector.js). Optional:
+  // a router built without it falls back to the historical defaults.
+  scanConfig = null,
   discoveredDevicesRepo,
   discoverySweepJob,
   discoveryConfig,
@@ -388,7 +391,7 @@ function createApiRouter({
     fetchImpl: geocodeFetch,
   }));
   router.use('/api/flows', createFlowsRouter({
-    resultsRepo, agentsRepo, flowsRepo, centroids,
+    resultsRepo, agentsRepo, flowsRepo, centroids, scanConfig,
     getCategories: settingsService ? () => settingsService.getFlowCategories() : undefined,
   }));
   // Flow-derived dependency/topology map (who-talks-to-whom from the 5-tuples).

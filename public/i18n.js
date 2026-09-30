@@ -1046,6 +1046,7 @@
       'changes.correlated': '{rows} events, correlated from {raw} raw occurrences.',
       // "What does this indicate?" — one line per condition family
       // (src/changes/indications.js). Keep these short: they sit under the row.
+      'changes.indicates.security': 'Who is on the network, or what it is reaching, has changed — a burst of failed logins or denied traffic, an address sweeping ports, or a destination never seen before. New is not the same as malicious: check whether the source is one of yours before treating it as an incident.',
       'changes.indicates.flatline': 'A metric that used to move has gone flat — usually a stopped exporter or collector, not a healthy calm.',
       'changes.indicates.certificate': 'A TLS certificate is expiring or failing validation — a deadline, not a performance problem.',
       'changes.indicates.routing': 'The path to the target changed (AS-path or route) — traffic is taking a different way round.',
@@ -6516,6 +6517,7 @@
       'changes.recurrenceSince': 'Først set {when}',
       'changes.foldedAnomalies': '{count} anomalier',
       'changes.correlated': '{rows} hændelser, korreleret fra {raw} rå forekomster.',
+      'changes.indicates.security': 'Hvem der er på netværket, eller hvad det når ud til, har ændret sig — en byge af fejlede logins eller afvist trafik, en adresse der skanner porte, eller en destination der aldrig er set før. Nyt er ikke det samme som ondsindet: tjek om kilden er jeres egen, før du behandler det som en hændelse.',
       'changes.indicates.flatline': 'En metrik, der før bevægede sig, ligger nu flad — typisk en stoppet exporter eller collector, ikke sund ro.',
       'changes.indicates.certificate': 'Et TLS-certifikat udløber eller fejler validering — en deadline, ikke et performanceproblem.',
       'changes.indicates.routing': 'Vejen til målet er ændret (AS-path eller rute) — trafikken går en anden vej.',

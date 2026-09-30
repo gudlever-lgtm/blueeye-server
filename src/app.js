@@ -68,6 +68,9 @@ function createApp({
   probePipeline,
   flowPipeline,
   flowsRepo,
+  // The shared port-scan thresholds (src/analysis/scanDetector.js), so the
+  // flow explorer's scan list and the `net.scan` finding agree.
+  scanConfig = null,
   lldpNeighborsRepo,
   serviceDependenciesRepo,
   hostConnectionsRepo,
@@ -297,6 +300,7 @@ function createApp({
       probePipeline,
       flowPipeline,
       flowsRepo,
+      scanConfig,
   lldpNeighborsRepo,
       serviceDependenciesRepo,
       hostConnectionsRepo,

@@ -258,6 +258,12 @@ function createRetentionRepo(db) {
   async function purgeKnownDevicesBefore(ts) {
     return deleteInBatches('DELETE FROM known_devices WHERE last_seen < ? ORDER BY last_seen LIMIT ?', [ts]);
   }
+  // The new-peer memory (migration 142). A network not reached for the window
+  // is forgotten, and would be "new" again if the site reached it — which,
+  // after 400 days, it is.
+  async function purgeKnownPeersBefore(ts) {
+    return deleteInBatches('DELETE FROM known_peers WHERE last_seen < ? ORDER BY last_seen LIMIT ?', [ts]);
+  }
   async function purgeHostConnectionsBefore(ts) {
     return deleteInBatches('DELETE FROM host_connections WHERE last_seen < ? ORDER BY last_seen LIMIT ?', [ts]);
   }
@@ -304,6 +310,7 @@ function createRetentionRepo(db) {
     purgeStaleDiscoveredDevicesBefore,
     purgeHostConnectionsBefore,
     purgeKnownDevicesBefore,
+    purgeKnownPeersBefore,
     purgeAuditEventsBefore,
   };
 }

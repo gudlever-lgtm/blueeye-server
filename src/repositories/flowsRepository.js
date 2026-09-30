@@ -460,7 +460,98 @@ function createFlowsRepository(db) {
     return [...new Set(rows.map((r) => r.agent_id))];
   }
 
-  return { insertMany, aggregateExternalDestinations, destinationExists, agentIdsForDestination, selectFlows, exploreFlows, mapFlows, topologyEdges, tcpServiceFlows, agentIdsForIp, agentIdsForPort, asnSeries, lastFlowAtByAgent };
+  // FLEET-WIDE scan / fan-out candidates over [from, to): one row per
+  // (agent, source address) that touched at least `portThreshold` distinct
+  // destination ports or `hostThreshold` distinct destination hosts.
+  //
+  // The same shape exploreFlows() returns in its `scans` array, and
+  // deliberately the same SQL — but across every agent, and without the
+  // conversation filters, because the detector asks a different question. The
+  // explorer answers "show me what this agent saw", on demand, for a technician
+  // who is already looking. This answers "did anything sweep the network in the
+  // last quarter of an hour", unprompted, for a technician who is not.
+  //
+  // Raw flow_records only: the rollups keep no per-port detail, which is the
+  // whole signal here. Windowed and capped, and the (agent_id, ts) index serves
+  // the window; a scan detector that can table-scan the flow table on a busy
+  // fleet is a denial of service on its own server.
+  //
+  // `firstSeen` / `lastSeen` are what the finding's window is built from, so a
+  // three-second burst is not reported as a fifteen-minute one.
+  async function scanCandidates({
+    from, to, agentId = null, portThreshold = 50, hostThreshold = 50, limit = 100,
+  }) {
+    const where = ['ts >= ?', 'ts < ?', 'src_ip IS NOT NULL'];
+    const params = [from, to];
+    if (agentId != null) { where.push('agent_id = ?'); params.push(agentId); }
+    const lim = Number.isInteger(limit) && limit > 0 && limit <= 500 ? limit : 100;
+    const rows = await q(
+      `SELECT agent_id, src_ip,
+              COUNT(DISTINCT dst_port) AS ports, COUNT(DISTINCT dst_ip) AS hosts,
+              SUM(bytes) AS bytes, SUM(packets) AS packets, SUM(flows) AS flowCount,
+              MIN(ts) AS firstSeen, MAX(ts) AS lastSeen,
+              MAX(internal) AS internal
+       FROM flow_records WHERE ${where.join(' AND ')}
+       GROUP BY agent_id, src_ip
+       HAVING ports >= ? OR hosts >= ?
+       ORDER BY ports DESC, hosts DESC LIMIT ?`,
+      [...params, portThreshold, hostThreshold, lim],
+    );
+    return rows.map((r) => ({
+      agentId: Number(r.agent_id),
+      srcIp: r.src_ip,
+      distinctPorts: numOf(r.ports),
+      distinctHosts: numOf(r.hosts),
+      bytes: numOf(r.bytes),
+      packets: numOf(r.packets),
+      flowCount: numOf(r.flowCount),
+      firstSeen: r.firstSeen ? new Date(r.firstSeen) : null,
+      lastSeen: r.lastSeen ? new Date(r.lastSeen) : null,
+      internal: !!r.internal,
+    }));
+  }
+
+  // The EXTERNAL networks each agent talked to over [from, to): one row per
+  // (agent, ASN, country), with the heaviest conversation's addresses as
+  // evidence. Feeds the new-peer memory (known_peers, migration 142).
+  //
+  // internal = 0 only, so RFC1918 conversations never appear — they are never
+  // geolocated (docs/geo.md) and have no ASN to be new.
+  //
+  // NOT Top-N: a first sighting is usually a handful of packets, and ordering
+  // by volume would hide exactly the row this exists to find. Capped instead,
+  // which the GROUP BY makes safe — there are ~75 000 routed ASNs in total and
+  // one agent reaches a few hundred in an hour.
+  async function externalPeersSince({ from, to, agentId = null, limit = 5000 }) {
+    const where = ['ts >= ?', 'ts < ?', 'internal = 0', '(asn IS NOT NULL OR country IS NOT NULL)'];
+    const params = [from, to];
+    if (agentId != null) { where.push('agent_id = ?'); params.push(agentId); }
+    const lim = Number.isInteger(limit) && limit > 0 && limit <= 20000 ? limit : 5000;
+    const rows = await q(
+      `SELECT agent_id, asn, MAX(asn_name) AS asnName, country,
+              SUM(bytes) AS bytes, SUM(flows) AS flowCount,
+              MIN(ts) AS firstSeen, MAX(ts) AS lastSeen,
+              MAX(src_ip) AS srcIp, MAX(ext_ip) AS extIp
+       FROM flow_records WHERE ${where.join(' AND ')}
+       GROUP BY agent_id, asn, country
+       ORDER BY agent_id ASC LIMIT ?`,
+      [...params, lim],
+    );
+    return rows.map((r) => ({
+      agentId: Number(r.agent_id),
+      asn: r.asn == null ? null : Number(r.asn),
+      asnName: r.asnName ?? null,
+      country: r.country ?? null,
+      bytes: numOf(r.bytes),
+      flowCount: numOf(r.flowCount),
+      firstSeen: r.firstSeen ? new Date(r.firstSeen) : null,
+      lastSeen: r.lastSeen ? new Date(r.lastSeen) : null,
+      srcIp: r.srcIp ?? null,
+      extIp: r.extIp ?? null,
+    }));
+  }
+
+  return { insertMany, aggregateExternalDestinations, destinationExists, agentIdsForDestination, selectFlows, exploreFlows, scanCandidates, externalPeersSince, mapFlows, topologyEdges, tcpServiceFlows, agentIdsForIp, agentIdsForPort, asnSeries, lastFlowAtByAgent };
 }
 
 module.exports = { createFlowsRepository, toRow, COLUMNS };

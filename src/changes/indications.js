@@ -23,6 +23,15 @@
 // Ordered: the first pattern that matches wins, so the more specific families
 // (certificate, routing, flatline) are tested before the broad ones (latency).
 const FAMILIES = [
+  // Something about who is on the network or what it is reaching, rather than
+  // how well it is working: a rate of failed logins or denied traffic off the
+  // equipment's own log, an address sweeping ports, an external network a site
+  // has never talked to before. FIRST, because these metrics carry words the
+  // broader patterns below would otherwise claim (`net.scan` is not
+  // saturation, `security.auth_failure` is not a transaction), and because the
+  // interpretation a reader needs here is different in kind: the others say
+  // what is broken, this one says what to go and look at.
+  ['security', /security|intrusion|\bscan\b|sweep|brute|auth_fail|acl_denied|denied|rogue|spoof|peer\.new|violation/],
   // A dead metric — the agent stopped reporting a value that used to move.
   ['flatline', /flatline|stall|no_data|nodata/],
   // TLS/certificate validity, not a performance signal at all.

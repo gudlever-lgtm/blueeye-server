@@ -28,6 +28,19 @@ function metricStep(metric, deviceId) {
   const m = String(metric || '').toLowerCase();
   const traceAction = deviceId != null ? { label: 'Run traceroute / path', view: 'agent', targetId: deviceId } : null;
 
+  // FIRST, mirroring the `security` family in src/changes/indications.js: these
+  // metrics carry words the patterns below would otherwise claim, and the step
+  // they need is a different one — identify the source before troubleshooting a
+  // fault that may not exist.
+  if (/security|\bscan\b|sweep|brute|auth_fail|acl_denied|rogue|peer\.new|violation/.test(m)) {
+    return {
+      title: 'Identify the source before treating this as an incident',
+      kind: 'check',
+      detail: 'Find out what the source address or device is. A vulnerability scanner, an asset-inventory tool, a backup agent or a monitoring system with a stale credential produces the same signal as an attacker. If it is one of yours, add it to the ignore list (SCAN_IGNORE_SOURCES) or tune the rule rather than acknowledging this every week.',
+      rationale: 'These findings are counts and first sightings, not verdicts — the source decides whether it is an incident, and the count alone never can.',
+      action: deviceId != null ? { label: 'Open flows', view: 'flows', targetId: deviceId } : null,
+    };
+  }
   if (/reach|loss|packet/.test(m)) {
     return {
       title: 'Localize where packets are lost',

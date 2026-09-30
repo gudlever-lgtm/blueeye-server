@@ -128,6 +128,9 @@ function createNewPeerDetector({
   // store -> publish -> event case -> alert -> integrations.
   findingSink = null,
   licensed = () => true,
+  // A getter, or a plain object. The server passes the live section of the
+  // attack-indication config (Settings → Attack indication), so a change
+  // applies on the next run instead of at the next restart.
   config = loadNewPeerConfig({}),
   logger = null,
   now = () => new Date(),
@@ -135,12 +138,23 @@ function createNewPeerDetector({
   let timer = null;
   let running = false;
 
+  // Resolves the configuration for ONE run. Never throws: a getter that fails
+  // leaves the detector on its shipped defaults rather than off.
+  function cfg() {
+    try {
+      const c = typeof config === 'function' ? config() : config;
+      return c && typeof c === 'object' ? c : loadNewPeerConfig({});
+    } catch {
+      return loadNewPeerConfig({});
+    }
+  }
+
   const warn = (msg) => { if (logger && typeof logger.warn === 'function') logger.warn(msg); };
   const info = (msg) => { if (logger && typeof logger.info === 'function') logger.info(msg); };
 
-  function isOn() {
+  function isOn(c) {
     try {
-      return !!(config && config.enabled) && !!licensed()
+      return !!(c && c.enabled) && !!licensed()
         && !!flowsRepo && !!knownPeersRepo && !!agentsRepo && !!findingSink;
     } catch { return false; }
   }
@@ -226,7 +240,7 @@ function createNewPeerDetector({
     };
   }
 
-  function buildSummary({ peers, scope, scopeName, at, from, to }) {
+  function buildSummary({ peers, scope, scopeName, at, from, to, config: c }) {
     const sample = peers.slice(0, 10).map((p) => (p.kind === 'country' ? p.key : `AS${p.key}`));
     const hostId = String(peers[0].agentId);
     return {
@@ -235,14 +249,14 @@ function createNewPeerDetector({
       deviceId: null,
       interfaceId: null,
       metric: 'peer.new_asn',
-      severity: config.asnSeverity,
+      severity: c.asnSeverity,
       kind: 'THRESHOLD',
       observed: peers.length,
       baseline: null,
       deviation: null,
       window: [from, to],
       explanation: `${scopeName ? `${scopeName} (${scope})` : scope} reached ${peers.length} more previously unseen `
-        + `network(s) in this hour than the limit of ${config.maxPerScope} per scope per run (NEW_PEER_MAX_PER_SCOPE), `
+        + `network(s) in this hour than the limit of ${c.maxPerScope} per scope per run (NEW_PEER_MAX_PER_SCOPE), `
         + `so they were not raised individually: ${sample.join(', ')}${peers.length > sample.length ? ', …' : ''}. `
         + `A jump this size is usually one cause — a changed upstream provider, a new cloud service, or a `
         + `GeoIP database update — rather than ${peers.length} separate events.`,
@@ -261,7 +275,8 @@ function createNewPeerDetector({
 
   // One pass over the previous complete hour.
   async function run() {
-    if (!isOn() || running) return null;
+    const c = cfg();
+    if (!isOn(c) || running) return null;
     running = true;
     try {
       const t = now();
@@ -271,9 +286,9 @@ function createNewPeerDetector({
       const { scopeOf, nameOf } = await buildScopes();
       const rows = await flowsRepo.externalPeersSince({ from, to });
       const grouped = groupPeers(rows, (id) => scopeOf.get(Number(id)) || null, {
-        asn: config.asnEnabled,
-        country: config.countryEnabled,
-        minBytes: config.minBytes,
+        asn: c.asnEnabled,
+        country: c.countryEnabled,
+        minBytes: c.minBytes,
       });
 
       let raised = 0;
@@ -285,7 +300,7 @@ function createNewPeerDetector({
         // ones still warming up — that is what ends the warm-up.
         let oldest = null;
         try { oldest = await knownPeersRepo.oldestFirstSeen(scope); } catch { oldest = null; }
-        const warm = oldest != null && t.getTime() - oldest.getTime() >= config.baselineHours * HOUR_MS;
+        const warm = oldest != null && t.getTime() - oldest.getTime() >= c.baselineHours * HOUR_MS;
 
         let fresh = [];
         if (warm) {
@@ -314,8 +329,8 @@ function createNewPeerDetector({
 
         // Countries first — the sharper signal is the one that survives the cap.
         fresh.sort((a, b) => (a.kind === b.kind ? b.bytes - a.bytes : (a.kind === 'country' ? -1 : 1)));
-        for (const peer of fresh.slice(0, config.maxPerScope)) {
-          const severity = peer.kind === 'country' ? config.countrySeverity : config.asnSeverity;
+        for (const peer of fresh.slice(0, c.maxPerScope)) {
+          const severity = peer.kind === 'country' ? c.countrySeverity : c.asnSeverity;
           try {
             // eslint-disable-next-line no-await-in-loop
             const stored = await findingSink.emit(buildFinding({
@@ -326,12 +341,12 @@ function createNewPeerDetector({
             warn(`new-peer: could not raise for ${scope} ${peer.kind}:${peer.key} (${err.message})`);
           }
         }
-        const over = fresh.slice(config.maxPerScope);
+        const over = fresh.slice(c.maxPerScope);
         if (over.length) {
           try {
             // eslint-disable-next-line no-await-in-loop
             const stored = await findingSink.emit(buildSummary({
-              peers: over, scope, scopeName: nameOf.get(scope) || null, at: to, from, to,
+              peers: over, scope, scopeName: nameOf.get(scope) || null, at: to, from, to, config: c,
             }));
             if (stored) raised += 1;
           } catch (err) {
@@ -354,7 +369,7 @@ function createNewPeerDetector({
   function start() {
     if (timer) return;
     run().catch(() => {});
-    timer = setInterval(() => run().catch(() => {}), config.intervalMinutes * 60 * 1000);
+    timer = setInterval(() => run().catch(() => {}), cfg().intervalMinutes * 60 * 1000);
     if (timer.unref) timer.unref();
   }
   function stop() { if (timer) { clearInterval(timer); timer = null; } }

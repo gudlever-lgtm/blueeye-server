@@ -1,5 +1,7 @@
 'use strict';
 
+const { isAttackMetric } = require('../analysis/attackIndication');
+
 // Deterministic, local, explainable troubleshooting guide for an event — the
 // "Guide me" steps. Pure: the route assembles a compact context (event +
 // anomalies + optional config-context + top similar) and this builds an ordered,
@@ -32,7 +34,7 @@ function metricStep(metric, deviceId) {
   // metrics carry words the patterns below would otherwise claim, and the step
   // they need is a different one — identify the source before troubleshooting a
   // fault that may not exist.
-  if (/security|\bscan\b|sweep|brute|auth_fail|acl_denied|rogue|peer\.new|violation/.test(m)) {
+  if (isAttackMetric(m)) {
     return {
       title: 'Identify the source before treating this as an incident',
       kind: 'check',

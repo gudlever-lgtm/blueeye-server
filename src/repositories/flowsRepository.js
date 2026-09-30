@@ -551,7 +551,122 @@ function createFlowsRepository(db) {
     }));
   }
 
-  return { insertMany, aggregateExternalDestinations, destinationExists, agentIdsForDestination, selectFlows, exploreFlows, scanCandidates, externalPeersSince, mapFlows, topologyEdges, tcpServiceFlows, agentIdsForIp, agentIdsForPort, asnSeries, lastFlowAtByAgent };
+  // How often each agent REPORTS flows over [from, to) — the grid every
+  // observation below is quantised to.
+  //
+  // WHY THE BEACON DETECTOR CANNOT WORK WITHOUT THIS. An agent sends a flow
+  // snapshot on its own cadence (BLUEEYE_REPORT_INTERVAL_MS, 60 s by default),
+  // so one row per 5-tuple per interval it was active in. A conversation that
+  // never stops — an SSH session left open, a replication link — therefore
+  // appears in EVERY interval, at a perfectly regular spacing, which is the
+  // exact shape a beacon has. The only thing that separates them is the
+  // cadence: a beacon skips intervals, a stream does not. A hard-coded 60 s
+  // would call every long-lived session on a five-minute agent a beacon.
+  //
+  // Mean rather than median spacing: one grouped read instead of pulling every
+  // distinct timestamp, and the value is a scale (is this 60 s or 300 s), not a
+  // measurement. `null` for an agent with fewer than two reports — nothing to
+  // derive a cadence from, and the detector skips it rather than guessing.
+  async function reportCadence({ from, to, agentId = null }) {
+    const where = ['ts >= ?', 'ts < ?'];
+    const params = [from, to];
+    if (agentId != null) { where.push('agent_id = ?'); params.push(agentId); }
+    const rows = await q(
+      `SELECT agent_id, COUNT(DISTINCT ts) AS reports, MIN(ts) AS firstTs, MAX(ts) AS lastTs
+       FROM flow_records WHERE ${where.join(' AND ')} GROUP BY agent_id`,
+      params,
+    );
+    const out = new Map();
+    for (const r of rows) {
+      const reports = numOf(r.reports);
+      if (reports < 2 || !r.firstTs || !r.lastTs) { out.set(Number(r.agent_id), null); continue; }
+      const spanSec = (new Date(r.lastTs).getTime() - new Date(r.firstTs).getTime()) / 1000;
+      out.set(Number(r.agent_id), spanSec > 0 ? spanSec / (reports - 1) : null);
+    }
+    return out;
+  }
+
+  // OUTBOUND conversations that were seen often enough over [from, to) to be
+  // worth testing for regularity: one row per (agent, internal source, external
+  // peer, destination port, protocol) with at least `minObservations` distinct
+  // report timestamps.
+  //
+  // `ext_ip <> src_ip` is what makes it outbound: ext_ip is the public endpoint
+  // the enrichment resolved, so when it is not the source, the source is the
+  // internal host and the peer is outside. An inbound conversation is somebody
+  // else's beacon, not this network's.
+  //
+  // This is only the CANDIDATE list — a count, not a verdict. The regularity
+  // test needs the timestamps themselves (beaconTimestamps below), which is the
+  // expensive half, so it runs on this short list rather than on the table.
+  async function beaconCandidates({
+    from, to, agentId = null, minObservations = 12, ignorePorts = [], limit = 100,
+  }) {
+    const where = [
+      'ts >= ?', 'ts < ?', 'internal = 0',
+      'src_ip IS NOT NULL', 'ext_ip IS NOT NULL', 'ext_ip <> src_ip', 'dst_port IS NOT NULL',
+    ];
+    const params = [from, to];
+    if (agentId != null) { where.push('agent_id = ?'); params.push(agentId); }
+    // Excluded in SQL rather than after the read: NTP is the loudest legitimate
+    // beacon on any network, and pulling its timestamps only to drop it wastes
+    // the expensive half of the job.
+    const ports = [...new Set((Array.isArray(ignorePorts) ? ignorePorts : [])
+      .map((n) => Number(n)).filter((n) => Number.isInteger(n) && n > 0 && n <= 65535))];
+    if (ports.length) { where.push('dst_port NOT IN (?)'); params.push(ports); }
+    const lim = Number.isInteger(limit) && limit > 0 && limit <= 1000 ? limit : 100;
+    const min = Number.isInteger(minObservations) && minObservations > 1 ? minObservations : 12;
+    const rows = await q(
+      `SELECT agent_id, src_ip, ext_ip, dst_port, proto,
+              COUNT(DISTINCT ts) AS observations,
+              MIN(ts) AS firstSeen, MAX(ts) AS lastSeen,
+              SUM(bytes) AS bytes, SUM(packets) AS packets, SUM(flows) AS flowCount,
+              MAX(asn) AS asn, MAX(asn_name) AS asnName, MAX(country) AS country
+       FROM flow_records WHERE ${where.join(' AND ')}
+       GROUP BY agent_id, src_ip, ext_ip, dst_port, proto
+       HAVING observations >= ?
+       ORDER BY observations DESC LIMIT ?`,
+      [...params, min, lim],
+    );
+    return rows.map((r) => ({
+      agentId: Number(r.agent_id),
+      srcIp: r.src_ip,
+      extIp: r.ext_ip,
+      dstPort: r.dst_port == null ? null : Number(r.dst_port),
+      proto: r.proto ?? null,
+      observations: numOf(r.observations),
+      firstSeen: r.firstSeen ? new Date(r.firstSeen) : null,
+      lastSeen: r.lastSeen ? new Date(r.lastSeen) : null,
+      bytes: numOf(r.bytes),
+      packets: numOf(r.packets),
+      flowCount: numOf(r.flowCount),
+      asn: r.asn == null ? null : Number(r.asn),
+      asnName: r.asnName ?? null,
+      country: r.country ?? null,
+    }));
+  }
+
+  // The distinct report timestamps of ONE candidate conversation, oldest first.
+  // The gaps between them are the whole signal: regular gaps are a beacon,
+  // ragged ones are a person. Served by idx_flows_agent_ts and bounded, so a
+  // conversation seen in every interval of a long window cannot pull an
+  // unbounded list into memory.
+  async function beaconTimestamps({ agentId, srcIp, extIp, dstPort, proto, from, to, limit = 5000 }) {
+    const where = ['agent_id = ?', 'ts >= ?', 'ts < ?', 'src_ip = ?', 'ext_ip = ?', 'dst_port = ?'];
+    const params = [agentId, from, to, srcIp, extIp, dstPort];
+    // A NULL proto is a real stored value (an exporter that did not say), and
+    // `proto = NULL` never matches — so it is asked for as IS NULL.
+    if (proto == null) where.push('proto IS NULL');
+    else { where.push('proto = ?'); params.push(proto); }
+    const lim = Number.isInteger(limit) && limit > 0 && limit <= 20000 ? limit : 5000;
+    const rows = await q(
+      `SELECT DISTINCT ts FROM flow_records WHERE ${where.join(' AND ')} ORDER BY ts ASC LIMIT ?`,
+      [...params, lim],
+    );
+    return rows.map((r) => new Date(r.ts));
+  }
+
+  return { insertMany, aggregateExternalDestinations, destinationExists, agentIdsForDestination, selectFlows, exploreFlows, scanCandidates, externalPeersSince, reportCadence, beaconCandidates, beaconTimestamps, mapFlows, topologyEdges, tcpServiceFlows, agentIdsForIp, agentIdsForPort, asnSeries, lastFlowAtByAgent };
 }
 
 module.exports = { createFlowsRepository, toRow, COLUMNS };

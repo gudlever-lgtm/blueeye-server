@@ -150,6 +150,7 @@
             <button data-view="guide" data-guide="diagnostics" data-i18n="nav.group.diagnostics">Diagnostics</button>
             <button data-view="guide" data-guide="assurance" data-feature="service_tests" data-i18n="sa.title">Service Assurance</button>
             <button data-view="guide" data-guide="insights" data-i18n="nav.group.insights">Insights</button>
+            <button data-view="guide" data-guide="security" data-feature="analysis" data-i18n="nav.guide.security">Attack indication</button>
           </div>
           <div class="nav-group collapsed" data-category="Administration">
             <button type="button" class="nav-group-label" aria-expanded="false" data-i18n="nav.group.administration">Administration</button>
@@ -171,6 +172,19 @@
         </div>
       </aside>
       <div class="shell">
+        <!-- Attack indication: a 3px red line across the top whenever an open
+             WARN-or-worse finding on the attack-indication list exists
+             (docs/attack-indication.md). Hidden, and taking no space, when
+             there is none. It is a button because it is the control that opens
+             the finding behind it; hovering or focusing it expands the strip
+             into its label. Wiring is in app.js (refreshAttackBar) — no inline
+             handlers, per the gate's UI sweep. -->
+        <button type="button" id="attack-bar" class="attack-bar" hidden
+                data-i18n-title="attack.bar.title" data-i18n-aria-label="attack.bar.title"
+                title="Attack indication — open the finding">
+          <span class="attack-bar-label" id="attack-bar-label"></span>
+          <span class="attack-bar-detail" id="attack-bar-detail"></span>
+        </button>
         <header class="topbar">
           <button id="nav-toggle" class="ghost nav-toggle" data-i18n-title="nav.toggle" data-i18n-aria-label="nav.toggle" title="Toggle navigation" aria-label="Toggle navigation">☰</button>
           <!-- Breadcrumb: section / page / sub-page, rebuilt from the route on

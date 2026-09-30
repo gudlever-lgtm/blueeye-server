@@ -13,6 +13,10 @@ const COLUMNS =
 // Hard ceiling on how many findings a single list() call can return.
 const MAX_LIST = 5000;
 
+// The stored severities, as a set — the attack-indication read filters on them
+// and must not pass an unchecked string into an IN ().
+const SEVERITIES_SET = new Set(['INFO', 'WARN', 'CRIT']);
+
 // Narrow projection for bulk id reads. Deliberately excludes `evidence` and
 // `correlated_with`: those are JSON blobs, and pulling tens of thousands of them
 // back just to count severities is the difference between a few hundred KB and
@@ -469,6 +473,78 @@ class FindingStore {
   }
 
   // The findings of SEVERAL event cases in one read — the Troubleshooting
+  // THE RED BAR'S QUERY — open attack-indication findings, newest and worst
+  // first (src/analysis/attackIndication.js says which metrics those are).
+  //
+  // A separate method rather than a filter on list(): the membership test is
+  // "metric IN (…) OR metric LIKE 'security.%'", which buildFilter's single
+  // `metric = ?` cannot express, and inventing an array/prefix filter there
+  // would change a code path every other screen depends on for one caller.
+  //
+  // `acked = 0` is the leading column (idx_findings_open, migration 114), so
+  // this reads the open findings and not the year of accepted ones — the bar is
+  // polled by every open dashboard, and a query that scanned the table would be
+  // the most expensive thing on the server.
+  //
+  // ACKNOWLEDGING IS HOW THE BAR CLEARS. Not a dismiss button of its own: the
+  // finding is the record, accepting it is the existing act of saying "seen",
+  // and a bar with a private dismissal would let somebody clear the warning
+  // without leaving a trace that they had.
+  async attackIndication({ metrics = [], prefixes = [], severities = [], since = null, limit = 5 } = {}) {
+    const exact = [...new Set((Array.isArray(metrics) ? metrics : []).filter((m) => typeof m === 'string' && m))];
+    const pre = [...new Set((Array.isArray(prefixes) ? prefixes : []).filter((p) => typeof p === 'string' && p))];
+    const sev = (Array.isArray(severities) ? severities : []).filter((x) => SEVERITIES_SET.has(x));
+    // No membership test means every finding matches, which is the opposite of
+    // what this is for. An empty answer is the honest one.
+    if (!exact.length && !pre.length) return { count: 0, bySeverity: {}, worst: null, findings: [] };
+
+    const member = [];
+    const memberParams = [];
+    if (exact.length) { member.push('metric IN (?)'); memberParams.push(exact); }
+    for (const p of pre) { member.push('metric LIKE ?'); memberParams.push(`${p}%`); }
+
+    const where = ['acked = 0', `(${member.join(' OR ')})`];
+    const params = [...memberParams];
+    if (sev.length) { where.push('severity IN (?)'); params.push(sev); }
+    if (since) { where.push('created_at >= ?'); params.push(since instanceof Date ? since : new Date(since)); }
+    const clause = `WHERE ${where.join(' AND ')}`;
+    const n = Number.isInteger(limit) && limit > 0 ? Math.min(limit, 50) : 5;
+
+    const [counts] = await this.pool.query(
+      `SELECT severity, COUNT(*) AS cnt FROM findings ${clause} GROUP BY severity`,
+      params,
+    );
+    const bySeverity = {};
+    let count = 0;
+    for (const r of counts) {
+      const c = Number(r.cnt) || 0;
+      bySeverity[r.severity] = c;
+      count += c;
+    }
+    if (!count) return { count: 0, bySeverity: {}, worst: null, findings: [] };
+
+    // Worst first, then newest: the bar names one finding, and on a morning
+    // with a scan and a beacon it should be the scan.
+    const [rows] = await this.pool.query(
+      `SELECT ${LIGHT_COLUMNS}, explanation FROM findings ${clause}
+       ORDER BY severity = 'CRIT' DESC, created_at DESC, id LIMIT ?`,
+      [...params, n],
+    );
+    const findings = rows.map((r) => ({
+      ...mapLightRow(r),
+      // The sentence the bar's tooltip shows. Capped here rather than in the
+      // browser: an explanation is up to a few hundred characters and the bar
+      // is three pixels tall.
+      explanation: typeof r.explanation === 'string' ? r.explanation.slice(0, 400) : null,
+    }));
+    return {
+      count,
+      bySeverity,
+      worst: bySeverity.CRIT ? 'CRIT' : (bySeverity.WARN ? 'WARN' : 'INFO'),
+      findings,
+    };
+  }
+
   // overview's case path (a single-host fault never forms a cross-agent
   // cluster, so its open event cases are what the screen rolls up). One
   // `event_case_id IN (...)` statement rather than listByEventCase per case,

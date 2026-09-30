@@ -299,7 +299,7 @@ test('a viewer may read every guide, and is told where their role stops', async 
   // because a guide to a module you have not bought is a sales brochure.
   const { doc } = await boot(t, { ...fullRoutes(), ...GENERAL_ROUTES }, 'viewer');
   const nav = [...doc.querySelectorAll('.tabs button[data-view="guide"]')];
-  assert.equal(nav.length, 5, 'the nav lost a guide');
+  assert.equal(nav.length, TRACKS.length, 'the nav lost a guide');
   for (const b of nav) {
     assert.ok(!b.classList.contains('role-hidden'), `a viewer cannot see the ${b.dataset.guide} guide`);
   }
@@ -350,12 +350,12 @@ test('the step titles and the shell exist in both catalogues', () => {
 
 
 // --------------------------------------------------------------- every guide
-const TRACKS = ['monitoring', 'fleet', 'diagnostics', 'assurance', 'insights'];
+const TRACKS = ['monitoring', 'fleet', 'diagnostics', 'assurance', 'insights', 'security'];
 
 test('the Guides nav group has one entry per guide, and each mounts its own', async (t) => {
   const { doc, errors } = await boot(t, { ...fullRoutes(), ...GENERAL_ROUTES });
   const nav = [...doc.querySelectorAll('.tabs button[data-view="guide"]')].map((b) => b.dataset.guide);
-  assert.deepEqual(nav, TRACKS, 'the nav does not list the five guides in order');
+  assert.deepEqual(nav, TRACKS, 'the nav does not list every guide, in order');
 
   const seen = new Set();
   for (const track of TRACKS) {

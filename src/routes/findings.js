@@ -6,6 +6,9 @@ const { requireAuth, requireRole } = require('../auth/middleware');
 const { ROLES } = require('../auth/roles');
 const { buildNetworkReport, renderNetworkReportHtml } = require('../analysis/networkReport');
 const { isChangeEvent } = require('../timeline/targetTimeline');
+const {
+  ATTACK_METRICS, ATTACK_METRIC_PREFIXES, BANNER_SEVERITIES, BANNER_WINDOW_HOURS,
+} = require('../analysis/attackIndication');
 
 const DEFAULT_CONTEXT_MINUTES = 30;
 const MAX_CONTEXT_MINUTES = 24 * 60; // cap the look-back at 24h
@@ -112,6 +115,38 @@ function createFindingsRouter({ findingStore, timelineService = null, auditLogge
         return res.status(400).json({ error: 'Validation failed', details: parsed.error });
       }
       res.json(await findingStore.summary(parsed.filters));
+    })
+  );
+
+  // GET /api/findings/attack-indication — what the red bar at the top of every
+  // dashboard reads (viewer+).
+  //
+  // Open, unacknowledged, WARN-or-worse findings whose metric is on the
+  // attack-indication list (src/analysis/attackIndication.js), newest and worst
+  // first, with the one the bar links to at the head.
+  //
+  // MOUNTED BEFORE `/:id` ON PURPOSE. Express matches in order, and
+  // `/attack-indication` would otherwise be read as a finding id — a 404 for a
+  // UUID that does not exist, on the one endpoint every open browser polls.
+  router.get(
+    '/attack-indication',
+    requireAuth,
+    requireRole(ROLES.VIEWER, ROLES.OPERATOR, ROLES.ADMIN),
+    asyncHandler(async (req, res) => {
+      const since = new Date(Date.now() - BANNER_WINDOW_HOURS * 60 * 60 * 1000);
+      // A store built before this existed (an older wiring, a fake in a test)
+      // answers "nothing", which hides the bar — never a 500 on the poll.
+      if (!findingStore || typeof findingStore.attackIndication !== 'function') {
+        return res.json({ count: 0, bySeverity: {}, worst: null, findings: [], since: since.toISOString() });
+      }
+      const out = await findingStore.attackIndication({
+        metrics: ATTACK_METRICS,
+        prefixes: ATTACK_METRIC_PREFIXES,
+        severities: BANNER_SEVERITIES,
+        since,
+        limit: 5,
+      });
+      res.json({ ...out, since: since.toISOString(), windowHours: BANNER_WINDOW_HOURS });
     })
   );
 

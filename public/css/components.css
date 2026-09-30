@@ -726,3 +726,65 @@
 .trust-key-name { margin: 0 0 var(--s-1); font-weight: 600; }
 .trust-key-row code { font-family: var(--mono); font-size: 0.85em; word-break: break-all; }
 .trust-key-impact { margin: var(--s-2) 0 0; padding-left: 1.2em; }
+
+/* ---- The attack-indication bar ---------------------------------------------
+   A 3px red line across the very top of the content column whenever an open
+   attack-indication finding exists (docs/attack-indication.md). Hidden — and
+   taking no space — when there is none, which is almost always.
+
+   WHY A LINE AND NOT A BANNER. It has to be visible from across a room on a
+   wall-mounted dashboard and cost nothing on every other day. A banner pushes
+   the page down, gets dismissed, and is then never seen again; three pixels at
+   the top edge are either there or not, and the whole strip is the click
+   target that opens the event behind it.
+
+   It is a <button>, not a decorated <div>: it is the control that takes you to
+   the finding, so it must be reachable by keyboard and announced as a control.
+   The expanded label appears on hover/focus — the line alone says "something",
+   the label says what. */
+.attack-bar {
+  display: block;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: var(--bad);
+  color: var(--bad);
+  cursor: pointer;
+  /* Three pixels: thick enough to read as deliberate at a glance, thin enough
+     that nothing else on the page moves when it appears. */
+  height: 3px;
+  line-height: 0;
+  font-size: 0;
+  overflow: hidden;
+  transition: height 120ms ease, font-size 120ms ease;
+}
+.attack-bar[hidden] { display: none; }
+.attack-bar:hover,
+.attack-bar:focus-visible {
+  height: auto;
+  min-height: 3px;
+  padding: var(--s-2) var(--s-4);
+  font-size: var(--fs-sm);
+  line-height: 1.3;
+  /* --btn-fg is the palette's own 'text on a filled surface' colour, the same
+     one the primary button uses, so the label stays legible in all fifteen. */
+  color: var(--btn-fg);
+  text-align: left;
+}
+.attack-bar:focus-visible { outline: 2px solid var(--bad); outline-offset: -2px; }
+/* The label is present in the DOM at all times so a screen reader announces
+   the control even while the strip is three pixels tall. */
+.attack-bar-label { font-weight: 600; }
+.attack-bar-detail { font-weight: 400; opacity: 0.9; }
+
+/* Motion is how a CRIT differs from a WARN here: same colour, but the critical
+   one breathes. Respects the reader's own preference — a pulsing bar on a
+   wall display is information, on a migraine it is not. */
+@media (prefers-reduced-motion: no-preference) {
+  .attack-bar.crit { animation: attack-bar-pulse 2s ease-in-out infinite; }
+}
+@keyframes attack-bar-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.55; }
+}

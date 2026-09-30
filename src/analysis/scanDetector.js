@@ -139,6 +139,9 @@ function createScanDetector({
   // integrations (src/devices/findingSink.js).
   findingSink = null,
   licensed = () => true,
+  // A getter, or a plain object. The server passes the live section of the
+  // attack-indication config (Settings → Attack indication), so a threshold an
+  // admin changes applies on the next run instead of at the next restart.
   config = loadScanConfig({}),
   // Live, so turning the discovery sweep on or off changes what is ignored
   // without a restart.
@@ -146,6 +149,16 @@ function createScanDetector({
   logger = null,
   now = () => new Date(),
 } = {}) {
+  // Resolves the configuration for ONE run. Never throws: a getter that fails
+  // leaves the detector on its shipped defaults rather than off.
+  function cfg() {
+    try {
+      const c = typeof config === 'function' ? config() : config;
+      return c && typeof c === 'object' ? c : loadScanConfig({});
+    } catch {
+      return loadScanConfig({});
+    }
+  }
   let timer = null;
   let running = false;
   // `${agentId}|${srcIp}` -> ms of the last finding. In memory: a restart
@@ -156,21 +169,21 @@ function createScanDetector({
   const warn = (msg) => { if (logger && typeof logger.warn === 'function') logger.warn(msg); };
   const info = (msg) => { if (logger && typeof logger.info === 'function') logger.info(msg); };
 
-  function isOn() {
-    try { return !!(config && config.enabled) && !!licensed() && !!flowsRepo && !!findingSink; } catch { return false; }
+  function isOn(c) {
+    try { return !!(c && c.enabled) && !!licensed() && !!flowsRepo && !!findingSink; } catch { return false; }
   }
 
-  function ignoreList() {
+  function ignoreList(c) {
     let on = false;
     try { on = typeof discoveryEnabled === 'function' ? !!discoveryEnabled() : !!discoveryEnabled; } catch { on = false; }
     return buildIgnoreList({
-      config,
+      config: c,
       discoveryEnabled: on,
       onBadEntry: (entry) => warn(`scan-detect: ignoring unparseable SCAN_IGNORE_SOURCES entry "${entry}"`),
     });
   }
 
-  function buildFinding({ row, verdict, from, to }) {
+  function buildFinding({ row, verdict, from, to, config: c }) {
     const hostId = String(row.agentId);
     const scope = row.internal ? 'internal (RFC1918) destinations' : 'destinations outside this network';
     const windowFrom = row.firstSeen instanceof Date ? row.firstSeen : from;
@@ -182,9 +195,9 @@ function createScanDetector({
       distinctHosts: verdict.hosts,
       flowCount: row.flowCount,
       bytes: row.bytes,
-      portThreshold: config.portThreshold,
-      hostThreshold: config.hostThreshold,
-      windowMinutes: config.windowMinutes,
+      portThreshold: c.portThreshold,
+      hostThreshold: c.hostThreshold,
+      windowMinutes: c.windowMinutes,
     };
     return {
       id: crypto.randomUUID(),
@@ -202,7 +215,7 @@ function createScanDetector({
       deviation: null,
       window: [windowFrom, windowTo],
       explanation: `${row.srcIp} reached ${verdict.ports} distinct ports across ${verdict.hosts} distinct hosts `
-        + `(${scope}) in ${config.windowMinutes} minutes — over the ${verdict.kind === 'port-scan' ? `${config.portThreshold}-port` : `${config.hostThreshold}-host`} threshold. `
+        + `(${scope}) in ${c.windowMinutes} minutes — over the ${verdict.kind === 'port-scan' ? `${c.portThreshold}-port` : `${c.hostThreshold}-host`} threshold. `
         + `Counted from flow metadata only (5-tuple), so this says what was touched, not what was sent or whether anything answered. `
         + `A vulnerability scanner, an asset inventory or a backup agent walking the LAN looks the same: `
         + `if this source is one of yours, add it to SCAN_IGNORE_SOURCES. `
@@ -224,19 +237,20 @@ function createScanDetector({
   // One pass over the previous complete window. Returns a summary, or null
   // when it did not run (off, or already running).
   async function run() {
-    if (!isOn() || running) return null;
+    const c = cfg();
+    if (!isOn(c) || running) return null;
     running = true;
     try {
       const t = now();
       const to = new Date(Math.floor(t.getTime() / MINUTE_MS) * MINUTE_MS);
-      const from = new Date(to.getTime() - config.windowMinutes * MINUTE_MS);
-      const ignore = ignoreList();
+      const from = new Date(to.getTime() - c.windowMinutes * MINUTE_MS);
+      const ignore = ignoreList(c);
 
       const candidates = await flowsRepo.scanCandidates({
         from,
         to,
-        portThreshold: config.portThreshold,
-        hostThreshold: config.hostThreshold,
+        portThreshold: c.portThreshold,
+        hostThreshold: c.hostThreshold,
       });
 
       let ignored = 0;
@@ -244,17 +258,17 @@ function createScanDetector({
       let raised = 0;
       let over = 0;
       for (const row of Array.isArray(candidates) ? candidates : []) {
-        const verdict = classify(row, config);
+        const verdict = classify(row, c);
         if (!verdict) continue;
         if (ignore.ignores(row.srcIp)) { ignored += 1; continue; }
         const key = `${row.agentId}|${row.srcIp}`;
         const last = lastRaised.get(key) || 0;
-        if (t.getTime() - last < config.cooldownMinutes * MINUTE_MS) { cooling += 1; continue; }
-        if (raised >= config.maxPerRun) { over += 1; continue; }
+        if (t.getTime() - last < c.cooldownMinutes * MINUTE_MS) { cooling += 1; continue; }
+        if (raised >= c.maxPerRun) { over += 1; continue; }
         lastRaised.set(key, t.getTime());
         try {
           // eslint-disable-next-line no-await-in-loop
-          const stored = await findingSink.emit(buildFinding({ row, verdict, from, to }));
+          const stored = await findingSink.emit(buildFinding({ row, verdict, from, to, config: c }));
           if (stored) raised += 1;
         } catch (err) {
           warn(`scan-detect: could not raise net.scan for ${key} (${err.message})`);
@@ -263,12 +277,12 @@ function createScanDetector({
       // The cooldown map would otherwise keep every source this server has ever
       // seen scan. Anything outside the cooldown is already forgotten in
       // effect, so drop it.
-      const stale = t.getTime() - config.cooldownMinutes * MINUTE_MS;
+      const stale = t.getTime() - c.cooldownMinutes * MINUTE_MS;
       for (const [key, ms] of lastRaised) if (ms < stale) lastRaised.delete(key);
 
       if (over) {
         warn(`scan-detect: ${over} more scan source(s) in ${from.toISOString()}–${to.toISOString()} were not raised `
-          + `(limit ${config.maxPerRun} per run, SCAN_MAX_PER_RUN) — a sweep this wide is one event, not ${over + raised}`);
+          + `(limit ${c.maxPerRun} per run, SCAN_MAX_PER_RUN) — a sweep this wide is one event, not ${over + raised}`);
       }
       if (raised || ignored) {
         info(`scan-detect: ${from.toISOString()}–${to.toISOString()} raised ${raised}, ignored ${ignored}, in cooldown ${cooling}`);
@@ -285,12 +299,12 @@ function createScanDetector({
   function start() {
     if (timer) return;
     run().catch(() => {});
-    timer = setInterval(() => run().catch(() => {}), config.intervalMinutes * MINUTE_MS);
+    timer = setInterval(() => run().catch(() => {}), cfg().intervalMinutes * MINUTE_MS);
     if (timer.unref) timer.unref();
   }
   function stop() { if (timer) { clearInterval(timer); timer = null; } }
 
-  return { start, stop, run, classify: (row) => classify(row, config) };
+  return { start, stop, run, classify: (row) => classify(row, cfg()) };
 }
 
 module.exports = {

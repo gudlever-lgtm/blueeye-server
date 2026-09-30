@@ -113,6 +113,7 @@ const { createFlowPairBaselinesRepository } = require('./repositories/flowPairBa
 const { createFlowPairBaselineJob } = require('./analysis/flowPairBaselineJob');
 const { createScanDetector, loadScanConfig } = require('./analysis/scanDetector');
 const { createNewPeerDetector, loadNewPeerConfig } = require('./analysis/newPeerDetector');
+const { createBeaconDetector, loadBeaconConfig } = require('./analysis/beaconDetector');
 const { createKnownPeersRepository } = require('./repositories/knownPeersRepository');
 const { createDiscoveredDevicesRepository } = require('./repositories/discoveredDevicesRepository');
 const { createDiscoverySweepJob } = require('./discovery/discoverySweepJob');
@@ -664,11 +665,27 @@ function start() {
   // detector pushes findings to the UI over the SAME WebSocket (agentWs is
   // assigned just below; the closure runs later, at ingest time).
   const analysisConfig = loadAnalysisConfig();
-  // Port-scan / fan-out thresholds. Read ONCE and shared by the detector job
-  // and the flow explorer's on-screen `scans` list, so tuning one moves both —
-  // an operator who raised the threshold because a load balancer trips it must
-  // not still see it listed as a scan on the screen the finding links to.
-  const scanConfig = loadScanConfig();
+  // THE ATTACK-INDICATION CONFIG, as ONE live object (docs/attack-indication.md).
+  //
+  // Four detectors, four sections, built from the environment here and then
+  // MUTATED IN PLACE by Settings → Attack indication (settingsService
+  // getAttackIndication/setAttackIndication, and applyStoredOverrides at boot).
+  // Each detector holds a reference and re-reads it on every run, so a
+  // threshold an admin changes — or an address they add to a scanner ignore
+  // list — applies on the next cycle instead of at the next restart, which on a
+  // customer's on-prem box is a change window.
+  //
+  // `scanConfig` is the same object the flow explorer's on-screen scan list
+  // reads, so tuning one moves both: an operator who raised the threshold
+  // because a load balancer trips it must not still see it listed as a scan on
+  // the screen the finding links to.
+  const attackConfig = {
+    scan: loadScanConfig(),
+    newPeer: loadNewPeerConfig(),
+    beacon: loadBeaconConfig(),
+    securityEvents: loadSecurityEventConfig(process.env, logger),
+  };
+  const scanConfig = attackConfig.scan;
   const findingStore = new FindingStore({ db, severityRules: severityRulesRepo });
   const investigationsRepo = createInvestigationsRepository(db);
   const baselineCache = createBaselineFileCache(config.analysis.baselineCachePath);
@@ -896,7 +913,7 @@ function start() {
   const securityEventDetector = createSecurityEventDetector({
     findingSink: deviceFindingSink,
     licensed: () => !!analysisConfig.analysisEnabled && featureGate.isFeatureEnabled('analysis'),
-    config: loadSecurityEventConfig(process.env, logger),
+    config: () => attackConfig.securityEvents,
     logger,
   });
   const deviceEventIngest = createDeviceEventIngest({
@@ -950,7 +967,7 @@ function start() {
     flowsRepo,
     findingSink: deviceFindingSink,
     licensed: () => !!analysisConfig.analysisEnabled && featureGate.isFeatureEnabled('analysis'),
-    config: scanConfig,
+    config: () => attackConfig.scan,
     discoveryEnabled: () => {
       try { return !!settingsService.getDiscovery().enabled; } catch { return !!config.discovery.enabled; }
     },
@@ -968,7 +985,18 @@ function start() {
     locationsRepo,
     findingSink: deviceFindingSink,
     licensed: () => !!analysisConfig.analysisEnabled && featureGate.isFeatureEnabled('analysis'),
-    config: loadNewPeerConfig(),
+    config: () => attackConfig.newPeer,
+    logger,
+  });
+  // Beaconing detection (src/analysis/beaconDetector.js): an internal host
+  // contacting the same external address on a machine's schedule. The one
+  // detector here that measures RHYTHM rather than volume — a beacon is small
+  // by design and passes every byte baseline there is. Leader-only, hourly.
+  const beaconDetectorJob = createBeaconDetector({
+    flowsRepo,
+    findingSink: deviceFindingSink,
+    licensed: () => !!analysisConfig.analysisEnabled && featureGate.isFeatureEnabled('analysis'),
+    config: () => attackConfig.beacon,
     logger,
   });
   // Scheduled active discovery (admin-only). Probes the configured CIDR scope for
@@ -1257,7 +1285,7 @@ function start() {
   const settingsService = createSettingsService({
     settingsRepo: createSettingsRepository(db), config,
     liveAnalysis: analysisConfig, liveRetention: retentionConfig, liveAlerting: alertingConfig,
-    liveGeo: geoProvider, liveGeoCity: cityProvider, secretBox,
+    liveGeo: geoProvider, liveGeoCity: cityProvider, liveAttack: attackConfig, secretBox,
   });
   // Re-apply persisted analysis/retention edits onto the live config so they
   // survive restarts. Best-effort + fire-and-forget (consumers read lazily).
@@ -1350,6 +1378,8 @@ function start() {
     scanDetectorJob,
     // First-sighting check against the external-peer memory (hourly, leader-only).
     newPeerDetectorJob,
+    // Regularity check over the raw flow timings (hourly, leader-only).
+    beaconDetectorJob,
     // Scheduled active-discovery sweep (leader-only; no-op unless enabled+scoped).
     discoverySweepJob,
     // Service Tests artefact retention (screenshots). Empty when no artefact
@@ -1480,6 +1510,7 @@ function start() {
     scanDetectorJob,
     knownPeersRepo,
     newPeerDetectorJob,
+    beaconDetectorJob,
     securityEventDetector,
     discoveredDevicesRepo,
     discoverySweepJob,

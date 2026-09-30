@@ -20,18 +20,24 @@
 // public/i18n.js, en + da), because the sentence is UI text and this is not the
 // UI. The server stays free of presentation strings.
 
+const { isAttackMetric } = require('../analysis/attackIndication');
+
 // Ordered: the first pattern that matches wins, so the more specific families
 // (certificate, routing, flatline) are tested before the broad ones (latency).
 const FAMILIES = [
   // Something about who is on the network or what it is reaching, rather than
   // how well it is working: a rate of failed logins or denied traffic off the
   // equipment's own log, an address sweeping ports, an external network a site
-  // has never talked to before. FIRST, because these metrics carry words the
-  // broader patterns below would otherwise claim (`net.scan` is not
-  // saturation, `security.auth_failure` is not a transaction), and because the
+  // has never talked to before.
+  // NOT a regex: the membership list lives in src/analysis/attackIndication.js,
+  // which the red bar at the top of the dashboard and the event guide read too.
+  // A predicate with a .test() so it slots into the same table — one list, not
+  // three that drift. FIRST, because these metrics carry words the broader
+  // patterns below would otherwise claim (`net.scan` is not saturation,
+  // `security.auth_failure` is not a transaction), and because the
   // interpretation a reader needs here is different in kind: the others say
   // what is broken, this one says what to go and look at.
-  ['security', /security|intrusion|\bscan\b|sweep|brute|auth_fail|acl_denied|denied|rogue|spoof|peer\.new|violation/],
+  ['security', { test: isAttackMetric }],
   // A dead metric — the agent stopped reporting a value that used to move.
   ['flatline', /flatline|stall|no_data|nodata/],
   // TLS/certificate validity, not a performance signal at all.

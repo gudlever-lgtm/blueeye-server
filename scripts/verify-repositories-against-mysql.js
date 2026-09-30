@@ -1275,6 +1275,118 @@ check('flows: external peers group by (agent, asn, country) and never include in
   assert.deepStrictEqual(await flows.externalPeersSince({ from: ago(600000), to: ago(300000), agentId }), []);
 });
 
+// The beacon detector's three reads (src/analysis/beaconDetector.js). The
+// regularity maths is pure and unit-tested; what a scripted pool can never
+// confirm is that a DISTINCT ts read, a GROUP BY over five columns and a
+// derived cadence all come back as MySQL actually computes them.
+check('flows: the beacon reads — per-agent cadence, repeat conversations, and their timings', async (pool) => {
+  const flows = repoOf('flowsRepository', 'createFlowsRepository')({ pool });
+  const agentId = await newAgent(pool, 'be-beacon');
+  const base = new Date(Math.floor((Date.now() - 4 * 3600000) / 60000) * 60000);
+  const at = (minutes) => new Date(base.getTime() + minutes * 60000);
+  const rows = [];
+  // The agent reports every minute for an hour (the cadence), and inside that:
+  //  - a beacon: the same external peer every 10th report
+  //  - a stream: the same peer in EVERY report
+  //  - an internal conversation, which is never a candidate
+  for (let m = 0; m <= 60; m += 1) {
+    rows.push({
+      agentId, ts: at(m), srcIp: '10.50.0.5', dstIp: '10.50.0.9', proto: 'tcp', dstPort: 445,
+      bytes: 10, packets: 1, flows: 1, internal: true,
+    });
+    rows.push({
+      agentId, ts: at(m), srcIp: '10.50.0.5', extIp: '198.51.100.20', dstIp: '198.51.100.20', proto: 'tcp',
+      dstPort: 22, bytes: 100, packets: 1, flows: 1, internal: false, asn: 64510, asnName: 'Stream AS', country: 'SE',
+    });
+    if (m % 10 === 0) {
+      rows.push({
+        agentId, ts: at(m), srcIp: '10.50.0.5', extIp: '198.51.100.10', dstIp: '198.51.100.10', proto: 'tcp',
+        dstPort: 443, bytes: 800, packets: 4, flows: 1, internal: false, asn: 64511, asnName: 'Beacon AS', country: 'NL',
+      });
+    }
+  }
+  // An INBOUND conversation: ext_ip IS the source, so it must never be a candidate.
+  rows.push({
+    agentId, ts: at(5), srcIp: '198.51.100.30', extIp: '198.51.100.30', dstIp: '10.50.0.5', proto: 'tcp',
+    dstPort: 443, bytes: 1, packets: 1, flows: 1, internal: false,
+  });
+  await flows.insertMany(rows);
+
+  const from = at(-1);
+  const to = at(61);
+  const cadence = await flows.reportCadence({ from, to, agentId });
+  assert.ok(Math.abs(cadence.get(agentId) - 60) < 1, `cadence read as ${cadence.get(agentId)}, expected ~60s`);
+
+  const candidates = await flows.beaconCandidates({ from, to, agentId, minObservations: 5, limit: 50 });
+  const byPeer = new Map(candidates.map((c) => [c.extIp, c]));
+  assert.deepStrictEqual([...byPeer.keys()].sort(), ['198.51.100.10', '198.51.100.20'],
+    'an internal or inbound conversation reached the candidate list');
+  assert.strictEqual(byPeer.get('198.51.100.10').observations, 7, 'distinct report timestamps were not counted');
+  assert.strictEqual(byPeer.get('198.51.100.10').asn, 64511);
+  assert.strictEqual(byPeer.get('198.51.100.10').country, 'NL');
+  assert.strictEqual(byPeer.get('198.51.100.10').bytes, 7 * 800);
+
+  // The port ignore list is applied in SQL, before the expensive read.
+  const ignored = await flows.beaconCandidates({ from, to, agentId, minObservations: 5, ignorePorts: [443], limit: 50 });
+  assert.deepStrictEqual(ignored.map((c) => c.extIp), ['198.51.100.20']);
+  // And a high bar takes both out.
+  assert.deepStrictEqual(await flows.beaconCandidates({ from, to, agentId, minObservations: 500, limit: 50 }), []);
+
+  const times = await flows.beaconTimestamps({
+    agentId, srcIp: '10.50.0.5', extIp: '198.51.100.10', dstPort: 443, proto: 'tcp', from, to,
+  });
+  assert.strictEqual(times.length, 7);
+  assert.ok(times.every((d) => d instanceof Date));
+  const gaps = times.slice(1).map((d, i) => (d - times[i]) / 1000);
+  assert.deepStrictEqual([...new Set(gaps)], [600], 'the gaps are not what was inserted');
+  // Ascending, so the caller never has to sort.
+  assert.deepStrictEqual(times.map((d) => d.getTime()), times.map((d) => d.getTime()).slice().sort((a, b) => a - b));
+});
+
+// The red bar's query (src/routes/findings.js -> FindingStore.attackIndication).
+// "metric IN (…) OR metric LIKE 'security.%'" is the part a scripted pool
+// cannot confirm, and it is on the one endpoint every open browser polls.
+check('findings: the attack-indication read filters by metric list AND prefix, worst first', async (pool) => {
+  const { FindingStore } = require(path.join(ROOT, 'src/analysis/findings'));
+  const {
+    ATTACK_METRICS, ATTACK_METRIC_PREFIXES, BANNER_SEVERITIES,
+  } = require(path.join(ROOT, 'src/analysis/attackIndication'));
+  const store = new FindingStore({ db: { pool } });
+  const host = 'ai-host-1';
+  const mk = async (over) => store.save({
+    hostId: host, metric: 'net.scan', severity: 'WARN', kind: 'THRESHOLD',
+    explanation: 'x', evidence: [{ hostId: host, metric: 'net.scan', value: 1, ts: new Date() }],
+    createdAt: new Date(), ...over,
+  });
+  await mk({ id: 'ai-scan-warn' });
+  await mk({ id: 'ai-beacon-crit', metric: 'net.beacon', severity: 'CRIT' });
+  await mk({ id: 'ai-sec-prefix', metric: 'security.auth_failure', severity: 'WARN' });
+  await mk({ id: 'ai-sec-unknown', metric: 'security.ids_alert', severity: 'WARN' });
+  await mk({ id: 'ai-info', metric: 'peer.new_asn', severity: 'INFO' });
+  await mk({ id: 'ai-fault', metric: 'cpu', severity: 'CRIT' });
+  await mk({ id: 'ai-old', metric: 'net.scan', severity: 'WARN', createdAt: ago(3 * DAY) });
+  const acked = await mk({ id: 'ai-acked', metric: 'net.scan', severity: 'CRIT' });
+  await store.ack(acked.id);
+
+  const out = await store.attackIndication({
+    metrics: ATTACK_METRICS, prefixes: ATTACK_METRIC_PREFIXES,
+    severities: BANNER_SEVERITIES, since: ago(DAY), limit: 10,
+  });
+  assert.deepStrictEqual(
+    out.findings.map((f) => f.id).sort(),
+    ['ai-beacon-crit', 'ai-scan-warn', 'ai-sec-prefix', 'ai-sec-unknown'],
+    'the INFO, the fault, the acknowledged or the out-of-window row reached the bar',
+  );
+  assert.strictEqual(out.count, 4);
+  assert.strictEqual(out.worst, 'CRIT');
+  assert.strictEqual(out.findings[0].id, 'ai-beacon-crit', 'a WARN outranked a CRIT');
+  assert.ok(typeof out.findings[0].explanation === 'string', 'the bar has no sentence to show');
+  assert.deepStrictEqual(out.bySeverity, { WARN: 3, CRIT: 1 });
+
+  // No membership test at all answers nothing, never everything.
+  assert.strictEqual((await store.attackIndication({ metrics: [], prefixes: [] })).count, 0);
+});
+
 // Migration 142: the new-peer detector's long memory.
 check('known peers: per-scope reads by kind, an upsert that keeps first_seen and never ages last_seen, the 400-day purge', async (pool) => {
   const repo = repoOf('knownPeersRepository', 'createKnownPeersRepository')({ pool });

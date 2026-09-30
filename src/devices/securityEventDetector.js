@@ -154,6 +154,9 @@ function createSecurityEventDetector({
   // inert, which is what a server built without analysis wants.
   findingSink = null,
   licensed = () => true,
+  // A getter, or a plain object. The server passes the live section of the
+  // attack-indication config (Settings → Attack indication), so a threshold an
+  // admin changes applies to the next batch instead of at the next restart.
   config = loadSecurityEventConfig({}),
   logger = null,
   now = () => new Date(),
@@ -161,18 +164,29 @@ function createSecurityEventDetector({
   // `${senderKey}|${eventType}` -> { hits: [{ t, n }], lastRaisedAt }
   const windows = new Map();
 
+  // Resolves the configuration for ONE batch. Never throws: a getter that fails
+  // leaves the detector on its shipped defaults rather than off.
+  function cfg() {
+    try {
+      const c = typeof config === 'function' ? config() : config;
+      return c && typeof c === 'object' && c.rules ? c : loadSecurityEventConfig({});
+    } catch {
+      return loadSecurityEventConfig({});
+    }
+  }
+
   const warn = (msg) => { if (logger && typeof logger.warn === 'function') logger.warn(msg); };
 
-  function isOn() {
-    try { return !!(config && config.enabled) && !!licensed(); } catch { return false; }
+  function isOn(c) {
+    try { return !!(c && c.enabled) && !!licensed(); } catch { return false; }
   }
 
   // Drops the least recently touched windows once the map is over its ceiling.
   // Map iteration is insertion-ordered and every touch re-inserts, so the head
   // of the iteration is the oldest.
-  function evict() {
-    if (windows.size <= config.maxTracked) return;
-    const over = windows.size - config.maxTracked;
+  function evict(c) {
+    if (windows.size <= c.maxTracked) return;
+    const over = windows.size - c.maxTracked;
     let i = 0;
     for (const key of windows.keys()) {
       windows.delete(key);
@@ -182,7 +196,7 @@ function createSecurityEventDetector({
   }
 
   // Adds one sighting and answers the total inside the rule's window.
-  function record(key, rule, at, occurrences) {
+  function record(key, rule, at, occurrences, c) {
     let w = windows.get(key);
     if (!w) w = { hits: [], lastRaisedAt: 0 };
     windows.delete(key);
@@ -190,7 +204,7 @@ function createSecurityEventDetector({
     w.hits = w.hits.filter((h) => h.t > cutoff);
     w.hits.push({ t: at.getTime(), n: occurrences });
     windows.set(key, w);
-    evict();
+    evict(c);
     return w;
   }
 
@@ -249,8 +263,9 @@ function createSecurityEventDetector({
   // Best-effort by construction: the caller has already stored the rows, and
   // every failure here is logged and swallowed.
   async function observe(agentId, events) {
-    if (!isOn() || !findingSink) return [];
-    const rows = (Array.isArray(events) ? events : []).filter((e) => e && config.rules[e.eventType]);
+    const c = cfg();
+    if (!isOn(c) || !findingSink) return [];
+    const rows = (Array.isArray(events) ? events : []).filter((e) => e && c.rules[e.eventType]);
     if (!rows.length) return [];
 
     const at = now();
@@ -262,7 +277,7 @@ function createSecurityEventDetector({
 
     for (const event of ordered) {
       const eventType = event.eventType;
-      const rule = config.rules[eventType];
+      const rule = c.rules[eventType];
       const key = `${senderKey(event)}|${eventType}`;
       const stamp = event.receivedAt ? new Date(event.receivedAt) : at;
       // A row stamped in the future (a device with a wrong clock) would keep a
@@ -270,11 +285,11 @@ function createSecurityEventDetector({
       // sighting is simply pinned to now.
       const seenAt = Number.isFinite(stamp.getTime()) && stamp.getTime() <= at.getTime() ? stamp : at;
       const occurrences = Math.max(1, toInt(event.occurrences, 1));
-      const w = record(key, rule, seenAt, occurrences);
+      const w = record(key, rule, seenAt, occurrences, c);
       const total = w.hits.reduce((sum, h) => sum + h.n, 0);
 
       if (total < rule.warn) continue;
-      if (at.getTime() - w.lastRaisedAt < config.cooldownMinutes * MINUTE_MS) continue;
+      if (at.getTime() - w.lastRaisedAt < c.cooldownMinutes * MINUTE_MS) continue;
 
       const severity = total >= rule.crit ? 'CRIT' : 'WARN';
       w.lastRaisedAt = at.getTime();
@@ -301,7 +316,10 @@ function createSecurityEventDetector({
     }));
   }
 
-  return { observe, state, rules: config.rules };
+  // `rules` is a getter, not a snapshot: the table is editable at runtime, and
+  // a caller reading a copy taken at construction would report the shipped
+  // thresholds for a server running tuned ones.
+  return { observe, state, get rules() { return cfg().rules; } };
 }
 
 module.exports = {

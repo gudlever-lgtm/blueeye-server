@@ -1,5 +1,65 @@
 # Changelog
 
+## 0.216.0 — Beaconing, a screen to tune it all from, and a red line at the top
+
+`docs/attack-indication.md` listed beaconing as the biggest remaining gap, and
+shipping the first three detectors as environment variables meant that tuning a
+threshold on a customer's on-prem box needed a change window. Both are closed.
+
+- **Beaconing detection.** `src/analysis/beaconDetector.js` raises `net.beacon`
+  when an internal host contacts the same external address on a machine's
+  schedule. It is the only detector here that measures RHYTHM rather than
+  volume — a beacon is a few hundred bytes on a timer, far below any byte
+  baseline, which is exactly why nothing caught it.
+
+  THE TRAP IT EXISTS TO AVOID is a long-lived session. An agent reports flows on
+  its own cadence, so a conversation that never stops appears in EVERY interval,
+  perfectly regularly, and looks exactly like a beacon. A fixed threshold would
+  call every open SSH session on a five-minute agent a beacon and the detector
+  would be switched off in a week. So the cadence is derived per agent from the
+  same table, and a candidate must SKIP intervals before its regularity counts
+  at all. Median + MAD over the gaps, the same statistics as everything else
+  here; jitter is sigma/median, so a ten-minute beacon may drift ninety seconds
+  and still count. NTP is excluded by default (its whole job is to call out on a
+  schedule); DNS deliberately is not.
+
+- **Settings → Attack indication.** All four detectors' thresholds and ignore
+  lists, editable by an admin, applied without a restart. The two that made this
+  necessary: the new-network warm-up, which is what stands between a fresh
+  install and a siren on its first day, and the list of addresses allowed to
+  sweep — this server's own discovery sweep is excluded automatically, a
+  customer's vulnerability scanner is not, and until it is listed it produces a
+  CRIT every run.
+
+  One live object (`attackConfig` in `server.js`), one section per detector,
+  mutated in place by the settings service and re-read by each detector on every
+  run. Env is the floor, so a deployment that never opens the screen behaves
+  exactly as it did. A patch carries only what it names, the rule table merges
+  per rule, and a CRIT line below its WARN line is refused and named rather than
+  silently clamped.
+
+- **A red line at the top of every screen** while an open, unacknowledged
+  WARN-or-worse attack indication exists. Three pixels: visible from across a
+  room on a wall display, and costing nothing on every other day. The whole
+  strip is a button — hover or focus expands it into the sentence the detector
+  wrote, clicking opens the event case, or the filtered findings list when there
+  is no case yet. CRIT pulses (behind `prefers-reduced-motion`); accepting the
+  finding clears it, because a private dismiss would let somebody clear the
+  warning without leaving a trace that they had.
+
+  Which metrics count is now ONE list (`src/analysis/attackIndication.js`),
+  read by the bar, the changes feed and the event guide — it had been a regex in
+  two places and a set of strings in four detectors.
+
+- **A sixth in-app guide**, Guides → Attack indication: what each detector
+  measures, the two settings to touch on the first day of an installation, and
+  the red line. en + da, like the other five.
+
+Also in here: `settingsFormCard` grew a real text field. Every non-checkbox,
+non-select field was built as a number input and saved through `Number()`, so
+`type: 'text'` rendered a spinner and saved `NaN` — which is what the agent
+auto-update window ("02:00-04:00") had been doing.
+
 ## 0.215.0 — Is the network under attack? Three detectors that can answer
 
 Everything the analysis module did compared a number against a number: a

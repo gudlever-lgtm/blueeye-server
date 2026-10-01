@@ -90,6 +90,79 @@ test('PageHeader: the (?) opens one popover, and Escape closes it', () => {
   assert.equal(doc.querySelectorAll('.ui-popover').length, 0, 'Escape leaves it open');
 });
 
+test('the (?) popover is placed where it FITS, and its body is what scrolls', () => {
+  const { ui, doc, window } = mount();
+  // A short window with the button near the bottom: the old code put the
+  // popover at button.bottom + 8 and left the rest of the help text below the
+  // fold, unreachable — no clamp, no scroll.
+  Object.defineProperty(doc.documentElement, 'clientHeight', { value: 700, configurable: true });
+  Object.defineProperty(doc.documentElement, 'clientWidth', { value: 1200, configurable: true });
+
+  const head = ui.pageHeader({
+    title: 'Discovery', lead: 'x',
+    help: { title: 'About Discovery', body: () => [ui.meta('a very long explanation')] },
+  });
+  doc.body.append(head);
+  const btn = head.querySelector('.help-btn');
+  // Near the bottom edge, so "below the button" is 60px of room.
+  btn.getBoundingClientRect = () => ({ top: 600, bottom: 624, left: 40, right: 64, width: 24, height: 24 });
+
+  btn.dispatchEvent(new window.Event('click', { bubbles: true }));
+  const pop = doc.querySelector('.ui-popover');
+  assert.ok(pop, 'the popover has to open at all — a throw in placement used to swallow it');
+
+  // Below the button there are 60px, above it 576: it flips rather than
+  // hanging off the edge, and it is told how much room it actually has.
+  // (jsdom has no layout, so offsetHeight reads 0 — the invariants asserted
+  // here are the ones that do not depend on a measured height.)
+  const top = parseFloat(pop.style.top);
+  const maxH = parseFloat(pop.style.maxHeight);
+  assert.ok(top >= 16, `clamped inside the top edge, got ${top}`);
+  assert.ok(top <= 600 - 8, 'it should sit above a button this close to the bottom');
+  assert.ok(maxH > 0 && maxH <= 600 - 8 - 16,
+    `max-height has to be the room above, not more: ${maxH}`);
+
+  // The head is outside the scroll region, so the close button cannot scroll
+  // out of reach of somebody reading a long help text.
+  assert.ok(pop.querySelector('.pop-head .pop-close'), 'the close button belongs to the fixed head');
+  assert.ok(pop.querySelector('.pop-body'), 'the body is the part that scrolls');
+  assert.equal(pop.querySelector('.pop-body').contains(pop.querySelector('.pop-close')), false);
+});
+
+test('with room below, the popover opens under the button and ends inside the window', () => {
+  const { ui, doc, window } = mount();
+  Object.defineProperty(doc.documentElement, 'clientHeight', { value: 900, configurable: true });
+  Object.defineProperty(doc.documentElement, 'clientWidth', { value: 1200, configurable: true });
+
+  const head = ui.pageHeader({ title: 'x', help: { title: 'h', body: () => [ui.meta('b')] } });
+  doc.body.append(head);
+  const btn = head.querySelector('.help-btn');
+  btn.getBoundingClientRect = () => ({ top: 80, bottom: 104, left: 40, right: 64, width: 24, height: 24 });
+
+  btn.dispatchEvent(new window.Event('click', { bubbles: true }));
+  const pop = doc.querySelector('.ui-popover');
+  const top = parseFloat(pop.style.top);
+  const maxH = parseFloat(pop.style.maxHeight);
+  assert.equal(top, 112, 'under the button, with the gap');
+  assert.equal(top + maxH, 900 - 16, 'the tallest it may grow still ends inside the window');
+});
+
+test('the popover is clamped inside the right edge too', () => {
+  const { ui, doc, window } = mount();
+  Object.defineProperty(doc.documentElement, 'clientHeight', { value: 900, configurable: true });
+  Object.defineProperty(doc.documentElement, 'clientWidth', { value: 500, configurable: true });
+
+  const head = ui.pageHeader({ title: 'x', help: { title: 'h', body: () => [ui.meta('b')] } });
+  doc.body.append(head);
+  const btn = head.querySelector('.help-btn');
+  btn.getBoundingClientRect = () => ({ top: 100, bottom: 124, left: 460, right: 484, width: 24, height: 24 });
+
+  btn.dispatchEvent(new window.Event('click', { bubbles: true }));
+  const left = parseFloat(doc.querySelector('.ui-popover').style.left);
+  assert.ok(left >= 16, `clamped inside the left edge, got ${left}`);
+  assert.ok(left <= 484, 'a button at the right edge must not push the popover off it');
+});
+
 // ---------------------------------------------------------------- Badge
 test('Badge carries only the status tones; metadata is muted text', () => {
   const { ui } = mount();

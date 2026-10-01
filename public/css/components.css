@@ -41,13 +41,26 @@
   color: var(--text-muted); font-size: var(--fs-xs); font-weight: 700; cursor: pointer; }
 .ui .help-btn:hover { border-color: var(--accent); color: var(--accent); background: var(--surface); }
 
+/* A column, not a block: the head stays put and the body scrolls. A help text
+   long enough to need scrolling used to run off the bottom of the window with
+   its last paragraphs unreachable and its own close button somewhere below the
+   fold. max-height is set by placePopover() from the room actually available;
+   the value here is the cap for the case where there is plenty. */
 .ui-popover { position: fixed; z-index: var(--z-popover); width: min(420px, calc(100vw - var(--s-6) * 2));
-  background: var(--elev-surface-3); border: 1px solid var(--border); border-radius: var(--r-panel);
-  box-shadow: var(--elev-3); padding: var(--s-5); }
-.ui-popover h3 { margin: 0 0 var(--s-2); font-size: var(--fs-md); }
+  max-height: calc(100vh - var(--s-6) * 2);
+  display: flex; flex-direction: column; overflow: hidden;
+  background: var(--elev-surface-3); border: 1px solid var(--hairline); border-radius: var(--r-panel);
+  box-shadow: var(--elev-3); }
+.ui-popover .pop-head { flex: 0 0 auto; display: flex; align-items: flex-start; gap: var(--s-3);
+  padding: var(--s-4) var(--s-5) var(--s-3); }
+.ui-popover h3 { margin: 0; flex: 1 1 auto; font-size: var(--fs-md); }
+/* overscroll-behavior: reaching the end of the help text must not start
+   scrolling the page underneath it. */
+.ui-popover .pop-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain;
+  padding: 0 var(--s-5) var(--s-5); }
 .ui-popover p { margin: 0 0 var(--s-3); font-size: var(--fs-sm); color: var(--text-muted); line-height: 1.6; }
 .ui-popover p:last-of-type { margin-bottom: 0; }
-.ui-popover .pop-close { position: absolute; top: var(--s-3); right: var(--s-3); }
+.ui-popover .pop-close { flex: 0 0 auto; margin-left: auto; }
 
 /* ---- SubTabs — the only tab pattern -------------------------------------
    The markup comes from tabStrip() in app.js (roving tabindex, arrow keys,
@@ -145,7 +158,7 @@
    background behind it, separated only by a 1px line. Level 1 is the whole
    difference between "a page with lines on it" and "a page with things on
    it". */
-.ui .panel-ui { background: var(--elev-surface-1); border: 1px solid var(--border);
+.ui .panel-ui { background: var(--elev-surface-1); border: 1px solid var(--hairline);
   border-radius: var(--r-panel); overflow: hidden; box-shadow: var(--elev-1); }
 /* A panel that is a link to somewhere lifts to level 2 under the pointer. */
 .ui .panel-ui.is-interactive { cursor: pointer;
@@ -199,7 +212,7 @@
 .ui .row-act .on-hover:focus-visible { opacity: 1; pointer-events: auto; }
 
 .ui-rowmenu { position: fixed; z-index: var(--z-rowmenu); min-width: 200px; padding: var(--s-1);
-  background: var(--elev-surface-3); border: 1px solid var(--border);
+  background: var(--elev-surface-3); border: 1px solid var(--hairline);
   border-radius: var(--r-panel); box-shadow: var(--elev-3); }
 .ui-rowmenu button { display: block; width: 100%; text-align: left; background: none; border: 0;
   border-radius: var(--r-btn); padding: var(--s-2) var(--s-3); font: inherit;
@@ -246,7 +259,7 @@
 .ui-scrim { position: fixed; inset: 0; z-index: var(--z-scrim); background: var(--scrim); }
 .ui-drawer { position: fixed; top: 0; right: 0; bottom: 0; z-index: var(--z-modal); width: 480px; max-width: 100%;
   display: flex; flex-direction: column; background: var(--elev-surface-3);
-  border-left: 1px solid var(--border); box-shadow: var(--elev-3); }
+  border-left: 1px solid var(--hairline); box-shadow: var(--elev-3); }
 .ui-drawer .drawer-head { display: flex; align-items: flex-start; gap: var(--s-3);
   padding: var(--s-5); border-bottom: 1px solid var(--hairline); }
 .ui-drawer .drawer-head h2 { margin: 0 0 var(--s-2); font-size: var(--fs-lg);
@@ -307,7 +320,7 @@
   display: flex; flex-direction: column; gap: var(--s-2);
   width: 340px; max-width: calc(100vw - var(--s-6)); }
 .ui-toast { display: flex; align-items: flex-start; gap: var(--s-3); padding: var(--s-3) var(--s-4);
-  background: var(--elev-surface-3); border: 1px solid var(--border);
+  background: var(--elev-surface-3); border: 1px solid var(--hairline);
   border-left: 3px solid var(--text-muted); border-radius: var(--r-panel);
   box-shadow: var(--elev-3); font-size: var(--fs-sm); }
 .ui-toast.ok { border-left-color: var(--sev-ok); }
@@ -547,7 +560,7 @@
 .ui.ui-auth { min-height: 100vh; display: grid; place-items: center; padding: var(--s-5); }
 .ui .auth-card { display: flex; flex-direction: column; gap: var(--s-4);
   width: min(360px, 100%); padding: var(--s-6); background: var(--surface);
-  border: 1px solid var(--border); border-radius: var(--r-panel); box-shadow: var(--shadow-md); }
+  border: 1px solid var(--hairline); border-radius: var(--r-panel); box-shadow: var(--elev-2); }
 .ui .auth-brand { margin: 0 0 var(--s-1); font-size: var(--fs-xl); font-weight: 700; }
 .ui .auth-sub { display: block; font-size: var(--fs-sm); font-weight: 500; color: var(--text-muted); }
 .ui .auth-card input { height: var(--control-h); padding: 0 var(--s-3); background: var(--surface-alt);
@@ -661,7 +674,7 @@
 .ui .ui-sug-input { width: 100%; }
 .ui .ui-sug-list { position: absolute; top: calc(100% + var(--s-1)); left: 0; right: 0;
   z-index: var(--z-inline); max-height: 240px; overflow-y: auto; display: grid;
-  border: 1px solid var(--border); border-radius: var(--radius);
+  border: 1px solid var(--hairline); border-radius: var(--radius);
   background: var(--elev-surface-3); box-shadow: var(--elev-3); }
 .ui .ui-sug-opt { display: flex; align-items: baseline; gap: var(--s-2);
   padding: var(--s-2) var(--s-3); color: var(--fg); font-size: var(--fs-sm); cursor: pointer; }

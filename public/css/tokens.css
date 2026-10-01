@@ -72,9 +72,16 @@
   --border-accent: var(--accent);
   --bg-accent:     var(--accent-weak);
   --text-accent:   var(--accent);
-  /* Hairline = the divider weight used between rows and around chrome; softer
-     than --border so long lists don't turn into a grid of cages. */
-  --hairline: color-mix(in srgb, var(--border) 72%, transparent);
+  /* Hairline = the line weight for a SURFACE and for the dividers inside it;
+     softer than --border so long lists don't turn into a grid of cages.
+     --border stays the weight for a CONTROL, where the edge is the affordance
+     and has to be found.
+     Which line a thing takes is the difference between a page of floating
+     surfaces and a page of boxes: a full-strength border is read first and
+     turns the shadow into decoration, however carefully the shadow is tuned.
+     So a panel, card, table, menu, drawer or modal takes --hairline; an input,
+     select, button or chip takes --border. */
+  --hairline: color-mix(in srgb, var(--border) 62%, transparent);
   /* Neutral hover wash for rows, menu items and quiet buttons. */
   --hover: color-mix(in srgb, var(--muted) 9%, transparent);
   --card: var(--panel);

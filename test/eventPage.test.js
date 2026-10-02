@@ -377,3 +377,44 @@ test('a case in no situation carries no situation link', async (t) => {
   await settle();
   assert.doesNotMatch(doc.querySelector('#view .page-head p').textContent, /situation/i);
 });
+
+// ---- The attack indication, in full, on the page the red bar opens ---------
+// The bar is three pixels and one trimmed sentence. The page it links to used
+// to bury the finding it was about in a list of nine anomalies, each cut to one
+// line — including the half of the sentence that says what would make it
+// harmless. It leads now.
+const SCAN_TEXT = '192.168.1.11 reached 175 distinct ports across 4 distinct hosts '
+  + '(internal (RFC1918) destinations) in 15 minutes — over the 50-port threshold. '
+  + 'A vulnerability scanner, an asset inventory or a backup agent walking the LAN looks '
+  + 'the same: if this source is one of yours, add it to SCAN_IGNORE_SOURCES.';
+
+const WITH_SCAN = () => {
+  const e = EVENT();
+  e.anomalies = [
+    { id: 'a1', severity: 'WARN', metric: 'probe.jitter', explanation: 'Jitter 32 ms to example.com:443.', createdAt: '2026-09-17T13:40:00.000Z', attack: false },
+    { id: 'scan-1', severity: 'WARN', metric: 'net.scan', explanation: SCAN_TEXT, createdAt: '2026-09-17T13:41:00.000Z', attack: true },
+  ];
+  return e;
+};
+
+test('an attack indication on the case gets its own panel, with the WHOLE sentence', async (t) => {
+  const { doc } = boot({ t, routes: SESSION({ 'GET /api/events/11': WITH_SCAN() }) });
+  await settle();
+  const panel = [...doc.querySelectorAll('#view .panel-ui')]
+    .find((p) => /Attack indication/.test((p.querySelector('.panel-head h2') || {}).textContent || ''));
+  assert.ok(panel, `no attack panel — ${panelTitles(doc).join(', ')}`);
+  const text = panel.textContent;
+  assert.match(text, /net\.scan/);
+  // The end of the explanation is the part that was being cut off.
+  assert.match(text, /SCAN_IGNORE_SOURCES/);
+  // And it is above the anomalies list, not below it.
+  const titles = panelTitles(doc);
+  assert.ok(titles.indexOf('Attack indication') < titles.findIndex((x) => /Anomalies/i.test(x)),
+    `the attack panel is not first — ${titles.join(', ')}`);
+});
+
+test('a case with no attack indication gets no attack panel', async (t) => {
+  const { doc } = boot({ t, routes: SESSION() });
+  await settle();
+  assert.ok(!panelTitles(doc).includes('Attack indication'), 'an ordinary fault was dressed up as an attack');
+});

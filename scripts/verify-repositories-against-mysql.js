@@ -1358,7 +1358,31 @@ check('findings: the attack-indication read filters by metric list AND prefix, w
     explanation: 'x', evidence: [{ hostId: host, metric: 'net.scan', value: 1, ts: new Date() }],
     createdAt: new Date(), ...over,
   });
-  await mk({ id: 'ai-scan-warn' });
+  // Two event cases, because corroboration is a JOIN back onto the same table
+  // and a scripted pool cannot tell whether MySQL agrees with it.
+  const [c1] = await pool.query(
+    "INSERT INTO event_cases (host_id, title, first_event_at, last_event_at) VALUES ('ai-host-1', 'Scan + new ASN', NOW(), NOW())",
+  );
+  const [c2] = await pool.query(
+    "INSERT INTO event_cases (host_id, title, first_event_at, last_event_at) VALUES ('ai-host-1', 'Two scans', NOW(), NOW())",
+  );
+
+  // Corroborated: a scan and a first-ever ASN from two different detectors in
+  // one case. The INFO half corroborates without itself reaching the bar.
+  // save() does not take an event case — the correlator links it afterwards,
+  // and so does this.
+  await mk({ id: 'ai-scan-corr' });
+  await mk({ id: 'ai-asn-corr', metric: 'peer.new_asn', severity: 'INFO' });
+  await store.setEventCase('ai-scan-corr', c1.insertId);
+  await store.setEventCase('ai-asn-corr', c1.insertId);
+  // Uncorroborated, each in its own way: no case at all, and a case holding
+  // nothing but a second finding from the SAME detector.
+  await mk({ id: 'ai-scan-alone' });
+  await mk({ id: 'ai-scan-twice-a' });
+  await mk({ id: 'ai-scan-twice-b' });
+  await store.setEventCase('ai-scan-twice-a', c2.insertId);
+  await store.setEventCase('ai-scan-twice-b', c2.insertId);
+  // CRIT needs no second opinion.
   await mk({ id: 'ai-beacon-crit', metric: 'net.beacon', severity: 'CRIT' });
   await mk({ id: 'ai-sec-prefix', metric: 'security.auth_failure', severity: 'WARN' });
   await mk({ id: 'ai-sec-unknown', metric: 'security.ids_alert', severity: 'WARN' });
@@ -1374,14 +1398,32 @@ check('findings: the attack-indication read filters by metric list AND prefix, w
   });
   assert.deepStrictEqual(
     out.findings.map((f) => f.id).sort(),
-    ['ai-beacon-crit', 'ai-scan-warn', 'ai-sec-prefix', 'ai-sec-unknown'],
-    'the INFO, the fault, the acknowledged or the out-of-window row reached the bar',
+    ['ai-beacon-crit', 'ai-scan-corr'],
+    'an uncorroborated WARN, the INFO, the fault, the acknowledged or the out-of-window row reached the bar',
   );
-  assert.strictEqual(out.count, 4);
+  assert.strictEqual(out.count, 2);
   assert.strictEqual(out.worst, 'CRIT');
   assert.strictEqual(out.findings[0].id, 'ai-beacon-crit', 'a WARN outranked a CRIT');
   assert.ok(typeof out.findings[0].explanation === 'string', 'the bar has no sentence to show');
-  assert.deepStrictEqual(out.bySeverity, { WARN: 3, CRIT: 1 });
+  assert.deepStrictEqual(out.bySeverity, { WARN: 1, CRIT: 1 });
+
+  // Acknowledging the corroborating half takes the other one off the bar: the
+  // agreement is what made it red, and it is gone.
+  await store.ack('ai-asn-corr');
+  const after = await store.attackIndication({
+    metrics: ATTACK_METRICS, prefixes: ATTACK_METRIC_PREFIXES,
+    severities: BANNER_SEVERITIES, since: ago(DAY), limit: 10,
+  });
+  assert.deepStrictEqual(after.findings.map((f) => f.id), ['ai-beacon-crit'],
+    'a WARN stayed on the bar after its corroboration was acknowledged');
+
+  // The exemption is a parameter, not a hard-coded severity: with nothing
+  // exempt, the lone CRIT needs corroboration too.
+  const strict = await store.attackIndication({
+    metrics: ATTACK_METRICS, prefixes: ATTACK_METRIC_PREFIXES,
+    severities: BANNER_SEVERITIES, since: ago(DAY), limit: 10, corroborationExempt: [],
+  });
+  assert.strictEqual(strict.count, 0, 'a lone CRIT passed a strict corroboration rule');
 
   // No membership test at all answers nothing, never everything.
   assert.strictEqual((await store.attackIndication({ metrics: [], prefixes: [] })).count, 0);

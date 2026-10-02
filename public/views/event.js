@@ -103,6 +103,36 @@
           actions: actions,
         }));
 
+        // THE ATTACK INDICATION, IN FULL, FIRST.
+        //
+        // The red bar at the top of the shell shows one trimmed sentence and
+        // links here. Until now "here" was a page whose heading named whatever
+        // the case was called — a jitter event, say — with the scan sitting
+        // fourth in a list of nine anomalies, trimmed to one line like all the
+        // others. The reader had to go looking for the thing that was red.
+        //
+        // So the case's attack-indication findings (flagged server-side from
+        // the one membership list) get their own panel above everything else,
+        // with the detector's COMPLETE text — the part that says what would
+        // make this benign is the part that was being cut off. The one the bar
+        // opened is marked as such.
+        var flagged = typeof deps.flaggedFinding === 'function' ? deps.flaggedFinding() : null;
+        var attacks = anomalies.filter(function (a) { return a && a.attack; });
+        var attackPanel = attacks.length ? ui.panel({
+          title: t('ev.attack.title'),
+          note: t('ev.attack.count', { n: attacks.length }),
+          children: [el('div', { class: 'panel-body' }, el('ul', { class: 'attack-findings' },
+            attacks.map(function (a) {
+              var isFlagged = flagged != null && String(a.id) === String(flagged);
+              return el('li', { class: 'attack-finding' + (isFlagged ? ' flagged' : '') },
+                el('div', { class: 'attack-finding-head' },
+                  sevBadge(a.severity), ' ', el('strong', {}, a.metric),
+                  ui.meta(' · ' + ui.fmt.abs(a.createdAt)),
+                  isFlagged ? el('span', {}, ui.meta(' · '), ui.badge('crit', t('ev.attack.fromBar'))) : null),
+                el('p', { class: 'attack-finding-text' }, a.explanation || t('ev.attack.noText')));
+            })))],
+        }) : null;
+
         // Anomalies is the one panel this view builds itself: it is a list of
         // findings, which is a shape the contract already has.
         var anomPanel = ui.panel({
@@ -115,6 +145,8 @@
             })))
             : ui.emptyState({ title: t('ev.noAnomalies'), body: t('ev.noAnomaliesHint') })],
         });
+
+        if (attackPanel) page.append(attackPanel);
 
         // Everything else is app.js's, wrapped rather than rebuilt: each panel
         // owns its title, and the loaders fill the body under it.

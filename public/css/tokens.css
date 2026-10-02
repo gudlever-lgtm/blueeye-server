@@ -23,7 +23,7 @@
    (--sidebar-w, --radius*, --shadow*) are defined once at the end of :root and
    re-theme automatically because they reference the base tokens above. */
 :root {
-  --bg: #f7f7f6;
+  --bg: #ebebea;
   --panel: #ffffff;
   --panel-2: #f1f1ef;
   --text: #17171a;
@@ -32,7 +32,7 @@
   --ok: #16a34a;
   --warn: #d97706;
   --bad: #dc2626;
-  --border: #e7e7e3;
+  --border: #d5d5d1;
   --btn-fg: #ffffff;
   /* The page-load line (.loading-bar). Cobalt, and deliberately ONE colour in
      every palette: it is system feedback, not brand, and "is it still
@@ -166,13 +166,13 @@
   --ok: #22c55e;
   --warn: #f59e0b;
   --bad: #ef4444;
-  --border: #334155;
+  --border: #39475a;
   --btn-fg: #04263a;
 }
 /* Midnight — near-black (OLED-friendly) with an indigo accent. */
 [data-theme="midnight"] {
   --bg: #0a0a12;
-  --panel: #14141f;
+  --panel: #22222d;
   --panel-2: #1e1e2e;
   --text: #e6e6f2;
   --muted: #9a9ab4;
@@ -180,7 +180,7 @@
   --ok: #34d399;
   --warn: #fbbf24;
   --bad: #fb7185;
-  --border: #2a2a3d;
+  --border: #3c3c4e;
   --btn-fg: #0a0a12;
 }
 /* Nord — the cool, muted arctic palette. */
@@ -194,13 +194,13 @@
   --ok: #a3be8c;
   --warn: #ebcb8b;
   --bad: #bf616a;
-  --border: #4c566a;
+  --border: #515b6e;
   --btn-fg: #2e3440;
 }
 /* Forest — deep green with a mint accent. */
 [data-theme="forest"] {
   --bg: #0c1410;
-  --panel: #14201a;
+  --panel: #1b2721;
   --panel-2: #1d2c24;
   --text: #d7e6dc;
   --muted: #82a08e;
@@ -208,13 +208,13 @@
   --ok: #4ade80;
   --warn: #fbbf24;
   --bad: #f87171;
-  --border: #243a2e;
+  --border: #31463a;
   --btn-fg: #06140d;
 }
 /* Sunset — warm aubergine with a rose accent. */
 [data-theme="sunset"] {
   --bg: #1a1320;
-  --panel: #251a2e;
+  --panel: #2c2134;
   --panel-2: #33253d;
   --text: #f1e7f2;
   --muted: #b29bba;
@@ -222,12 +222,12 @@
   --ok: #4ade80;
   --warn: #fbbf24;
   --bad: #fb7185;
-  --border: #3d2e48;
+  --border: #493a52;
   --btn-fg: #1a1320;
 }
 /* Solarized — the classic low-contrast palette, light and dark. */
 [data-theme="solarized-light"] {
-  --bg: #eee8d5;
+  --bg: #e8e2cf;
   --panel: #fdf6e3;
   --panel-2: #e7e0cb;
   --text: #586e75;
@@ -236,12 +236,12 @@
   --ok: #859900;
   --warn: #b58900;
   --bad: #dc322f;
-  --border: #ddd5bf;
+  --border: #d5cdb7;
   --btn-fg: #fdf6e3;
 }
 [data-theme="solarized-dark"] {
   --bg: #002b36;
-  --panel: #073642;
+  --panel: #0e3c48;
   --panel-2: #0a4250;
   --text: #93a1a1;
   --muted: #657b83;
@@ -249,13 +249,13 @@
   --ok: #859900;
   --warn: #b58900;
   --bad: #dc322f;
-  --border: #0e4655;
+  --border: #235664;
   --btn-fg: #fdf6e3;
 }
 /* High contrast — maximum legibility (accessibility). */
 [data-theme="contrast"] {
   --bg: #000000;
-  --panel: #0a0a0a;
+  --panel: #181818;
   --panel-2: #1a1a1a;
   --text: #ffffff;
   --muted: #d0d0d0;
@@ -269,7 +269,7 @@
 /* Light variants of the colour palettes — paired with the dark blocks above so
    the topbar 🌙/☀️ button switches brightness while keeping the palette. */
 [data-theme="midnight-light"] {
-  --bg: #eef0fb;
+  --bg: #e8eaf4;
   --panel: #ffffff;
   --panel-2: #e4e7f7;
   --text: #181a2e;
@@ -278,11 +278,11 @@
   --ok: #1f9d57;
   --warn: #b07d1a;
   --bad: #d14343;
-  --border: #dcdff2;
+  --border: #d2d5e8;
   --btn-fg: #ffffff;
 }
 [data-theme="nord-light"] {
-  --bg: #e5e9f0;
+  --bg: #d9dde4;
   --panel: #eceff4;
   --panel-2: #d8dee9;
   --text: #2e3440;
@@ -291,11 +291,11 @@
   --ok: #4f7d3f;
   --warn: #9a7d10;
   --bad: #bf616a;
-  --border: #d2d8e3;
+  --border: #c2c8d3;
   --btn-fg: #eceff4;
 }
 [data-theme="forest-light"] {
-  --bg: #eef4ee;
+  --bg: #e6ece6;
   --panel: #ffffff;
   --panel-2: #e2ece4;
   --text: #14241a;
@@ -304,11 +304,11 @@
   --ok: #1f9d57;
   --warn: #b07d1a;
   --bad: #c2412f;
-  --border: #d3e2d6;
+  --border: #cbdace;
   --btn-fg: #ffffff;
 }
 [data-theme="sunset-light"] {
-  --bg: #fbeef4;
+  --bg: #f0e4ea;
   --panel: #fffafc;
   --panel-2: #f6e2ec;
   --text: #2a1320;
@@ -317,11 +317,11 @@
   --ok: #2f9e6b;
   --warn: #b9821f;
   --bad: #d6436a;
-  --border: #f0d6e2;
+  --border: #e6ccd8;
   --btn-fg: #ffffff;
 }
 [data-theme="contrast-light"] {
-  --bg: #ffffff;
+  --bg: #ebebeb;
   --panel: #ffffff;
   --panel-2: #f0f0f0;
   --text: #000000;

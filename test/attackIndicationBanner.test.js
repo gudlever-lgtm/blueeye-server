@@ -79,11 +79,17 @@ test('it is NOT read as a finding id — the route order holds', async () => {
 });
 
 test('worst first, then newest, and the one the bar links to is at the head', async () => {
+  // Relative to now, not pinned to a date. The bar's window is
+  // BANNER_WINDOW_HOURS wide and measured from Date.now(), so three findings
+  // written as 2026-09-30T08/09/10:00Z were inside it for one day and outside
+  // it ever after — the suite went red on its own, with nothing changed.
+  // Only the ORDER matters here, so the order is what the fixture states.
+  const hoursAgo = (h) => new Date(Date.now() - h * 60 * 60 * 1000).toISOString();
   const app = makeApp({
     findingStore: storeWith([
-      F({ id: 'warn-old', severity: 'WARN', createdAt: '2026-09-30T08:00:00Z' }),
-      F({ id: 'crit', metric: 'net.beacon', severity: 'CRIT', createdAt: '2026-09-30T09:00:00Z', eventCaseId: 12 }),
-      F({ id: 'warn-new', severity: 'WARN', createdAt: '2026-09-30T10:00:00Z' }),
+      F({ id: 'warn-old', severity: 'WARN', createdAt: hoursAgo(6) }),
+      F({ id: 'crit', metric: 'net.beacon', severity: 'CRIT', createdAt: hoursAgo(5), eventCaseId: 12 }),
+      F({ id: 'warn-new', severity: 'WARN', createdAt: hoursAgo(4) }),
     ]),
   });
   const res = await request(app).get('/api/findings/attack-indication').set('Authorization', authHeader('viewer'));

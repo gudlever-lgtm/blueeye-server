@@ -225,3 +225,30 @@ test('the prefix list is what the route sends, so a custom security rule is cove
   assert.deepEqual(asked.severities, BANNER_SEVERITIES);
   assert.ok(asked.since instanceof Date);
 });
+
+// The corroboration clause itself, over a scripted pool. It cannot say whether
+// MySQL accepts the SQL — scripts/verify-repositories-against-mysql.js does
+// that — but it can say the clause is in the statement at all, which is the
+// bug this test exists for: skipping it when NOTHING was exempt turned "every
+// severity needs corroboration" into "everything passes".
+test('an empty exemption list means everything needs corroboration, not nothing', async () => {
+  const { FindingStore } = require('../src/analysis/findings');
+  const seen = [];
+  const store = new FindingStore({ db: { pool: { query: async (sql, params) => { seen.push({ sql, params }); return [[]]; } } } });
+  const args = {
+    metrics: ATTACK_METRICS, prefixes: ATTACK_METRIC_PREFIXES,
+    severities: BANNER_SEVERITIES, since: new Date('2026-10-01T00:00:00Z'),
+  };
+
+  await store.attackIndication({ ...args, corroborationExempt: [] });
+  assert.match(seen[0].sql, /EXISTS/, 'nothing exempt and no corroboration test — every finding would pass');
+  assert.doesNotMatch(seen[0].sql, /f\.severity IN \(\?\) OR \(f\.event_case_id/, 'an exemption was applied that nobody asked for');
+
+  seen.length = 0;
+  await store.attackIndication({ ...args, corroborationExempt: ['CRIT'] });
+  assert.match(seen[0].sql, /f\.severity IN \(\?\) OR \(f\.event_case_id IS NOT NULL AND EXISTS/, 'CRIT lost its exemption');
+  // The parameters line up with the placeholders: metric list, prefix,
+  // severities, since, THEN the exempt list, then the subquery's own copies.
+  assert.deepEqual(seen[0].params[4], ['CRIT']);
+  assert.deepEqual(seen[0].params[5], ATTACK_METRICS);
+});

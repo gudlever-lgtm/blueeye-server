@@ -523,16 +523,24 @@ class FindingStore {
     // lights the bar. A finding the correlator has not placed in a case yet has
     // nothing to agree with it, so it waits — the Changes feed and Analysis
     // already carry it.
+    const exists = [`c.event_case_id = f.event_case_id`, 'c.acked = 0', 'c.id <> f.id', 'c.metric <> f.metric'];
+    const existsParams = [];
+    exists.push(`(${member.map((m) => `c.${m}`).join(' OR ')})`);
+    existsParams.push(...memberParams);
+    if (sinceDate) { exists.push('c.created_at >= ?'); existsParams.push(sinceDate); }
+    const corroborated = `(f.event_case_id IS NOT NULL AND EXISTS (
+      SELECT 1 FROM findings c WHERE ${exists.join(' AND ')}
+    ))`;
+    // An EMPTY exemption list means every severity needs corroboration — not
+    // that the rule is off. Skipping the clause when nothing was exempt is how
+    // "nothing is exempt" came to mean "everything passes", which is the
+    // opposite rule and the one the bar would have shipped with.
     if (exemptSev.length) {
-      const exists = [`c.event_case_id = f.event_case_id`, 'c.acked = 0', 'c.id <> f.id', 'c.metric <> f.metric'];
-      const existsParams = [];
-      exists.push(`(${member.map((m) => `c.${m}`).join(' OR ')})`);
-      existsParams.push(...memberParams);
-      if (sinceDate) { exists.push('c.created_at >= ?'); existsParams.push(sinceDate); }
-      where.push(`(f.severity IN (?) OR (f.event_case_id IS NOT NULL AND EXISTS (
-        SELECT 1 FROM findings c WHERE ${exists.join(' AND ')}
-      )))`);
+      where.push(`(f.severity IN (?) OR ${corroborated})`);
       params.push(exemptSev, ...existsParams);
+    } else {
+      where.push(corroborated);
+      params.push(...existsParams);
     }
 
     const clause = `WHERE ${where.join(' AND ')}`;

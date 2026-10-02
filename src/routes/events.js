@@ -12,6 +12,7 @@ const { maskedDiff } = require('../config/configContext');
 const { scoreSimilarEvents } = require('../eventCases/similarity');
 const { silentLogger } = require('../logger');
 const { gatherEventAskContext } = require('../eventCases/askContext');
+const { isAttackMetric } = require('../analysis/attackIndication');
 const { buildEventGuide } = require('../eventCases/guide');
 const { buildMatchingPlaybook, buildHistoricalMatches, shouldGenerateAi } = require('../eventCases/recommendation');
 const { buildExplanation } = require('../eventCases/explanation');
@@ -155,7 +156,11 @@ function createEventsRouter({
     if (id === null) return res.status(400).json({ error: 'id must be a positive integer' });
     const event = await eventCasesRepo.findById(id);
     if (!event) return res.status(404).json({ error: 'Event not found' });
-    const anomalies = await findingStore.listByEventCase(id);
+    // `attack` is the one membership list (src/analysis/attackIndication.js)
+    // travelling with the row, so the page can lead with the finding the red
+    // bar was about instead of the browser keeping a second copy of the list.
+    const anomalies = (await findingStore.listByEventCase(id))
+      .map((a) => ({ ...a, attack: isAttackMetric(a.metric) }));
 
     // Playbook runs recorded against this event (empty when the subsystem/repo
     // is not wired). Read-only here; the recommendation endpoint interprets them.

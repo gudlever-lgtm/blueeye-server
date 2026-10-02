@@ -129,6 +129,51 @@ test('clicking opens the event the finding was grouped into', async (t) => {
   assert.match(window.location.hash + window.location.pathname, /event/, 'the bar did not navigate to the event');
 });
 
+test('the strip says whole sentences, and the page behind it says all of them', async (t) => {
+  // The server hands the bar a `summary` that fits two lines and the finding's
+  // full `explanation` for the page. The strip must use the first — "…add it
+  // to" with the rest nowhere was the bug.
+  const full = 'A reached 400 distinct ports in 15 minutes — over the 50-port threshold. '
+    + 'A vulnerability scanner, an asset inventory or a backup agent walking the LAN looks the '
+    + 'same: if this source is one of yours, add it to SCAN_IGNORE_SOURCES.';
+  const summary = 'A reached 400 distinct ports in 15 minutes — over the 50-port threshold.';
+  const { doc, window } = await boot(t, {
+    'GET /api/findings/attack-indication': {
+      count: 1, bySeverity: { WARN: 1 }, worst: 'WARN', windowHours: 24,
+      findings: [finding({ id: 'scan-1', eventCaseId: 42, summary, explanation: full })],
+    },
+    'GET /api/events/42': {
+      event: { id: 42, hostId: 7, title: 'WARN probe.jitter on fellis-instance', severity: 'WARN', status: 'open', firstEventAt: '2026-09-30T10:00:00Z' },
+      anomalies: [
+        { id: 'j1', severity: 'WARN', metric: 'probe.jitter', explanation: 'Jitter 32 ms.', createdAt: '2026-09-30T09:00:00Z', attack: false },
+        { id: 'scan-1', severity: 'WARN', metric: 'net.scan', explanation: full, createdAt: '2026-09-30T10:00:00Z', attack: true },
+      ],
+    },
+    'GET /api/events/42/timeline': { events: [] },
+    'GET /api/events/42/similar': { similar: [] },
+    'GET /api/events/42/notes': { notes: [], ruledOut: [] },
+    'GET /api/events/42/config-context': { configChangeId: null },
+    'GET /agents': [{ id: 7, display_name: 'fellis-instance' }],
+    // The event page's own loaders, stubbed empty: this test is about the bar
+    // and the panel it lands on, not about the rest of the page.
+    'GET /agents/7/results': [],
+    'GET /agents/7': { id: 7, display_name: 'fellis-instance' },
+  });
+  const detail = doc.querySelector('#attack-bar-detail').textContent;
+  assert.ok(detail.includes(summary), `the strip is not showing the summary: ${detail}`);
+  assert.ok(!detail.includes('SCAN_IGNORE_SOURCES'), 'the strip is showing the whole essay');
+  assert.ok(!/\badd it to$/.test(detail.trim()), 'the strip ends mid-sentence');
+
+  doc.querySelector('#attack-bar').click();
+  await tick(400);
+  const view = doc.querySelector('#view').textContent;
+  // The page the bar opened names the finding it was about, in full, and says
+  // that this is the one the red line meant.
+  assert.match(view, /SCAN_IGNORE_SOURCES/, 'the full explanation is nowhere on the page the bar opened');
+  assert.match(view, /opened from the red line/, 'the page does not say which finding was red');
+  assert.ok(window, 'window closed');
+});
+
 test('with no event yet it opens the findings list filtered to that metric', async (t) => {
   const { doc, window, calls } = await boot(t, {
     'GET /api/findings/attack-indication': {

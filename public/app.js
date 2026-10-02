@@ -906,6 +906,10 @@ function trustImpactLines(impact) {
 let attackBarLast = null;
 let attackBarTimer = null;
 let attackBarTarget = null;
+// The finding the bar last opened, so the event page can put it first and say
+// so. Cleared when the event page has used it — it describes one navigation,
+// not a state the page keeps.
+let flaggedFindingId = null;
 
 // The poll. Slow on purpose: the socket is what makes this feel instant, and
 // the timer is only there so a dashboard left open overnight is still right in
@@ -926,6 +930,7 @@ function endAttackBarPolling() {
   if (attackBarTimer) { clearInterval(attackBarTimer); attackBarTimer = null; }
   attackBarLast = null;
   attackBarTarget = null;
+  flaggedFindingId = null;
   const host = typeof document !== 'undefined' ? $('#attack-bar') : null;
   if (host) host.hidden = true;
 }
@@ -937,7 +942,14 @@ function endAttackBarPolling() {
 function openAttackTarget() {
   const target = attackBarTarget;
   if (!target) return;
-  if (target.eventCaseId != null) { openEvent(target.eventCaseId); return; }
+  if (target.eventCaseId != null) {
+    // WHICH finding the bar was about, not just which case it belongs to. A
+    // case holds nine anomalies and the scan is the fourth of them; landing on
+    // the page without saying which one was red made the reader hunt for it.
+    flaggedFindingId = target.id || null;
+    openEvent(target.eventCaseId);
+    return;
+  }
   findingsState.metric = target.metric || '';
   findingsState.severity = '';
   currentView = 'findings';
@@ -973,9 +985,12 @@ async function refreshAttackBar() {
   // so the bar says "1 attack indication" rather than "1 attack indication(s)".
   if (label) label.textContent = I18n.plural('attack.bar.count', data.count, { count: data.count });
   if (detail) {
-    // The metric name, then the sentence the detector wrote. Truncated by the
-    // server already; the strip is one or two lines even expanded.
-    detail.textContent = ` — ${top.metric}${top.explanation ? `: ${top.explanation}` : ''}`;
+    // The metric name, then the sentence the detector wrote. `summary` is whole
+    // sentences cut to fit the strip — the full text is on the event page this
+    // bar opens, which is where somebody reads it. `explanation` is the
+    // fallback for a server that predates the summary field.
+    const said = top.summary || top.explanation || '';
+    detail.textContent = ` — ${top.metric}${said ? `: ${said}` : ''}`;
   }
   host.setAttribute('title', t('attack.bar.title'));
 }
@@ -4588,6 +4603,10 @@ function getEventPage() {
     canWrite,
     openCluster: (id) => openCluster(id),
     id: () => selectedEventId,
+    // Which finding the red bar opened, read ONCE: it describes the navigation
+    // that just happened, not a state the page keeps. Coming back to the same
+    // event from the menu should not re-flag it.
+    flaggedFinding: () => { const f = flaggedFindingId; flaggedFindingId = null; return f; },
     transitions: (status) => INC_TRANSITIONS[status],
     openList: () => { currentView = 'events'; render(); },
     rerender: () => render(),

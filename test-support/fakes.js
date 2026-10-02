@@ -14,6 +14,7 @@ const { createSecretBox } = require('../src/lib/secretBox');
 const { createCommandSigner } = require('../src/services/commandSigner');
 const { publicKeyFingerprint } = require('../src/lib/fingerprint');
 const { makeServiceTests } = require('./serviceTestsFakes');
+const { summarize } = require('../src/analysis/attackIndication');
 const { createConnectorRegistry } = require('../src/integrations/connectors');
 const { createCmdbConnectorRegistry } = require('../src/cmdb/connectors');
 const { createPlanService } = require('../src/license/planService');
@@ -2996,12 +2997,24 @@ function makeFindingStore(overrides = {}) {
     // WARN-or-worse findings whose metric is on the attack list, worst first
     // then newest. Modelled over `rows` rather than stubbed, so a test that
     // gets the membership rule wrong fails here too.
-    attackIndication: overrides.attackIndication || (async ({ metrics = [], prefixes = [], severities = [], since = null, limit = 5 } = {}) => {
+    attackIndication: overrides.attackIndication || (async ({
+      metrics = [], prefixes = [], severities = [], since = null, limit = 5,
+      corroborationExempt = ['CRIT'],
+    } = {}) => {
       const member = (m) => metrics.includes(m) || prefixes.some((p) => String(m).startsWith(p));
       if (!metrics.length && !prefixes.length) return { count: 0, bySeverity: {}, worst: null, findings: [] };
+      const inWindow = (f) => !since || new Date(f.createdAt || 0) >= new Date(since);
+      // CORROBORATION — the rule lives in src/analysis/attackIndication.js and
+      // is modelled here rather than stubbed, so a test that gets it wrong
+      // fails in the fake too. A WARN reaches the bar only when another open
+      // attack finding from a DIFFERENT detector shares its event case.
+      const corroborated = (f) => f.eventCaseId != null && rows.some((o) => !o.acked
+        && o.id !== f.id && o.metric !== f.metric && member(o.metric)
+        && o.eventCaseId != null && String(o.eventCaseId) === String(f.eventCaseId) && inWindow(o));
       const hits = rows.filter((f) => !f.acked && member(f.metric)
         && (!severities.length || severities.includes(f.severity))
-        && (!since || new Date(f.createdAt || 0) >= new Date(since)));
+        && inWindow(f)
+        && (corroborationExempt.includes(f.severity) || corroborated(f)));
       const bySeverity = {};
       for (const h of hits) bySeverity[h.severity] = (bySeverity[h.severity] || 0) + 1;
       const sorted = hits.slice().sort((a, b) => ((b.severity === 'CRIT') - (a.severity === 'CRIT'))
@@ -3010,7 +3023,11 @@ function makeFindingStore(overrides = {}) {
         count: hits.length,
         bySeverity,
         worst: bySeverity.CRIT ? 'CRIT' : (bySeverity.WARN ? 'WARN' : null),
-        findings: sorted.slice(0, limit).map(lightFinding).map((f, i) => ({ ...f, explanation: sorted[i].explanation ?? null })),
+        findings: sorted.slice(0, limit).map(lightFinding).map((f, i) => ({
+          ...f,
+          explanation: sorted[i].explanation ?? null,
+          summary: summarize(sorted[i].explanation),
+        })),
       };
     }),
     // The explicit backfill. Matches the real store: unacknowledged findings

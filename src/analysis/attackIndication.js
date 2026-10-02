@@ -65,10 +65,63 @@ const BANNER_SEVERITIES = Object.freeze(['WARN', 'CRIT']);
 // noise is not.
 const BANNER_WINDOW_HOURS = 24;
 
+// RED MEANS "WE ARE REASONABLY SURE", AND ONE WARN IS NOT SURE.
+//
+// A single net.scan says one source touched a lot of ports. The detector's own
+// sentence then admits that a vulnerability scanner, an asset inventory or a
+// backup agent walking the LAN looks exactly the same — and a red line that
+// says "attack" over a sentence that says "this is probably your backup agent"
+// teaches an operator to stop reading the line.
+//
+// So a WARN reaches the bar only when something ELSE on the attack list agrees
+// about it: another attack-indication finding, raised by a DIFFERENT detector,
+// open, inside the same window, in the same event case (the server's own
+// correlation — src/eventCases/). A scan plus a first-ever ASN from the same
+// host is a story; a scan on its own is a candidate, and candidates belong in
+// the Changes feed and on Analysis, where they already are.
+//
+// A DIFFERENT metric, because two net.scan findings in one case is one detector
+// saying the same thing twice, which is repetition, not corroboration.
+//
+// CRIT is exempt: the critical thresholds exist precisely to name the cases
+// nobody needs a second opinion on, and waiting for corroboration there would
+// hold the bar back on the one night it matters.
+const CORROBORATION_EXEMPT_SEVERITIES = Object.freeze(['CRIT']);
+
+// What the bar shows of a finding's explanation: whole sentences, never a
+// sentence cut mid-word. The strip is two lines, the full text lives on the
+// finding and on the event page the bar links to, and "…add it to" with the
+// rest missing is worse than one complete sentence.
+const BAR_SUMMARY_MAX = 240;
+
+function summarize(text, max = BAR_SUMMARY_MAX) {
+  const s = String(text == null ? '' : text).replace(/\s+/g, ' ').trim();
+  if (!s) return null;
+  if (s.length <= max) return s;
+  // Whole sentences while they fit. A sentence ends at . ! or ? followed by a
+  // space and a capital or a digit — "10.0.0.5" and "v1.2" do not end one.
+  const sentences = s.split(/(?<=[.!?])\s+(?=[A-Z0-9])/);
+  let out = '';
+  for (const part of sentences) {
+    const next = out ? `${out} ${part}` : part;
+    if (next.length > max) break;
+    out = next;
+  }
+  if (out) return out;
+  // The first sentence alone is longer than the cap: cut on a word boundary and
+  // SAY that it was cut.
+  const cut = s.slice(0, max);
+  const lastSpace = cut.lastIndexOf(' ');
+  return `${(lastSpace > 40 ? cut.slice(0, lastSpace) : cut).replace(/[\s,;:—-]+$/, '')}…`;
+}
+
 module.exports = {
   ATTACK_METRICS,
   ATTACK_METRIC_PREFIXES,
   BANNER_SEVERITIES,
   BANNER_WINDOW_HOURS,
+  CORROBORATION_EXEMPT_SEVERITIES,
+  BAR_SUMMARY_MAX,
   isAttackMetric,
+  summarize,
 };

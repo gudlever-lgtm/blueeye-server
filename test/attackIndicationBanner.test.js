@@ -12,6 +12,7 @@ const request = require('supertest');
 
 const {
   isAttackMetric, ATTACK_METRICS, ATTACK_METRIC_PREFIXES, BANNER_SEVERITIES, BANNER_WINDOW_HOURS,
+  CORROBORATION_EXEMPT_SEVERITIES, BAR_SUMMARY_MAX, summarize,
 } = require('../src/analysis/attackIndication');
 const { metricFamily } = require('../src/changes/indications');
 const { makeApp, makeFindingStore, authHeader } = require('../test-support/fakes');
@@ -46,6 +47,36 @@ test('INFO never raises the bar', () => {
   assert.equal(BANNER_WINDOW_HOURS, 24);
 });
 
+test('CRIT is the only severity that reaches the bar uncorroborated', () => {
+  assert.deepEqual(CORROBORATION_EXEMPT_SEVERITIES, ['CRIT']);
+});
+
+test('the bar summary is whole sentences, never a sentence cut mid-word', () => {
+  const scan = '192.168.1.11 reached 175 distinct ports across 4 distinct hosts '
+    + '(internal (RFC1918) destinations) in 15 minutes — over the 50-port threshold. '
+    + 'Counted from flow metadata only (5-tuple), so this says what was touched, not what '
+    + 'was sent or whether anything answered. A vulnerability scanner, an asset inventory or '
+    + 'a backup agent walking the LAN looks the same: if this source is one of yours, add it '
+    + 'to SCAN_IGNORE_SOURCES.';
+  const out = summarize(scan);
+  assert.ok(out.length <= BAR_SUMMARY_MAX, 'the summary does not fit the strip');
+  assert.ok(out.endsWith('threshold.'), `the summary stopped mid-sentence: ${out}`);
+  // The old behaviour: a hard slice that put "…add it to" on screen.
+  assert.ok(!/add it$/.test(out));
+
+  // Short enough already: untouched, and no ellipsis invented.
+  assert.equal(summarize('Jitter 32 ms to example.com:443.'), 'Jitter 32 ms to example.com:443.');
+  // A dotted address or a version number does not end a sentence.
+  assert.match(summarize('10.0.0.5 v1.2 reached 400 ports.'), /^10\.0\.0\.5 v1\.2/);
+  // One sentence longer than the cap is cut on a word boundary AND says so.
+  const long = `${'word '.repeat(80)}end.`;
+  const cut = summarize(long);
+  assert.ok(cut.endsWith('…'), 'a cut summary did not say it was cut');
+  assert.ok(cut.length <= BAR_SUMMARY_MAX + 1);
+  assert.equal(summarize(''), null);
+  assert.equal(summarize(null), null);
+});
+
 // The shared fake's own attackIndication implementation over these rows — the
 // membership and ordering rules are modelled there, so this file exercises the
 // route rather than restating the store.
@@ -54,6 +85,11 @@ function storeWith(findings) {
   store.rows.push(...findings);
   return store;
 }
+
+// RELATIVE, NOT A DATE IN 2026. A fixed timestamp drops out of the bar's
+// 24-hour window as soon as the calendar passes it, and the test then fails on
+// a Tuesday for reasons that have nothing to do with the code.
+const hoursAgo = (h) => new Date(Date.now() - h * 60 * 60 * 1000).toISOString();
 
 const F = (over = {}) => ({
   id: 'f1', metric: 'net.scan', severity: 'WARN', hostId: '7', eventCaseId: null,
@@ -79,17 +115,15 @@ test('it is NOT read as a finding id — the route order holds', async () => {
 });
 
 test('worst first, then newest, and the one the bar links to is at the head', async () => {
-  // Relative to now, not pinned to a date. The bar's window is
-  // BANNER_WINDOW_HOURS wide and measured from Date.now(), so three findings
-  // written as 2026-09-30T08/09/10:00Z were inside it for one day and outside
-  // it ever after — the suite went red on its own, with nothing changed.
-  // Only the ORDER matters here, so the order is what the fixture states.
-  const hoursAgo = (h) => new Date(Date.now() - h * 60 * 60 * 1000).toISOString();
+  // The WARNs are corroborated (each shares a case with a finding from another
+  // detector); the CRIT needs no corroboration.
   const app = makeApp({
     findingStore: storeWith([
-      F({ id: 'warn-old', severity: 'WARN', createdAt: hoursAgo(6) }),
-      F({ id: 'crit', metric: 'net.beacon', severity: 'CRIT', createdAt: hoursAgo(5), eventCaseId: 12 }),
-      F({ id: 'warn-new', severity: 'WARN', createdAt: hoursAgo(4) }),
+      F({ id: 'warn-old', severity: 'WARN', createdAt: hoursAgo(5), eventCaseId: 1 }),
+      F({ id: 'asn-old', metric: 'peer.new_asn', severity: 'INFO', createdAt: hoursAgo(5), eventCaseId: 1 }),
+      F({ id: 'crit', metric: 'net.beacon', severity: 'CRIT', createdAt: hoursAgo(3), eventCaseId: 12 }),
+      F({ id: 'warn-new', severity: 'WARN', createdAt: hoursAgo(1), eventCaseId: 2 }),
+      F({ id: 'dhcp-new', metric: 'probe.dhcp.rogue', severity: 'INFO', createdAt: hoursAgo(1), eventCaseId: 2 }),
     ]),
   });
   const res = await request(app).get('/api/findings/attack-indication').set('Authorization', authHeader('viewer'));
@@ -99,6 +133,61 @@ test('worst first, then newest, and the one the bar links to is at the head', as
   assert.equal(res.body.findings[0].id, 'crit', 'a WARN outranked a CRIT on the bar');
   assert.equal(res.body.findings[0].eventCaseId, 12, 'the bar has nothing to link to');
   assert.deepEqual(res.body.bySeverity, { WARN: 2, CRIT: 1 });
+});
+
+// RED MEANS "WE ARE REASONABLY SURE". One detector saying "this source touched
+// a lot of ports" is a candidate, not a conclusion — the detector's own text
+// says a backup agent looks the same — so a WARN waits for a second detector.
+test('a lone WARN does not light the bar: corroboration is the rule', async () => {
+  const app = makeApp({
+    findingStore: storeWith([
+      // No event case at all: nothing has agreed with it yet.
+      F({ id: 'alone' }),
+      // A case, but the only other finding in it is the same detector again.
+      F({ id: 'twice-a', eventCaseId: 5 }),
+      F({ id: 'twice-b', eventCaseId: 5 }),
+      // A case whose other member is not an attack indication.
+      F({ id: 'with-fault', eventCaseId: 6 }),
+      F({ id: 'fault', metric: 'cpu', severity: 'CRIT', eventCaseId: 6 }),
+    ]),
+  });
+  const res = await request(app).get('/api/findings/attack-indication').set('Authorization', authHeader('viewer'));
+  assert.equal(res.body.count, 0, 'an uncorroborated WARN lit the red bar');
+});
+
+test('a WARN plus a second detector in the same event case does light it', async () => {
+  const app = makeApp({
+    findingStore: storeWith([
+      F({ id: 'scan', metric: 'net.scan', severity: 'WARN', eventCaseId: 9 }),
+      // INFO corroborates without being on the bar itself — exactly the shape
+      // of a scan next to a first-ever ASN from the same host.
+      F({ id: 'asn', metric: 'peer.new_asn', severity: 'INFO', eventCaseId: 9 }),
+    ]),
+  });
+  const res = await request(app).get('/api/findings/attack-indication').set('Authorization', authHeader('viewer'));
+  assert.equal(res.body.count, 1);
+  assert.equal(res.body.findings[0].id, 'scan');
+  assert.equal(res.body.findings[0].eventCaseId, 9);
+});
+
+test('a CRIT needs no second opinion', async () => {
+  const app = makeApp({ findingStore: storeWith([F({ id: 'crit', severity: 'CRIT' })]) });
+  const res = await request(app).get('/api/findings/attack-indication').set('Authorization', authHeader('viewer'));
+  assert.equal(res.body.count, 1);
+  assert.equal(res.body.worst, 'CRIT');
+});
+
+test('the bar is handed a summary that fits it AND the full explanation', async () => {
+  const long = 'A reached 400 distinct ports in 15 minutes — over the 50-port threshold. '
+    + 'Counted from flow metadata only (5-tuple), so this says what was touched, not what was sent. '
+    + 'A vulnerability scanner, an asset inventory or a backup agent walking the LAN looks the same: '
+    + 'if this source is one of yours, add it to SCAN_IGNORE_SOURCES.';
+  const app = makeApp({ findingStore: storeWith([F({ id: 'crit', severity: 'CRIT', explanation: long })]) });
+  const res = await request(app).get('/api/findings/attack-indication').set('Authorization', authHeader('viewer'));
+  const top = res.body.findings[0];
+  assert.ok(top.summary.length <= BAR_SUMMARY_MAX);
+  assert.ok(/[.…]$/.test(top.summary), `the bar was handed a cut-off sentence: ${top.summary}`);
+  assert.equal(top.explanation, long, 'the full text did not survive for the page behind the bar');
 });
 
 test('an acknowledged finding, an INFO one and a metric that is not an attack are all off the bar', async () => {

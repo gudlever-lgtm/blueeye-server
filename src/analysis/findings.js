@@ -3,6 +3,7 @@
 const crypto = require('crypto');
 const { applySeverity } = require('../events/severityRules');
 const { Severity, FindingKind } = require('./constants');
+const { CORROBORATION_EXEMPT_SEVERITIES, summarize } = require('./attackIndication');
 
 // Columns selected when reading findings back.
 const COLUMNS =
@@ -490,10 +491,17 @@ class FindingStore {
   // finding is the record, accepting it is the existing act of saying "seen",
   // and a bar with a private dismissal would let somebody clear the warning
   // without leaving a trace that they had.
-  async attackIndication({ metrics = [], prefixes = [], severities = [], since = null, limit = 5 } = {}) {
+  async attackIndication({
+    metrics = [], prefixes = [], severities = [], since = null, limit = 5,
+    // Severities that reach the bar on their own. Everything else needs a
+    // second detector to agree — see CORROBORATION below.
+    corroborationExempt = CORROBORATION_EXEMPT_SEVERITIES,
+  } = {}) {
     const exact = [...new Set((Array.isArray(metrics) ? metrics : []).filter((m) => typeof m === 'string' && m))];
     const pre = [...new Set((Array.isArray(prefixes) ? prefixes : []).filter((p) => typeof p === 'string' && p))];
     const sev = (Array.isArray(severities) ? severities : []).filter((x) => SEVERITIES_SET.has(x));
+    const exemptSev = [...new Set((Array.isArray(corroborationExempt) ? corroborationExempt : [])
+      .filter((x) => SEVERITIES_SET.has(x)))];
     // No membership test means every finding matches, which is the opposite of
     // what this is for. An empty answer is the honest one.
     if (!exact.length && !pre.length) return { count: 0, bySeverity: {}, worst: null, findings: [] };
@@ -503,15 +511,35 @@ class FindingStore {
     if (exact.length) { member.push('metric IN (?)'); memberParams.push(exact); }
     for (const p of pre) { member.push('metric LIKE ?'); memberParams.push(`${p}%`); }
 
-    const where = ['acked = 0', `(${member.join(' OR ')})`];
+    const sinceDate = since ? (since instanceof Date ? since : new Date(since)) : null;
+    const where = ['f.acked = 0', `(${member.map((m) => `f.${m}`).join(' OR ')})`];
     const params = [...memberParams];
-    if (sev.length) { where.push('severity IN (?)'); params.push(sev); }
-    if (since) { where.push('created_at >= ?'); params.push(since instanceof Date ? since : new Date(since)); }
+    if (sev.length) { where.push('f.severity IN (?)'); params.push(sev); }
+    if (sinceDate) { where.push('f.created_at >= ?'); params.push(sinceDate); }
+
+    // CORROBORATION (src/analysis/attackIndication.js says why). Anything not
+    // exempt by severity needs a second, OPEN attack-indication finding from a
+    // DIFFERENT detector in the same event case and the same window before it
+    // lights the bar. A finding the correlator has not placed in a case yet has
+    // nothing to agree with it, so it waits — the Changes feed and Analysis
+    // already carry it.
+    if (exemptSev.length) {
+      const exists = [`c.event_case_id = f.event_case_id`, 'c.acked = 0', 'c.id <> f.id', 'c.metric <> f.metric'];
+      const existsParams = [];
+      exists.push(`(${member.map((m) => `c.${m}`).join(' OR ')})`);
+      existsParams.push(...memberParams);
+      if (sinceDate) { exists.push('c.created_at >= ?'); existsParams.push(sinceDate); }
+      where.push(`(f.severity IN (?) OR (f.event_case_id IS NOT NULL AND EXISTS (
+        SELECT 1 FROM findings c WHERE ${exists.join(' AND ')}
+      )))`);
+      params.push(exemptSev, ...existsParams);
+    }
+
     const clause = `WHERE ${where.join(' AND ')}`;
     const n = Number.isInteger(limit) && limit > 0 ? Math.min(limit, 50) : 5;
 
     const [counts] = await this.pool.query(
-      `SELECT severity, COUNT(*) AS cnt FROM findings ${clause} GROUP BY severity`,
+      `SELECT f.severity AS severity, COUNT(*) AS cnt FROM findings f ${clause} GROUP BY f.severity`,
       params,
     );
     const bySeverity = {};
@@ -526,16 +554,19 @@ class FindingStore {
     // Worst first, then newest: the bar names one finding, and on a morning
     // with a scan and a beacon it should be the scan.
     const [rows] = await this.pool.query(
-      `SELECT ${LIGHT_COLUMNS}, explanation FROM findings ${clause}
-       ORDER BY severity = 'CRIT' DESC, created_at DESC, id LIMIT ?`,
+      `SELECT ${LIGHT_COLUMNS.split(', ').map((c) => `f.${c}`).join(', ')}, f.explanation FROM findings f ${clause}
+       ORDER BY f.severity = 'CRIT' DESC, f.created_at DESC, f.id LIMIT ?`,
       [...params, n],
     );
     const findings = rows.map((r) => ({
       ...mapLightRow(r),
-      // The sentence the bar's tooltip shows. Capped here rather than in the
-      // browser: an explanation is up to a few hundred characters and the bar
-      // is three pixels tall.
-      explanation: typeof r.explanation === 'string' ? r.explanation.slice(0, 400) : null,
+      // What the bar says, and what the finding says, are two different lengths.
+      // `summary` is whole sentences inside the strip's two lines; `explanation`
+      // is the detector's full text, which the event page the bar links to
+      // shows in full. Cutting the long one mid-word was the old behaviour and
+      // it put "…add it to" on screen with the rest nowhere.
+      summary: summarize(r.explanation),
+      explanation: typeof r.explanation === 'string' ? r.explanation : null,
     }));
     return {
       count,

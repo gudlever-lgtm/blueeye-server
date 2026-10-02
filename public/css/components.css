@@ -792,7 +792,11 @@
   line-height: 0;
   font-size: 0;
   overflow: hidden;
-  transition: height 120ms ease, font-size 120ms ease;
+  /* PADDING IS IN THE TRANSITION ON PURPOSE. Without it the hover state's
+     padding applied in one frame while the text was still font-size: 0, so a
+     mouse crossing the top edge produced a fat, empty red band for 120ms —
+     a false "something big just happened" on every stray pointer. */
+  transition: height 120ms ease, padding 120ms ease, font-size 120ms ease;
 }
 .attack-bar[hidden] { display: none; }
 .attack-bar:hover,
@@ -823,6 +827,19 @@
   0%, 100% { opacity: 1; }
   50% { opacity: 0.55; }
 }
+
+/* ---- The attack indication, in full, on the event page ---------------------
+   The red bar links to an event and shows one trimmed sentence. The panel it
+   lands on carries the detector's complete text, because the sentence that was
+   being cut off is the one explaining what would make the finding harmless.
+   The finding the bar actually opened is marked with a left edge in --bad; the
+   others in the same case are listed plainly beside it. */
+.attack-findings { list-style: none; margin: 0; padding: 0; }
+.attack-finding + .attack-finding { margin-top: var(--s-3); padding-top: var(--s-3);
+  border-top: 1px solid var(--border); }
+.attack-finding.flagged { border-left: 3px solid var(--bad); padding-left: var(--s-3); }
+.attack-finding-head { display: flex; align-items: center; flex-wrap: wrap; gap: var(--s-1); }
+.attack-finding-text { margin: var(--s-2) 0 0; font-size: var(--fs-sm); }
 
 /* ---- Page-load line ------------------------------------------------------
    Two pixels across the top of the viewport while the dashboard is waiting on

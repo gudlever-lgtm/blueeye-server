@@ -406,8 +406,8 @@ reads, so tuning the threshold moves the finding and the list together.
 
 A **3 px red line** across the top of the content column whenever an open,
 unacknowledged attack-indication finding of **WARN or worse** exists in the last
-24 hours. Hidden, and taking no space, when there is none — which is almost
-always.
+24 hours **and either is CRIT or has been corroborated** (below). Hidden, and
+taking no space, when there is none — which is almost always.
 
 - **Why a line and not a banner.** It has to be visible from across a room on a
   wall-mounted dashboard and cost nothing on every other day. A banner pushes
@@ -427,10 +427,55 @@ always.
   why raising it, in Settings or with a severity rule, is also how you make the
   line react to it.
 
+### Red means "we are reasonably sure": corroboration
+
+A single WARN is not sure. `net.scan` says one source touched a lot of ports,
+and the detector's own sentence then admits that a vulnerability scanner, an
+asset inventory or a backup agent walking the LAN looks exactly the same. A red
+line over a sentence that says "this is probably your backup agent" teaches an
+operator to stop reading the line.
+
+So a **WARN reaches the bar only when a second detector agrees**: another open
+attack-indication finding, with a **different metric**, in the **same event
+case**, inside the same 24-hour window. A scan beside a first-ever ASN from the
+same host is a story; a scan on its own is a candidate.
+
+- **A different metric**, because two `net.scan` findings in one case is one
+  detector saying the same thing twice — repetition, not corroboration.
+- **The corroborator may be INFO.** `peer.new_asn` is INFO by default and still
+  corroborates, without reaching the bar on its own.
+- **It must still be open.** Acknowledging the corroborating half takes the
+  other one off the bar: the agreement is what made it red.
+- **A finding with no event case waits.** The correlator (`src/eventCases/`) is
+  what places findings in a case; until it has, nothing has agreed with it. The
+  Changes feed and Analysis carry it in the meantime — it is not lost, it is
+  just not red.
+- **CRIT is exempt.** The critical thresholds exist precisely to name the cases
+  nobody needs a second opinion on, and waiting there would hold the bar back on
+  the one night it matters. The exemption is a parameter
+  (`corroborationExempt`), not a hard-coded severity.
+
+### What the strip says, and what the page says
+
+The strip shows a **summary**: whole sentences from the detector's explanation,
+cut to 240 characters on a sentence boundary — never mid-word. The old hard
+slice put "…add it to" on screen with the rest nowhere, and the half that was
+being cut is the half that says what would make the finding harmless.
+
+The **full** text lives on the event the bar opens, in its own
+**Attack indication** panel above everything else on that page, with the finding
+the bar actually opened marked "opened from the red line". The case's title is
+usually about something else — the correlator names the case after its primary
+fault — so without that panel the reader landed on a page about jitter and had
+to hunt a scan out of nine one-line anomalies.
+
 | Piece | Where |
 | --- | --- |
 | Which metrics count | `src/analysis/attackIndication.js` — the ONE list, also read by the changes feed and the event guide |
-| The query | `FindingStore.attackIndication()`, on `idx_findings_open` |
+| The query | `FindingStore.attackIndication()`, on `idx_findings_open` — the corroboration test is an `EXISTS` back onto `findings` over `event_case_id` |
+| The summary | `summarize()` in `src/analysis/attackIndication.js` (`BAR_SUMMARY_MAX`) |
+| The `attack` flag on an event's anomalies | `GET /api/events/:id`, from the same membership list |
+| The panel on the event page | `public/views/event.js`, `.attack-finding` in `public/css/components.css` |
 | The endpoint | `GET /api/findings/attack-indication` (viewer+), mounted before `/:id` |
 | The markup | `#attack-bar` in `public/index.html` |
 | The behaviour | `refreshAttackBar()` in `public/app.js` — every render, every live finding over the dashboard socket, and a 60 s poll |

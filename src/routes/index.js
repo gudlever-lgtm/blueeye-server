@@ -199,6 +199,8 @@ function createApiRouter({
   geoTileConfig,
   geoProvider,
   cityProvider = null,
+  hopLocationsRepo = null,
+  hopCorrections = null,
   geoipUpdater,
   centroids,
   assistant,
@@ -381,7 +383,7 @@ function createApiRouter({
     : null;
   if (findingStore) router.use('/api/findings', createFindingsRouter({ findingStore, timelineService: targetTimelineService, auditLogger, agentsRepo }));
   if (assistant) router.use('/api/assistant', createAssistantRouter({ assistant, featureGate, logger }));
-  if (flowsRepo) router.use('/api/geo', createGeoRouter({ flowsRepo, agentsRepo, findingStore, tileConfig: geoTileConfig, getMapConfig, geoProvider, featureGate }));
+  if (flowsRepo) router.use('/api/geo', createGeoRouter({ flowsRepo, agentsRepo, findingStore, tileConfig: geoTileConfig, getMapConfig, geoProvider, hopLocationsRepo, hopCorrections, featureGate }));
   if (dispatcher) router.use('/api/alerting', createAlertingRouter({ dispatcher }));
   router.use('/api/map', createMapRouter({ getMapConfig }));
   // Server-side geocoding proxy: the geocodeUrl stays server-side so
@@ -431,7 +433,7 @@ function createApiRouter({
     agentsRepo, resultsRepo, probeResultsRepo, agentCommander,
     assistant, auditLogger, logger,
   }));
-  if (probeResultsRepo) router.use('/api/probes', createProbesRouter({ probeResultsRepo, agentsRepo, geoProvider, cityProvider, centroids }));
+  if (probeResultsRepo) router.use('/api/probes', createProbesRouter({ probeResultsRepo, agentsRepo, geoProvider, cityProvider, centroids, hopCorrections }));
   if (probeResultsRepo) router.use('/api/fleet', createFleetRouter({ agentsRepo, probeResultsRepo, resultsRepo, speedtestResultsRepo, settingsService, healthAcksRepo, auditLogger, logger }));
   // Overview "open issues" rollup (license feature `dashboard_advanced`,
   // Professional+) — active events + recent findings, gated. Surfaced inline

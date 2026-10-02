@@ -227,6 +227,79 @@ position of its own: overriding the address's own answer collapsed whole paths
 onto the agent and hid what the data said. A filled-in hop never becomes an
 anchor, so a chain of small steps cannot creep a pin across a continent.
 
+**Does the path agree with itself?** (`src/geo/hopConsistency.js`). Everything
+above answers each hop ALONE, from what somebody published about its address
+block — and a block is registered where the operator's head office is, not where
+the rack is. The path knows better: three hops a millisecond apart are in one
+building, whatever their blocks say. So after the hops are placed and settled,
+each one is compared with the hop before and the hop after it. The bound is the
+same physics used against the agent, applied between hops: an RTT difference of
+*d* ms allows at most *d* × 100 km between them (+250 km slack, because both
+ends are now estimates).
+
+A hop is marked `place.suspect` when it disagrees with **both** neighbours while
+they agree with **each other** — one-sided disagreement is left alone, because
+at the end of a path "this hop is placed wrong" and "the path really does end in
+another country" look identical. The mark carries the evidence (`prev`/`next`
+with `distanceKm` and `allowedKm`) and a `suggestion`: where the nearer
+neighbour sits. A hop placed from a correction, from RIPE, or by `settlePath`
+is never second-guessed.
+
+**Nothing is moved on that evidence.** Moving a hop because its neighbours
+disagree is the mistake `settlePath` was written to avoid, and it hides the
+thing worth seeing — that the GeoIP data for this address is wrong. The map
+lists the suspect hops under the path (`pathSuspectNote` in `public/app.js`) and
+offers the one thing that does move a hop: writing down where it stands.
+
+## Correcting a hop (the server's own location table)
+
+`hop_locations` (migration 144) is what somebody KNOWS, as opposed to what a
+range file infers. It is the first candidate `locateHop` tries, ahead of the
+router name, city GeoIP and the country centroid, and the reply-time check never
+downgrades it: the person who runs the network outranks a published range.
+
+| Column | Meaning |
+| --- | --- |
+| `ip` + `prefix_len` | one address (`/32`) or a whole block (`/24`, down to `/8`). Longest prefix wins, the way routing works, so a `/32` exception inside a corrected `/24` behaves as expected |
+| `latitude`, `longitude` | where the router actually stands |
+| `city`, `country` | what to call it on the map (both optional) |
+| `source` | `manual` (somebody corrected it) or `ripe` (imported, below) |
+| `note` | why they know — shown next to the hop, so the next person does not re-litigate it |
+
+**In the UI.** Under a path map, each suspect hop has **Correct location**
+(operator+): a point picker that opens on what the neighbouring hops suggest, a
+choice between this address and the whole `/24`, and the city/country/note.
+`PUT /api/geo/hops` writes it, `DELETE /api/geo/hops?ip=&prefixLen=` goes back to
+what GeoIP says, `GET /api/geo/hops` lists them (viewer+). Every write reloads
+the in-memory index (`src/geo/hopCorrections.js`), so the next path drawn is
+already corrected — a correction that only took effect after a restart reads as
+"it did not work".
+
+**RIPE NCC `geoloc:`.** The RIPE database carries an optional attribute holding
+the coordinates the HOLDER of a block published for it — the operator saying
+where their own equipment is, in a European registry, in a file that can be read
+offline. `scripts/import-ripe-geoloc.js` streams a split file
+(`ftp.ripe.net/ripe/dbase/split/ripe.db.inetnum.gz`), takes the records that have
+one, converts each `inetnum` range to the prefixes that exactly cover it (never
+wider — that would move addresses the holder never claimed) and inserts them as
+`source = 'ripe'`:
+
+```
+node scripts/import-ripe-geoloc.js --dry-run ripe.db.inetnum.gz   # count first
+node scripts/import-ripe-geoloc.js ripe.db.inetnum.gz
+```
+
+`INSERT IGNORE`, so an import never overwrites a manual correction. Most holders
+leave the attribute out, so this seeds the table rather than replacing GeoIP.
+Private space in the registry is skipped, like everywhere else here.
+
+**Not IPinfo.** The obvious alternative is a commercial GeoIP aggregator API,
+and the ones usually reached for (IPinfo among them) are US companies — ruled
+out by the no-US-vendor rule this product is built on, and by the fact that a
+runtime API call would send every router address a customer traces to a third
+party. RIPE's published data is the European, offline answer to the same
+question.
+
 **Is the agent where its site says?** (`src/geo/hostingNetworks.js`). Every
 distance is measured from the agent's site. When the first public hop belongs
 to a cloud or hosting provider (DigitalOcean, AWS, Google Cloud, Azure,

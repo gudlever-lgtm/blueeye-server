@@ -17,6 +17,7 @@ const { makeServiceTests } = require('./serviceTestsFakes');
 const { summarize } = require('../src/analysis/attackIndication');
 const { createConnectorRegistry } = require('../src/integrations/connectors');
 const { createCmdbConnectorRegistry } = require('../src/cmdb/connectors');
+const { createHopCorrections } = require('../src/geo/hopCorrections');
 const { createPlanService } = require('../src/license/planService');
 const { createUsageService } = require('../src/services/usageService');
 const { createAuditLogger } = require('../src/services/complianceLogger');
@@ -4207,7 +4208,45 @@ function makeSeverityRulesRepo(seed = []) {
   };
 }
 
+// hop_locations (migration 144) — the server's own hop positions. In-memory,
+// so a route test can write a correction and read it back.
+function makeHopLocationsRepo(overrides = {}) {
+  const rows = new Map(); // "ip/len" -> row
+  const key = (ip, len) => `${ip}/${len}`;
+  return {
+    all: async () => [...rows.values()].sort((a, b) => b.prefixLen - a.prefixLen),
+    find: async (ip, prefixLen = 32) => rows.get(key(ip, prefixLen)) || null,
+    upsert: async (r) => {
+      const row = {
+        ip: r.ip, prefixLen: r.prefixLen == null ? 32 : r.prefixLen,
+        lat: r.lat, lng: r.lng, city: r.city || null, country: r.country || null,
+        source: r.source || 'manual', note: r.note || null,
+        createdBy: r.createdBy == null ? null : r.createdBy, createdByName: null,
+        createdAt: new Date(), updatedAt: new Date(),
+      };
+      rows.set(key(row.ip, row.prefixLen), row);
+      return row;
+    },
+    insertManyIgnore: async (list = []) => {
+      let n = 0;
+      for (const r of list) {
+        const k = key(r.ip, r.prefixLen == null ? 32 : r.prefixLen);
+        if (rows.has(k)) continue;
+        rows.set(k, { ...r, prefixLen: r.prefixLen == null ? 32 : r.prefixLen });
+        n += 1;
+      }
+      return n;
+    },
+    remove: async (ip, prefixLen = 32) => (rows.delete(key(ip, prefixLen)) ? 1 : 0),
+    ...overrides,
+  };
+}
+
 function makeApp(overrides = {}) {
+  // hop_locations + the in-memory index the geo layer reads: wired to each
+  // other, so a correction written through the API is live immediately, the
+  // way it is on the real server.
+  const hopLocationsRepo = overrides.hopLocationsRepo === undefined ? makeHopLocationsRepo() : overrides.hopLocationsRepo;
   const releaseKeyService = overrides.releaseKeyService || makeReleaseKeyService();
   // Resolve the deps the plan/usage services build on, so the (real) services
   // can wrap them. Default plan resolution lands on the internal 'licensed'
@@ -4405,6 +4444,8 @@ function makeApp(overrides = {}) {
     probePipeline: overrides.probePipeline || makeProbePipeline(),
     flowPipeline: overrides.flowPipeline || makeFlowPipeline(),
     flowsRepo: overrides.flowsRepo || makeFlowsRepo(),
+    hopLocationsRepo,
+    hopCorrections: overrides.hopCorrections === undefined ? createHopCorrections({ repo: hopLocationsRepo }) : overrides.hopCorrections,
     // The shared port-scan thresholds (src/analysis/scanDetector.js). null by
     // default, which is the deployment without them: the flow explorer then
     // reports the historical 50/50.
@@ -4606,6 +4647,7 @@ const throwingAsync = (message = 'simulated database failure') => async () => {
 };
 
 module.exports = {
+  makeHopLocationsRepo,
   FAKE_RELEASE_KEYPAIR,
   makeDiagnoseSessionsRepo,
   makeSeverityRulesRepo,

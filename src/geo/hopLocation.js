@@ -5,7 +5,15 @@ const { placeFromHostname, cleanHostname } = require('./hostnameHints');
 
 // Where to draw one traceroute hop on the map, and how sure we are.
 //
-// Three sources, best first:
+// Four sources, best first:
+//   0. manual/ripe   what somebody WROTE DOWN about this address: an operator's
+//                    correction, or the `geoloc:` the block holder published in
+//                    the RIPE NCC database (`hop_locations`, migration 144,
+//                    held in memory by hopCorrections.js). The only source that
+//                    is a statement rather than an inference, so it wins
+//                    outright and the reply-time check never downgrades it —
+//                    overruling the person who runs the network with a range
+//                    file is how the wrong pin got there in the first place.
 //   1. rdns          the router's own name says its city (hostnameHints.js).
 //                    Operators name routers after where they stand, so this is
 //                    the most precise source there is for a transit hop.
@@ -94,7 +102,7 @@ const EMPTY = Object.freeze({
   hostname: null, place: null, rejected: null, withinKm: null, alternatives: null,
 });
 
-//   locateHop({ ip, hostname, rttMs }, { geoProvider, cityProvider, centroids, origin })
+//   locateHop({ ip, hostname, rttMs }, { corrections, geoProvider, cityProvider, centroids, origin })
 //     rttMs    the lowest RTT seen for the hop (the tightest bound)
 //     origin   { lat, lng } of the agent's site
 //   -> { country, asn, asnName,            GeoIP registration (unchanged meaning)
@@ -103,7 +111,7 @@ const EMPTY = Object.freeze({
 //        rejected: [{ source, city, country, distanceKm, maxKm }] | null,
 //        hostname, private }
 function locateHop({ ip = null, hostname = null, rttMs = null } = {}, {
-  geoProvider = null, cityProvider = null, centroids = null, origin = null,
+  geoProvider = null, cityProvider = null, centroids = null, origin = null, corrections = null,
 } = {}) {
   const name = cleanHostname(hostname);
   if (!ip) return { ...EMPTY, hostname: name };
@@ -119,6 +127,16 @@ function locateHop({ ip = null, hostname = null, rttMs = null } = {}, {
   };
 
   const candidates = [];
+  // What somebody wrote down about this address beats everything inferred.
+  const fixed = corrections && typeof corrections.lookup === 'function' ? corrections.lookup(ip) : null;
+  if (fixed && Number.isFinite(fixed.lat) && Number.isFinite(fixed.lng)) {
+    candidates.push({
+      city: fixed.city || null, country: fixed.country || out.country || null,
+      lat: fixed.lat, lng: fixed.lng, precision: 'city',
+      source: fixed.source === 'ripe' ? 'ripe' : 'manual',
+      note: fixed.note || null, trusted: true,
+    });
+  }
   const fromName = name ? placeFromHostname(name) : null;
   if (fromName) candidates.push({ ...fromName, precision: 'city', source: 'rdns' });
   const fromCity = cityProvider && typeof cityProvider.lookup === 'function' ? cityProvider.lookup(ip) : null;
@@ -133,13 +151,14 @@ function locateHop({ ip = null, hostname = null, rttMs = null } = {}, {
   const c = candidates[0];
   if (c) {
     const reachKm = c.precision === 'country' ? countryReachKm(c.country) : 0;
-    const asPoint = feasible(origin, c, rttMs);
+    const asPoint = c.trusted ? true : feasible(origin, c, rttMs);
     const asRegion = reachKm > 0 ? feasible(origin, c, rttMs, reachKm) : asPoint;
     const certainty = asPoint !== false ? 'exact' : (asRegion !== false ? 'approximate' : 'registration');
     out.lat = c.lat;
     out.lng = c.lng;
     out.place = { city: c.city, country: c.country, precision: c.precision, source: c.source, certainty };
     if (c.code) out.place.code = c.code;
+    if (c.note) out.place.note = c.note;
     if (certainty !== 'exact') {
       out.place.offByKm = Math.max(0, Math.round(haversineKm(origin, c) - maxDistanceKm(rttMs)));
       // What the reply time proves on its own, whatever the address says.

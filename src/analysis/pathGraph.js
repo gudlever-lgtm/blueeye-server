@@ -1,6 +1,7 @@
 'use strict';
 
 const { locateHop, settlePath } = require('../geo/hopLocation');
+const { checkNeighbours } = require('../geo/hopConsistency');
 const { cloudOrigin } = require('../geo/hostingNetworks');
 
 // Turns a set of traceroute probe results (repeated runs to one target) into a
@@ -101,7 +102,7 @@ function fastestOf(h) {
 // ICMP path and a working TCP path to the same host are two different findings.
 const PATH_PROBE_TYPES = Object.freeze(['traceroute', 'tcptraceroute']);
 
-function buildPathGraph(results, { geoProvider = null, cityProvider = null, centroids = null, target = null, origin = null } = {}) {
+function buildPathGraph(results, { geoProvider = null, cityProvider = null, centroids = null, corrections = null, target = null, origin = null } = {}) {
   const runs = (Array.isArray(results) ? results : [])
     .filter((r) => r && PATH_PROBE_TYPES.includes(r.type) && Array.isArray(r.hops));
   const tsList = runs.map((r) => (r.ts ? new Date(r.ts).getTime() : null)).filter((n) => n != null);
@@ -150,7 +151,7 @@ function buildPathGraph(results, { geoProvider = null, cityProvider = null, cent
   const originLat = origin && Number.isFinite(origin.lat) ? origin.lat : null;
   const originLng = origin && Number.isFinite(origin.lng) ? origin.lng : null;
   const geoOrigin = originLat != null && originLng != null ? { lat: originLat, lng: originLng } : null;
-  const geoDeps = { geoProvider, cityProvider, centroids, origin: geoOrigin };
+  const geoDeps = { geoProvider, cityProvider, centroids, corrections, origin: geoOrigin };
   const nodes = [{
     index: 0, kind: 'source', hop: 0, ip: null, label: (origin && origin.label) || 'Agent',
     country: null, asn: null, asnName: null, lat: originLat, lng: originLng,
@@ -206,10 +207,17 @@ function buildPathGraph(results, { geoProvider = null, cityProvider = null, cent
 
   // Second pass: place what GeoIP could not by the path itself — a reply only a
   // millisecond or two behind a placed hop came from the same place.
-  settlePath(nodes.filter((n) => n.kind !== 'source').map((n) => ({
+  const settled = nodes.filter((n) => n.kind !== 'source').map((n) => ({
     hop: n.hop, rttMs: n.ip && fastest.has(n.ip) ? fastest.get(n.ip) : n.rttMs, node: n,
-  })), { origin: geoOrigin });
+  }));
+  settlePath(settled, { origin: geoOrigin });
   for (const n of nodes) if (n.kind !== 'source') n.placeCertainty = n.place ? (n.place.certainty || 'exact') : null;
+
+  // Third pass: read the path as evidence about its own hops. A hop that
+  // disagrees with BOTH neighbours while they agree with each other is marked
+  // `place.suspect` — GeoIP is probably wrong about it, and the operator can
+  // write down the right answer (src/geo/hopConsistency.js).
+  const suspectHops = checkNeighbours(settled, { origin: geoOrigin });
 
   // Is the agent where its site says? A first public hop inside a cloud
   // provider, a few ms away, says it runs in that provider's data centre.
@@ -245,7 +253,7 @@ function buildPathGraph(results, { geoProvider = null, cityProvider = null, cent
 
   const branches = buildBranches(runs, byPos, maxPos, { ...geoDeps, names, fastest });
 
-  return { ...meta, worstHopIndex, nodes, links, branches, originHint };
+  return { ...meta, worstHopIndex, nodes, links, branches, originHint, suspectHops };
 }
 
 // ECMP / multipath inference, from the runs already stored. Load-balancers make
@@ -264,7 +272,7 @@ function buildPathGraph(results, { geoProvider = null, cityProvider = null, cent
 //     edges: [{ fromHop, fromIp, toHop, toIp, runs }],
 //   }
 function buildBranches(runs, byPos, maxPos, {
-  geoProvider = null, cityProvider = null, centroids = null, origin = null, names = new Map(), fastest = new Map(),
+  geoProvider = null, cityProvider = null, centroids = null, corrections = null, origin = null, names = new Map(), fastest = new Map(),
 } = {}) {
   // Per (position, ip): accumulate the samples so each branch carries its own
   // aggregated metrics, exactly like the linear nodes but split by IP.
@@ -328,7 +336,7 @@ function buildBranches(runs, byPos, maxPos, {
       const rttMs = round(median(b.rtt));
       const jitterMs = round(median(b.jitter));
       const lossPct = round(median(b.loss));
-      const geo = enrichGeo(ip, { geoProvider, cityProvider, centroids, origin }, { hostname: names.get(ip) || null, rttMs: fastest.has(ip) ? fastest.get(ip) : null });
+      const geo = enrichGeo(ip, { geoProvider, cityProvider, centroids, corrections, origin }, { hostname: names.get(ip) || null, rttMs: fastest.has(ip) ? fastest.get(ip) : null });
       const { severity, reason } = classify({ lossPct, jitterMs, rttMs, responded: b.responded, unresponsive: false });
       ips.push({
         ip, asn: geo.asn, asnName: geo.asnName, country: geo.country, private: geo.private,
@@ -492,7 +500,7 @@ function describeWorse({ lossBefore, lossNow, hopLossBefore, hopLossNow, silentB
 // no medians: the numbers are the hop's own. Geo follows the same rule as the
 // graph — public addresses only, the same name → city → country order and the
 // same speed-of-light check (origin = the agent's site, when known).
-function describeLiveHop(h, { geoProvider = null, cityProvider = null, centroids = null, origin = null } = {}) {
+function describeLiveHop(h, { geoProvider = null, cityProvider = null, centroids = null, corrections = null, origin = null } = {}) {
   const hop = Number(h && h.hop);
   if (!Number.isInteger(hop) || hop < 1 || hop > 64) return null;
   const ip = typeof h.ip === 'string' && h.ip.length <= 64 ? h.ip : null;
@@ -503,7 +511,7 @@ function describeLiveHop(h, { geoProvider = null, cityProvider = null, centroids
   const responded = rttMs != null ? 1 : 0;
   const unresponsive = responded === 0;
   const { severity, reason } = classify({ lossPct, jitterMs, rttMs, responded, unresponsive });
-  const geo = enrichGeo(ip, { geoProvider, cityProvider, centroids, origin }, { hostname: h.hostname, rttMs: num(h.minMs) ?? rttMs });
+  const geo = enrichGeo(ip, { geoProvider, cityProvider, centroids, corrections, origin }, { hostname: h.hostname, rttMs: num(h.minMs) ?? rttMs });
   return {
     kind: 'hop', hop, ip, label: ip || '* * *',
     country: geo.country, asn: geo.asn, asnName: geo.asnName, lat: geo.lat, lng: geo.lng, private: geo.private,
@@ -536,7 +544,12 @@ function createLiveTraces({ ttlMs = 5 * 60 * 1000, maxTraces = 500, now = () => 
     t.at = now();
     t.raw.set(node.hop, clone(node));
     const copies = [...t.raw.values()].map(clone);
-    settlePath(copies.map((n) => ({ hop: n.hop, rttMs: n.fastestMs, node: n })), { origin });
+    const items = copies.map((n) => ({ hop: n.hop, rttMs: n.fastestMs, node: n }));
+    settlePath(items, { origin });
+    // The same neighbour cross-check the finished path gets, on what has
+    // arrived so far: a hop only becomes suspect once the hop AFTER it has
+    // replied, which is exactly when the live list can say so.
+    checkNeighbours(items, { origin });
     const out = copies.find((n) => n.hop === node.hop);
     const hint = origin && origin.source === 'agent'
       ? null

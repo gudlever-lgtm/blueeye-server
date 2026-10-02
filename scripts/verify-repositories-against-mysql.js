@@ -1889,6 +1889,45 @@ check('snmp devices: system group + hardware kept with COALESCE, inventory repla
   assert.strictEqual((await devices.findBySerial('FOC%')).length, 0, 'a % in the query is a literal, not a wildcard');
 });
 
+check('hop locations: an upsert that keeps the first writer, a longest-prefix read, an import that never overwrites (migration 144)', async (pool) => {
+  const { createHopLocationsRepository } = require(path.join(ROOT, 'src/repositories/hopLocationsRepository'));
+  const repo = createHopLocationsRepository({ pool });
+  const [user] = await pool.query(
+    'INSERT INTO users (email, name, password_hash, role) VALUES (?, ?, ?, ?)',
+    ['hops@example.dk', 'Hop Corrector', 'x', 'operator'],
+  );
+
+  const block = await repo.upsert({
+    ip: '193.162.153.0', prefixLen: 24, lat: 55.6761, lng: 12.5683,
+    city: 'Copenhagen', country: 'DK', note: 'measured from HQ', createdBy: user.insertId,
+  });
+  assert.strictEqual(block.source, 'manual');
+  assert.strictEqual(block.lat, 55.6761, 'DECIMAL(9,6) came back as something else');
+  assert.strictEqual(block.createdByName, 'Hop Corrector', 'the user JOIN is wrong');
+
+  // A /32 exception inside the corrected block, and the read that the in-memory
+  // index depends on: longest prefix FIRST.
+  await repo.upsert({ ip: '193.162.153.9', prefixLen: 32, lat: 56.1629, lng: 10.2039, city: 'Aarhus', country: 'DK' });
+  const all = await repo.all();
+  assert.deepStrictEqual(all.map((r) => r.prefixLen), [32, 24], 'the longest prefix is not read first');
+
+  // An import never overwrites what a person wrote down.
+  const written = await repo.insertManyIgnore([
+    { ip: '193.162.153.0', prefixLen: 24, lat: 1.3521, lng: 103.8198, country: 'SG', source: 'ripe' },
+    { ip: '80.0.0.0', prefixLen: 8, lat: 52.3676, lng: 4.9041, country: 'NL', source: 'ripe' },
+  ]);
+  assert.strictEqual(written, 1, 'INSERT IGNORE overwrote a manual correction');
+  assert.strictEqual((await repo.find('193.162.153.0', 24)).city, 'Copenhagen');
+  assert.strictEqual((await repo.find('80.0.0.0', 8)).source, 'ripe');
+
+  // A correction outlives the account that made it.
+  await pool.query('DELETE FROM users WHERE id = ?', [user.insertId]);
+  assert.strictEqual((await repo.find('193.162.153.0', 24)).createdBy, null, 'the FK is not ON DELETE SET NULL');
+
+  assert.strictEqual(await repo.remove('193.162.153.9', 32), 1);
+  assert.strictEqual(await repo.remove('193.162.153.9', 32), 0);
+});
+
 async function main() {
   const admin = await mysql.createConnection({ host: HOST, port: PORT, user: USER, password: PASSWORD });
   let failures = 0;

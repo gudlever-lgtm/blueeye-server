@@ -115,6 +115,8 @@ const { createScanDetector, loadScanConfig } = require('./analysis/scanDetector'
 const { createNewPeerDetector, loadNewPeerConfig } = require('./analysis/newPeerDetector');
 const { createBeaconDetector, loadBeaconConfig } = require('./analysis/beaconDetector');
 const { createKnownPeersRepository } = require('./repositories/knownPeersRepository');
+const { createHopLocationsRepository } = require('./repositories/hopLocationsRepository');
+const { createHopCorrections } = require('./geo/hopCorrections');
 const { createDiscoveredDevicesRepository } = require('./repositories/discoveredDevicesRepository');
 const { createDiscoverySweepJob } = require('./discovery/discoverySweepJob');
 const {
@@ -1158,6 +1160,18 @@ function start() {
   // traceroute maps use it, as the fallback when a router's name does not say
   // where it stands. Streams in the background; lookups answer null meanwhile.
   const cityProvider = createCityProvider({ dbPath: config.geo.cityDbPath, logger });
+  // The server's OWN hop locations (hop_locations, migration 144): an
+  // operator's correction, or a `geoloc:` imported from the RIPE NCC database.
+  // Consulted BEFORE every GeoIP source when a traceroute hop is placed, and
+  // held in memory because placement is synchronous and runs per hop per path.
+  // The initial load is best-effort for the same reason every geo source is —
+  // an empty index draws the GeoIP answer, it never breaks a path.
+  const hopLocationsRepo = createHopLocationsRepository(db);
+  const hopCorrections = createHopCorrections({ repo: hopLocationsRepo, logger });
+  hopCorrections.reload().then(
+    (n) => { if (n) logger.info({ corrections: n }, 'hop location corrections loaded'); },
+    (err) => logger.warn({ err }, 'hop location corrections could not be loaded'),
+  );
 
   // Active-probe analysis: derive findings (reachability/loss/latency/jitter/cert/
   // AS-path change) from probe-results on ingest, alongside the traffic detector
@@ -1535,6 +1549,8 @@ function start() {
     geoTileConfig: config.geo,
     geoProvider,
     cityProvider,
+    hopLocationsRepo,
+    hopCorrections,
     geoipUpdater,
     centroids,
     assistant,
@@ -1721,7 +1737,7 @@ function start() {
     // (createLiveTraces), so the live path is placed like the finished one.
     describeTraceHop: async (hop, agentId, { probeType = '', target = '' } = {}) => {
       const origin = await liveTraceOrigin(agentId);
-      const node = describeLiveHop(hop, { geoProvider, cityProvider, centroids, origin });
+      const node = describeLiveHop(hop, { geoProvider, cityProvider, centroids, corrections: hopCorrections, origin });
       return liveTraces.settle(`${agentId}|${probeType}|${target}`, node, origin);
     },
     // Transaction-test channel: config push on connect/change + result ingest +

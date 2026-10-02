@@ -232,7 +232,12 @@ async function apiRequest(path, { method, body }) {
   // message instead of tearing the session down.
   if (res.status === 401 && path !== '/auth/login' && path !== '/auth/change-password') {
     logout();
-    throw new Error('Session expired — please log in again.');
+    // Marked so callers can tell "the session ended" apart from "this endpoint
+    // failed". A licence read that 401s says nothing about the licence.
+    const err = new Error('Session expired — please log in again.');
+    err.status = 401;
+    err.sessionExpired = true;
+    throw err;
   }
   // Baseline security (Settings → Authentication → Security): an expired
   // password holds the session to the change screen; an address outside the
@@ -290,7 +295,10 @@ async function authedFetch(path, init = {}) {
   });
   if (res.status === 401) {
     logout();
-    throw new Error('Session expired — please log in again.');
+    const err = new Error('Session expired — please log in again.');
+    err.status = 401;
+    err.sessionExpired = true;
+    throw err;
   }
   return res;
 }
@@ -415,6 +423,9 @@ let planLoadedAt = 0;
 function invalidateFeatures() {
   licenseFeatures = null; featuresLoadedAt = 0;
   licensePlan = null; planLoadedAt = 0;
+  // The failure state belongs to the reads being dropped. Keeping it would let
+  // one session's failure warn the next user who logs in in this browser tab.
+  featuresLoadFailed = false; planLoadFailed = false; licenseWarningShown = false;
 }
 // Set when the last licence read FAILED (as opposed to succeeding with an
 // empty map). The two are not the same thing and used to be indistinguishable:
@@ -422,16 +433,23 @@ function invalidateFeatures() {
 // failed read silently greys out modules the customer has actually paid for,
 // with nothing in the UI and nothing in the log. The flag drives a one-time
 // warning, and the failure is captured into the client log like any other.
-let licenseLoadFailed = false;
+// A 401 is NOT one of those failures: it means the session ended (an expired
+// token at page load, or one that expired mid-session), the client has already
+// logged out, and the licence was never consulted. Flagging it put the warning
+// on the login screen of a perfectly licensed server.
+let featuresLoadFailed = false;
+let planLoadFailed = false;
+function licenceUnreadable() { return featuresLoadFailed || planLoadFailed; }
 async function loadFeatures() {
   if (licenseFeatures && Date.now() - featuresLoadedAt < FEATURES_TTL_MS) return licenseFeatures;
   try {
     licenseFeatures = await api('/license/features');
     featuresLoadedAt = Date.now();
-    licenseLoadFailed = false;
+    featuresLoadFailed = false;
   } catch (e) {
     if (!licenseFeatures) licenseFeatures = {};
-    licenseLoadFailed = true;
+    if (e && e.sessionExpired) return licenseFeatures;
+    featuresLoadFailed = true;
     recordClientLog('error', `Could not read /license/features: ${e.message}`);
   }
   return licenseFeatures;
@@ -441,9 +459,11 @@ async function loadPlan() {
   try {
     licensePlan = await api('/license/plan');
     planLoadedAt = Date.now();
+    planLoadFailed = false;
   } catch (e) {
     if (!licensePlan) licensePlan = {};
-    licenseLoadFailed = true;
+    if (e && e.sessionExpired) return licensePlan;
+    planLoadFailed = true;
     recordClientLog('error', `Could not read /license/plan: ${e.message}`);
   }
   return licensePlan;
@@ -454,7 +474,7 @@ async function loadPlan() {
 // the client log keeps the full history.
 let licenseWarningShown = false;
 function warnIfLicenceUnreadable() {
-  if (!licenseLoadFailed || licenseWarningShown) return;
+  if (!licenceUnreadable() || licenseWarningShown) return;
   licenseWarningShown = true;
   toast(t('license.loadFailed'), true);
 }
@@ -20571,6 +20591,10 @@ async function render({ silent = false } = {}) {
   $('#app').classList.remove('hidden');
   connectLive(); // live findings channel (idempotent)
   await loadProfile(); // apply the user's saved colour theme (once per session)
+  // loadProfile() swallows its own errors, including the 401 that logs an
+  // expired token out. If that happened we are on the login screen now, so stop
+  // here rather than firing unauthenticated licence reads into another 401.
+  if (!token) return;
   await Promise.all([loadFeatures(), loadPlan()]);
   applyFeatureVisibility(); // dim modules the licence excludes (tied to the active plan)
   warnIfLicenceUnreadable(); // ...and say so once if we could not read it at all

@@ -748,8 +748,16 @@
       // Mounted ONCE. A period change redraws the markers and retitles the
       // panel; rebuilding the map would throw away the reader's pan and zoom,
       // which is the one thing a map is for.
+      // Says how many of the destinations the map can actually draw. They are
+      // placed by country, so one without a country is table-only — and a
+      // silent gap between "67 destinations" and an empty map is the worst
+      // version of that.
       function mapNote() {
-        return t('dest.mapNote', { n: dests.length, bytes: deps.fmtBytes(totalBytes()) });
+        var placed = dests.filter(function (d) { return d.lat != null && d.lng != null; }).length;
+        var base = t('dest.mapNote', { n: dests.length, bytes: deps.fmtBytes(totalBytes()) });
+        return placed < dests.length
+          ? base + t('dest.mapNote.unplaced', { n: dests.length - placed })
+          : base;
       }
       function drawMap() {
         if (!deps.hasMapLibrary()) {

@@ -69,6 +69,29 @@ test('externalDestinations carry no raw/RFC1918 addresses (aggregates only)', as
   }
 });
 
+test('GET /api/geo/overview places every destination at its country centroid', async () => {
+  const centroids = { get: (c) => (c === 'DE' ? { lat: 51.1, lng: 10.4 } : null) };
+  const app = makeApp({ flowsRepo: geoFlowsRepo(), agentsRepo: geoAgents(), centroids });
+  const res = await request(app).get('/api/geo/overview').set('Authorization', viewer());
+  assert.equal(res.status, 200);
+  const de = res.body.externalDestinations.find((d) => d.country === 'DE');
+  const us = res.body.externalDestinations.find((d) => d.country === 'US');
+  // Without coordinates the dashboard drops the destination from the map, so
+  // this is what makes the circle — and the dragged-region selection — exist.
+  assert.equal(de.lat, 51.1);
+  assert.equal(de.lng, 10.4);
+  // An unknown country stays table-only rather than being placed at [0, 0].
+  assert.equal(us.lat, null);
+  assert.equal(us.lng, null);
+});
+
+test('GET /api/geo/overview without a centroid table still answers (map-less, 200)', async () => {
+  const app = makeApp({ flowsRepo: geoFlowsRepo(), agentsRepo: geoAgents() });
+  const res = await request(app).get('/api/geo/overview').set('Authorization', viewer());
+  assert.equal(res.status, 200);
+  assert.equal(res.body.externalDestinations[0].lat, null);
+});
+
 test('GET /api/geo/overview rejects an invalid since (400) and bad hostId (400)', async () => {
   const app = makeApp({ flowsRepo: geoFlowsRepo(), agentsRepo: geoAgents() });
   assert.equal((await request(app).get('/api/geo/overview?since=not-a-date').set('Authorization', viewer())).status, 400);

@@ -388,7 +388,7 @@ function createApiRouter({
     : null;
   if (findingStore) router.use('/api/findings', createFindingsRouter({ findingStore, timelineService: targetTimelineService, auditLogger, agentsRepo }));
   if (assistant) router.use('/api/assistant', createAssistantRouter({ assistant, featureGate, logger }));
-  if (flowsRepo) router.use('/api/geo', createGeoRouter({ flowsRepo, agentsRepo, findingStore, tileConfig: geoTileConfig, getMapConfig, geoProvider, hopLocationsRepo, hopCorrections, featureGate }));
+  if (flowsRepo) router.use('/api/geo', createGeoRouter({ flowsRepo, agentsRepo, findingStore, tileConfig: geoTileConfig, getMapConfig, geoProvider, hopLocationsRepo, hopCorrections, centroids, featureGate }));
   if (dispatcher) router.use('/api/alerting', createAlertingRouter({ dispatcher }));
   router.use('/api/map', createMapRouter({ getMapConfig }));
   // Server-side geocoding proxy: the geocodeUrl stays server-side so

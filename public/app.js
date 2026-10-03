@@ -12063,7 +12063,10 @@ let sitesTab = 'map';
 
 // ---- Destinations map (internal sites + external destinations + selection) ----
 const geoState = { map: null, ext: null, hosts: null, rect: null, dests: [], internalHosts: [], sinceIso: '',
-  selecting: false, rectStart: null, healthByHost: null, traces: new Map(), config: null, mapOpts: null };
+  selecting: false, rectStart: null, healthByHost: null, traces: new Map(), config: null, mapOpts: null,
+  // destination -> the circle drawn for it, so a dragged region can ask the
+  // cluster group where that destination is actually VISIBLE right now.
+  destMarkers: [] };
 
 // Drops the Leaflet objects, keeping the data they were drawn from: mounting a
 // new map has to tear the old one down WITHOUT throwing away the overview it is
@@ -12072,6 +12075,7 @@ function teardownGeoMap() {
   if (geoState.map) { try { geoState.map.remove(); } catch { /* ignore */ } }
   geoState.map = null; geoState.ext = null; geoState.hosts = null; geoState.rect = null;
   geoState.selecting = false; geoState.rectStart = null; geoState.traces = new Map();
+  geoState.destMarkers = [];
 }
 function stopGeo() {
   teardownGeoMap();
@@ -12103,6 +12107,7 @@ function drawGeoMarkers(opts) {
   if (!geoState.ext || !geoState.hosts) return;
   geoState.ext.clearLayers();
   geoState.hosts.clearLayers();
+  geoState.destMarkers = [];
   for (const h of geoState.internalHosts || []) {
     if (h.lat == null || h.lng == null) continue;
     const status = (geoState.healthByHost && geoState.healthByHost.get(h.hostId))
@@ -12124,6 +12129,7 @@ function drawGeoMarkers(opts) {
     c.bindTooltip(`${destTitleOf(d)} — ${fmtBytes(d.bytes)}`);
     c.on('click', () => opts.onDestination(d));
     geoState.ext.addLayer(c);
+    geoState.destMarkers.push({ d, marker: c });
   }
 }
 function destTitleOf(d) {
@@ -12168,12 +12174,50 @@ function mountGeoMap(canvas, opts) {
       geoState.selecting = false;
       map.dragging.enable();
       map.boxZoom.enable();
-      opts.onRegion(geoState.dests.filter((d) => b.contains([d.lat, d.lng])));
+      opts.onRegion(destsInBox(b));
       clearGeoRegion();
     });
 
     drawGeoMarkers(opts);
   }, 0);
+}
+
+// Hit-testing a dragged box against the destinations. Two things make the plain
+// `bounds.contains([lat, lng])` wrong here:
+//
+//  * The map wraps. Pan past the dateline and the box comes back with
+//    longitudes like 300 or -420 while the destinations still sit in
+//    -180..180 — every test misses although the circles are plainly inside.
+//  * The circles are CLUSTERED. What the reader draws a box around is usually
+//    a cluster bubble sitting at the average of its children, so the
+//    destination they can see inside the box may have coordinates outside it.
+//
+// So test the destination's own position across world copies, and the position
+// of the cluster bubble it is currently folded into.
+function boxHasLatLng(b, lat, lng) {
+  if (lat == null || lng == null) return false;
+  if (lat < b.getSouth() || lat > b.getNorth()) return false;
+  const west = b.getWest();
+  const east = b.getEast();
+  for (let shift = -360; shift <= 360; shift += 360) {
+    const x = Number(lng) + shift;
+    if (x >= west && x <= east) return true;
+  }
+  return false;
+}
+function visibleMarker(marker) {
+  const group = geoState.ext;
+  if (!group || typeof group.getVisibleParent !== 'function') return null;
+  try { return group.getVisibleParent(marker); } catch { return null; }
+}
+function destsInBox(b) {
+  return (geoState.destMarkers || []).filter(({ d, marker }) => {
+    if (boxHasLatLng(b, d.lat, d.lng)) return true;
+    const p = visibleMarker(marker);
+    if (!p || p === marker) return false;
+    const ll = p.getLatLng();
+    return boxHasLatLng(b, ll.lat, ll.lng);
+  }).map((x) => x.d);
 }
 
 function beginRegionSelect() {

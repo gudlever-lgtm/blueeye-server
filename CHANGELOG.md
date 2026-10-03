@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.222.0 — Every hop correction on one screen
+
+The corrections went in with no way to see them: a path map could write one, and
+after that it existed only in its effect on a pin. **Settings → Data → Map** now
+lists them all — address, place, coordinates, source, note, who last changed it —
+in the order the lookup reads them, longest prefix first, with Edit, Remove and
+Add.
+
+It sits beside the GeoIP card rather than in the sidebar because it answers the
+same question that card does: where the map gets a position from. A nav entry
+for a table that is empty on every fresh install is read once and never again.
+
+- One editor serves all three entry points now (`hopCorrectionDialog`): a
+  suspect hop from a path map, an existing row from the list, and an address
+  somebody already knows the answer for. Editing a stored row keeps its prefix
+  LOCKED — `(ip, prefix_len)` is the key, so re-scoping in place would write a
+  second row and leave the first one on the map. Typing an address takes a CIDR
+  instead, and the suffix is the scope.
+- A licence without `geo` says so where the table would be, rather than showing
+  an empty one.
+
+
 ## 0.220.0 — The path checks its own hops, and you can correct one
 
 Every position on a traceroute map was somebody else's statement about an

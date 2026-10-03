@@ -5964,36 +5964,70 @@ function pathSuspectNote(nodes, { onChange = null } = {}) {
 // The scope matters as much as the position: a correction for the whole /24 is
 // usually what is wanted, because an operator numbers one site out of one block
 // and a single row then fixes every hop in it.
-async function correctHopLocation(n, { onChange = null } = {}) {
-  const sus = (n.place && n.place.suspect) || null;
-  const start = sus ? sus.suggestion : (n.lat != null ? { lat: n.lat, lng: n.lng } : {});
+// The editor behind every hop correction: from the path map (a hop the
+// neighbours disagree with), from the Settings list (an existing row), and from
+// "Add correction" (an address somebody already knows the answer for). One
+// dialog, because they write the same row and the same mistakes are possible in
+// all three.
+//
+//   ip          prefilled address; editable only when `lockTarget` is false
+//   prefixLen   the scope; locked when editing an existing row, because the
+//               (ip, prefixLen) pair IS the row's key — changing it would write
+//               a second row and leave the first one on the map
+//   existing    true when the row is already stored: the title says so and
+//               "Remove correction" is offered
+//   suspect     the path's evidence, shown as the reason the dialog opened
+async function hopCorrectionDialog({
+  ip = '', prefixLen = 24, lockTarget = true, lockScope = false,
+  lat = null, lng = null, city = '', country = '', note = '',
+  hop = null, suspect = null, existing = false, onChange = null,
+} = {}) {
   let mapCfg = {};
   try { mapCfg = await api('/api/map/config'); } catch { mapCfg = {}; }
-  const picker = mapPointPicker(mapCfg, { lat: start.lat, lng: start.lng });
-  const city = el('input', { type: 'text', maxlength: '100', value: (sus && sus.suggestion.city) || '' });
-  const country = el('input', { type: 'text', maxlength: '2', value: (sus && sus.suggestion.country) || '' });
-  const note = el('input', { type: 'text', maxlength: '255' });
+  const picker = mapPointPicker(mapCfg, { lat, lng });
+  const addr = el('input', { type: 'text', value: ip, placeholder: '193.162.153.0/24' });
+  if (lockTarget) addr.disabled = true;
+  const cityEl = el('input', { type: 'text', maxlength: '100', value: city || '' });
+  const countryEl = el('input', { type: 'text', maxlength: '2', value: country || '' });
+  const noteEl = el('input', { type: 'text', maxlength: '255', value: note || '' });
+  // /32 and /24 are the two an operator picks between in practice; an existing
+  // row keeps whatever prefix it was written with, including one from a RIPE
+  // import, so editing it never silently re-scopes the correction.
   const scope = el('select', {},
-    el('option', { value: '32' }, t('hopfix.scope.host', { ip: n.ip })),
-    el('option', { value: '24', selected: 'selected' }, t('hopfix.scope.block', { ip: n.ip })));
+    el('option', { value: '32' }, t('hopfix.scope.host', { ip: ip || '' })),
+    el('option', { value: '24' }, t('hopfix.scope.block', { ip: ip || '' })));
+  if (![32, 24].includes(Number(prefixLen))) {
+    scope.append(el('option', { value: String(prefixLen) }, t('hopfix.scope.prefix', { len: prefixLen })));
+  }
+  scope.value = String(prefixLen);
+  if (lockScope) scope.disabled = true;
   const err = el('p', { class: 'error' });
+
+  const target = () => ({
+    ip: lockTarget ? ip : addr.value.trim(),
+    prefixLen: Number(scope.value),
+  });
 
   async function save() {
     let p;
     try { p = picker.value(); } catch (e2) { err.textContent = e2.message; return; }
     if (!p) { err.textContent = t('ag.pos.bad'); return; }
     err.textContent = '';
+    const tgt = target();
+    if (!tgt.ip) { err.textContent = t('hopfix.needAddress'); return; }
     try {
       await api('/api/geo/hops', {
         method: 'PUT',
         body: {
-          ip: n.ip,
-          prefixLen: Number(scope.value),
+          ip: tgt.ip,
+          // An address typed as CIDR carries its own prefix; the select only
+          // applies when it does not.
+          prefixLen: tgt.ip.includes('/') ? undefined : tgt.prefixLen,
           lat: p.lat,
           lng: p.lng,
-          city: city.value.trim() || null,
-          country: country.value.trim() || null,
-          note: note.value.trim() || null,
+          city: cityEl.value.trim() || null,
+          country: countryEl.value.trim() || null,
+          note: noteEl.value.trim() || null,
         },
       });
       closeModal();
@@ -6003,34 +6037,60 @@ async function correctHopLocation(n, { onChange = null } = {}) {
   }
 
   async function clear() {
+    const tgt = target();
+    if (!confirm(t('hopfix.confirmRemove', { ip: `${tgt.ip}/${tgt.prefixLen}` }))) return;
     err.textContent = '';
     try {
-      await api(`/api/geo/hops?ip=${encodeURIComponent(n.ip)}&prefixLen=${encodeURIComponent(scope.value)}`, { method: 'DELETE' });
+      await api(`/api/geo/hops?ip=${encodeURIComponent(tgt.ip)}&prefixLen=${encodeURIComponent(tgt.prefixLen)}`, { method: 'DELETE' });
       closeModal();
       toast(t('hopfix.cleared'));
       if (onChange) onChange(); else render();
     } catch (e2) { err.textContent = errText(e2); }
   }
 
+  const title = hop != null ? t('hopfix.title', { hop, ip })
+    : existing ? t('hopfix.editTitle', { ip: `${ip}/${prefixLen}` })
+      : t('hopfix.addTitle');
+
   $('#modal-card').classList.add('wide');
   $('#modal-card').replaceChildren(
-    el('h3', {}, t('hopfix.title', { hop: n.hop, ip: n.ip })),
+    el('h3', {}, title),
     el('p', { class: 'muted' }, t('hopfix.blurb')),
-    sus ? el('p', { class: 'small' }, t('pathmap.suspect.why', {
-      prev: sus.prev.hop, next: sus.next.hop, km: sus.prev.distanceKm, allowed: sus.prev.allowedKm,
+    suspect ? el('p', { class: 'small' }, t('pathmap.suspect.why', {
+      prev: suspect.prev.hop, next: suspect.next.hop, km: suspect.prev.distanceKm, allowed: suspect.prev.allowedKm,
     })) : null,
-    el('label', {}, t('hopfix.scope'), scope),
+    lockTarget ? null : el('label', {}, t('hopfix.address'), addr),
+    // The scope picker only makes sense for an address that is already fixed.
+    // When the address is typed, the CIDR suffix IS the scope — offering both
+    // would let them contradict each other, and a bare address means /32.
+    lockTarget ? el('label', {}, t('hopfix.scope'), scope) : null,
     picker.el,
-    el('label', {}, t('hopfix.city'), city),
-    el('label', {}, t('hopfix.country'), country),
-    el('label', {}, t('hopfix.note'), note),
+    el('label', {}, t('hopfix.city'), cityEl),
+    el('label', {}, t('hopfix.country'), countryEl),
+    el('label', {}, t('hopfix.note'), noteEl),
     err,
     el('div', { class: 'form-actions' },
       el('button', { type: 'button', class: 'ghost', onclick: closeModal }, t('common.cancel')),
-      el('button', { type: 'button', class: 'ghost', onclick: clear }, t('hopfix.clear')),
+      existing || hop != null ? el('button', { type: 'button', class: 'ghost danger', onclick: clear }, t('hopfix.clear')) : null,
       el('button', { type: 'button', onclick: save }, t('hopfix.save'))));
   $('#modal').classList.remove('hidden');
   setTimeout(() => picker.mount(), 50);
+}
+
+// From a path map: the hop opens on what its neighbours suggest.
+function correctHopLocation(n, { onChange = null } = {}) {
+  const sus = (n.place && n.place.suspect) || null;
+  const start = sus ? sus.suggestion : (n.lat != null ? { lat: n.lat, lng: n.lng } : {});
+  return hopCorrectionDialog({
+    ip: n.ip,
+    hop: n.hop,
+    suspect: sus,
+    lat: start.lat == null ? null : start.lat,
+    lng: start.lng == null ? null : start.lng,
+    city: (sus && sus.suggestion.city) || '',
+    country: (sus && sus.suggestion.country) || '',
+    onChange,
+  });
 }
 
 // Draws a path's geolocated stops into a Leaflet layer group: a polyline (each
@@ -17781,8 +17841,84 @@ async function settingsMapView() {
   const data = await api('/api/settings');
   const root = el('div');
   root.append(el('p', { class: 'muted settings-intro' }, 'The maps (Sites, Destinations and the location picker) fetch background tiles from the tile URL, and address search uses the geocoder URL. Use an EU/self-hosted source in production — no hardcoded US service. Stored in the database and works without restart.'));
-  root.append(el('div', { class: 'settings-grid' }, mapSettingsCard(data.map), geoipSettingsCard(data.geoip)));
+  root.append(el('div', { class: 'settings-grid' }, mapSettingsCard(data.map), geoipSettingsCard(data.geoip), hopCorrectionsCard()));
   return root;
+}
+
+// Every hop location the server has been told about (`hop_locations`,
+// migration 144): the ones an operator corrected from a path map, and the ones
+// a RIPE import brought in. It lives beside the GeoIP card because it answers
+// the same question that card does — where the map gets a position from — and
+// it is read in the same order the lookup is: longest prefix first.
+//
+// Self-loading: the list is its own fetch rather than part of /api/settings,
+// because it is the only thing on this screen that is a TABLE rather than a
+// setting, and it is usually empty.
+function hopCorrectionsCard() {
+  const card = el('div', { class: 'settings-card wide' }, el('h3', {}, t('hopfix.manage.title')));
+  card.append(el('p', { class: 'muted small' }, t('hopfix.manage.blurb')));
+  const status = el('p', { class: 'muted small' });
+  const body = el('div', { class: 'hopfix-list' });
+  const err = el('p', { class: 'error' });
+  const addBtn = el('button', {
+    class: 'small',
+    onclick: () => hopCorrectionDialog({ lockTarget: false, prefixLen: 32, onChange: load }),
+  }, t('hopfix.manage.add'));
+
+  function row(c) {
+    const where = [c.city, c.country].filter(Boolean).join(', ');
+    const pos = `${Number(c.lat).toFixed(4)}, ${Number(c.lng).toFixed(4)}`;
+    return el('div', { class: 'hopfix-row' },
+      el('span', { class: 'mono' }, `${c.ip}/${c.prefixLen}`),
+      el('span', {}, where || '—'),
+      el('span', { class: 'mono muted' }, pos),
+      el('span', {}, t(c.source === 'ripe' ? 'hopfix.source.ripe' : 'hopfix.source.manual')),
+      el('span', { class: 'muted' }, c.note || ''),
+      el('span', { class: 'muted small' }, [c.createdByName, c.updatedAt ? fmtDate(c.updatedAt) : null].filter(Boolean).join(' · ')),
+      canWrite()
+        ? el('button', {
+          class: 'small ghost',
+          onclick: () => hopCorrectionDialog({
+            ip: c.ip, prefixLen: c.prefixLen, lockScope: true, existing: true,
+            lat: c.lat, lng: c.lng, city: c.city || '', country: c.country || '', note: c.note || '',
+            onChange: load,
+          }),
+        }, t('hopfix.manage.edit'))
+        : null);
+  }
+
+  async function load() {
+    err.textContent = '';
+    try {
+      const res = await api('/api/geo/hops');
+      const list = Array.isArray(res.corrections) ? res.corrections : [];
+      const active = res.active && Number.isFinite(res.active.size) ? res.active.size : null;
+      status.textContent = list.length
+        ? t('hopfix.manage.count', { n: list.length, active: active == null ? list.length : active })
+        : '';
+      body.replaceChildren(list.length
+        ? el('div', {},
+          el('div', { class: 'hopfix-row hopfix-head muted' },
+            el('span', {}, t('hopfix.manage.col.address')),
+            el('span', {}, t('hopfix.manage.col.place')),
+            el('span', {}, t('hopfix.manage.col.position')),
+            el('span', {}, t('hopfix.manage.col.source')),
+            el('span', {}, t('hopfix.manage.col.note')),
+            el('span', {}, t('hopfix.manage.col.by')),
+            el('span', {})),
+          ...list.map(row))
+        : el('div', { class: 'empty' }, t('hopfix.manage.empty')));
+    } catch (e2) {
+      // The module is licensed (geo), so a 403 here is "not in this licence"
+      // rather than a fault — say which it is instead of an empty table.
+      const msg = e2 && e2.status === 403 ? t('hopfix.manage.locked') : errText(e2);
+      body.replaceChildren(el('div', { class: 'empty' }, msg));
+    }
+  }
+
+  card.append(status, body, err, canWrite() ? el('div', { class: 'form-actions' }, addBtn) : null);
+  load();
+  return card;
 }
 
 async function settingsTypesView() {

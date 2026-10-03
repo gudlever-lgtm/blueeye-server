@@ -187,6 +187,28 @@ test('every tab strip is built by tabStrip(), and the tab look is a strip rather
   assert.match(saCss.slice(saCss.indexOf('.sa-tab.active'), saCss.indexOf('.sa-tab.active') + 200), /border-bottom-color/);
 });
 
+test('only a chip that IS a button looks pressable', () => {
+  // A static .chip — an environment type, a layer, "HTTP 500", an incident's
+  // state — wore a button's pointer cursor and hover accent, so it read as a
+  // control that does nothing. The affordances belong to the chips that are
+  // actually buttons (the traffic-type toggles).
+  const css = fs.readFileSync(path.join(PUBLIC, 'styles.css'), 'utf8');
+  const start = css.indexOf('.chip {');
+  const base = css.slice(start, css.indexOf('}', start) + 1);
+  assert.doesNotMatch(base, /cursor:\s*pointer/, '.chip gives every static label a button cursor');
+  assert.match(css, /button\.chip[^{]*\{[^}]*cursor:\s*pointer/, 'a chip that is a button lost its cursor');
+  assert.doesNotMatch(css, /^\.chip:hover/m, '.chip still accents on hover, which only a control should do');
+
+  // And a plain `class: 'chip'` is a LABEL: it is built as a span, never as a
+  // button. The toggles that are controls carry their own class.
+  for (const f of ['app.js', 'serviceAssurance.js']) {
+    const src = fs.readFileSync(path.join(PUBLIC, f), 'utf8');
+    for (const m of src.matchAll(/el\('(\w+)',\s*\{\s*class:\s*'chip[ ']/g)) {
+      assert.equal(m[1], 'span', `${f}:${src.slice(0, m.index).split('\n').length} builds a static chip as <${m[1]}>`);
+    }
+  }
+});
+
 test('every t() key used by the dashboard exists in BOTH locales, and the catalogues are in parity', () => {
   const missing = [];
   for (const f of jsFiles) {

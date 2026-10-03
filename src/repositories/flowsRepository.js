@@ -10,6 +10,9 @@ const COLUMNS = [
   'agent_id', 'ts', 'src_ip', 'dst_ip', 'ext_ip', 'direction', 'proto',
   'src_port', 'dst_port', 'bytes', 'packets', 'flows', 'internal',
   'country', 'asn', 'asn_name',
+  // Migration 145: the destination's city, written only where it can be said
+  // honestly (src/geo/destinationPlace.js). NULL = draw it on the centroid.
+  'city', 'city_lat', 'city_lng',
   // Migration 127: the 802.1Q VLAN and the exporter's in/out ifIndex. NULL
   // whenever the agent did not report them (NetFlow v5, older agents).
   'vlan', 'in_if', 'out_if',
@@ -25,6 +28,13 @@ const vlanOrNull = (v) => {
 const ifOrNull = (v) => {
   const n = Number(v);
   return v != null && Number.isInteger(n) && n > 0 && n <= 0xffffffff ? n : null;
+};
+
+// A latitude/longitude in range, or NULL. A city without a point is drawn on
+// the centroid, which is the honest fallback; 0,0 is a place in the Atlantic.
+const coordOrNull = (v, max) => {
+  const n = Number(v);
+  return v != null && Number.isFinite(n) && Math.abs(n) <= max ? n : null;
 };
 
 // Maps a geo-enriched flow record (camelCase) to a positional row for INSERT.
@@ -47,6 +57,9 @@ function toRow(r) {
     r.country ?? null,
     r.asn ?? null,
     r.asnName ?? null,
+    r.city ?? null,
+    coordOrNull(r.cityLat, 90),
+    coordOrNull(r.cityLng, 180),
     vlanOrNull(r.vlan),
     ifOrNull(r.inIf),
     ifOrNull(r.outIf),
@@ -118,9 +131,16 @@ function createFlowsRepository(db) {
     const rollParams = [from, to];
     if (agentId) { rollWhere.push('agent_id = ?'); rollParams.push(agentId); }
 
+    // The city widens the key for raw rows only: flow_rollup has no city
+    // column (and no ext_ip to recover one from), so a period reaching past
+    // raw retention contributes one city-less row per (country, ASN) that the
+    // map draws on the centroid. Same totals either way — a window that spans
+    // the horizon just shows the older half at country level.
     const [raw, roll] = await Promise.all([
-      q(`SELECT country, asn, MAX(asn_name) AS asnName, SUM(bytes) AS bytes, SUM(flows) AS flowCount
-         FROM flow_records WHERE ${rawWhere.join(' AND ')} GROUP BY country, asn`, rawParams),
+      q(`SELECT country, asn, city, MAX(asn_name) AS asnName,
+                MAX(city_lat) AS cityLat, MAX(city_lng) AS cityLng,
+                SUM(bytes) AS bytes, SUM(flows) AS flowCount
+         FROM flow_records WHERE ${rawWhere.join(' AND ')} GROUP BY country, asn, city`, rawParams),
       q(`SELECT country, asn, MAX(asn_name) AS asnName, SUM(bytes) AS bytes, SUM(flow_count) AS flowCount
          FROM flow_rollup WHERE ${rollWhere.join(' AND ')} GROUP BY country, asn`, rollParams),
     ]);
@@ -128,9 +148,15 @@ function createFlowsRepository(db) {
     // Normalise asn (NULL in raw, 0 in rollup) before keying so "unknown ASN"
     // collapses to a single row per country.
     return mergeRows(
-      [...raw, ...roll].map((r) => ({ ...r, asn: normAsn(r.asn) })),
-      (r) => `${r.country}|${r.asn ?? ''}`,
-      (r) => ({ country: r.country, asn: r.asn }),
+      [...raw, ...roll].map((r) => ({ ...r, asn: normAsn(r.asn), city: r.city || null })),
+      (r) => `${r.country}|${r.asn ?? ''}|${r.city ?? ''}`,
+      (r) => ({
+        country: r.country,
+        asn: r.asn,
+        city: r.city ?? null,
+        cityLat: r.cityLat ?? null,
+        cityLng: r.cityLng ?? null,
+      }),
     );
   }
 
@@ -143,46 +169,65 @@ function createFlowsRepository(db) {
       sumByDest({ agentId, from: since, to: until }),
       sumByDest({ agentId, from: new Date(since.getTime() - len), to: since }),
     ]);
-    const prevMap = new Map(prev.map((r) => [`${r.country}|${r.asn ?? ''}`, Number(r.bytes) || 0]));
+    const key = (r) => `${r.country}|${r.asn ?? ''}|${r.city ?? ''}`;
+    const prevMap = new Map(prev.map((r) => [key(r), Number(r.bytes) || 0]));
     return cur.map((r) => {
       const bytes = Number(r.bytes) || 0;
-      const pb = prevMap.get(`${r.country}|${r.asn ?? ''}`) || 0;
+      const pb = prevMap.get(key(r)) || 0;
       const deviation = pb > 0 ? (bytes - pb) / pb : (bytes > 0 ? 1 : 0);
-      return { country: r.country, asn: r.asn ?? null, asnName: r.asnName ?? null, bytes, flowCount: Number(r.flowCount) || 0, deviation };
+      return {
+        country: r.country,
+        asn: r.asn ?? null,
+        asnName: r.asnName ?? null,
+        city: r.city ?? null,
+        cityLat: r.cityLat != null ? Number(r.cityLat) : null,
+        cityLng: r.cityLng != null ? Number(r.cityLng) : null,
+        bytes,
+        flowCount: Number(r.flowCount) || 0,
+        deviation,
+      };
     });
   }
 
   // WHERE clause + params for the public flows matching a destination selection.
   // The raw and rollup tables differ only in how "public" is expressed
   // (internal=0 vs a non-empty country) and in their timestamp column.
-  function destFilter({ publicPredicate, tsCol }, { country, asn, since, until }) {
+  function destFilter({ publicPredicate, tsCol, hasCity = false }, { country, asn, city, since, until }) {
     const where = [publicPredicate, `${tsCol} >= ?`, `${tsCol} < ?`];
     const params = [since, until];
     if (country) { where.push('country = ?'); params.push(country); }
     if (asn !== null && asn !== undefined && asn !== '') { where.push('asn = ?'); params.push(Number(asn)); }
-    return { clause: where.join(' AND '), params };
+    // A city narrows the selection to the circle that was clicked, but only on
+    // the raw table — flow_rollup has no city, so an unqualified rollup would
+    // quietly fold the rest of the country back in. A city selection is
+    // therefore raw-only, which is also the only window the city exists in.
+    if (city !== null && city !== undefined && city !== '') {
+      if (!hasCity) return { clause: where.join(' AND '), params, excluded: true };
+      where.push('city = ?'); params.push(String(city));
+    }
+    return { clause: where.join(' AND '), params, excluded: false };
   }
-  const rawDestFilter = (sel) => destFilter({ publicPredicate: 'internal = 0', tsCol: 'ts' }, sel);
+  const rawDestFilter = (sel) => destFilter({ publicPredicate: 'internal = 0', tsCol: 'ts', hasCity: true }, sel);
   const rollDestFilter = (sel) => destFilter({ publicPredicate: "country <> ''", tsCol: 'bucket' }, sel);
 
   // True if any public flow exists (raw OR rollup) for the selection.
-  async function destinationExists({ country = null, asn = null, since, until }) {
-    const raw = rawDestFilter({ country, asn, since, until });
-    const roll = rollDestFilter({ country, asn, since, until });
+  async function destinationExists({ country = null, asn = null, city = null, since, until }) {
+    const raw = rawDestFilter({ country, asn, city, since, until });
+    const roll = rollDestFilter({ country, asn, city, since, until });
     const [a, b] = await Promise.all([
       q(`SELECT 1 FROM flow_records WHERE ${raw.clause} LIMIT 1`, raw.params),
-      q(`SELECT 1 FROM flow_rollup WHERE ${roll.clause} LIMIT 1`, roll.params),
+      roll.excluded ? [] : q(`SELECT 1 FROM flow_rollup WHERE ${roll.clause} LIMIT 1`, roll.params),
     ]);
     return a.length > 0 || b.length > 0;
   }
 
   // Distinct agent ids that talked to the selection (raw + rollup).
-  async function agentIdsForDestination({ country = null, asn = null, since, until }) {
-    const raw = rawDestFilter({ country, asn, since, until });
-    const roll = rollDestFilter({ country, asn, since, until });
+  async function agentIdsForDestination({ country = null, asn = null, city = null, since, until }) {
+    const raw = rawDestFilter({ country, asn, city, since, until });
+    const roll = rollDestFilter({ country, asn, city, since, until });
     const [a, b] = await Promise.all([
       q(`SELECT DISTINCT agent_id FROM flow_records WHERE ${raw.clause}`, raw.params),
-      q(`SELECT DISTINCT agent_id FROM flow_rollup WHERE ${roll.clause}`, roll.params),
+      roll.excluded ? [] : q(`SELECT DISTINCT agent_id FROM flow_rollup WHERE ${roll.clause}`, roll.params),
     ]);
     return [...new Set([...a, ...b].map((r) => r.agent_id))];
   }
@@ -211,9 +256,9 @@ function createFlowsRepository(db) {
   // Aggregated detail for a selected destination, read across raw + rollup:
   // peers by ASN, by direction, a byte time-series; protocol breakdown is
   // raw-only (rollups don't retain per-protocol detail).
-  async function selectFlows({ country = null, asn = null, since, until }) {
-    const raw = rawDestFilter({ country, asn, since, until });
-    const roll = rollDestFilter({ country, asn, since, until });
+  async function selectFlows({ country = null, asn = null, city = null, since, until }) {
+    const raw = rawDestFilter({ country, asn, city, since, until });
+    const roll = rollDestFilter({ country, asn, city, since, until });
     // Raw and rollup share four aggregate shapes; only the table, the flow-count
     // column (flows vs flow_count) and the series timestamp column (ts vs bucket)
     // differ. All come from fixed constants — no user input is interpolated.
@@ -224,7 +269,13 @@ function createFlowsRepository(db) {
       totals: q(`SELECT SUM(bytes) AS bytes, SUM(${flowCol}) AS flowCount FROM ${table} WHERE ${where.clause}`, where.params),
     });
     const rawAgg = aggregates({ table: 'flow_records', flowCol: 'flows', tsCol: 'ts' }, raw);
-    const rollAgg = aggregates({ table: 'flow_rollup', flowCol: 'flow_count', tsCol: 'bucket' }, roll);
+    // A city selection has no rollup half (flow_rollup has no city column), so
+    // the detail covers the raw window only rather than silently widening to
+    // the whole country.
+    const empty = { byAsn: [], byDir: [], series: [], totals: [] };
+    const rollAgg = roll.excluded
+      ? empty
+      : aggregates({ table: 'flow_rollup', flowCol: 'flow_count', tsCol: 'bucket' }, roll);
     // Protocol breakdown is raw-only (rollups don't retain per-protocol detail).
     const byProtoQ = q(`SELECT proto, SUM(bytes) AS bytes, SUM(flows) AS flowCount FROM flow_records WHERE ${raw.clause} GROUP BY proto ORDER BY bytes DESC LIMIT 20`, raw.params);
 

@@ -165,10 +165,38 @@ states are shown rather than a blank screen.
 ## Country centroids
 
 `src/geo/countryCentroids.json` maps ISO-3166 alpha-2 → approximate `[lat, lng]`.
-**Flows and destinations stay at country level.** City-level GeoIP is too
-imprecise to build selection or alerts on; centroids give stable marker
-positions without pretending to a precision the data doesn't have. Extend the
-table as needed.
+A destination is drawn here **unless** the city test below passes: centroids
+give a stable marker position without pretending to a precision the data
+doesn't have. Extend the table as needed.
+
+## Destinations: city where it can be said honestly (migration 145)
+
+A destination used to be drawn on the country centroid, full stop. For Canada
+that is a point in Nunavut, while a traceroute stop in the same country is
+drawn on its city — two layers of one map disagreeing by a thousand kilometres.
+
+`src/geo/destinationPlace.js` decides per flow, at enrichment time, and writes
+`city` / `city_lat` / `city_lng` onto `flow_records` only when **all** of this
+holds:
+
+| Test | Why |
+| --- | --- |
+| The ASN is not a cloud/hosting network (`hostingNetworks.js`) and not an anycast CDN (`ANYCAST` in `destinationPlace.js`) | One address answers from whichever of dozens of sites is nearest. "The city" does not exist |
+| The city database and the country database name the **same** country | Two sources agreeing is the only corroboration available — a flow carries no round-trip time, so unlike a hop there is nothing to measure the claim against |
+| There is a city name and a usable point | A city without coordinates is a label, not a position |
+
+Anything else keeps `city` NULL and is drawn on the centroid. The destination
+carries `precision: 'city' | 'country'`, and the map draws a country-level
+circle with a dashed ring — the same language the path map uses for a stop it
+only knows the country of.
+
+**The rollup has no city.** `flow_rollup` aggregates per (agent, direction,
+country, ASN) and keeps no `ext_ip` to recover one from, so a period reaching
+past raw retention contributes one country-level row per (country, ASN)
+alongside the city rows. Totals stay right; the older half of the window is
+simply less precise. For the same reason `?city=` on the selection endpoints is
+a raw-only read: filtering the rollup by a column it does not have would
+quietly fold the whole country back in.
 
 ## Traceroute hops (city level where it can be shown)
 

@@ -98,6 +98,28 @@ test('GET /api/geo/overview rejects an invalid since (400) and bad hostId (400)'
   assert.equal((await request(app).get('/api/geo/overview?hostId=abc').set('Authorization', viewer())).status, 400);
 });
 
+test('GET /api/geo/overview draws a city-placed destination on its city', async () => {
+  const centroids = { get: (c) => (c === 'CA' ? { lat: 56.1, lng: -106.3 } : null) };
+  const flowsRepo = geoFlowsRepo({
+    aggregateExternalDestinations: async () => [
+      { country: 'CA', asn: 852, asnName: 'TELUS', city: 'Montreal', cityLat: 45.5, cityLng: -73.57, bytes: 10, flowCount: 1, deviation: 0 },
+      { country: 'CA', asn: 13335, asnName: 'CLOUDFLARENET', city: null, cityLat: null, cityLng: null, bytes: 20, flowCount: 2, deviation: 0 },
+    ],
+  });
+  const app = makeApp({ flowsRepo, agentsRepo: geoAgents(), centroids });
+  const res = await request(app).get('/api/geo/overview').set('Authorization', viewer());
+  assert.equal(res.status, 200);
+  const [city, country] = res.body.externalDestinations;
+  assert.equal(city.lat, 45.5);
+  assert.equal(city.lng, -73.57);
+  assert.equal(city.precision, 'city');
+  // The CDN keeps the centroid, and says so rather than naming a city it is
+  // not in.
+  assert.equal(country.lat, 56.1);
+  assert.equal(country.city, null);
+  assert.equal(country.precision, 'country');
+});
+
 // ---- /api/geo/select/findings ---------------------------------------------
 test('GET /api/geo/select/findings with an unknown asn returns 404', async () => {
   const app = makeApp({ flowsRepo: geoFlowsRepo(), agentsRepo: geoAgents() });
@@ -135,6 +157,45 @@ test('GET /api/geo/select/flows for a valid country returns aggregated data', as
 test('GET /api/geo/select/flows with an unknown country returns 404', async () => {
   const app = makeApp({ flowsRepo: geoFlowsRepo(), agentsRepo: geoAgents() });
   const res = await request(app).get('/api/geo/select/flows?country=ZZ').set('Authorization', viewer());
+  assert.equal(res.status, 404);
+});
+
+// ---- ?city= (migration 145) ------------------------------------------------
+test('a city selection is passed to the repository, on both selection endpoints', async () => {
+  const seen = [];
+  const flowsRepo = geoFlowsRepo({
+    destinationExists: async (sel) => { seen.push(sel); return true; },
+  });
+  const app = makeApp({ flowsRepo, agentsRepo: geoAgents(), findingStore: makeFindingStore() });
+  assert.equal((await request(app).get('/api/geo/select/flows?country=CA&asn=852&city=Montreal').set('Authorization', viewer())).status, 200);
+  assert.equal((await request(app).get('/api/geo/select/findings?country=CA&asn=852&city=Montreal').set('Authorization', viewer())).status, 200);
+  assert.equal(seen.length, 2);
+  for (const sel of seen) assert.equal(sel.city, 'Montreal');
+});
+
+test('a selection without ?city= leaves the city null (the whole country+ASN)', async () => {
+  const seen = [];
+  const flowsRepo = geoFlowsRepo({ destinationExists: async (sel) => { seen.push(sel); return true; } });
+  const app = makeApp({ flowsRepo, agentsRepo: geoAgents() });
+  await request(app).get('/api/geo/select/flows?country=DE').set('Authorization', viewer());
+  assert.equal(seen[0].city, null);
+});
+
+test('an over-long ?city= is rejected (400), not sent to the database', async () => {
+  const seen = [];
+  const flowsRepo = geoFlowsRepo({ destinationExists: async (sel) => { seen.push(sel); return true; } });
+  const app = makeApp({ flowsRepo, agentsRepo: geoAgents() });
+  const res = await request(app)
+    .get(`/api/geo/select/flows?country=CA&city=${'x'.repeat(101)}`)
+    .set('Authorization', viewer());
+  assert.equal(res.status, 400);
+  assert.equal(seen.length, 0);
+});
+
+test('a city with no traffic is a 404, like any other unknown destination', async () => {
+  const flowsRepo = geoFlowsRepo({ destinationExists: async ({ city }) => city !== 'Nowhere' });
+  const app = makeApp({ flowsRepo, agentsRepo: geoAgents() });
+  const res = await request(app).get('/api/geo/select/flows?country=DE&city=Nowhere').set('Authorization', viewer());
   assert.equal(res.status, 404);
 });
 

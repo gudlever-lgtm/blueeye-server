@@ -1280,7 +1280,9 @@ function start() {
   // store without country/ASN. RFC1918/private endpoints are never geolocated.
   // (flowsRepo is declared earlier — the topology/flow analytics jobs need it.)
   const centroids = createCentroids();
-  const geoEnricher = createGeoEnricher({ provider: geoProvider, centroids });
+  // cityProvider is the same table the path map uses; the enricher only writes
+  // a city where destinationPlace.js says the claim holds (docs/geo.md).
+  const geoEnricher = createGeoEnricher({ provider: geoProvider, centroids, cityProvider });
   const flowPipeline = createFlowPipeline({
     flowsRepo,
     enricher: geoEnricher,

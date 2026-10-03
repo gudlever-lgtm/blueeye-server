@@ -77,13 +77,22 @@ dashboard Probes tab  ←  GET /api/probes/path  ←  buildPathGraph()  ←─�
 
 The same path can be plotted on the **Destinations** map (Leaflet, EU/self-hosted
 tiles via `GET /api/map/config`). Each node's `lat/lng` comes from
-`src/geo/hopLocation.js`: the router's PTR name when it names a city
+`src/geo/hopLocation.js`: a correction somebody wrote down for the address
+(`hop_locations`, migration 144 — it beats everything below), else the router's
+PTR name when it names a city
 (`ae3.cph-bb1.telia.net` → Copenhagen), else city GeoIP, else the country
 centroid — each checked against the hop's fastest RTT, so a hop is never drawn
 somewhere its reply was too fast to come from (see `docs/geo.md` → "Traceroute
 hops"). The **source** node is anchored at the agent's site
 (`locations.latitude/longitude`, surfaced on `agentsRepo.findById` as
 `location_lat/location_lng` and passed to `buildPathGraph` as `origin`).
+
+After the hops are placed, the path is read as evidence about ITSELF
+(`src/geo/hopConsistency.js`): a hop that disagrees with the hop before it and
+the hop after it, while those two agree with each other, is marked
+`place.suspect` and listed under the map in plain words, with **Correct
+location** next to it for an operator. The graph carries them as `suspectHops`.
+Nothing is moved on that evidence — see `docs/geo.md` → "Correcting a hop".
 
 `pathGraph()` adds a lazily-built "Geographic map" panel (`drawPathMap()`):
 `pathGeoStops()` collapses consecutive hops sharing a coordinate into one stop, then

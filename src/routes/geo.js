@@ -5,6 +5,7 @@ const { asyncHandler } = require('../middleware/asyncHandler');
 const { requireAuth, requireRole } = require('../auth/middleware');
 const { ROLES } = require('../auth/roles');
 const { requireFeature } = require('../license/features');
+const { validateHopLocationInput } = require('../validation/hopLocationValidation');
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -12,7 +13,10 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 // 'geo' license feature. Aggregation is done server-side — raw flow records
 // never leave the server, and RFC1918/private endpoints are excluded at the
 // data layer (internal = 0).
-function createGeoRouter({ flowsRepo, agentsRepo, findingStore, tileConfig = {}, getMapConfig = null, geoProvider = null, featureGate }) {
+function createGeoRouter({
+  flowsRepo, agentsRepo, findingStore, tileConfig = {}, getMapConfig = null, geoProvider = null,
+  hopLocationsRepo = null, hopCorrections = null, featureGate,
+}) {
   const router = express.Router();
   // GeoIP enrichment status (configured? how many ranges?) — viewer-safe, no file
   // contents. Lets the map views show a "GeoIP not configured" banner instead of
@@ -127,6 +131,51 @@ function createGeoRouter({ flowsRepo, agentsRepo, findingStore, tileConfig = {},
     const detail = await flowsRepo.selectFlows({ ...sel, since: win.since, until: win.until });
     res.json({ country: sel.country, asn: sel.asn, since: win.since.toISOString(), until: win.until.toISOString(), ...detail });
   }));
+
+  // ---- hop location corrections (`hop_locations`, migration 144) -----------
+  //
+  // The server's OWN answer to where a traceroute hop stands, used ahead of
+  // every GeoIP source. Reading is viewer+ like the rest of the module (it is
+  // on the map they are already looking at); writing is operator+, because a
+  // correction changes what every path draws for everybody.
+  //
+  // Each write reloads the in-memory index (src/geo/hopCorrections.js), so the
+  // next path drawn is already corrected — a correction that only took effect
+  // after a restart would read as "it did not work".
+  if (hopLocationsRepo) {
+    const write = [requireRole(ROLES.OPERATOR, ROLES.ADMIN)];
+
+    // GET /api/geo/hops — every correction, longest prefix first.
+    router.get('/hops', ...staff, asyncHandler(async (req, res) => {
+      const corrections = await hopLocationsRepo.all();
+      res.json({ corrections, active: hopCorrections ? hopCorrections.status() : null });
+    }));
+
+    // PUT /api/geo/hops — write (or replace) one. The address is in the body
+    // rather than the path: a CIDR in a URL segment is an encoding fight nobody
+    // needs, and the body already carries the rest of the correction.
+    router.put('/hops', ...write, asyncHandler(async (req, res) => {
+      const { value, errors } = validateHopLocationInput(req.body);
+      if (errors) return res.status(400).json({ error: 'Validation failed', details: errors });
+      const saved = await hopLocationsRepo.upsert({
+        ...value, source: 'manual', createdBy: req.user && req.user.id ? req.user.id : null,
+      });
+      if (hopCorrections) await hopCorrections.reload();
+      return res.json({ correction: saved });
+    }));
+
+    // DELETE /api/geo/hops?ip=&prefixLen= — back to what GeoIP says. 404 when
+    // there was nothing to delete, so a stale UI says so rather than claiming
+    // it removed something.
+    router.delete('/hops', ...write, asyncHandler(async (req, res) => {
+      const { value, errors } = validateHopLocationInput({ ...req.query, lat: 0, lng: 0 });
+      if (errors) return res.status(400).json({ error: 'Validation failed', details: errors });
+      const removed = await hopLocationsRepo.remove(value.ip, value.prefixLen);
+      if (!removed) return res.status(404).json({ error: 'No correction for that address' });
+      if (hopCorrections) await hopCorrections.reload();
+      return res.json({ removed: 1, ip: value.ip, prefixLen: value.prefixLen });
+    }));
+  }
 
   return router;
 }

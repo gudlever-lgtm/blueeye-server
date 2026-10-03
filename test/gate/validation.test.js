@@ -379,6 +379,29 @@ test('l2PathValidation: an endpoint is classified once, and the inventory page i
   assert.ok(rejected(validateInventoryQuery({ q: ['a', 'b'] })));
 });
 
+test('hopLocationValidation: public addresses only, a bounded prefix, and a whole position', () => {
+  const { validateHopLocationInput, MIN_PREFIX_LEN } = require('../../src/validation/hopLocationValidation');
+  // A correction moves a pin for EVERYBODY, so the address it names is checked
+  // the way every other address in the geo layer is: private space is never
+  // geolocated, and a prefix wider than /8 would move a continent at once.
+  for (const priv of ['10.0.0.1', '192.168.1.1', '127.0.0.1', '169.254.1.1', '100.64.0.1']) {
+    assert.ok(errorsOf(validateHopLocationInput({ ip: priv, lat: 1, lng: 2 })).includes('ip'), priv);
+  }
+  assert.ok(rejected(validateHopLocationInput({ ip: `1.2.3.4/${MIN_PREFIX_LEN - 1}`, lat: 1, lng: 2 })));
+  assert.ok(rejected(validateHopLocationInput({ ip: '1.2.3.4/33', lat: 1, lng: 2 })));
+  assert.ok(rejected(validateHopLocationInput({ ip: 'not-an-address', lat: 1, lng: 2 })));
+  // Half a position is worse than the GeoIP answer it would replace.
+  assert.ok(errorsOf(validateHopLocationInput({ ip: '1.2.3.4', lat: 55 })).includes('lng'));
+  assert.ok(errorsOf(validateHopLocationInput({ ip: '1.2.3.4', lat: 91, lng: 2 })).includes('lat'));
+  assert.ok(errorsOf(validateHopLocationInput({ ip: '1.2.3.4', lat: 1, lng: 181 })).includes('lng'));
+  // A CIDR is stored at its network boundary, so one block is one row.
+  const ok = validateHopLocationInput({ ip: '193.162.153.77/24', lat: 55.6761, lng: 12.5683, country: 'dk' });
+  assert.equal(ok.value.ip, '193.162.153.0');
+  assert.equal(ok.value.prefixLen, 24);
+  assert.equal(ok.value.country, 'DK');
+  assert.ok(rejected(validateHopLocationInput({ ip: '1.2.3.4', lat: 1, lng: 2, country: 'Denmark' })));
+});
+
 test('every src/validation module is named in this suite', () => {
   const self = fs.readFileSync(__filename, 'utf8');
   for (const f of fs.readdirSync(DIR)) assert.ok(self.includes(f.replace(/\.js$/, '')), `${f} has no dedicated gate rule`);

@@ -5811,7 +5811,9 @@ function pathGeoStops(nodes) {
 // city GeoIP did, or only the country is known. See src/geo/hopLocation.js.
 function pathPlaceNote(place) {
   if (!place) return '';
-  const how = place.source === 'latency'
+  const how = place.source === 'manual' ? t('pathmap.place.manual')
+    : place.source === 'ripe' ? t('pathmap.place.ripe')
+    : place.source === 'latency'
     ? (place.nearHop === 0 ? t('pathmap.place.latencyAgent', { ms: place.deltaMs }) : t('pathmap.place.latencyHop', { hop: place.nearHop, ms: place.deltaMs }))
     : place.source === 'rdns' ? t('pathmap.place.rdns', { code: place.code || '' })
       : place.source === 'geoip-city' ? t('pathmap.place.geoipCity')
@@ -5829,6 +5831,9 @@ function pathStopPopup(s, i, total) {
   const where = pl ? [pl.city, pl.country].filter(Boolean).join(', ') : (s.nodes[0].country || '');
   const place = where ? ` · ${esc(where)}` : '';
   const note = pl && s.nodes.some((n) => n.kind !== 'source') ? `<div class="muted">${esc(pathPlaceNote(pl))}</div>` : '';
+  // The neighbours disagree with this pin (src/geo/hopConsistency.js).
+  const sus = s.nodes.map((n) => n.place && n.place.suspect).find(Boolean) || null;
+  const suspect = sus ? `<div class="warn-text">${esc(t('pathmap.suspect.pin'))}</div>` : '';
   const lines = s.nodes.map((n) => {
     const who = n.kind === 'source' ? esc(n.label || 'Agent') : `Hop ${n.hop}${n.ip ? ' · ' + esc(n.ip) : ''}`;
     const name = n.hostname ? ` · ${esc(n.hostname)}` : '';
@@ -5837,7 +5842,7 @@ function pathStopPopup(s, i, total) {
     const loss = n.lossPct ? ` · ${n.lossPct}% loss` : '';
     return `<div>${who}${name}${asn}${met}${loss}</div>`;
   }).join('');
-  return `<div class="pg-pop"><strong>${head}${place}</strong>${note}${lines}</div>`;
+  return `<div class="pg-pop"><strong>${head}${place}</strong>${note}${suspect}${lines}</div>`;
 }
 
 // Hops the reply time says answer from much closer than their address is
@@ -5854,6 +5859,110 @@ function pathRejectedNote(nodes) {
     })));
   }
   return out.length ? el('ul', { class: 'muted small pg-rejected' }, ...out) : null;
+}
+
+// Hops the PATH says are placed wrong: the hop before and the hop after both
+// disagree with the pin, while agreeing with each other, so the reply times
+// rule out the position GeoIP gave it (src/geo/hopConsistency.js). Nothing is
+// moved on that evidence — this says so under the map, and offers the one
+// thing that does move it: writing down where the router actually stands.
+function pathSuspectNote(nodes, { onChange = null } = {}) {
+  const out = [];
+  for (const n of nodes || []) {
+    const sus = n.place && n.place.suspect;
+    if (!sus) continue;
+    const where = [n.place.city, n.place.country].filter(Boolean).join(', ') || '?';
+    const near = [sus.suggestion.city, sus.suggestion.country].filter(Boolean).join(', ') || `hop ${sus.suggestion.fromHop}`;
+    out.push(el('li', {},
+      t('pathmap.suspect.row', {
+        hop: n.hop, ip: n.ip || '*', where, km: sus.prev.distanceKm, allowed: sus.prev.allowedKm, near,
+      }),
+      n.ip && canWrite()
+        ? el('button', {
+          type: 'button',
+          class: 'small',
+          onclick: () => correctHopLocation(n, { onChange }),
+        }, t('pathmap.suspect.fix'))
+        : null));
+  }
+  return out.length ? el('ul', { class: 'muted small pg-suspect' }, ...out) : null;
+}
+
+// Writes down where a traceroute hop actually stands (`hop_locations`,
+// migration 144). The position outranks every GeoIP source from the next path
+// onwards, so the dialog opens on what the path itself suggests — the place the
+// neighbouring hops agree on — and the operator moves the pin from there.
+//
+// The scope matters as much as the position: a correction for the whole /24 is
+// usually what is wanted, because an operator numbers one site out of one block
+// and a single row then fixes every hop in it.
+async function correctHopLocation(n, { onChange = null } = {}) {
+  const sus = (n.place && n.place.suspect) || null;
+  const start = sus ? sus.suggestion : (n.lat != null ? { lat: n.lat, lng: n.lng } : {});
+  let mapCfg = {};
+  try { mapCfg = await api('/api/map/config'); } catch { mapCfg = {}; }
+  const picker = mapPointPicker(mapCfg, { lat: start.lat, lng: start.lng });
+  const city = el('input', { type: 'text', maxlength: '100', value: (sus && sus.suggestion.city) || '' });
+  const country = el('input', { type: 'text', maxlength: '2', value: (sus && sus.suggestion.country) || '' });
+  const note = el('input', { type: 'text', maxlength: '255' });
+  const scope = el('select', {},
+    el('option', { value: '32' }, t('hopfix.scope.host', { ip: n.ip })),
+    el('option', { value: '24', selected: 'selected' }, t('hopfix.scope.block', { ip: n.ip })));
+  const err = el('p', { class: 'error' });
+
+  async function save() {
+    let p;
+    try { p = picker.value(); } catch (e2) { err.textContent = e2.message; return; }
+    if (!p) { err.textContent = t('ag.pos.bad'); return; }
+    err.textContent = '';
+    try {
+      await api('/api/geo/hops', {
+        method: 'PUT',
+        body: {
+          ip: n.ip,
+          prefixLen: Number(scope.value),
+          lat: p.lat,
+          lng: p.lng,
+          city: city.value.trim() || null,
+          country: country.value.trim() || null,
+          note: note.value.trim() || null,
+        },
+      });
+      closeModal();
+      toast(t('hopfix.saved'));
+      if (onChange) onChange(); else render();
+    } catch (e2) { err.textContent = errText(e2); }
+  }
+
+  async function clear() {
+    err.textContent = '';
+    try {
+      await api(`/api/geo/hops?ip=${encodeURIComponent(n.ip)}&prefixLen=${encodeURIComponent(scope.value)}`, { method: 'DELETE' });
+      closeModal();
+      toast(t('hopfix.cleared'));
+      if (onChange) onChange(); else render();
+    } catch (e2) { err.textContent = errText(e2); }
+  }
+
+  $('#modal-card').classList.add('wide');
+  $('#modal-card').replaceChildren(
+    el('h3', {}, t('hopfix.title', { hop: n.hop, ip: n.ip })),
+    el('p', { class: 'muted' }, t('hopfix.blurb')),
+    sus ? el('p', { class: 'small' }, t('pathmap.suspect.why', {
+      prev: sus.prev.hop, next: sus.next.hop, km: sus.prev.distanceKm, allowed: sus.prev.allowedKm,
+    })) : null,
+    el('label', {}, t('hopfix.scope'), scope),
+    picker.el,
+    el('label', {}, t('hopfix.city'), city),
+    el('label', {}, t('hopfix.country'), country),
+    el('label', {}, t('hopfix.note'), note),
+    err,
+    el('div', { class: 'form-actions' },
+      el('button', { type: 'button', class: 'ghost', onclick: closeModal }, t('common.cancel')),
+      el('button', { type: 'button', class: 'ghost', onclick: clear }, t('hopfix.clear')),
+      el('button', { type: 'button', onclick: save }, t('hopfix.save'))));
+  $('#modal').classList.remove('hidden');
+  setTimeout(() => picker.mount(), 50);
 }
 
 // Draws a path's geolocated stops into a Leaflet layer group: a polyline (each
@@ -5892,11 +6001,13 @@ async function drawPathMap(host, stops, nodes = [], originHint = null, agentId =
       : null));
   }
   const rejected = pathRejectedNote(nodes);
+  const suspect = pathSuspectNote(nodes);
   if (!stops || stops.length < 2) {
-    host.replaceChildren(el('div', { class: 'empty' }, t('pathmap.empty')), rejected || '');
+    host.replaceChildren(el('div', { class: 'empty' }, t('pathmap.empty')), rejected || '', suspect || '');
     return;
   }
   if (rejected) host.after(rejected);
+  if (suspect) host.after(suspect);
   let cfg = {};
   try { cfg = await api('/api/map/config'); } catch { /* fall back to default tiles */ }
   const map = createLeafletMap(host, cfg, { center: [stops[0].lat, stops[0].lng], zoom: 3 });

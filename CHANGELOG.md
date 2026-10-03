@@ -1,5 +1,47 @@
 # Changelog
 
+## 0.220.0 — The path checks its own hops, and you can correct one
+
+Every position on a traceroute map was somebody else's statement about an
+address BLOCK: a router name, a city range file, a country centroid. A block is
+registered where the operator's head office is, not where the rack is, so one
+hop would land a continent away and the map drew a line that the reply times
+say never happened. There was no way to see that, and no way to fix it.
+
+- **The path is now read as evidence about its own hops.**
+  `src/geo/hopConsistency.js` compares each hop with the hop before and the hop
+  after it: a hop that disagrees with BOTH while they agree with each other is
+  marked `place.suspect`, with the distances, what the reply times allowed, and
+  what the neighbours suggest instead. The physics is the one already used
+  against the agent — ~200 km per ms in fibre — applied between hops.
+
+  NOTHING IS MOVED on that evidence. Moving a hop because its neighbours
+  disagree is how a chain of small corrections creeps a pin across a continent,
+  and it would hide the thing worth seeing: that the GeoIP data for this address
+  is wrong. The map says so under the path, and offers the one thing that does
+  move it.
+
+- **Corrections: the server's own location table.** `hop_locations`
+  (migration 144) holds what somebody wrote down — one address or a whole block,
+  longest prefix first, with the coordinates, a city, a country and a note on
+  why they know. It is the FIRST source `locateHop` tries, ahead of every GeoIP
+  source, and the consistency check never second-guesses it: the person who runs
+  the network outranks a range file. `GET/PUT/DELETE /api/geo/hops`
+  (read viewer+, write operator+); the write reloads the in-memory index, so the
+  next path drawn is already right rather than right after a restart.
+
+- **RIPE NCC `geoloc:` import.** `scripts/import-ripe-geoloc.js` reads a RIPE
+  database split file and loads the coordinates the HOLDER of each block
+  published for it into the same table. Most holders leave the attribute out, so
+  it seeds the table rather than replacing GeoIP — but where it exists, nobody
+  is better placed to know. Offline, European, and it never overwrites a manual
+  correction.
+
+- **In the UI.** The suspect hops are listed under the path map in plain words,
+  each with **Correct location** (operator+): a map that opens on what the
+  neighbours suggest, a choice of this address or the whole /24, and the city,
+  country and note. A corrected hop says so in its popup.
+
 ## 0.216.0 — Beaconing, a screen to tune it all from, and a red line at the top
 
 `docs/attack-indication.md` listed beaconing as the biggest remaining gap, and

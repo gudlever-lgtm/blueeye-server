@@ -44,18 +44,47 @@
       var legendHost = el('div', { class: 'ui-chart-legend' });
       var toolbarHost = el('div', {});
       var topHost = el('div', {});
+      var dataHost = el('div', {});
+      // The folds app.js hands over (storage, history, traffic type) are
+      // mounted into a host of our own rather than onto the page, so the lens
+      // can drop them with the rest of the overview instead of leaving them
+      // hanging under a table they have nothing to do with.
+      var extrasHost = el('div', {});
+      var lensHost = el('div', {});
+
+      // Two lenses on the SAME tick: the chart answers "what is moving right
+      // now", the table answers "how much is each agent carrying" — and the
+      // table is every agent, not the five the chart's companion lists. The
+      // tick is the same read either way; neither lens fetches anything the
+      // other does not.
+      var MODES = ['overview', 'data'];
+      var mode = ui.storedMode('traffic', MODES, 'overview');
+
+      var livePanel = ui.panel({
+        title: t('traffic.live'),
+        note: t('traffic.liveNote'),
+        children: [toolbarHost, chartHost, legendHost],
+      });
 
       var info = deps.help();
       page.append(ui.pageHeader({
         title: t('traffic.title'),
         lead: info.lead,
         help: { title: info.title, body: info.body },
-        actions: [ui.button('secondary', t('traffic.openFleet'), { onclick: function () { deps.gotoView('fleet'); } })],
-      }), alertHost, stripHost, ui.panel({
-        title: t('traffic.live'),
-        note: t('traffic.liveNote'),
-        children: [toolbarHost, chartHost, legendHost],
-      }), topHost);
+        actions: [
+          ui.modeSwitch({
+            label: t('mode.label'),
+            store: 'traffic',
+            value: mode,
+            items: [
+              { key: 'overview', label: t('mode.overview'), icon: 'overview', title: t('mode.overviewHint') },
+              { key: 'data', label: t('mode.data'), icon: 'data', title: t('mode.dataHintTraffic') },
+            ],
+            onchange: function (key) { mode = key; drawLens(); },
+          }),
+          ui.button('secondary', t('traffic.openFleet'), { onclick: function () { deps.gotoView('fleet'); } }),
+        ],
+      }), alertHost, stripHost, lensHost);
 
       // history[seriesId] = { label, points: [{ t, y }] } — the rolling buffer
       // the chart is drawn from. MAX points at one tick each is the window.
@@ -294,6 +323,116 @@
         }));
       }
 
+      // ---- the Data lens -----------------------------------------------------
+      // Every agent, sorted by what it is carrying — the rows the chart and
+      // the Top panel are both drawn from. Nothing here is read a second time:
+      // `latest` is the tick that just landed.
+      var dataSort = { key: 'total', dir: 'desc' };
+
+      function dataRows(latest) {
+        var rows = latest.slice();
+        var dir = dataSort.dir === 'asc' ? 1 : -1;
+        rows.sort(function (a, b) {
+          var av, bv;
+          if (dataSort.key === 'agent') {
+            av = (a.a.display_name || a.a.hostname || '').toLowerCase();
+            bv = (b.a.display_name || b.a.hostname || '').toLowerCase();
+          } else if (dataSort.key === 'status') { av = a.a.status || ''; bv = b.a.status || ''; }
+          else if (dataSort.key === 'rx') { av = a.rx; bv = b.rx; }
+          else if (dataSort.key === 'tx') { av = a.tx; bv = b.tx; }
+          else { av = a.rx + a.tx + (a.total || 0); bv = b.rx + b.tx + (b.total || 0); }
+          if (av < bv) return -1 * dir;
+          if (av > bv) return 1 * dir;
+          return 0;
+        });
+        return rows;
+      }
+
+      function drawData(latest) {
+        // A first tick that failed is the reason the table is empty, so the
+        // Data lens says that rather than "no agent is reporting traffic" —
+        // the two are not the same answer.
+        if (tickError && !tickN) { dataHost.replaceChildren(ui.panel({ title: t('traffic.all'), children: [tickErrorState()] })); return; }
+        if (!latest.length) {
+          dataHost.replaceChildren(ui.panel({
+            title: t('traffic.all'),
+            children: [ui.emptyState({ kind: 'nodata', title: t('traffic.noAgents'), body: t('traffic.noAgentsHint') })],
+          }));
+          return;
+        }
+        dataHost.replaceChildren(ui.panel({
+          title: t('traffic.all'),
+          note: t('traffic.allNote'),
+          children: [ui.dataTable({
+            dense: true,
+            columns: [
+              { key: 'agent', label: t('traffic.col.agent'), width: '220px', sortable: true },
+              { key: 'status', label: t('traffic.col.status'), width: '110px', sortable: true },
+              { key: 'rx', label: t('traffic.col.rx'), width: '140px', num: true, sortable: true },
+              { key: 'tx', label: t('traffic.col.tx'), width: '140px', num: true, sortable: true },
+              { key: 'total', label: t('traffic.col.total'), width: '140px', num: true, sortable: true },
+              { key: 'why', label: t('traffic.col.why') },
+            ],
+            rows: dataRows(latest).map(function (r) {
+              var note = whyNote(r);
+              // The same rule the Top panel follows: a rate nobody can source
+              // is a dash with the reason beside it, never a bare 0 B/s.
+              var unknown = note && r.reason !== 'nodirection';
+              return {
+                a: r.a,
+                cells: {
+                  agent: ui.hostLink(r.a.display_name || r.a.hostname, function () { deps.openAgent(r.a.id); }),
+                  status: ui.badge(r.a.status === 'online' ? 'ok' : 'neutral',
+                    r.a.status === 'online' ? t('traffic.online') : t('traffic.offline')),
+                  rx: unknown ? '\u2013' : deps.fmtBytes(r.rx) + '/s',
+                  tx: unknown ? '\u2013' : deps.fmtBytes(r.tx) + '/s',
+                  total: unknown ? '\u2013' : deps.fmtBytes(r.rx + r.tx) + '/s',
+                  why: note || '',
+                },
+              };
+            }),
+            sort: dataSort,
+            onSort: function (key) {
+              dataSort = dataSort.key === key
+                ? { key: key, dir: dataSort.dir === 'asc' ? 'desc' : 'asc' }
+                : { key: key, dir: 'desc' };
+              drawData(lastLatest);
+            },
+            onOpen: function (row) { deps.openAgent(row.a.id); },
+          })],
+        }));
+      }
+
+      // ---- the lens ----------------------------------------------------------
+      // The pane that is off is DROPPED, not hidden: the chart keeps a 60-point
+      // buffer and redraws on every 3-second tick, and a chart nobody can see
+      // redrawing is work done for no reader.
+      var lastLatest = [];
+      var tickError = null;
+      function tickErrorState() {
+        return ui.errorState({
+          title: t('traffic.err.title'),
+          body: deps.errText(tickError),
+          detail: 'GET /agents',
+          onRetry: function () { return tick(); },
+        });
+      }
+
+      // Mounting is separate from drawing: the first call happens before the
+      // first tick has landed, and a drawTop([]) then would replace the
+      // skeleton with "no agent is reporting" before anything has been read.
+      function mountLens() {
+        if (mode === 'data') lensHost.replaceChildren(dataHost);
+        else lensHost.replaceChildren(livePanel, topHost, extrasHost);
+      }
+
+      function drawLens() {
+        mountLens();
+        if (mode === 'data') { drawData(lastLatest); return; }
+        drawTop(lastLatest);
+        draw();
+      }
+
       // ---- alert -------------------------------------------------------------
       function drawAlert(hit) {
         if (!hit) { alertHost.replaceChildren(); return; }
@@ -329,9 +468,15 @@
               if (!selection.size) { selection.add('total:rx'); selection.add('total:tx'); }
             }
             var online = d.agents.filter(function (a) { return a.status === 'online'; }).length;
+            tickError = null;
+            lastLatest = d.latest;
             drawStrip(totalRx, totalTx, online, d.agents.length);
-            drawTop(d.latest);
-            draw();
+            if (mode === 'data') {
+              drawData(lastLatest);
+            } else {
+              drawTop(lastLatest);
+              draw();
+            }
             drawToolbar();
             tickN += 1;
             if (tickN === 1 || tickN % 10 === 0) {
@@ -341,17 +486,22 @@
           })
           .catch(function (e) {
             if (tickN) return; // a failed tick keeps the last good render
-            chartHost.replaceChildren(ui.errorState({
-              title: t('traffic.err.title'),
-              body: deps.errText(e),
-              detail: 'GET /agents',
-              onRetry: function () { return tick(); },
-            }));
+            tickError = e;
+            // The error goes where the reader is looking, which is whichever
+            // lens is on — in the table's place, not behind it. It is kept, so
+            // switching lens after the failure still says what went wrong.
+            if (mode === 'data') {
+              drawData(lastLatest);
+              return;
+            }
+            chartHost.replaceChildren(tickErrorState());
             legendHost.replaceChildren();
           });
       }
 
       chartHost.replaceChildren(ui.loadingState(4));
+      mountLens();
+      if (mode === 'data') dataHost.replaceChildren(ui.panel({ title: t('traffic.all'), children: [ui.loadingState(4)] }));
       drawToolbar();
       deps.fetchSites().then(function (s) {
         state.siteCount = s.count;
@@ -362,7 +512,7 @@
         // Mounted after the first tick (the page is built by then), and asked
         // to fill itself straight away — otherwise the storage line sits on its
         // placeholder until the tenth tick, half a minute in.
-        deps.mountExtras(page);
+        deps.mountExtras(extrasHost);
         deps.refreshExtras();
         deps.startPolling(tick);
         return page;

@@ -56,6 +56,31 @@
       var body = el('div', {});
       var stripHost = el('div', {});
 
+      // Two lenses on the SAME rows: the list answers "what changed", the
+      // overview answers "how much, where, and of what kind" — which is the
+      // question the landing screen gets asked first on a fleet with a
+      // hundred rows in the window. Neither fetches: both are drawn from the
+      // feed already in `data`, and the filters above apply to both.
+      var MODES = ['overview', 'list'];
+      var mode = ui.storedMode('changes', MODES, 'list');
+      var modeCtl = ui.modeSwitch({
+        label: t('mode.label'),
+        store: 'changes',
+        value: mode,
+        items: [
+          { key: 'overview', label: t('mode.overview'), icon: 'overview', title: t('mode.overviewHint') },
+          { key: 'list', label: t('mode.list'), icon: 'list', title: t('mode.listHintChanges') },
+        ],
+        onchange: function (key) { mode = key; draw(); },
+      });
+      // Going to the list from a rollup row presses the switch rather than
+      // setting `mode` behind its back: the control has to show which lens is
+      // on, and pressing it is also what remembers the choice.
+      function pressMode(key) {
+        var btn = modeCtl.querySelector('.mode-btn[data-mode="' + key + '"]');
+        if (btn) btn.click();
+      }
+
       var markSeen = ui.button('primary', t('changes.markSeen'), {
         onclick: function () {
           markSeen.disabled = true;
@@ -87,6 +112,7 @@
         },
         // One primary. "Fleet grid" is a way out of the page, so it is secondary.
         actions: [
+          modeCtl,
           ui.button('secondary', t('changes.fleetLink'), { onclick: function () { deps.gotoView('fleet'); } }),
           markSeen,
         ],
@@ -280,6 +306,92 @@
         });
       }
 
+      // ---- the Overview lens -------------------------------------------------
+      // A rollup of the rows the filters let through, grouped twice: by what
+      // kind of change it is, and by which host it came from. Clicking a host
+      // row narrows the host filter to it, so the overview is a way INTO the
+      // list rather than a dead end.
+      function rollup(rows, keyOf, labelOf) {
+        var by = {};
+        rows.forEach(function (ev) {
+          var k = keyOf(ev);
+          if (!by[k]) by[k] = { key: k, total: 0, CRIT: 0, WARN: 0, INFO: 0 };
+          by[k].total += 1;
+          if (by[k][ev.severity] !== undefined) by[k][ev.severity] += 1;
+        });
+        return Object.keys(by).map(function (k) {
+          var g = by[k];
+          g.label = labelOf(k);
+          return g;
+        }).sort(function (a, b) {
+          if (b.CRIT !== a.CRIT) return b.CRIT - a.CRIT;
+          if (b.total !== a.total) return b.total - a.total;
+          return a.label < b.label ? -1 : 1;
+        });
+      }
+
+      // A zero reads as muted text, not as a badge: a badge is a state, and
+      // "no critical changes here" is not one.
+      function sevCell(n, tone) {
+        return n ? ui.badge(tone, String(n)) : ui.meta('—');
+      }
+
+      function rollupTable(groups, label, onPick) {
+        return ui.dataTable({
+          dense: true,
+          columns: [
+            { key: 'name', label: label },
+            { key: 'CRIT', label: t('changes.group.CRIT'), width: '108px', num: true },
+            { key: 'WARN', label: t('changes.group.WARN'), width: '108px', num: true },
+            { key: 'INFO', label: t('changes.group.INFO'), width: '122px', num: true },
+            { key: 'total', label: t('changes.total'), width: '96px', num: true },
+          ],
+          rows: groups.map(function (g) {
+            return {
+              g: g,
+              cells: {
+                name: g.label,
+                CRIT: sevCell(g.CRIT, 'crit'),
+                WARN: sevCell(g.WARN, 'warn'),
+                INFO: sevCell(g.INFO, 'info'),
+                total: String(g.total),
+              },
+            };
+          }),
+          onOpen: onPick ? function (row) { onPick(row.g); } : undefined,
+        });
+      }
+
+      function overviewPanels(rows) {
+        if (!rows.length) return [];
+        return [
+          ui.panel({
+            title: t('changes.rollup.byType'),
+            note: t('changes.rollup.note'),
+            children: [rollupTable(
+              rollup(rows, function (ev) { return ev.kind || ''; }, kindLabel),
+              t('changes.col.type'),
+              null)],
+          }),
+          ui.panel({
+            title: t('changes.rollup.byHost'),
+            note: t('changes.rollup.note'),
+            children: [rollupTable(
+              rollup(rows,
+                function (ev) { return ev.agentId == null ? '' : String(ev.agentId); },
+                function (k) { return k === '' ? '\u2014' : hostName(Number(k)); }),
+              t('changes.col.host'),
+              function (g) {
+                if (g.key === '') return;
+                // Narrowing by name is what the host filter takes, and it is
+                // the same string the column shows.
+                state.host = hostName(Number(g.key));
+                pressMode('list');
+              })],
+          }),
+        ];
+      }
+
       var data = null;
 
       // The rows the status selector lets through. The stat strip counts these,
@@ -347,6 +459,11 @@
         // as an inline note — never a banner, never hidden behind the (?).
         if (data.partial && (data.failedSources || []).length) {
           kids.push(ui.inlineNote('⚠ ' + t('changes.partial', { sources: data.failedSources.join(', ') }), 'warn'));
+        }
+        if (mode === 'overview' && rows.length) {
+          kids.push.apply(kids, overviewPanels(rows));
+          body.replaceChildren.apply(body, kids);
+          return;
         }
         kids.push(ui.panel({
           title: t('changes.panel'),

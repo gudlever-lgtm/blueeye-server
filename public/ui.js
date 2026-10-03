@@ -256,6 +256,7 @@
         ['path', 'M14 3v5h5M9 13h6M9 17h4'],
       ],
       data: [['path', 'M3 5h18v14H3zM3 10h18M9 10v9M15 10v9']],
+      overview: [['path', 'M4 4h6v6H4zM14 4h6v4h-6zM4 14h6v6H4zM14 12h6v8h-6z']],
       map: [['path', 'm9 4-6 2.5v13L9 17l6 3 6-2.5v-13L15 7z'], ['path', 'M9 4v13M15 7v13']],
     };
     function modeIcon(name) {

@@ -118,6 +118,14 @@
                 { key: 'map', label: t('mode.map'), icon: 'map' },
                 { key: 'list', label: t('mode.list'), icon: 'list' },
               ],
+            }),
+            ui.modeSwitch({
+              label: t('ks.mode.title'),
+              value: 'overview',
+              items: [
+                { key: 'overview', label: t('mode.overview'), icon: 'overview' },
+                { key: 'data', label: t('mode.data'), icon: 'data' },
+              ],
             }))))],
       });
     }

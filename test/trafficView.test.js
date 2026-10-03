@@ -292,3 +292,87 @@ test('an agent that is reporting fine carries no note', async (t) => {
   assert.match(row[2], /MB\/s$/);
   assert.equal(row[4], '', 'a healthy row was given a reason it does not need');
 });
+
+// ---- the ModeSwitch: Overview and Data ------------------------------------
+// Two lenses on the SAME tick (ui.modeSwitch, docs/ui-contract.md ->
+// ModeSwitch): the chart answers "what is moving right now", the table answers
+// "how much is each agent carrying". Neither goes back to the server.
+
+const toMode = async (doc, window, key) => {
+  const btn = doc.querySelector('#view .mode-switch .mode-btn[data-mode="' + key + '"]');
+  assert.ok(btn, 'no mode switch in the page header');
+  btn.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+  await settle();
+};
+
+test('the Data lens drops the chart and lists EVERY agent, without a second read', async (t) => {
+  const { doc, window, log } = boot({ t, routes: SESSION() });
+  await settle();
+  assert.ok(doc.querySelector('#view .ui-chart-legend .ui-legend-item'), 'Overview is not the default lens');
+  const reads = log.filter((c) => c.key === 'GET /agents').length;
+
+  await toMode(doc, window, 'data');
+  assert.equal(log.filter((c) => c.key === 'GET /agents').length, reads, 'a lens went back to the server');
+  // The chart is dropped, not hidden — a chart nobody can see still redraws on
+  // every 3-second tick.
+  assert.equal(doc.querySelectorAll('#view svg.multi-chart, #view .ui-chart-legend .ui-legend-item').length, 0,
+    'the chart was hidden rather than dropped');
+  assert.equal(doc.querySelectorAll('#view .storage-fold').length, 0, 'the folds stayed under a table they are not about');
+  // Top agents is five; this is all three, offline one included.
+  assert.equal(rows(doc).length, 3);
+  assert.equal(rows(doc)[0].children[0].textContent.trim(), 'oslo-edge-01', 'the table does not lead with the busiest');
+  // Total is rx + tx, so it is not a copy of either column.
+  const [rx, tx, total] = [2, 3, 4].map((i) => rows(doc)[0].children[i].textContent.trim());
+  assert.match(total, /MB\/s$/, 'no Total column');
+  assert.notEqual(total, rx);
+  assert.notEqual(total, tx);
+});
+
+test('the Data lens sorts, and going back to Overview brings the chart and the folds back', async (t) => {
+  const { doc, window } = boot({ t, routes: SESSION() });
+  await settle();
+  await toMode(doc, window, 'data');
+  const head = [...doc.querySelectorAll('#view .panel-ui table.dt thead th')].find((th) => /Agent/.test(th.textContent));
+  const btn = head.querySelector('button') || head;
+  btn.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+  await settle();
+  const names = rows(doc).map((r) => r.children[0].textContent.trim());
+  assert.deepEqual(names, ['sto-branch-07', 'oslo-edge-01', 'cph-core-02'], 'the name column does not sort');
+
+  await toMode(doc, window, 'overview');
+  assert.ok(doc.querySelector('#view .ui-chart-legend .ui-legend-item'), 'the chart did not come back');
+  assert.ok(doc.querySelector('#view .storage-fold'), 'the folds did not come back');
+});
+
+test('an agent that never reported reads as a dash in the Data lens too, never as 0 B/s', async (t) => {
+  const { doc, window } = boot({ t, routes: SESSION({ 'GET /agents/9/results': [] }) });
+  await settle();
+  await toMode(doc, window, 'data');
+  const sto = rows(doc).find((r) => /sto-branch-07/.test(r.textContent));
+  assert.equal(sto.children[2].textContent.trim(), '–');
+  assert.equal(sto.children[4].textContent.trim(), '–', 'the total claimed a number nobody can source');
+  assert.match(sto.children[5].textContent, /never reported|no result/i);
+});
+
+test('a 500 on /agents is an ErrorState in the Data lens too, not an empty table', async (t) => {
+  const { doc, window } = boot({ t, routes: SESSION({ 'GET /agents': { status: 500, body: { error: 'Internal Server Error' } } }) });
+  await settle();
+  // The first tick failed, so the chart carries the error. Switching lens must
+  // carry it over: "no agent is reporting" and "the read failed" are not the
+  // same answer, and the table would be empty either way.
+  assert.ok(doc.querySelector('#view .state.is-error'), 'no ErrorState on the chart');
+  await toMode(doc, window, 'data');
+  const state = doc.querySelector('#view .state.is-error');
+  assert.ok(state, 'the Data lens turned a failed read into an empty table');
+  assert.match(state.textContent, /GET \/agents/);
+  assert.equal(doc.querySelectorAll('#view .panel-ui table.dt').length, 0);
+});
+
+test('a 404 on one agent results counts as zero in the Data lens, it does not lose the tick', async (t) => {
+  const { doc, window } = boot({ t, routes: SESSION({ 'GET /agents/8/results': { status: 404, body: { error: 'Not Found' } } }) });
+  await settle();
+  await toMode(doc, window, 'data');
+  assert.equal(rows(doc).length, 3, 'one unreadable agent took the whole table down');
+  const cph = rows(doc).find((r) => /cph-core-02/.test(r.textContent));
+  assert.equal(cph.children[2].textContent.trim(), '\u2013', 'an unreadable agent reads as 0 B/s');
+});

@@ -349,15 +349,23 @@ you to other content**, a **mode re-draws the same content for a different
 reader**. Analysis reads as a sentence or as the numbers the sentence rests on;
 Troubleshooting as a graph or as a sortable list; the Report Generator as the
 document or as the rows the document is built from; Sites and Destinations as a
-map or as a table. Neither half is a different page, so neither gets a tab —
-and the sidebar keeps the entries it had, because the rail is navigation and
-this is not.
+map or as a table; Changes as a rollup or as every row; Traffic as the live
+chart or as every agent's rate. Neither half is a different page, so neither
+gets a tab — and the sidebar keeps the entries it had, because the rail is
+navigation and this is not.
+
+It stays in the PageHeader rather than next to the logo for the same reason: a
+lens belongs to the screen it re-draws, not to the app. "Overview" means the
+rollup on Changes and the live chart on Traffic, and a control that changes
+meaning on every navigation cannot live in the chrome that never changes. In
+the header it sits beside the title it re-draws, where the reader is already
+looking when they think "this is not the view I want".
 
 Rules:
 
 - **Two items, text *and* icon.** The icon alone makes "Evidence" a guess. The
   icon set lives in `ui.js` (`MODE_ICONS`), so two screens cannot draw "list"
-  differently; a fifth pair is added there and to the kitchen sink first.
+  differently; a new pair is added there and to the kitchen sink first.
 - **Exactly one half is `aria-pressed="true"`**, left/right move between them,
   and pressing the half that is already on is not a change — a screen that
   redrew there would throw the reader's scroll position away for nothing.

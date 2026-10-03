@@ -361,3 +361,81 @@ test('a failed mute says so and keeps the rows', async (t) => {
   assert.equal(doc.querySelectorAll('#view table.dt tbody tr').length, 3);
   assert.ok(doc.querySelector('#ui-toasts .ui-toast.err'), 'the failure was silent');
 });
+
+// ---- the ModeSwitch: Overview and List ------------------------------------
+// Two lenses on the SAME rows (ui.modeSwitch, docs/ui-contract.md ->
+// ModeSwitch). Neither fetches: both are drawn from the feed already read.
+
+const toMode = async (doc, window, key) => {
+  const btn = doc.querySelector('#view .mode-switch .mode-btn[data-mode="' + key + '"]');
+  assert.ok(btn, 'no mode switch in the page header');
+  btn.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+  await settle();
+};
+
+test('the Overview lens rolls the same rows up by type and by host, and asks nothing new', async (t) => {
+  const { doc, window, log } = boot({ t, routes: SESSION() });
+  await settle();
+  const reads = log.filter((c) => c.key === 'GET /api/changes').length;
+  assert.equal(doc.querySelectorAll('#view table.dt tbody tr').length, 3, 'List is not the default lens');
+
+  await toMode(doc, window, 'overview');
+  assert.equal(log.filter((c) => c.key === 'GET /api/changes').length, reads, 'a lens went back to the server');
+  const tables = [...doc.querySelectorAll('#view .panel-ui table.dt')];
+  assert.equal(tables.length, 2, 'the overview is not two rollups');
+  // The list is dropped, not hidden: the change list has a Time column and
+  // neither rollup does.
+  assert.equal([...doc.querySelectorAll('#view table.dt thead th')].filter((th) => /^Time$/.test(th.textContent.trim())).length, 0,
+    'the change list survived under the overview');
+  // Three kinds, three hosts (the topology row has none).
+  assert.equal(tables[0].querySelectorAll('tbody tr').length, 3);
+  assert.equal(tables[1].querySelectorAll('tbody tr').length, 3);
+  // The strip and the filters are about the rows, not about how they are
+  // drawn, so they survive the switch.
+  assert.ok(doc.querySelector('#view .statstrip .stat-card.crit'), 'the strip went with the list');
+  assert.ok(doc.querySelector('#view .toolbar-ui'), 'the filters went with the list');
+});
+
+test('a rollup counts each severity once, and a zero is text rather than a badge', async (t) => {
+  const { doc, window } = boot({ t, routes: SESSION() });
+  await settle();
+  await toMode(doc, window, 'overview');
+  const byHost = [...doc.querySelectorAll('#view .panel-ui table.dt')][1];
+  const oslo = [...byHost.querySelectorAll('tbody tr')].find((r) => /oslo-edge-01/.test(r.textContent));
+  assert.ok(oslo, 'the host rollup lost a host');
+  assert.equal(oslo.children[1].textContent.trim(), '1', 'oslo has one critical change');
+  assert.equal(oslo.children[4].textContent.trim(), '1', 'the total is wrong');
+  // WARN and INFO are zero for this host: muted text, never a badge.
+  assert.equal(oslo.children[2].querySelectorAll('.badge-ui').length, 0, 'a zero was drawn as a badge');
+  assert.match(oslo.children[2].textContent, /—/);
+});
+
+test('a host row in the rollup presses List and narrows the filter to that host', async (t) => {
+  const { doc, window } = boot({ t, routes: SESSION() });
+  await settle();
+  await toMode(doc, window, 'overview');
+  const byHost = [...doc.querySelectorAll('#view .panel-ui table.dt')][1];
+  const cph = [...byHost.querySelectorAll('tbody tr')].find((r) => /cph-core-02/.test(r.textContent));
+  cph.dispatchEvent(new window.Event('click', { bubbles: true }));
+  await settle();
+  // The switch has to SHOW which lens is on — setting the mode behind its back
+  // would leave "Overview" pressed over a list.
+  const pressed = doc.querySelector('#view .mode-switch .mode-btn[aria-pressed="true"]');
+  assert.equal(pressed.dataset.mode, 'list');
+  const rows = [...doc.querySelectorAll('#view .panel-ui table.dt tbody tr')];
+  assert.equal(rows.length, 1, 'the host filter did not narrow the list');
+  assert.match(rows[0].textContent, /cph-core-02/);
+});
+
+test('an empty feed keeps the EmptyState in the Overview lens too', async (t) => {
+  const { doc, window } = boot({
+    t,
+    routes: SESSION({ 'GET /api/changes': Object.assign({}, FEED, { events: [], total: 0 }) }),
+  });
+  await settle();
+  await toMode(doc, window, 'overview');
+  const state = doc.querySelector('#view .state');
+  assert.ok(state, 'nothing to roll up and nothing said');
+  assert.equal(state.classList.contains('is-error'), false);
+  assert.equal(doc.querySelectorAll('#view .panel-ui table.dt').length, 0);
+});

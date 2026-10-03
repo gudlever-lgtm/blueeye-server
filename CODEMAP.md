@@ -357,11 +357,15 @@ A single vanilla-JS SPA. Key building blocks:
 - **ModeSwitch** — two lenses on ONE screen (`ui.modeSwitch()` in
   `public/ui.js`, `.mode-switch` in `components.css`), in the PageHeader's
   actions. A tab moves you to other content; a mode re-draws the same content
-  for a different reader, so the sidebar is untouched. Four screens have one:
+  for a different reader, so the sidebar is untouched. Six screens have one:
   Analysis (Explanation ⟷ Evidence — the same rows, the explanation column
   swapped for baseline/observed/kind), Troubleshooting (Graph ⟷ List — the
   same `data.topology`), Reporting → Report Generator (Document ⟷ Data — the
-  rows the export carries), Sites and Destinations (Map ⟷ List). The choice is
+  rows the export carries), Sites and Destinations (Map ⟷ List), Changes
+  (Overview ⟷ List — the same feed rolled up by kind and by host, where a host
+  row presses List and narrows the filter to it), Traffic (Overview ⟷ Data —
+  the same 3-second tick as the live chart or as every agent's rate, sortable;
+  the three unmigrated folds go with the Overview lens). The choice is
   remembered PER SCREEN in `localStorage` (`blueeye.mode.<screen>`, read with
   `ui.storedMode`), the labels are one catalogue entry per lens (`mode.*`), and
   the pane that is off is dropped rather than hidden so a Leaflet map does not

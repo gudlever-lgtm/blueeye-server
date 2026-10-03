@@ -1015,6 +1015,74 @@ async function refreshAttackBar() {
   host.setAttribute('title', t('attack.bar.title'));
 }
 
+// ---- The address agents are told to use -------------------------------------
+// Every install script, every update one-liner and every enrolled agent's
+// launcher carries ONE address: the one this server handed out. The dashboard
+// is the one place that can tell whether it still works, because it knows the
+// address it was itself loaded from — and the two disagreeing is exactly the
+// failure that cost a fleet a day: a proxy began redirecting http to https, the
+// stored address still said http, and a WebSocket handshake does not follow
+// redirects. Every agent logged it. Nothing on screen did.
+//
+// Three things are worth saying, in this order of severity:
+//   * a MISMATCH of scheme or host: agents are being sent somewhere other than
+//     where this dashboard answers;
+//   * plain http with no admin saying that is deliberate;
+//   * nothing at all configured, so the address is whatever Host header the
+//     enrolling host happened to send.
+let publicUrlBannerLast = null;
+
+function publicUrlProblem(settings, origin) {
+  const effective = (settings && settings.effective) || '';
+  const allowHttp = !!(settings && settings.allowHttp);
+  let here;
+  try { here = new URL(origin); } catch { return null; }
+  // Loopback is the development server: the dashboard is on localhost too, and
+  // there is no certificate to compare against.
+  const local = /^(localhost|127(\.\d{1,3}){3}|\[?::1\]?)$/i.test(here.hostname);
+  if (local) return null;
+  if (!effective) return { kind: 'unset', here: here.origin };
+  let told;
+  try { told = new URL(effective); } catch { return { kind: 'unparseable', told: effective, here: here.origin }; }
+  if (told.protocol !== here.protocol || told.host !== here.host) {
+    return { kind: 'mismatch', told: told.origin, here: here.origin };
+  }
+  if (told.protocol === 'http:' && !allowHttp) return { kind: 'insecure', told: told.origin, here: here.origin };
+  return null;
+}
+
+async function checkPublicUrl() {
+  const host = $('#public-url-banner');
+  if (!host) return;
+  // Admin-only: everyone else cannot change it, and a warning nobody can act on
+  // is noise on every screen.
+  if (role !== 'admin') return;
+  let settings = null;
+  try { settings = (await api('/api/settings')).publicUrl; }
+  catch { return; } // transient — leave whatever is on screen and retry next render
+  const problem = publicUrlProblem(settings, window.location.origin);
+  const signature = problem ? `${problem.kind}|${problem.told || ''}|${problem.here}` : '';
+  if (signature === publicUrlBannerLast) return;
+  publicUrlBannerLast = signature;
+  if (!problem) {
+    host.replaceChildren();
+    host.classList.add('hidden');
+    return;
+  }
+  host.classList.remove('hidden');
+  host.replaceChildren(
+    el('h2', { class: 'trust-banner-title' }, `\u26a0 ${t('publicUrl.banner.title')}`),
+    el('div', { class: 'trust-banner-item' },
+      el('p', {}, t(`publicUrl.banner.${problem.kind}`, { told: problem.told || '', here: problem.here })),
+      el('p', { class: 'trust-banner-impact' }, t('publicUrl.banner.impact'))),
+    el('div', { class: 'trust-banner-actions' },
+      el('button', {
+        type: 'button',
+        class: 'ghost',
+        onclick: () => { settingsTab = 'agents'; currentView = 'settings'; render(); },
+      }, t('publicUrl.banner.open'))));
+}
+
 async function refreshTrustBanner() {
   const host = $('#trust-banner');
   if (!host) return;
@@ -15683,9 +15751,31 @@ function eventsBulkCard(e) {
 async function settingsAgentsView() {
   const data = await api('/api/settings');
   return el('div', { class: 'settings-grid' },
+    serverAddressCard(data.publicUrl),
     agentDefaultsCard(data.agents),
     agentsSettingsCard(data.agents),
     agentUpdatePolicyCard(data.agents));
+}
+
+// The address every install script, update one-liner and enrolled agent is told
+// to use. FIRST on this screen because it is the one setting here that can stop
+// a whole fleet: an agent sent to the wrong address reconnects for ever, and a
+// WebSocket handshake does not follow redirects, so nothing on either side says
+// what is wrong. The banner above the view compares it with the address this
+// dashboard was loaded from.
+function serverAddressCard(pu) {
+  const env = (pu && pu.envPublicUrl) || '';
+  return settingsFormCard({
+    title: 'Address agents use',
+    values: { publicUrl: (pu && pu.publicUrl) || '', allowHttp: !!(pu && pu.allowHttp) },
+    endpoint: '/api/settings/public-url',
+    fields: [
+      { key: 'publicUrl', label: 'Server address', type: 'text', maxlength: 512,
+        hint: `https://host — what agents are told to reach this server at, baked into every install script and update one-liner. Empty falls back to ${env ? `BLUEEYE_PUBLIC_URL (${env})` : 'BLUEEYE_PUBLIC_URL'}, and then to whatever address the enrolling host happened to ask for. Set here rather than in the environment when a certificate arrives or a proxy starts forcing https: this takes effect on the next script, not the next restart.` },
+      { key: 'allowHttp', label: 'Plain HTTP is deliberate here', type: 'checkbox',
+        hint: 'Off (the default) means an http:// address is upgraded to https:// before it is handed to an agent, because an agent carries its token and the network metadata it reports on that connection — and a stored http address is nearly always inherited from before the certificate existed rather than chosen. On for a deliberate plain-HTTP deployment on an internal network; loopback is never upgraded either way.' },
+    ],
+  });
 }
 
 // Default traffic source stamped on each agent as it enrolls (Settings → Agents).
@@ -20726,6 +20816,9 @@ async function render({ silent = false } = {}) {
   // ...and, on every render, whether either trust key has moved. Above the view,
   // not in it: a key that changed is not a property of the page you are on.
   refreshTrustBanner();
+  // ...and whether the address this server hands to agents is still the address
+  // it answers on. Same place, same reasoning.
+  checkPublicUrl();
   // ...and whether anything is indicating an attack. Same reasoning: a scan
   // running right now is not a property of the page you are on.
   refreshAttackBar();

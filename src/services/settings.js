@@ -75,7 +75,7 @@ function badRequest(message, details) {
 // live-object seam liveAnalysis and liveAlerting use, and for the same reason:
 // the detectors run on timers and must not each hold a snapshot taken when the
 // process started.
-function createSettingsService({ settingsRepo, config, liveAnalysis = null, liveRetention = null, liveAlerting = null, liveGeo = null, liveGeoCity = null, liveAttack = null, secretBox = null }) {
+function createSettingsService({ settingsRepo, config, liveAnalysis = null, liveRetention = null, liveAlerting = null, liveGeo = null, liveGeoCity = null, liveAttack = null, livePublicUrl = null, secretBox = null }) {
   // Encrypt/decrypt the assistant API key for storage at rest (AES-256-GCM via
   // secretBox, the same scheme integration credentials + the LDAP bind password
   // use). When no box is wired (some tests) values pass through as plaintext. A
@@ -523,6 +523,92 @@ function createSettingsService({ settingsRepo, config, liveAnalysis = null, live
     const merged = { ...(await getEvents()), ...value };
     await settingsRepo.set('events', merged);
     return merged;
+  }
+
+  // ---- The address agents are told to use (Settings → Agents) -------------
+  //
+  // Every install script, every update one-liner and every enrolled agent's
+  // launcher carries ONE address: the one this server told them to use. It has
+  // lived in BLUEEYE_PUBLIC_URL, an env var — and an env var is answered by
+  // somebody with a shell and a redeploy, while the address changes for reasons
+  // that reach the dashboard first: a certificate arrives, a proxy starts
+  // forcing https, a hostname moves.
+  //
+  // What that cost, once: a proxy began redirecting http to https. The stored
+  // address still said http. A WebSocket handshake does not follow redirects,
+  // so the fleet spent a day logging `handshake failed: HTTP 301` while the
+  // dashboard — reached over https by the same people — said nothing at all.
+  //
+  // So it is a setting, it wins over the env var (the more specific, more
+  // recent answer, exactly as the recording publicUrl already works), and the
+  // dashboard checks it against the address IT was loaded from on every render.
+  //
+  // HTTPS IS THE DEFAULT. An agent carries its token and the customer's network
+  // metadata on that connection, and a stored http:// address is nearly always
+  // inherited rather than chosen — so one is accepted, stored as it was typed,
+  // and reported as a problem rather than silently honoured. `allowHttp` is how
+  // a deliberate plain-HTTP deployment on an internal network says so.
+  const PUBLIC_URL_DEFAULTS = { publicUrl: '', allowHttp: false };
+
+  function validatePublicUrl(patch) {
+    const p = patch && typeof patch === 'object' ? patch : {};
+    const errors = {};
+    const value = {};
+    bool(p, 'allowHttp', value);
+    if (p.publicUrl !== undefined) {
+      const raw = String(p.publicUrl == null ? '' : p.publicUrl).trim().replace(/\/+$/, '');
+      if (!raw) value.publicUrl = ''; // cleared: fall back to the env var, then the request
+      else {
+        let url = null;
+        try { url = new URL(raw); } catch { url = null; }
+        if (!url) errors.publicUrl = 'that does not look like a full address (https://host)';
+        else if (url.protocol !== 'https:' && url.protocol !== 'http:') errors.publicUrl = 'the address must start with https:// or http://';
+        else if (!url.hostname) errors.publicUrl = 'the address needs a hostname';
+        else if (url.search || url.hash) errors.publicUrl = 'the address must not carry a query or fragment';
+        else if (url.pathname && url.pathname !== '/') errors.publicUrl = 'the address must not carry a path — agents append their own';
+        else value.publicUrl = `${url.protocol}//${url.host}`;
+      }
+    }
+    return { errors: Object.keys(errors).length ? errors : null, value };
+  }
+
+  async function getPublicUrl() {
+    const override = await loadOverride('publicUrl');
+    const o = override && typeof override === 'object' ? override : {};
+    const base = { ...PUBLIC_URL_DEFAULTS, ...o };
+    const configured = String(base.publicUrl || '').trim().replace(/\/+$/, '');
+    const envUrl = String(config.publicUrl || '').trim().replace(/\/+$/, '');
+    return {
+      // What an admin set here. Empty means "nobody has", not "http://".
+      publicUrl: configured,
+      allowHttp: !!base.allowHttp,
+      // What the env var says, shown beside it so an operator can see which
+      // of the two is in force rather than guessing.
+      envPublicUrl: envUrl,
+      // The one that actually goes into install scripts.
+      effective: configured || envUrl,
+    };
+  }
+
+  async function setPublicUrl(patch) {
+    const { errors, value } = validatePublicUrl(patch || {});
+    if (errors) throw badRequest('invalid server address', errors);
+    const current = await getPublicUrl();
+    const merged = { publicUrl: current.publicUrl, allowHttp: current.allowHttp, ...value };
+    await settingsRepo.set('publicUrl', merged);
+    // The enroll router reads this per request and cannot await a database
+    // read, so the live object is what it sees — the same seam liveAnalysis and
+    // liveAttack use, and for the same reason: an address changed in Settings
+    // must be in the next install script, not after the next restart.
+    applyPublicUrlToLive(merged);
+    return getPublicUrl();
+  }
+
+  function applyPublicUrlToLive(stored) {
+    if (!livePublicUrl) return;
+    const o = stored && typeof stored === 'object' ? stored : {};
+    livePublicUrl.publicUrl = String(o.publicUrl || '').trim().replace(/\/+$/, '') || String(config.publicUrl || '');
+    livePublicUrl.allowHttp = !!o.allowHttp;
   }
 
   // ---- Throughput health thresholds (Settings → Analysis) -----------------
@@ -1315,6 +1401,10 @@ function createSettingsService({ settingsRepo, config, liveAnalysis = null, live
       if (ai) applyAttackToLive(ai);
     } catch { /* ignore */ }
     try {
+      const pu = await settingsRepo.get('publicUrl');
+      if (pu) applyPublicUrlToLive(pu);
+    } catch { /* ignore */ }
+    try {
       const al = await settingsRepo.get('alerting');
       if (al && liveAlerting) applyAlertingToLive(normAlerting(al));
     } catch { /* ignore */ }
@@ -1505,6 +1595,7 @@ function createSettingsService({ settingsRepo, config, liveAnalysis = null, live
     getLadder, getLadders, setLadder, validateLadderPatch,
     getAgents, setAgents, validateAgents, getDefaultMonitorConfig,
     getEvents, setEvents, validateEvents,
+    getPublicUrl, setPublicUrl, validatePublicUrl,
     getAssistant, getAssistantSafe, setAssistant, validateAssistant,
     getAlerting, getAlertingSafe, setAlerting, validateAlerting,
     getTsdb,

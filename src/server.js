@@ -1296,10 +1296,17 @@ function start() {
 
   // Runtime-editable settings (map tile/geocoder, traffic-type categories, and
   // the analysis/retention knobs — which it mutates on the live config objects).
+  // The address agents are told to use, as a live object: the enroll router
+  // reads it on every request to build an install script and cannot await a
+  // database read, and an address changed in Settings must be in the NEXT
+  // script rather than after the next restart. Seeded from the env var,
+  // overwritten by applyStoredOverrides when an admin has set one.
+  const publicUrlConfig = { publicUrl: config.publicUrl, allowHttp: false };
   const settingsService = createSettingsService({
     settingsRepo: createSettingsRepository(db), config,
     liveAnalysis: analysisConfig, liveRetention: retentionConfig, liveAlerting: alertingConfig,
-    liveGeo: geoProvider, liveGeoCity: cityProvider, liveAttack: attackConfig, secretBox,
+    liveGeo: geoProvider, liveGeoCity: cityProvider, liveAttack: attackConfig,
+    livePublicUrl: publicUrlConfig, secretBox,
   });
   // Re-apply persisted analysis/retention edits onto the live config so they
   // survive restarts. Best-effort + fire-and-forget (consumers read lazily).
@@ -1608,7 +1615,14 @@ function start() {
     nis2EvidenceRepo,
     nis2AuditRepo,
     investigationsRepo,
-    enrollConfig: { publicUrl: config.publicUrl, certFingerprint: config.enroll.certFingerprint, defaultTtlMinutes: config.enrollment.defaultTtlMinutes },
+    enrollConfig: {
+      // Getters, not values: Settings → Agents can change both while the server
+      // runs, and the next install script must carry the new answer.
+      publicUrl: () => publicUrlConfig.publicUrl,
+      allowHttp: () => publicUrlConfig.allowHttp,
+      certFingerprint: config.enroll.certFingerprint,
+      defaultTtlMinutes: config.enrollment.defaultTtlMinutes,
+    },
     notifyDashboard,
     // Brute-force throttle for agent enrollment by IP (login has its own
     // loginThrottle inside the auth router).

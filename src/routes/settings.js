@@ -33,6 +33,11 @@ function createSettingsRouter({ settingsService, featureGate, dispatcher, analys
       ladder: settingsService ? await settingsService.getLadder() : null,
       agents: settingsService ? await settingsService.getAgents() : null,
       events: settingsService ? await settingsService.getEvents() : null,
+      // The address agents are told to use, and whether plain http is
+      // deliberate here. The dashboard compares `effective` with the address IT
+      // was loaded from and says so when they disagree.
+      publicUrl: settingsService && typeof settingsService.getPublicUrl === 'function'
+        ? await settingsService.getPublicUrl() : null,
       assistant: settingsService ? await settingsService.getAssistantSafe() : null,
       map: settingsService ? await settingsService.getMap() : null,
       geoip: settingsService ? await settingsService.getGeoip() : null,
@@ -225,6 +230,22 @@ function createSettingsRouter({ settingsService, featureGate, dispatcher, analys
   router.put('/events', ...admin, asyncHandler(async (req, res) => {
     try {
       res.json({ events: await settingsService.setEvents(req.body || {}) });
+    } catch (err) {
+      if (err.statusCode === 400) return res.status(400).json({ error: 'Validation failed', details: err.details || {} });
+      throw err;
+    }
+  }));
+
+  // PUT /api/settings/public-url — the address every install script, update
+  // one-liner and enrolled agent is told to use: { publicUrl, allowHttp }.
+  // Empty publicUrl falls back to BLUEEYE_PUBLIC_URL, then to the request's own
+  // host. http is accepted and stored as typed — and then reported, because an
+  // agent carries its token on that connection and a stored http address is
+  // nearly always inherited rather than chosen. `allowHttp` is how a deliberate
+  // plain-HTTP deployment says so.
+  router.put('/public-url', ...admin, asyncHandler(async (req, res) => {
+    try {
+      res.json({ publicUrl: await settingsService.setPublicUrl(req.body || {}) });
     } catch (err) {
       if (err.statusCode === 400) return res.status(400).json({ error: 'Validation failed', details: err.details || {} });
       throw err;

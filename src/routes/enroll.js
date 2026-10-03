@@ -12,16 +12,53 @@ const { renderRepinScript } = require('../enroll/repinScript');
 // so a forged Host header can't be reflected into the install script.
 const SAFE_HOST_RE = /^[a-zA-Z0-9.\-:[\]]+$/;
 
-// The canonical URL clients should use to reach this server: the configured
-// public URL if set (recommended behind a reverse proxy), otherwise derived
-// from the incoming request (works for direct/local access).
+// Loopback is the development server and the test suite: no transport to
+// protect, no certificate to present. Everything else is somebody's network.
+const LOOPBACK_RE = /^(localhost|127(\.\d{1,3}){3}|\[?::1\]?)(:\d+)?$/i;
+
+// HTTPS IS THE DEFAULT, AND THIS IS WHERE IT IS DECIDED FOR THE WHOLE FLEET.
+//
+// This one string is baked into every install script, every update one-liner
+// and every enrolled agent's launcher — and an agent carries its token and the
+// customer's network metadata on that connection. A plain-http address here is
+// almost never chosen: it is what the server happened to see when the first
+// agent was enrolled, before the certificate arrived, and it then outlives the
+// reason it existed.
+//
+// So http is upgraded to https unless the host is loopback or an admin has said
+// plain http is deliberate (Settings → Agents, `allowHttp`). The port is kept:
+// whoever wrote :3000 meant :3000.
+//
+// `TRUST_PROXY` is the other half. Without it `req.protocol` is the protocol of
+// the HOP FROM THE PROXY — plain http — so a server behind a TLS-terminating
+// proxy derives `http://host` for a browser that arrived over https, and bakes
+// that into every script it hands out. The upgrade here covers the deployment
+// that forgot it; it does not excuse leaving it off.
+function secureServerUrl(raw, { allowHttp = false } = {}) {
+  const value = String(raw == null ? '' : raw).trim().replace(/\/+$/, '');
+  if (!value || allowHttp) return value;
+  let url;
+  try { url = new URL(value); } catch { return value; }
+  if (url.protocol !== 'http:' || LOOPBACK_RE.test(url.host)) return value;
+  return `https://${url.host}`;
+}
+
+// The canonical URL clients should use to reach this server: the address an
+// admin set (Settings → Agents), else the configured public URL (recommended
+// behind a reverse proxy), else derived from the incoming request (works for
+// direct/local access). Always over https, per secureServerUrl above.
 function resolveServerUrl(req, enrollConfig) {
-  const configured = enrollConfig && enrollConfig.publicUrl;
-  if (configured) return String(configured).replace(/\/+$/, '');
+  const live = enrollConfig && typeof enrollConfig.publicUrl === 'function'
+    ? enrollConfig.publicUrl()
+    : (enrollConfig && enrollConfig.publicUrl);
+  const allowHttp = enrollConfig && typeof enrollConfig.allowHttp === 'function'
+    ? !!enrollConfig.allowHttp()
+    : !!(enrollConfig && enrollConfig.allowHttp);
+  if (live) return secureServerUrl(live, { allowHttp });
   const host = req.get('host') || '';
   const proto = req.protocol || 'http';
   if (!SAFE_HOST_RE.test(host)) return `${proto}://localhost`;
-  return `${proto}://${host}`;
+  return secureServerUrl(`${proto}://${host}`, { allowHttp });
 }
 
 // Nothing under /enroll may be cached by anything in between. The install and
@@ -399,4 +436,4 @@ function publicBinaryStatus(status) {
   return { ...s, topError: s.topError ? BUILD_ERROR_PUBLIC : null, arches };
 }
 
-module.exports = { createEnrollRouter, resolveServerUrl, publicBinaryStatus };
+module.exports = { createEnrollRouter, resolveServerUrl, secureServerUrl, publicBinaryStatus };

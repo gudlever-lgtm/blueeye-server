@@ -5663,6 +5663,15 @@
       // Neither is meant to ever change. When one does the server keeps running
       // and the fleet quietly stops accepting updates, so this is the loudest
       // text in the dashboard on purpose.
+      // The address agents are told to use, checked against the one the
+      // dashboard was loaded from.
+      'publicUrl.banner.title': 'Agents are being told to use a different address than this one',
+      'publicUrl.banner.mismatch': 'Install scripts and enrolled agents are told to reach this server at {told}. You are reading this at {here}.',
+      'publicUrl.banner.insecure': 'Agents are told to reach this server at {told} — plain HTTP. An agent carries its token and the network metadata it reports on that connection.',
+      'publicUrl.banner.unset': 'No address is configured, so each install script carries whatever address the enrolling host happened to ask for. You are reading this at {here}.',
+      'publicUrl.banner.unparseable': 'The configured address ({told}) is not a usable URL, so agents cannot be told where to go.',
+      'publicUrl.banner.impact': 'A WebSocket handshake does not follow redirects: an agent sent to the wrong address reconnects for ever without ever saying what is wrong.',
+      'publicUrl.banner.open': 'Set the address',
       'trustKey.banner.title': 'A trust key on this server has changed',
       'trustKey.banner.license': 'Licence trust anchor',
       'trustKey.banner.agent': 'Agent signing key',
@@ -11312,6 +11321,13 @@
       'set.attack.rule.window': 'vindue (min)',
 
       // ---- Tillidsnøgler: licensankeret og agentsigneringsnøglen -------------
+      'publicUrl.banner.title': 'Agenter får besked på at bruge en anden adresse end denne',
+      'publicUrl.banner.mismatch': 'Installationsscripts og enrollerede agenter får besked på at nå denne server på {told}. Du læser dette på {here}.',
+      'publicUrl.banner.insecure': 'Agenter får besked på at nå denne server på {told} — almindelig HTTP. En agent bærer sit token og de netværksdata, den rapporterer, på den forbindelse.',
+      'publicUrl.banner.unset': 'Der er ingen adresse konfigureret, så hvert installationsscript bærer den adresse, den enrollerende host tilfældigvis bad om. Du læser dette på {here}.',
+      'publicUrl.banner.unparseable': 'Den konfigurerede adresse ({told}) er ikke en brugbar URL, så agenter kan ikke få at vide hvor de skal hen.',
+      'publicUrl.banner.impact': 'Et WebSocket-håndtryk følger ikke redirects: en agent sendt til den forkerte adresse genopretter forbindelsen i det uendelige uden nogensinde at sige hvad der er galt.',
+      'publicUrl.banner.open': 'Sæt adressen',
       'trustKey.banner.title': 'En tillidsnøgle på denne server er ændret',
       'trustKey.banner.license': 'Licensens tillidsanker',
       'trustKey.banner.agent': 'Agentsigneringsnøgle',

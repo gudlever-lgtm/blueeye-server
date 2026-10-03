@@ -333,9 +333,17 @@ main#view .card { width: auto; padding: var(--s-5); box-shadow: var(--elev-1); }
 .alert-banner.sev-WARN { background: var(--warn-weak); border-color: var(--warn); }
 .alert-banner .alert-ic { font-size: 18px; }
 
+/* A chip is a PILL, and only a pill. The pointer cursor and the hover accent
+   belong to the ones that are actually buttons (the traffic-type toggles):
+   every other chip on the dashboard is a static label — an environment type, a
+   layer, "HTTP 500", "Accepted", an incident's state — and wearing a button's
+   affordances made each of them read as a control that does nothing when
+   pressed. That is how the incident row ended up with two pills a line apart,
+   both reading "Open", one of which was the status. */
 .chip { font: inherit; font-size: 12px; line-height: 1.45; border: 1px solid var(--border); border-radius: var(--radius-pill);
-  padding: 3px 11px; background: var(--panel); color: var(--muted); cursor: pointer; }
-.chip:hover { border-color: var(--accent); }
+  padding: 3px 11px; background: var(--panel); color: var(--muted); cursor: default; }
+button.chip, a.chip { cursor: pointer; }
+button.chip:hover, a.chip:hover { border-color: var(--accent); }
 .chip.on { background: var(--panel-2); color: var(--text); border-color: var(--accent); }
 
 /* Traffic-type breakdown: a row of toggle chips above the per-type chart. */

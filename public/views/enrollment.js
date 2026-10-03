@@ -135,7 +135,10 @@
           // Only offered when there is something to clear, and it can never
           // sweep up a code an agent is listed beside.
           (deps.canDelete() && expired)
-            ? ui.button('ghost', t('enroll.codes.deleteExpired') + ' (' + expired + ')', {
+            // It deletes rows, and it stands next to "New code". Ghost made
+            // the one destructive control on the panel the quietest thing on
+            // it, which is the wrong way round.
+            ? ui.button('secondary', t('enroll.codes.deleteExpired') + ' (' + expired + ')', {
               title: t('enroll.codes.deleteExpiredTitle', { n: expired }),
               onclick: function () { deps.deleteExpired(expired); },
             })

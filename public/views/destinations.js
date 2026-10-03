@@ -189,8 +189,11 @@
               title: t('dest.selectRegionHint'),
               onclick: function () { deps.beginRegionSelect(); },
             }),
-            ui.button('ghost', t('dest.exportCsv'), { onclick: function () { deps.exportAs('csv'); } }),
-            ui.button('ghost', t('dest.exportJson'), { onclick: function () { deps.exportAs('json'); } }),
+            // Secondary, not ghost: they stand beside "Select region" in one
+            // action cluster, and a borderless button next to an outlined one
+            // reads as a link next to a button rather than as a hierarchy.
+            ui.button('secondary', t('dest.exportCsv'), { onclick: function () { deps.exportAs('csv'); } }),
+            ui.button('secondary', t('dest.exportJson'), { onclick: function () { deps.exportAs('json'); } }),
           ],
         }));
       }
@@ -264,7 +267,9 @@
           actions: [
             ui.button('secondary', t('dest.path.show'), { onclick: function () { runPath(false); } }),
             ui.button('secondary', t('dest.path.trace'), { onclick: function () { runPath(true); }, title: t('dest.path.traceHint') }),
-            ui.button('ghost', t('dest.path.showAll'), { onclick: showAll, title: t('dest.path.showAllHint') }),
+            // An action beside two other actions, so it carries their weight.
+            // "Clear path" after it stays ghost: it undoes, it does not do.
+            ui.button('secondary', t('dest.path.showAll'), { onclick: showAll, title: t('dest.path.showAllHint') }),
             ui.button('ghost', t('dest.path.clear'), { onclick: function () { clearPath(null); } }),
           ],
         });

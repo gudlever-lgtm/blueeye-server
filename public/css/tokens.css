@@ -390,6 +390,12 @@
      the estate of a 40-item sidebar does not grow by 320px. */
   --control-h: 40px;
   --control-h-sm: 32px;
+  /* One size below that, for a control INSIDE a bar of a fixed height. The
+     topbar is 65px with its account chip; the ModeSwitch at --control-h-sm
+     plus its own padding pushed it to 75, so the bar grew by 10px on the
+     screens that have a lens and shrank again on the ones that do not —
+     chrome that moves when you navigate. Nothing outside such a bar uses it. */
+  --control-h-xs: 26px;
 
   /* Radius. The contract first proposed 6px and the decision then was to keep
      the softer scale the app shipped; --r-btn is 8px now, which is the middle

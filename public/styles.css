@@ -124,6 +124,17 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   position: sticky; top: 0; z-index: var(--z-topbar);
 }
 .nav-toggle { display: none; font-size: var(--fs-lg); line-height: 1; padding: var(--s-2) var(--s-3); }
+
+/* The current screen's lens switch, beside the brand. Empty on a screen with
+   one lens — and an empty flex item with a gap on both sides would otherwise
+   leave a hole in front of the breadcrumb. */
+.topbar-mode { display: inline-flex; align-items: center; flex: 0 0 auto; }
+.topbar-mode:empty { display: none; }
+/* Narrow: the switch keeps its icons (components.css hides the labels under
+   640px) and the breadcrumb is what gives way. */
+@media (max-width: 720px) {
+  .topbar .crumb { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+}
 .spacer { flex: 1; }
 
 /* Global search — a single round magnifier button that expands into a search

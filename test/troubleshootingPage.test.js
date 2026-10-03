@@ -130,7 +130,7 @@ test('the ModeSwitch draws the topology as a table, from the same read', async (
   assert.ok(topoPanel().querySelector('svg'), 'the graph is not the default lens');
   const before = log.length;
 
-  const list = doc.querySelector('#view .mode-switch .mode-btn[data-mode="list"]');
+  const list = doc.querySelector('#topbar-mode .mode-switch .mode-btn[data-mode="list"]');
   assert.ok(list, 'no mode switch in the page header');
   list.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
   await settle();

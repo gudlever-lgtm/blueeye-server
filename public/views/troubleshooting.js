@@ -74,27 +74,33 @@
       var mode = ui.storedMode('troubleshooting', MODES, 'graph');
 
       var info = deps.help();
+      // The lens switch lives in the TOPBAR, beside the brand: the topology it
+      // re-draws sits under the toolbar, the note, the stat strip and the
+      // root-cause panels, so from the PageHeader the reader pressed a control
+      // whose effect was a screen below the fold. The topbar is sticky, so the
+      // switch is still reachable from down there.
+      ui.headerMode({
+        label: t('mode.label'),
+        store: 'troubleshooting',
+        value: mode,
+        items: [
+          { key: 'graph', label: t('mode.graph'), icon: 'graph', title: t('mode.graphHint') },
+          { key: 'list', label: t('mode.list'), icon: 'list', title: t('mode.listHint') },
+        ],
+        onchange: function (key) {
+          mode = key;
+          // The graph holds an SVG and a selection; dropping the reference
+          // when it leaves the page is what stops a redraw writing into a
+          // node that is no longer in the document.
+          if (mode !== 'graph') graphEl = null;
+          if (data) drawTopology();
+        },
+        reveal: function () { return topoHost.firstChild; },
+      });
       page.append(ui.pageHeader({
         title: t('tshoot.title'),
         lead: info.lead,
         help: { title: info.title, body: info.body },
-        modes: ui.modeSwitch({
-          label: t('mode.label'),
-          store: 'troubleshooting',
-          value: mode,
-          items: [
-            { key: 'graph', label: t('mode.graph'), icon: 'graph', title: t('mode.graphHint') },
-            { key: 'list', label: t('mode.list'), icon: 'list', title: t('mode.listHint') },
-          ],
-          onchange: function (key) {
-            mode = key;
-            // The graph holds an SVG and a selection; dropping the reference
-            // when it leaves the page is what stops a redraw writing into a
-            // node that is no longer in the document.
-            if (mode !== 'graph') graphEl = null;
-            if (data) drawTopology();
-          },
-        }),
         actions: [
           ui.button('secondary', t('tshoot.openTopology'), {
             onclick: function () { deps.gotoView('topology'); },

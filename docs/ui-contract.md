@@ -341,9 +341,11 @@ an underline row rather than the legacy row of filled buttons.
 
 ### ModeSwitch
 
-Two lenses on **one** screen, built by `ui.modeSwitch()` and handed to the
-PageHeader's **`modes:`** slot, which draws it full width under the title —
-a segmented control across the page, not a pill in the action row.
+Two lenses on **one** screen, built by `ui.headerMode()` and mounted in the
+**topbar**, beside the brand — `#topbar-mode`, which `render()` empties on every
+navigation so a screen with one lens carries no switch. It keeps the pill shape
+there (`wide: false` is what `headerMode()` passes); the full-width segmented
+variant `modeSwitch()` draws by default is for a lens that sits in the page.
 
 The line against SubTabs is what makes it a separate component: a **tab moves
 you to other content**, a **mode re-draws the same content for a different
@@ -355,24 +357,30 @@ chart or as every agent's rate. Neither half is a different page, so neither
 gets a tab — and the sidebar keeps the entries it had, because the rail is
 navigation and this is not.
 
-It stays in the PageHeader rather than next to the logo: a lens belongs to the
-screen it re-draws, not to the app. "Overview" means the rollup on Changes and
-the live chart on Traffic, and a control that changes meaning on every
-navigation cannot live in the chrome that never changes.
+It used to sit in the PageHeader, beside the title it re-draws. That failed in
+practice: on every one of these screens the lens is a stat strip, a toolbar and
+a panel or two below the title, so the reader pressed the switch, the part that
+changed was off-screen, and the control read as broken. The topbar is **sticky**,
+which is the property that matters — the switch is still there when the reader
+is scrolled down inside the lens, and pressing it is visible work.
 
-Inside the header it is its own row, not one more thing in the action row. In
-the action row a lens was the same height as Export and as wide as its own
-label, so the half that was OFF read as disabled text rather than as somewhere
-to press. Full width with equal halves says the opposite — two places to be,
-you are in one of them — and "Explanation" and "Evidence" cannot come out two
-different sizes. `ui.pageHeader({ modes })` is the only placement; a gate rule
-fails a view that puts a `ui.modeSwitch()` in `actions:` instead. The report
-generator is the one exception, because the PageHeader on that page belongs to
-Reporting and its five sections: there the switch sits directly above the
-preview it re-draws, full width all the same.
+It is still per **screen**, not per app: the slot is filled by the view and
+emptied by `render()`, so "Graph/List" never survives onto a page with no graph,
+and "Overview" goes on meaning the rollup on Changes and the live chart on
+Traffic.
 
-`wide: false` returns the old pill. Nothing ships with it — it is in the
-kitchen sink so the two can be compared.
+Because the lens can be off-screen when it is pressed, `modeSwitch()` takes
+`reveal:` — a function naming the region it re-draws. If that region is not
+meaningfully on screen after the redraw, the page scrolls to it and flashes it
+once (`.reveal-flash`); if it is already visible nothing moves, because a page
+that jumps under a change the reader can see is worse than one that does not.
+
+The one lens still in the page is the report generator's: the PageHeader on that
+page belongs to Reporting and its five sections, so the switch sits directly
+above the preview it re-draws, full width, from `ui.modeSwitch()`. The
+PageHeader's **`modes:`** slot still exists for that shape — a row under the
+title, equal halves across the page — and a gate rule fails a view that builds a
+`ui.modeSwitch()` and drops it in `actions:` instead.
 
 Rules:
 

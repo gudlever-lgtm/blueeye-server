@@ -19574,7 +19574,7 @@ async function reportGenerator() {
   let rgReport = null;
   const actions = el('div', { class: 'rg-actions' },
     el('button', { class: 'small', onclick: doPreview }, 'Preview'),
-    el('button', { class: 'small', onclick: doExport }, '⤓ Export'));
+    el('button', { class: 'small', onclick: doExport }));
   // The generator has no PageHeader of its own — the one at the top of the
   // page belongs to Reporting, which has five sections. So the lens sits
   // directly above the thing it re-draws, full width, which is the same
@@ -19589,6 +19589,8 @@ async function reportGenerator() {
     ],
     // Nothing is re-fetched: the preview already holds every row.
     onchange: (key) => { rgMode = key; if (rgReport) preview.replaceChildren(renderRgPreview(rgReport, rgMode)); },
+    // On a long spec the preview is below the fold even from here.
+    reveal: () => preview,
   });
   wrap.append(actions, rgLens, preview);
 
@@ -21079,6 +21081,10 @@ async function render({ silent = false } = {}) {
   syncCrumb();
 
   const view = $('#view');
+  // The topbar lens switch belongs to the screen that is going away: empty it
+  // before the next view builds, so a page with one lens shows no switch at all
+  // rather than the previous page's. The view fills it again from ui.headerMode().
+  if (ui && ui.clearHeaderMode) ui.clearHeaderMode();
   if (!silent) {
     view.replaceChildren(el('div', { class: 'empty' }, t('view.loading')));
     announceView(t('view.loading'));

@@ -204,6 +204,14 @@
         </button>
         <header class="topbar">
           <button id="nav-toggle" class="ghost nav-toggle" data-i18n-title="nav.toggle" data-i18n-aria-label="nav.toggle" title="Toggle navigation" aria-label="Toggle navigation">☰</button>
+          <!-- Lens switch for the current screen (Graph/List, Explanation/
+               Evidence, Map/List …). Filled by ui.headerMode() while a view
+               that has two lenses is on screen and emptied by render() on every
+               navigation, so it is never a stale control from the page before.
+               It sits here, beside the brand, because the topbar is sticky:
+               the switch stays reachable while the reader is scrolled down in
+               the part of the page it re-draws. -->
+          <div id="topbar-mode" class="topbar-mode ui"></div>
           <!-- Breadcrumb: section / page / sub-page, rebuilt from the route on
                every render (see syncCrumb in app.js). Static markup, so the
                label is set from the same catalogue the sidebar uses. -->

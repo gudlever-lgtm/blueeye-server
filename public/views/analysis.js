@@ -82,20 +82,25 @@
         title: t('analysis.title'),
         lead: info.lead,
         help: { title: info.title, body: info.body },
-        // The switch sits left of the exports: it changes what the page says,
-        // and an export is what you do once it has said it.
         actions: deps.headerActions(),
-        modes: ui.modeSwitch({
-          label: t('mode.label'),
-          store: 'analysis',
-          value: mode,
-          items: [
-            { key: 'explain', label: t('mode.explanation'), icon: 'explain', title: t('mode.explanationHint') },
-            { key: 'evidence', label: t('mode.evidence'), icon: 'evidence', title: t('mode.evidenceHint') },
-          ],
-          onchange: function (key) { mode = key; drawList(); },
-        }),
       }), stripHost, toolbarHost, aiHost, overviewHost, listHost, breakdownHost);
+
+      // The lens switch goes in the TOPBAR, beside the brand. The list it
+      // re-draws sits under the stat strip, the toolbar and the AI panel, so
+      // from the PageHeader it was a control whose effect was off-screen —
+      // press it and the page looked unchanged. The topbar is sticky, so the
+      // switch is still there when the reader is down in the rows.
+      ui.headerMode({
+        label: t('mode.label'),
+        store: 'analysis',
+        value: mode,
+        items: [
+          { key: 'explain', label: t('mode.explanation'), icon: 'explain', title: t('mode.explanationHint') },
+          { key: 'evidence', label: t('mode.evidence'), icon: 'evidence', title: t('mode.evidenceHint') },
+        ],
+        onchange: function (key) { mode = key; drawList(); },
+        reveal: function () { return listHost.firstChild; },
+      });
 
       // ---- AI, where the picture is ------------------------------------------
       // The assistant used to be a raw <input> and a .small button bolted onto

@@ -299,7 +299,7 @@ test('an agent that is reporting fine carries no note', async (t) => {
 // "how much is each agent carrying". Neither goes back to the server.
 
 const toMode = async (doc, window, key) => {
-  const btn = doc.querySelector('#view .mode-switch .mode-btn[data-mode="' + key + '"]');
+  const btn = doc.querySelector('#topbar-mode .mode-switch .mode-btn[data-mode="' + key + '"]');
   assert.ok(btn, 'no mode switch in the page header');
   btn.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
   await settle();

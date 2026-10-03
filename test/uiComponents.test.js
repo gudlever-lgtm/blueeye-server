@@ -624,6 +624,78 @@ test('ModeSwitch: left and right move between the halves', () => {
   assert.equal(sw.querySelectorAll('[aria-pressed="true"]').length, 1);
 });
 
+// ---- headerMode / reveal ----------------------------------------------------
+// The switch lives in the topbar now (docs/ui-contract.md → ModeSwitch): on
+// every screen that has one, the lens it re-draws is below the fold, and a
+// control whose effect you cannot see reads as a broken control.
+
+test('headerMode: the switch is mounted in the topbar slot, not where it was built', () => {
+  const { ui, doc, window } = mount();
+  withStorage(window);
+  const slot = doc.createElement('div');
+  slot.id = 'topbar-mode';
+  doc.body.append(slot);
+  ui.headerMode({
+    store: 'analysis',
+    value: 'explain',
+    items: [{ key: 'explain', label: 'Explanation', icon: 'explain' }, { key: 'evidence', label: 'Evidence', icon: 'evidence' }],
+  });
+  assert.equal(slot.querySelectorAll('.mode-switch').length, 1, 'the switch went into the topbar');
+  // A second screen replaces it rather than stacking a second switch.
+  ui.headerMode({
+    store: 'sites',
+    value: 'map',
+    items: [{ key: 'map', label: 'Map', icon: 'map' }, { key: 'list', label: 'List', icon: 'list' }],
+  });
+  assert.equal(slot.querySelectorAll('.mode-switch').length, 1, 'one screen, one switch');
+  assert.ok(slot.querySelector('.mode-btn[data-mode="map"]'), 'the newest screen owns the slot');
+  ui.clearHeaderMode();
+  assert.equal(slot.children.length, 0, 'navigation leaves no stale switch behind');
+});
+
+test('headerMode: a page with no slot still builds (nothing throws)', () => {
+  const { ui, window } = mount();
+  withStorage(window);
+  const sw = ui.headerMode({
+    value: 'map',
+    items: [{ key: 'map', label: 'Map', icon: 'map' }, { key: 'list', label: 'List', icon: 'list' }],
+  });
+  assert.ok(sw.querySelector('.mode-btn'), 'the switch is still returned to the caller');
+});
+
+test('reveal: an off-screen lens is scrolled to and flashed; a visible one is left alone', () => {
+  const { ui, doc, window } = mount();
+  withStorage(window);
+  const slot = doc.createElement('div');
+  slot.id = 'topbar-mode';
+  doc.body.append(slot);
+  const lens = doc.createElement('div');
+  doc.body.append(lens);
+  const scrolled = [];
+  lens.scrollIntoView = (opts) => scrolled.push(opts);
+
+  // Off-screen: jsdom gives every element a zero rect, so the rect is scripted.
+  let rect = { top: 2000, bottom: 2600, height: 600 };
+  lens.getBoundingClientRect = () => rect;
+  Object.defineProperty(window, 'innerHeight', { value: 800, configurable: true });
+
+  const sw = ui.headerMode({
+    value: 'explain',
+    items: [{ key: 'explain', label: 'Explanation', icon: 'explain' }, { key: 'evidence', label: 'Evidence', icon: 'evidence' }],
+    reveal: () => lens,
+  });
+  sw.querySelector('.mode-btn[data-mode="evidence"]').dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+  assert.equal(scrolled.length, 1, 'the part that changed was brought on screen');
+  assert.ok(lens.classList.contains('reveal-flash'), 'and says which part it was');
+
+  // Already on screen: the reader is looking at the change, so nothing jumps.
+  lens.classList.remove('reveal-flash');
+  rect = { top: 40, bottom: 640, height: 600 };
+  sw.querySelector('.mode-btn[data-mode="explain"]').dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+  assert.equal(scrolled.length, 1, 'a visible lens is not scrolled');
+  assert.equal(lens.classList.contains('reveal-flash'), false);
+});
+
 test('ModeSwitch: the full-width variant is the default, and the pill is opt-in', () => {
   const { ui, doc, window } = mount();
   withStorage(window);

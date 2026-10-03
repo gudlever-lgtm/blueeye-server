@@ -564,6 +564,8 @@
       'ks.buttons.sizesNote': 'The row size (xs) exists so a table row does not grow to fit its actions. An icon button is the same height as a text one.',
       'ks.mode.title': 'ModeSwitch',
       'ks.mode.note': 'Two lenses on one screen, remembered per screen. A tab moves you to other content; a mode re-draws the same content for a different reader.',
+      'ks.mode.wide': 'ModeSwitch — the default, full width',
+      'ks.mode.wideNote': 'Under the title, in the PageHeader\u2019s `modes:` slot. Equal halves across the page say \u201ctwo places to be, you are in one of them\u201d; as a pill in the action row the half that is off read as disabled text.',
       // ---- ModeSwitch — the labels, shared by every screen that has one ------
       // One catalogue entry per lens, not one per screen: "Evidence" has to
       // read the same on Analysis and on an Event, or the switch stops being
@@ -6331,6 +6333,8 @@
       'ks.buttons.sizesNote': 'Rækkestørrelsen (xs) findes for at en tabelrække ikke vokser for at rumme sine handlinger. En ikonknap har samme højde som en tekstknap.',
       'ks.mode.title': 'ModeSwitch',
       'ks.mode.note': 'To linser på én skærm, husket per skærm. En fane fører dig til andet indhold; en tilstand tegner det samme indhold op for en anden læser.',
+      'ks.mode.wide': 'ModeSwitch — standard, i fuld bredde',
+      'ks.mode.wideNote': 'Under titlen, i PageHeaderens `modes:`-plads. Lige store halvdele tværs over siden siger \u201cto steder at være, du er i det ene\u201d; som pille i handlingsrækken lignede den slukkede halvdel deaktiveret tekst.',
       'mode.label': 'Visning',
       'mode.explanation': 'Forklaring',
       'mode.evidence': 'Evidens',

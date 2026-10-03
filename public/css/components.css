@@ -30,7 +30,8 @@
 /* ---- PageHeader ----------------------------------------------------------
    Title, one line of description, help behind (?), actions right. At most one
    primary button; the info banner it replaces is gone. */
-.ui .page-head { display: flex; align-items: flex-start; gap: var(--s-4); }
+.ui .page-head { display: flex; flex-direction: column; gap: var(--s-4); }
+.ui .page-head-row { display: flex; align-items: flex-start; gap: var(--s-4); }
 .ui .page-head h1 { margin: 0; font-size: var(--fs-xl); font-weight: 650;
   letter-spacing: -0.01em; display: flex; align-items: center; gap: var(--s-2); }
 .ui .page-head p { margin: var(--s-1) 0 0; color: var(--text-muted); font-size: var(--fs-sm); }
@@ -96,6 +97,19 @@
   border-radius: var(--radius-pill);
   background: none; font: inherit; font-size: var(--fs-sm); color: var(--text-muted);
   cursor: pointer; }
+
+/* The wide variant — the default, and what sits under the title in the
+   PageHeader. The pill in the action row made a lens look like one more
+   button: same height as Export, same width as its label, and the half that
+   was OFF read as disabled text rather than as somewhere to press. Full width
+   and equal halves say the opposite — two places to be, you are in one of
+   them. Each half is an equal grid column, so "Explanation" and "Evidence"
+   cannot be two different sizes, and the labels stay at every width because
+   there is room for them. */
+.ui .mode-switch.mode-wide { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr;
+  width: 100%; border-radius: var(--r-panel); }
+.ui .mode-wide .mode-btn { justify-content: center; height: var(--control-h);
+  border-radius: calc(var(--r-panel) - 2px); }
 .ui .mode-btn:hover { background: var(--hover); color: var(--text); }
 .ui .mode-btn[aria-pressed="true"] { background: var(--surface); color: var(--text);
   font-weight: 600; box-shadow: var(--elev-1); }
@@ -108,6 +122,11 @@
   .ui .mode-btn { padding: 0 var(--s-2); }
   .ui .mode-label { position: absolute; width: 1px; height: 1px; overflow: hidden;
     clip-path: inset(50%); white-space: nowrap; }
+  /* The wide one keeps its labels: it has the whole width of the page, so
+     there is nothing to save by turning two named halves into two icons. */
+  .ui .mode-wide .mode-btn { padding: 0 var(--s-2); }
+  .ui .mode-wide .mode-label { position: static; width: auto; height: auto;
+    overflow: visible; clip-path: none; }
 }
 
 /* ---- StatStrip — clickable filter cards ---------------------------------- */

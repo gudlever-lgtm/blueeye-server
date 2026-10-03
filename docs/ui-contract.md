@@ -343,7 +343,9 @@ an underline row rather than the legacy row of filled buttons.
 
 Two lenses on **one** screen, built by `ui.headerMode()` and mounted in the
 **topbar**, beside the brand — `#topbar-mode`, which `render()` empties on every
-navigation so a screen with one lens carries no switch.
+navigation so a screen with one lens carries no switch. It keeps the pill shape
+there (`wide: false` is what `headerMode()` passes); the full-width segmented
+variant `modeSwitch()` draws by default is for a lens that sits in the page.
 
 The line against SubTabs is what makes it a separate component: a **tab moves
 you to other content**, a **mode re-draws the same content for a different
@@ -353,9 +355,7 @@ document or as the rows the document is built from; Sites and Destinations as a
 map or as a table; Changes as a rollup or as every row; Traffic as the live
 chart or as every agent's rate. Neither half is a different page, so neither
 gets a tab — and the sidebar keeps the entries it had, because the rail is
-navigation and this is not. (The Report Generator's pair is the one exception to
-the topbar rule: it belongs to the preview widget inside the page, not to the
-screen, so it stays next to Preview/Export where it is built.)
+navigation and this is not.
 
 It used to sit in the PageHeader, beside the title it re-draws. That failed in
 practice: on every one of these screens the lens is a stat strip, a toolbar and
@@ -374,6 +374,13 @@ Because the lens can be off-screen when it is pressed, `modeSwitch()` takes
 meaningfully on screen after the redraw, the page scrolls to it and flashes it
 once (`.reveal-flash`); if it is already visible nothing moves, because a page
 that jumps under a change the reader can see is worse than one that does not.
+
+The one lens still in the page is the report generator's: the PageHeader on that
+page belongs to Reporting and its five sections, so the switch sits directly
+above the preview it re-draws, full width, from `ui.modeSwitch()`. The
+PageHeader's **`modes:`** slot still exists for that shape — a row under the
+title, equal halves across the page — and a gate rule fails a view that builds a
+`ui.modeSwitch()` and drops it in `actions:` instead.
 
 Rules:
 

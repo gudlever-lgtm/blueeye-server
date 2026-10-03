@@ -86,8 +86,17 @@
             ui.button('ghost', '⋯', { icon: true, size: 'xs', ariaLabel: t('ui.moreActions') }))),
           // Every pair the app ships, so a fifth one is written here first and
           // the icon set stays a set rather than growing per screen.
+          specimen(t('ks.mode.wide'), t('ks.mode.wideNote'), ui.modeSwitch({
+            label: t('ks.mode.title'),
+            value: 'overview',
+            items: [
+              { key: 'overview', label: t('mode.overview'), icon: 'overview' },
+              { key: 'data', label: t('mode.data'), icon: 'data' },
+            ],
+          })),
           specimen(t('ks.mode.title'), t('ks.mode.note'), shelf(
             ui.modeSwitch({
+              wide: false,
               label: t('ks.mode.title'),
               value: 'explain',
               items: [
@@ -96,6 +105,7 @@
               ],
             }),
             ui.modeSwitch({
+              wide: false,
               label: t('ks.mode.title'),
               value: 'graph',
               items: [
@@ -104,6 +114,7 @@
               ],
             }),
             ui.modeSwitch({
+              wide: false,
               label: t('ks.mode.title'),
               value: 'doc',
               items: [
@@ -112,6 +123,7 @@
               ],
             }),
             ui.modeSwitch({
+              wide: false,
               label: t('ks.mode.title'),
               value: 'map',
               items: [
@@ -120,6 +132,7 @@
               ],
             }),
             ui.modeSwitch({
+              wide: false,
               label: t('ks.mode.title'),
               value: 'overview',
               items: [

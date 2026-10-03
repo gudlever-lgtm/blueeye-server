@@ -108,14 +108,22 @@
     }
 
     // ---- PageHeader ----------------------------------------------------------
+    // `modes:` is the ModeSwitch slot: a lens is not an action, so it does not
+    // go in the action row where it would be read as one button among several
+    // and sized like a chip. It takes the full width under the title, which is
+    // also what makes the half that is OFF visible as a thing you can press —
+    // the pill shape only hinted at it.
     function pageHeader(opts) {
-      var head = el('header', { class: 'page-head' });
+      var head = el('header', { class: 'page-head' + (opts.modes ? ' has-modes' : '') });
       var title = el('h1', {}, opts.title);
       if (opts.status) title.append(opts.status); // template D: the record's state
       if (opts.help) title.append(helpButton(opts.help));
-      head.append(el('div', {}, title, opts.lead ? el('p', {}, opts.lead) : null));
+      var row = el('div', { class: 'page-head-row' },
+        el('div', {}, title, opts.lead ? el('p', {}, opts.lead) : null));
       var actions = (opts.actions || []).filter(Boolean);
-      if (actions.length) head.append(el('div', { class: 'page-head-actions' }, actions));
+      if (actions.length) row.append(el('div', { class: 'page-head-actions' }, actions));
+      head.append(row);
+      if (opts.modes) head.append(opts.modes);
       return head;
     }
 
@@ -317,7 +325,10 @@
     function modeSwitch(opts) {
       var items = (opts.items || []).filter(Boolean);
       var value = opts.value;
-      var group = el('div', { class: 'mode-switch', role: 'group', 'aria-label': opts.label || null });
+      var group = el('div', {
+        class: 'mode-switch' + (opts.wide === false ? '' : ' mode-wide'),
+        role: 'group', 'aria-label': opts.label || null,
+      });
       var btns = items.map(function (it) {
         return el('button', {
           type: 'button', class: 'mode-btn', 'data-mode': it.key,
@@ -370,7 +381,13 @@
     // Same options as modeSwitch(). Returns the switch so a caller can press a
     // half from elsewhere on the page (Changes does, from its rollup rows).
     function headerMode(opts) {
-      var sw = modeSwitch(opts);
+      // The pill, not the full-width segmented control: the topbar is a row of
+      // chrome beside the brand, and a lens stretched across it would be the
+      // widest thing on the page.
+      var cfg = {};
+      Object.keys(opts).forEach(function (k) { cfg[k] = opts[k]; });
+      if (cfg.wide === undefined) cfg.wide = false;
+      var sw = modeSwitch(cfg);
       var slot = headerModeSlot();
       if (slot) slot.replaceChildren(sw);
       return sw;

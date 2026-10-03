@@ -59,14 +59,35 @@
 
       function tab() { return deps.tab() === 'list' ? 'list' : 'map'; }
 
+      // The Map tab drew the map AND the table, stacked — so the rollup was
+      // always below the fold and the map was always above it, whichever one
+      // you came for. They are two lenses on the same sites now: the map
+      // answers "where", the list answers "which ones" and sorts. The tabs
+      // above are unchanged — Register is a different screen's worth of
+      // records, not a second view of these.
+      var MODES = ['map', 'list'];
+      var mode = ui.storedMode('sites', MODES, 'map');
+
       var info = deps.help();
       root2.append(ui.pageHeader({
         title: t('sites.title'),
         lead: info.lead,
         help: { title: info.title, body: info.body },
-        actions: [deps.canWrite()
-          ? ui.button('primary', t('sites.new'), { onclick: function () { deps.newSite(); } })
-          : null],
+        actions: [
+          ui.modeSwitch({
+            label: t('mode.label'),
+            store: 'sites',
+            value: mode,
+            items: [
+              { key: 'map', label: t('mode.map'), icon: 'map', title: t('mode.mapHint') },
+              { key: 'list', label: t('mode.list'), icon: 'list', title: t('mode.listHintPlaces') },
+            ],
+            onchange: function (key) { mode = key; draw(); },
+          }),
+          deps.canWrite()
+            ? ui.button('primary', t('sites.new'), { onclick: function () { deps.newSite(); } })
+            : null,
+        ],
       }), tabsHost, stripHost, mapHost, tableHost, registerHost);
 
       function drawTabs() {
@@ -291,8 +312,25 @@
         var onMap = tab() === 'map';
         if (onMap) {
           drawStrip();
-          drawMap();
-          drawTable();
+          // One lens at a time. A Leaflet instance nobody is looking at still
+          // holds its tiles and still redraws on the 30 s poll, so the map is
+          // dropped rather than hidden when the list is showing.
+          if (mode === 'map') {
+            drawMap();
+            // The map lens hides the table only while the map can actually
+            // answer the question. An estate with no sites has nothing to draw
+            // and nothing to switch to — the table's EmptyState is the only
+            // thing on the page that says so, and it carries the button that
+            // fixes it — and without the map library, or with no site that
+            // has coordinates, there is no map to be the answer, so the table
+            // is still the whole content.
+            if (!locations.length || !deps.hasMapLibrary() || !located().length) drawTable();
+            else tableHost.replaceChildren();
+          } else {
+            deps.dropMap();
+            mapHost.replaceChildren();
+            drawTable();
+          }
         } else {
           // Emptied rather than hidden: a Leaflet instance nobody can see still
           // holds its tiles, and a hidden table is still a table to anything
@@ -314,7 +352,11 @@
             // A poll on the Register tab keeps the data current for when the
             // reader goes back to the map, and redraws nothing under them.
             if (first) draw();
-            else if (tab() === 'map') { drawStrip(); drawTable(); deps.redrawMarkers(rollup()); }
+            else if (tab() === 'map') {
+              drawStrip();
+              if (mode === 'map') deps.redrawMarkers(rollup());
+              else drawTable();
+            }
           })
           .catch(function (e) {
             if (!first) return; // a failed poll keeps the last good render
@@ -334,7 +376,8 @@
           });
       }
 
-      tableHost.replaceChildren(ui.panel({ title: t('sites.panel'), children: [ui.loadingState(5)] }));
+      (mode === 'map' ? mapHost : tableHost)
+        .replaceChildren(ui.panel({ title: t('sites.panel'), children: [ui.loadingState(5)] }));
       return load(true).then(function () {
         deps.startPolling(function () { return load(false); });
         return root2;

@@ -518,3 +518,108 @@ test('the row menu stays inside the window instead of running off the right edge
   assert.ok(top + 180 <= 800, `the menu runs past the bottom (top ${top})`);
   assert.ok(top < 760, 'with no room below, the menu must flip above the trigger');
 });
+
+// ---------------------------------------------------------------- ModeSwitch
+// Two lenses on one screen. The rules worth pinning are the ones a screen can
+// get wrong on its own: exactly one half is pressed, the choice is remembered
+// PER SCREEN (so Troubleshooting's graph and Sites' table can both be the
+// default), and a stored key that no longer exists falls back instead of
+// drawing a pane that is gone.
+function withStorage(window) {
+  const store = new Map();
+  global.localStorage = {
+    getItem: (k) => (store.has(k) ? store.get(k) : null),
+    setItem: (k, v) => store.set(k, String(v)),
+    removeItem: (k) => store.delete(k),
+  };
+  return global.localStorage;
+}
+
+test('ModeSwitch: one pressed half, a label and an icon on each', () => {
+  const { ui, doc, window } = mount();
+  withStorage(window);
+  const sw = ui.modeSwitch({
+    label: 'View',
+    value: 'evidence',
+    items: [
+      { key: 'explain', label: 'Explanation', icon: 'explain' },
+      { key: 'evidence', label: 'Evidence', icon: 'evidence' },
+    ],
+  });
+  doc.body.append(sw);
+  const btns = [...sw.querySelectorAll('.mode-btn')];
+  assert.equal(btns.length, 2);
+  assert.equal(sw.getAttribute('role'), 'group');
+  assert.equal(sw.getAttribute('aria-label'), 'View');
+  assert.equal(sw.querySelectorAll('[aria-pressed="true"]').length, 1, 'exactly one half is on');
+  assert.equal(btns[1].getAttribute('aria-pressed'), 'true', 'the value decides which');
+  // Text AND icon: the icon alone makes "Evidence" a guess.
+  assert.equal(btns[0].querySelector('.mode-label').textContent, 'Explanation');
+  assert.ok(btns[0].querySelector('svg.mode-ico'), 'each half carries its icon');
+});
+
+test('ModeSwitch: a click moves the pressed state and reports the new key once', () => {
+  const { ui, doc, window } = mount();
+  withStorage(window);
+  const seen = [];
+  const sw = ui.modeSwitch({
+    value: 'graph',
+    items: [{ key: 'graph', label: 'Graph', icon: 'graph' }, { key: 'list', label: 'List', icon: 'list' }],
+    onchange: (k) => seen.push(k),
+  });
+  doc.body.append(sw);
+  const [graph, list] = [...sw.querySelectorAll('.mode-btn')];
+  list.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+  assert.deepEqual(seen, ['list']);
+  assert.equal(list.getAttribute('aria-pressed'), 'true');
+  assert.equal(graph.getAttribute('aria-pressed'), 'false');
+  // Pressing the half that is already on is not a change — a screen that
+  // redrew here would throw the reader's scroll position away for nothing.
+  list.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+  assert.deepEqual(seen, ['list']);
+});
+
+test('ModeSwitch: the choice is remembered per screen, not globally', () => {
+  const { ui, doc, window } = mount();
+  withStorage(window);
+  const sw = ui.modeSwitch({
+    store: 'sites',
+    value: 'map',
+    items: [{ key: 'map', label: 'Map', icon: 'map' }, { key: 'list', label: 'List', icon: 'list' }],
+  });
+  doc.body.append(sw);
+  sw.querySelectorAll('.mode-btn')[1].dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+  assert.equal(ui.storedMode('sites', ['map', 'list'], 'map'), 'list');
+  // Another screen is untouched: that is the whole point of the per-screen key.
+  assert.equal(ui.storedMode('troubleshooting', ['graph', 'list'], 'graph'), 'graph');
+});
+
+test('ModeSwitch: an unknown or stale stored key falls back to the default', () => {
+  const { ui, window } = mount();
+  const storage = withStorage(window);
+  storage.setItem('blueeye.mode.analysis', 'evidence');
+  assert.equal(ui.storedMode('analysis', ['explain', 'evidence'], 'explain'), 'evidence');
+  // A key an older build wrote, for a pane this one no longer has.
+  storage.setItem('blueeye.mode.analysis', 'raw');
+  assert.equal(ui.storedMode('analysis', ['explain', 'evidence'], 'explain'), 'explain');
+  // Storage switched off entirely is the ordinary private-window case, not an
+  // error: the screen opens on its default.
+  delete global.localStorage;
+  assert.equal(ui.storedMode('analysis', ['explain', 'evidence'], 'explain'), 'explain');
+});
+
+test('ModeSwitch: left and right move between the halves', () => {
+  const { ui, doc, window } = mount();
+  withStorage(window);
+  const seen = [];
+  const sw = ui.modeSwitch({
+    value: 'doc',
+    items: [{ key: 'doc', label: 'Document', icon: 'doc' }, { key: 'data', label: 'Data', icon: 'data' }],
+    onchange: (k) => seen.push(k),
+  });
+  doc.body.append(sw);
+  const [first] = [...sw.querySelectorAll('.mode-btn')];
+  first.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }));
+  assert.deepEqual(seen, ['data']);
+  assert.equal(sw.querySelectorAll('[aria-pressed="true"]').length, 1);
+});

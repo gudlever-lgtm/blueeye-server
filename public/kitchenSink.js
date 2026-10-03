@@ -83,7 +83,42 @@
             ui.button('secondary', t('ks.buttons.secondary')),
             ui.button('secondary', t('ks.buttons.small'), { size: 'xs' }),
             ui.button('ghost', '⋯', { icon: true, ariaLabel: t('ui.moreActions') }),
-            ui.button('ghost', '⋯', { icon: true, size: 'xs', ariaLabel: t('ui.moreActions') }))))],
+            ui.button('ghost', '⋯', { icon: true, size: 'xs', ariaLabel: t('ui.moreActions') }))),
+          // Every pair the app ships, so a fifth one is written here first and
+          // the icon set stays a set rather than growing per screen.
+          specimen(t('ks.mode.title'), t('ks.mode.note'), shelf(
+            ui.modeSwitch({
+              label: t('ks.mode.title'),
+              value: 'explain',
+              items: [
+                { key: 'explain', label: t('mode.explanation'), icon: 'explain' },
+                { key: 'evidence', label: t('mode.evidence'), icon: 'evidence' },
+              ],
+            }),
+            ui.modeSwitch({
+              label: t('ks.mode.title'),
+              value: 'graph',
+              items: [
+                { key: 'graph', label: t('mode.graph'), icon: 'graph' },
+                { key: 'list', label: t('mode.list'), icon: 'list' },
+              ],
+            }),
+            ui.modeSwitch({
+              label: t('ks.mode.title'),
+              value: 'doc',
+              items: [
+                { key: 'doc', label: t('mode.document'), icon: 'doc' },
+                { key: 'data', label: t('mode.data'), icon: 'data' },
+              ],
+            }),
+            ui.modeSwitch({
+              label: t('ks.mode.title'),
+              value: 'map',
+              items: [
+                { key: 'map', label: t('mode.map'), icon: 'map' },
+                { key: 'list', label: t('mode.list'), icon: 'list' },
+              ],
+            }))))],
       });
     }
 

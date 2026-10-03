@@ -138,14 +138,33 @@
       var agents = [];
       var config = {};
 
+      // Where the traffic goes, or which destinations they are. The map is the
+      // better answer to "is anything leaving the country"; the table is the
+      // only one that sorts by volume, and both are drawn from the same
+      // /api/geo/overview read. Remembered per screen.
+      var MODES = ['map', 'list'];
+      var mode = ui.storedMode('destinations', MODES, 'map');
+
       var info = deps.help();
       page.append(ui.pageHeader({
         title: t('dest.title'),
         lead: info.lead,
         help: { title: info.title, body: info.body },
-        actions: [ui.button('secondary', t('dest.openProbes'), {
-          onclick: function () { deps.gotoView('probes'); },
-        })],
+        actions: [
+          ui.modeSwitch({
+            label: t('mode.label'),
+            store: 'destinations',
+            value: mode,
+            items: [
+              { key: 'map', label: t('mode.map'), icon: 'map', title: t('mode.mapHint') },
+              { key: 'list', label: t('mode.list'), icon: 'list', title: t('mode.listHintPlaces') },
+            ],
+            onchange: function (key) { mode = key; drawLens(); },
+          }),
+          ui.button('secondary', t('dest.openProbes'), {
+            onclick: function () { deps.gotoView('probes'); },
+          }),
+        ],
       }), noteHost, toolbarHost, mapHost, pathHost, tableHost);
 
       // ---- Toolbar -----------------------------------------------------------
@@ -936,14 +955,39 @@
         }
       }
 
+      // One lens at a time. The traced paths belong to the map — they are hops
+      // drawn on it — so they travel with it rather than sitting above a table
+      // that cannot show them.
+      function drawLens() {
+        if (mode === 'map') {
+          drawMap();
+          drawTraces();
+          // Nothing to plot is not the same as nothing to say: with no flows
+          // yet, the table's EmptyState is what explains why — most often that
+          // GeoIP has never been configured. And without the map library there
+          // is no map to be the answer, so the table is still the whole
+          // content.
+          if (!dests.length || !deps.hasMapLibrary()) drawTable();
+          else tableHost.replaceChildren();
+        } else {
+          if (deps.dropMap) deps.dropMap();
+          mapHost.replaceChildren();
+          pathHost.replaceChildren();
+          drawTable();
+        }
+      }
+
       function reload() {
         return deps.fetchOverview()
           .then(function (d) {
             dests = d.destinations || [];
-            deps.redraw(d);
-            drawTable();
-            var note = mapHost.querySelector('.panel-head .meta-xs');
-            if (note) note.textContent = mapNote();
+            if (mode === 'map') {
+              deps.redraw(d);
+              var note = mapHost.querySelector('.panel-head .meta-xs');
+              if (note) note.textContent = mapNote();
+            } else {
+              drawTable();
+            }
           })
           .catch(function (e) {
             tableHost.replaceChildren(ui.panel({
@@ -956,7 +1000,8 @@
           });
       }
 
-      tableHost.replaceChildren(ui.panel({ title: t('dest.panel'), children: [ui.loadingState(5)] }));
+      (mode === 'map' ? mapHost : tableHost)
+        .replaceChildren(ui.panel({ title: t('dest.panel'), children: [ui.loadingState(5)] }));
       drawToolbar();
       return deps.fetchFirst()
         .then(function (d) {
@@ -964,8 +1009,7 @@
           agents = d.agents || [];
           dests = d.destinations || [];
           drawNote();
-          drawMap();
-          drawTable();
+          drawLens();
           return page;
         })
         .catch(function (e) {

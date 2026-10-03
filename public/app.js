@@ -12147,6 +12147,9 @@ function getDestinationsView() {
     },
     redraw: () => { if (geoState.mapOpts) drawGeoMarkers(geoState.mapOpts); },
     mountMap: mountGeoMap,
+    // The list lens drops the map rather than hiding it: a Leaflet instance
+    // off screen still holds its tiles and still redraws on every reload.
+    dropMap: () => teardownGeoMap(),
     beginRegionSelect,
     exportAs: (fmt) => downloadExport('geo', fmt, geoState.sinceIso ? { since: geoState.sinceIso } : {}),
     // A destination with no flows in the period is a 404, which is an answer
@@ -19395,9 +19398,28 @@ async function reportGenerator() {
   }
 
   const preview = el('div', { class: 'rg-preview' });
+  // Two lenses on the SAME preview: the document as it prints, and the rows it
+  // is built from — which is also what the CSV and JSON exports contain. The
+  // pair exists because "is this number right?" and "does this read well?" are
+  // different questions, and the generator only ever answered the second.
+  // Remembered per screen, like every other ModeSwitch.
+  const RG_MODES = ['doc', 'data'];
+  let rgMode = ui.storedMode('reporting', RG_MODES, 'doc');
+  let rgReport = null;
   const actions = el('div', { class: 'rg-actions' },
     el('button', { class: 'small', onclick: doPreview }, 'Preview'),
-    el('button', { class: 'small', onclick: doExport }, '⤓ Export'));
+    el('button', { class: 'small', onclick: doExport }, '⤓ Export'),
+    ui.modeSwitch({
+      label: t('mode.label'),
+      store: 'reporting',
+      value: rgMode,
+      items: [
+        { key: 'doc', label: t('mode.document'), icon: 'doc', title: t('mode.documentHint') },
+        { key: 'data', label: t('mode.data'), icon: 'data', title: t('mode.dataHint') },
+      ],
+      // Nothing is re-fetched: the preview already holds every row.
+      onchange: (key) => { rgMode = key; if (rgReport) preview.replaceChildren(renderRgPreview(rgReport, rgMode)); },
+    }));
   wrap.append(actions, preview);
 
   async function doPreview() {
@@ -19406,8 +19428,9 @@ async function reportGenerator() {
     preview.replaceChildren(el('div', { class: 'empty' }, 'Building preview…'));
     try {
       const report = await api(withLocale('/api/nis2/custom-reports/preview'), { method: 'POST', body: spec });
-      preview.replaceChildren(renderRgPreview(report));
-    } catch (err) { preview.replaceChildren(el('div', { class: 'empty error' }, errText(err))); }
+      rgReport = report;
+      preview.replaceChildren(renderRgPreview(report, rgMode));
+    } catch (err) { rgReport = null; preview.replaceChildren(el('div', { class: 'empty error' }, errText(err))); }
   }
 
   async function doExport() {
@@ -19439,7 +19462,8 @@ async function reportGenerator() {
   return wrap;
 }
 
-function renderRgPreview(report) {
+function renderRgPreview(report, mode) {
+  if (mode === 'data') return renderRgData(report);
   const out = el('div');
   out.append(el('div', { class: 'section-head' }, el('h3', { class: 'nis2-h3' }, report.title || 'Custom Report'),
     el('span', { class: 'muted' }, `Generated ${fmtDate(report.generatedAt)}`)));
@@ -19447,6 +19471,30 @@ function renderRgPreview(report) {
   for (const s of report.sections) {
     out.append(el('h4', { class: 'rg-sec-h' }, s.heading, s.truncated ? el('span', { class: 'muted' }, `  (showing first ${s.rows.length} of ${s.rowCount})`) : null));
     if (!s.rows.length) { out.append(el('div', { class: 'empty' }, 'No matching rows.')); continue; }
+    const thead = el('thead', {}, el('tr', {}, ...s.headers.map((h) => el('th', {}, h))));
+    const tbody = el('tbody', {}, ...s.rows.map((r) => el('tr', {}, ...r.map((c) => el('td', {}, String(c ?? ''))))));
+    out.append(el('div', { class: 'tablewrap' }, el('table', {}, thead, tbody)));
+  }
+  return out;
+}
+
+// The data lens: the rows as they come out of the builder, with no headings
+// and no prose — one grid per source, each labelled with the source key the
+// export carries and the true row count. This is what the CSV and JSON exports
+// contain, so "what will I get?" is answered on screen rather than after a
+// download.
+function renderRgData(report) {
+  const out = el('div');
+  out.append(el('div', { class: 'section-head' },
+    el('h3', { class: 'nis2-h3' }, t('rep.gen.data.title')),
+    el('span', { class: 'muted' }, t('rep.gen.data.note', { n: report.sections.length }))));
+  if (!report.sections.length) { out.append(el('div', { class: 'empty' }, t('rep.gen.data.none'))); return out; }
+  for (const s of report.sections) {
+    out.append(el('div', { class: 'rg-sec-h' },
+      el('code', {}, s.source),
+      el('span', { class: 'muted' }, ` \u00b7 ${t('rep.gen.data.rows', { n: s.rowCount })}`),
+      s.truncated ? el('span', { class: 'muted' }, ` \u00b7 ${t('rep.gen.data.truncated', { shown: s.rows.length, total: s.rowCount })}` ) : null));
+    if (!s.rows.length) { out.append(el('div', { class: 'empty' }, t('rep.gen.data.noRows'))); continue; }
     const thead = el('thead', {}, el('tr', {}, ...s.headers.map((h) => el('th', {}, h))));
     const tbody = el('tbody', {}, ...s.rows.map((r) => el('tr', {}, ...r.map((c) => el('td', {}, String(c ?? ''))))));
     out.append(el('div', { class: 'tablewrap' }, el('table', {}, thead, tbody)));

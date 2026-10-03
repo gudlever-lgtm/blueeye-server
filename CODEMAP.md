@@ -354,6 +354,18 @@ A single vanilla-JS SPA. Key building blocks:
   under the `ui` marker class. `public/uiPreview.js` is the phase-1 example
   screens on `/ui-preview/changes` and `/ui-preview/probes` (admin only, removed
   when those two screens migrate). See docs/ui-contract.md.
+- **ModeSwitch** — two lenses on ONE screen (`ui.modeSwitch()` in
+  `public/ui.js`, `.mode-switch` in `components.css`), in the PageHeader's
+  actions. A tab moves you to other content; a mode re-draws the same content
+  for a different reader, so the sidebar is untouched. Four screens have one:
+  Analysis (Explanation ⟷ Evidence — the same rows, the explanation column
+  swapped for baseline/observed/kind), Troubleshooting (Graph ⟷ List — the
+  same `data.topology`), Reporting → Report Generator (Document ⟷ Data — the
+  rows the export carries), Sites and Destinations (Map ⟷ List). The choice is
+  remembered PER SCREEN in `localStorage` (`blueeye.mode.<screen>`, read with
+  `ui.storedMode`), the labels are one catalogue entry per lens (`mode.*`), and
+  the pane that is off is dropped rather than hidden so a Leaflet map does not
+  keep redrawing off screen. See docs/ui-contract.md → ModeSwitch.
 - **Elevation** — four levels in `public/css/tokens.css`, each a PAIR of a
   shadow and a surface (`--elev-1…4` + `--elev-surface-1…4`): resting panel →
   hovered card → menu/popover/drawer → modal. The surface half is what carries

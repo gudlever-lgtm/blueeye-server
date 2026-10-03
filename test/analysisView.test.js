@@ -162,6 +162,27 @@ test('Analysis is a ListPage: PageHeader, StatStrip, Toolbar, DataTable, no bann
   assert.match(stats[1].textContent, /2/);
 });
 
+test('the ModeSwitch swaps the explanation for the numbers it rests on', async (t) => {
+  const { doc, window, log } = boot({ t, routes: SESSION() });
+  await settle();
+  const head = (doc) => [...doc.querySelectorAll('#view .panel-ui table.dt thead th')].map((th) => th.textContent.trim());
+  assert.ok(head(doc).includes('Explanation'), `no explanation column: ${head(doc).join(', ')}`);
+  const before = log.length;
+
+  const evidence = doc.querySelector('#view .mode-switch .mode-btn[data-mode="evidence"]');
+  assert.ok(evidence, 'no mode switch in the page header');
+  evidence.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+  await settle();
+
+  const cols = head(doc);
+  assert.ok(!cols.includes('Explanation'), 'the explanation column stayed');
+  assert.ok(cols.includes('Baseline') && cols.includes('Observed'),
+    `the numbers are not on the table: ${cols.join(', ')}`);
+  // The rows already carried them: a lens that refetches is a tab wearing the
+  // wrong clothes.
+  assert.equal(log.length, before, 'switching the lens went back to the server');
+});
+
 test('the StatStrip filters, and the request carries the filter', async (t) => {
   const { doc, window, log } = boot({ t, routes: SESSION() });
   await settle();

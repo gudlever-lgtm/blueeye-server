@@ -122,6 +122,27 @@ test('Troubleshooting is a DashboardPage: PageHeader, Toolbar, StatStrip, Panels
   assert.equal(causes(doc).length, 2);
 });
 
+test('the ModeSwitch draws the topology as a table, from the same read', async (t) => {
+  const { doc, window, log } = boot({ t, routes: SESSION() });
+  await settle();
+  const topoPanel = () => [...doc.querySelectorAll('#view .panel-ui')]
+    .find((p) => /Topology/i.test(p.querySelector('.panel-head') ? p.querySelector('.panel-head').textContent : ''));
+  assert.ok(topoPanel().querySelector('svg'), 'the graph is not the default lens');
+  const before = log.length;
+
+  const list = doc.querySelector('#view .mode-switch .mode-btn[data-mode="list"]');
+  assert.ok(list, 'no mode switch in the page header');
+  list.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+  await settle();
+
+  const panel = topoPanel();
+  assert.equal(panel.querySelectorAll('svg').length, 0, 'the graph is still laid out off screen');
+  const head = [...panel.querySelectorAll('table.dt thead th')].map((th) => th.textContent.trim());
+  assert.ok(head.length, 'no table in the list lens');
+  // Same /overview payload, no second call.
+  assert.equal(log.length, before, 'switching the lens went back to the server');
+});
+
 test('the fault list is opt-in: nothing is fetched until the card is clicked', async (t) => {
   const { doc, window, log } = boot({ t, routes: SESSION() });
   await settle();

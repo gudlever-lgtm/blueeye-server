@@ -28,6 +28,23 @@
     var SEVERITIES = ['CRIT', 'WARN', 'INFO'];
 
     function sigma(v) { return typeof v === 'number' ? v.toFixed(1) + 'σ' : '—'; }
+    // A measurement, as a person reads it. The unit is the metric's own and the
+    // server does not send one, so this only decides how many digits are
+    // honest: a baseline of 41.23871 is six digits of precision the median of
+    // fourteen days does not have.
+    function measure(v) {
+      var n = Number(v);
+      if (v === null || v === undefined || !isFinite(n)) return '—';
+      if (Math.abs(n) >= 1000) return String(Math.round(n));
+      if (Math.abs(n) >= 10) return n.toFixed(1);
+      return n.toFixed(2);
+    }
+
+    // The two lenses this screen offers. Explanation is the default because the
+    // sentence is what most people open the page for; evidence is the same rows
+    // with the numbers the sentence rests on, for the reader who wants to check
+    // the verdict rather than take it.
+    var MODES = ['explain', 'evidence'];
 
     function view() {
       var state = deps.state;
@@ -41,6 +58,9 @@
       // screen titled "what is wrong, and where". `state.showAccepted` is
       // undefined on a first visit, which is the scoped reading.
       var openOnly = function () { return !state.showAccepted; };
+      // Remembered per screen (ui.storedMode), so the reader who works in the
+      // numbers does not re-pick them on every visit.
+      var mode = ui.storedMode('analysis', MODES, 'explain');
       var root2 = ui.page();
       var stripHost = el('div', {});
       var toolbarHost = el('div', {});
@@ -62,7 +82,18 @@
         title: t('analysis.title'),
         lead: info.lead,
         help: { title: info.title, body: info.body },
-        actions: deps.headerActions(),
+        // The switch sits left of the exports: it changes what the page says,
+        // and an export is what you do once it has said it.
+        actions: [ui.modeSwitch({
+          label: t('mode.label'),
+          store: 'analysis',
+          value: mode,
+          items: [
+            { key: 'explain', label: t('mode.explanation'), icon: 'explain', title: t('mode.explanationHint') },
+            { key: 'evidence', label: t('mode.evidence'), icon: 'evidence', title: t('mode.evidenceHint') },
+          ],
+          onchange: function (key) { mode = key; drawList(); },
+        })].concat(deps.headerActions()),
       }), stripHost, toolbarHost, aiHost, overviewHost, listHost, breakdownHost);
 
       // ---- AI, where the picture is ------------------------------------------
@@ -474,6 +505,16 @@
                 : null),
             deviation: sigma(f.deviation),
             explanation: f.explanation || '—',
+            // Evidence mode: the three numbers behind the verdict. The window
+            // they were measured over goes on the cell rather than into a
+            // column of its own — it is the same fourteen days for every row
+            // on the screen, and a column that never varies is a column that
+            // only steals width from the ones that do.
+            baseline: el('span', {
+              title: f.window && f.window[0] ? t('analysis.ev.windowHint', { from: ui.fmt.abs(f.window[0]), to: ui.fmt.abs(f.window[1]) }) : null,
+            }, measure(f.baseline)),
+            observed: measure(f.observed),
+            kind: f.kind ? ui.meta(f.kind) : ui.meta('—'),
             // One action on the row, the rest behind ⋯ — this is the three
             // stacked buttons gone.
             actions: ui.rowActions(
@@ -504,17 +545,31 @@
         });
       }
 
+      // The two lenses, as two column sets over the SAME rows. Nothing is
+      // fetched again when the switch is pressed: the list already carries the
+      // baseline, the observed value and the kind — the explanation column was
+      // simply the only one of them the page ever showed.
+      function columns() {
+        var head = [
+          { key: 'time', label: t('analysis.col.time'), width: '136px', sortable: true, time: true },
+          { key: 'host', label: t('analysis.col.host'), width: '150px', sortable: true },
+          { key: 'metric', label: t('analysis.col.metric'), width: '144px', sortable: true },
+          { key: 'severity', label: t('analysis.col.severity'), width: '176px', sortable: true },
+          { key: 'deviation', label: t('analysis.col.deviation'), width: '104px', sortable: true, num: true },
+        ];
+        var body = mode === 'evidence'
+          ? [
+            { key: 'baseline', label: t('analysis.col.baseline'), width: '120px', num: true },
+            { key: 'observed', label: t('analysis.col.observed'), width: '120px', num: true },
+            { key: 'kind', label: t('analysis.drawer.kind') },
+          ]
+          : [{ key: 'explanation', label: t('analysis.col.explanation') }];
+        return head.concat(body, [{ key: 'actions', label: '', width: '104px' }]);
+      }
+
       function table() {
         return ui.dataTable({
-          columns: [
-            { key: 'time', label: t('analysis.col.time'), width: '136px', sortable: true, time: true },
-            { key: 'host', label: t('analysis.col.host'), width: '150px', sortable: true },
-            { key: 'metric', label: t('analysis.col.metric'), width: '144px', sortable: true },
-            { key: 'severity', label: t('analysis.col.severity'), width: '176px', sortable: true },
-            { key: 'deviation', label: t('analysis.col.deviation'), width: '104px', sortable: true, num: true },
-            { key: 'explanation', label: t('analysis.col.explanation') },
-            { key: 'actions', label: '', width: '104px' },
-          ],
+          columns: columns(),
           rows: sortRows(rows).map(toRow),
           sort: state.sort,
           onSort: function (key) {

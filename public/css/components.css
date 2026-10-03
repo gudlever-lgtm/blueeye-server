@@ -80,6 +80,36 @@
 .ui .subtab[aria-selected="true"], .ui .subtab.active {
   background: none; color: var(--accent); border-bottom-color: var(--accent); font-weight: 600; }
 
+/* ---- ModeSwitch — two lenses on one screen -------------------------------
+   Built by ui.modeSwitch(). It sits in the PageHeader's actions, so it is
+   sized like a control rather than like a tab: the pressed half is a raised
+   surface inside a sunken track, which is what says "one of these two is on"
+   without a second colour. The track takes --surface-alt and the pressed half
+   --surface, so the pair reads the same way on all sixteen palettes — a tinted
+   pressed state would mean "accent = selected" here and "accent = pressable"
+   everywhere else. */
+.ui .mode-switch { display: inline-flex; align-items: center; gap: 1px; padding: var(--s-1);
+  background: var(--surface-alt); border: 1px solid var(--hairline);
+  border-radius: var(--radius-pill); }
+.ui .mode-btn { display: inline-flex; align-items: center; gap: var(--s-2);
+  height: var(--control-h-sm); padding: 0 var(--s-3); border: 0;
+  border-radius: var(--radius-pill);
+  background: none; font: inherit; font-size: var(--fs-sm); color: var(--text-muted);
+  cursor: pointer; }
+.ui .mode-btn:hover { background: var(--hover); color: var(--text); }
+.ui .mode-btn[aria-pressed="true"] { background: var(--surface); color: var(--text);
+  font-weight: 600; box-shadow: var(--elev-1); }
+.ui .mode-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.ui .mode-ico { width: 16px; height: 16px; flex: 0 0 auto; }
+/* Narrow screens: the labels go and the icons stay, rather than the switch
+   wrapping under the title. The title attribute each button carries is what
+   names it then. */
+@media (max-width: 640px) {
+  .ui .mode-btn { padding: 0 var(--s-2); }
+  .ui .mode-label { position: absolute; width: 1px; height: 1px; overflow: hidden;
+    clip-path: inset(50%); white-space: nowrap; }
+}
+
 /* ---- StatStrip — clickable filter cards ---------------------------------- */
 .ui .statstrip { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: var(--s-3); }
 .ui .stat-card { display: flex; flex-direction: column; gap: var(--s-1); padding: var(--s-4);

@@ -339,6 +339,42 @@ strip, because it carries the roving tabindex, the arrow keys and the
 enforces it). `components.css` supplies only the look: inside `.ui` the strip is
 an underline row rather than the legacy row of filled buttons.
 
+### ModeSwitch
+
+Two lenses on **one** screen, built by `ui.modeSwitch()` and placed in the
+PageHeader's actions, left of the buttons.
+
+The line against SubTabs is what makes it a separate component: a **tab moves
+you to other content**, a **mode re-draws the same content for a different
+reader**. Analysis reads as a sentence or as the numbers the sentence rests on;
+Troubleshooting as a graph or as a sortable list; the Report Generator as the
+document or as the rows the document is built from; Sites and Destinations as a
+map or as a table. Neither half is a different page, so neither gets a tab —
+and the sidebar keeps the entries it had, because the rail is navigation and
+this is not.
+
+Rules:
+
+- **Two items, text *and* icon.** The icon alone makes "Evidence" a guess. The
+  icon set lives in `ui.js` (`MODE_ICONS`), so two screens cannot draw "list"
+  differently; a fifth pair is added there and to the kitchen sink first.
+- **Exactly one half is `aria-pressed="true"`**, left/right move between them,
+  and pressing the half that is already on is not a change — a screen that
+  redrew there would throw the reader's scroll position away for nothing.
+- **The choice is remembered per screen** (`store:` → `localStorage`, read back
+  with `ui.storedMode(store, allowed, fallback)`). Per screen, not globally:
+  the useful default differs — an operator wants the graph on Troubleshooting
+  and the table on Sites. A stored key that no longer exists falls back rather
+  than drawing a pane that is gone, and storage being switched off is the
+  ordinary private-window case, not an error.
+- **Both halves come from data the screen already has.** A switch that fetches
+  is a tab wearing the wrong clothes.
+- **One lens at a time.** A map behind a hidden table still holds its tiles and
+  still redraws on the poll, so the pane that is off is dropped, not hidden.
+  The labels are one catalogue entry per lens (`mode.*`), not one per screen:
+  "Evidence" has to read the same everywhere or the switch stops being one
+  control the reader has learnt.
+
 ### StatStrip
 
 Clickable cards (number + label) that set a filter in the Toolbar/DataTable.

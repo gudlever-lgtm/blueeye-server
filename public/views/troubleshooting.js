@@ -64,14 +64,42 @@
       // touches it.
       var faults = { open: !!state.faultsOpen, rows: [], total: 0, loading: false, error: null, loaded: false };
 
+      // The two lenses on the estate. The graph answers "what is behind what",
+      // which is the question a blast radius is; the list answers "which ones",
+      // which a picture is bad at — two sites 40 km apart overlap on a map and
+      // nothing sorts a dot. Same `data.topology`, no second read.
+      // Remembered per screen, so an operator who works in the table is not
+      // handed the graph again on every visit.
+      var MODES = ['graph', 'list'];
+      var mode = ui.storedMode('troubleshooting', MODES, 'graph');
+
       var info = deps.help();
       page.append(ui.pageHeader({
         title: t('tshoot.title'),
         lead: info.lead,
         help: { title: info.title, body: info.body },
-        actions: [ui.button('secondary', t('tshoot.openTopology'), {
-          onclick: function () { deps.gotoView('topology'); },
-        })],
+        actions: [
+          ui.modeSwitch({
+            label: t('mode.label'),
+            store: 'troubleshooting',
+            value: mode,
+            items: [
+              { key: 'graph', label: t('mode.graph'), icon: 'graph', title: t('mode.graphHint') },
+              { key: 'list', label: t('mode.list'), icon: 'list', title: t('mode.listHint') },
+            ],
+            onchange: function (key) {
+              mode = key;
+              // The graph holds an SVG and a selection; dropping the reference
+              // when it leaves the page is what stops a redraw writing into a
+              // node that is no longer in the document.
+              if (mode !== 'graph') graphEl = null;
+              if (data) drawTopology();
+            },
+          }),
+          ui.button('secondary', t('tshoot.openTopology'), {
+            onclick: function () { deps.gotoView('topology'); },
+          }),
+        ],
       // ROOT CAUSES BEFORE THE TOPOLOGY. The page used to open on the graph,
       // which meant the screen led with a picture and put the answer below the
       // fold: on a fleet whose switches are not in the graph yet, that is most
@@ -130,6 +158,61 @@
       }
 
       // ---- topology ----------------------------------------------------------
+      // The graph as a table: the same nodes, their derived state, and how many
+      // neighbours each has — worst first, because that is the order somebody
+      // works in. It is a view of `data.topology`, not a second source, so the
+      // two halves of the switch can never disagree about what is down.
+      var NODE_RANK = { down: 0, unreachable_downstream: 1, degraded: 2, unknown: 3, ok: 4 };
+      function stateTone(st) {
+        if (st === 'down') return 'crit';
+        if (st === 'ok') return 'ok';
+        if (st === 'degraded' || st === 'unreachable_downstream') return 'warn';
+        return 'neutral';
+      }
+      function topologyTable(topo) {
+        var nodes = (topo.nodes || []).slice();
+        if (!nodes.length) {
+          return ui.emptyState({
+            title: t('tshoot.topoList.empty'),
+            body: t('tshoot.topoList.emptyHint'),
+          });
+        }
+        var degree = {};
+        (topo.links || []).forEach(function (l) {
+          degree[String(l.source)] = (degree[String(l.source)] || 0) + 1;
+          degree[String(l.target)] = (degree[String(l.target)] || 0) + 1;
+        });
+        nodes.sort(function (a, b) {
+          var d = (NODE_RANK[a.state] === undefined ? 9 : NODE_RANK[a.state])
+            - (NODE_RANK[b.state] === undefined ? 9 : NODE_RANK[b.state]);
+          if (d) return d;
+          return String(a.label || '').toLowerCase() < String(b.label || '').toLowerCase() ? -1 : 1;
+        });
+        return ui.dataTable({
+          dense: true,
+          columns: [
+            { key: 'node', label: t('tshoot.topoList.col.node'), width: '260px' },
+            { key: 'state', label: t('tshoot.topoList.col.state'), width: '190px' },
+            { key: 'kind', label: t('tshoot.topoList.col.kind'), width: '110px' },
+            { key: 'links', label: t('tshoot.topoList.col.links'), width: '110px', num: true },
+            { key: 'seen', label: t('tshoot.topoList.col.lastSeen'), width: '190px', time: true },
+          ],
+          rows: nodes.map(function (n) {
+            return {
+              cells: {
+                node: deps.openNode
+                  ? ui.hostLink(n.label, function () { deps.openNode(n.id); })
+                  : ui.meta(n.label),
+                state: ui.badge(stateTone(n.state), TV.stateLabel(n.state, t)),
+                kind: ui.meta(n.kind === 'device' ? t('tshoot.topoList.device') : t('tshoot.topoList.agent')),
+                links: String(degree[String(n.id)] || 0),
+                seen: n.lastSeen ? ui.fmt.abs(n.lastSeen) : ui.meta(t('tshoot.neverSeen')),
+              },
+            };
+          }),
+        });
+      }
+
       function drawTopology() {
         var topo = data.topology || { nodes: [], links: [], counts: {}, layers: {} };
         var counts = topo.counts || {};
@@ -169,7 +252,10 @@
           });
           graphSlot.replaceChildren(graphEl);
         }
-        draw();
+        // Drawn only when it is on screen: topologySvg lays out every node, and
+        // doing that for a pane nobody is looking at is work the browser spends
+        // on each auto-refresh.
+        if (mode === 'graph') draw();
 
         var legend = el('div', { class: 'ui-chart-legend site-legend' },
           el('span', { class: 'ui-legend-item' }, el('span', { class: 'ui-legend-dot health-ok' }),
@@ -192,11 +278,17 @@
             : null);
 
         var discovered = (topo.discovered || []).length;
+        // The layer filter belongs to the drawing, not to the estate: the list
+        // shows every node, so offering a filter that changes nothing there
+        // would be a control that lies.
         topoHost.replaceChildren(ui.panel({
           title: t('tshoot.topology'),
-          actions: [layerSel],
+          actions: mode === 'graph' ? [layerSel] : [],
           children: [
-            el('div', { class: 'panel-body' }, graphSlot, legend, detail,
+            el('div', { class: 'panel-body' },
+              mode === 'graph' ? graphSlot : topologyTable(topo),
+              mode === 'graph' ? legend : null,
+              mode === 'graph' ? detail : null,
               // Something the active scan found that nobody has promoted is a
               // hole in this graph, so it is said here rather than nowhere.
               discovered ? ui.inlineNote(t('tshoot.discovered', { n: discovered }), 'info') : null),

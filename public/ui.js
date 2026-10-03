@@ -207,6 +207,108 @@
     // arrow keys and the tablist role); components.css gives it the underline.
     function tabs(items, opts) { return tabStrip(items, opts || {}); }
 
+    // ---- ModeSwitch ----------------------------------------------------------
+    // Two lenses on ONE screen, and the difference from SubTabs is the whole
+    // point: a tab moves you to other content, a mode re-draws the SAME content
+    // for a different reader. Findings read as a sentence or as the numbers the
+    // sentence rests on; Troubleshooting as a graph or as a sortable list.
+    // Neither half is a different page, so neither gets a tab — and the sidebar
+    // keeps the entries it had, because the rail is navigation and this is not.
+    //
+    // It lives in the PageHeader's actions, right of the title, so the reader
+    // finds it where they are already looking when they think "this is not the
+    // view I want".
+    //
+    // The choice is remembered PER SCREEN (`store`), because the useful default
+    // is not global: an operator wants the graph on Troubleshooting and the
+    // table on Sites, and a switch that forgets is a switch you press twice on
+    // every visit.
+    var MODE_STORE_PREFIX = 'blueeye.mode.';
+    function modeStoreKey(store) { return MODE_STORE_PREFIX + store; }
+    // What this screen was last left on. `allowed` is the gate: a key from an
+    // older build, or a hand-edited one, falls back rather than drawing a pane
+    // that no longer exists.
+    function storedMode(store, allowed, fallback) {
+      var def = fallback || allowed[0];
+      if (!store) return def;
+      var v = null;
+      try { v = localStorage.getItem(modeStoreKey(store)); } catch (e) { v = null; }
+      return allowed.indexOf(v) >= 0 ? v : def;
+    }
+    function rememberMode(store, value) {
+      if (!store) return;
+      try { localStorage.setItem(modeStoreKey(store), value); } catch (e) { /* storage off */ }
+    }
+
+    // The icons. Kept here rather than in the views so two screens cannot draw
+    // "list" differently, and so a view never hand-rolls SVG to get a button.
+    // Each entry is a list of [shape, …attrs] drawn at 24×24, stroked.
+    var MODE_ICONS = {
+      explain: [['path', 'M21 11.5a8.4 8.4 0 0 1-9 8.4 9 9 0 0 1-3.6-.7L3 21l1.9-5A8.4 8.4 0 0 1 12 3a8.4 8.4 0 0 1 9 8.5z']],
+      evidence: [['path', 'm8 17-5-5 5-5M16 7l5 5-5 5']],
+      graph: [
+        ['circle', 12, 5, 2.2], ['circle', 5, 18, 2.2], ['circle', 19, 18, 2.2],
+        ['path', 'M12 7.2 6.3 15.8M12 7.2l5.7 8.6'],
+      ],
+      list: [['path', 'M8 6h13M8 12h13M8 18h13M3.5 6h.01M3.5 12h.01M3.5 18h.01']],
+      doc: [
+        ['path', 'M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z'],
+        ['path', 'M14 3v5h5M9 13h6M9 17h4'],
+      ],
+      data: [['path', 'M3 5h18v14H3zM3 10h18M9 10v9M15 10v9']],
+      map: [['path', 'm9 4-6 2.5v13L9 17l6 3 6-2.5v-13L15 7z'], ['path', 'M9 4v13M15 7v13']],
+    };
+    function modeIcon(name) {
+      var shapes = MODE_ICONS[name];
+      if (!shapes) return null;
+      var svg = svgEl('svg', {
+        class: 'mode-ico', viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor',
+        'stroke-width': '1.8', 'stroke-linecap': 'round', 'stroke-linejoin': 'round',
+        'aria-hidden': 'true', focusable: 'false',
+      });
+      shapes.forEach(function (s) {
+        if (s[0] === 'circle') svg.append(svgEl('circle', { cx: s[1], cy: s[2], r: s[3] }));
+        else svg.append(svgEl('path', { d: s[1] }));
+      });
+      return svg;
+    }
+
+    // items: [{ key, label, icon, title }] — two of them, in reading order.
+    // The pressed one is aria-pressed="true"; left/right move between them, so
+    // it behaves like the one control it looks like rather than two buttons
+    // that happen to sit together.
+    function modeSwitch(opts) {
+      var items = (opts.items || []).filter(Boolean);
+      var value = opts.value;
+      var group = el('div', { class: 'mode-switch', role: 'group', 'aria-label': opts.label || null });
+      var btns = items.map(function (it) {
+        return el('button', {
+          type: 'button', class: 'mode-btn', 'data-mode': it.key,
+          'aria-pressed': String(it.key === value), title: it.title || null,
+        }, modeIcon(it.icon), el('span', { class: 'mode-label' }, it.label));
+      });
+      function pick(i) {
+        var key = items[i].key;
+        if (key === value) return;
+        value = key;
+        btns.forEach(function (b, bi) { b.setAttribute('aria-pressed', String(bi === i)); });
+        rememberMode(opts.store, key);
+        if (opts.onchange) opts.onchange(key);
+      }
+      btns.forEach(function (b, i) {
+        b.addEventListener('click', function () { pick(i); });
+        b.addEventListener('keydown', function (e) {
+          if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+          e.preventDefault();
+          var next = (i + (e.key === 'ArrowRight' ? 1 : btns.length - 1)) % btns.length;
+          btns[next].focus();
+          pick(next);
+        });
+      });
+      group.append.apply(group, btns);
+      return group;
+    }
+
     // ---- StatStrip -----------------------------------------------------------
     function statStrip(cards) {
       return el('div', { class: 'statstrip' }, cards.filter(Boolean).map(function (c) {
@@ -1113,6 +1215,8 @@
       page: page,
       pageHeader: pageHeader,
       tabs: tabs,
+      modeSwitch: modeSwitch,
+      storedMode: storedMode,
       statStrip: statStrip,
       toolbar: toolbar,
       filter: filter,

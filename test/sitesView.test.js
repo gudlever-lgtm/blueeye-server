@@ -108,11 +108,21 @@ const SESSION = (over = {}) => Object.assign({
 }, over);
 
 const rows = (doc) => [...doc.querySelectorAll('#view .panel-ui table.dt tbody tr')];
+// The Map lens hides the rollup and the List lens drops the map (ui.modeSwitch,
+// docs/ui-contract.md -> ModeSwitch), so a test about the TABLE asks for the
+// table first. The one exception is a map that cannot answer anything — no
+// library, no coordinates, no sites — where the table is drawn either way.
+const toList = async (doc, window) => {
+  const btn = doc.querySelector('#view .mode-switch .mode-btn[data-mode="list"]');
+  assert.ok(btn, 'no mode switch in the page header');
+  btn.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+  await settle();
+};
 const cards = (doc) => [...doc.querySelectorAll('#view .statstrip .stat-card')];
 const cell = (row, i) => row.children[i].textContent.trim();
 
 test('Sites is a ListPage: PageHeader, StatStrip, map Panel, DataTable', async (t) => {
-  const { doc, errors } = boot({ t, routes: SESSION(), leaflet: true });
+  const { doc, errors, window } = boot({ t, routes: SESSION(), leaflet: true });
   await settle();
   assert.deepEqual(errors, []);
   const page = doc.querySelector('#view .ui.ui-page');
@@ -121,8 +131,16 @@ test('Sites is a ListPage: PageHeader, StatStrip, map Panel, DataTable', async (
   assert.equal(doc.querySelectorAll('#view .hero').length, 0, 'the info banner came back');
   assert.equal(doc.querySelectorAll('#view .section-head').length, 0, 'the old section head survived');
   assert.equal(cards(doc).length, 4);
-  assert.equal(rows(doc).length, 3, 'every site is in the table, mapped or not');
+  // Map is the default lens: the canvas is drawn and the rollup is not, so the
+  // page is one answer rather than the same estate twice, stacked.
   assert.ok(doc.querySelector('#view .site-map'), 'no map canvas');
+  assert.equal(rows(doc).length, 0, 'the map lens still draws the table under it');
+  // The switch is the way to the other half, and the strip survives it: the
+  // counts are about the estate, not about how it is drawn.
+  await toList(doc, window);
+  assert.equal(doc.querySelectorAll('#view .site-map').length, 0, 'the map was hidden rather than dropped');
+  assert.equal(rows(doc).length, 3, 'every site is in the table, mapped or not');
+  assert.equal(cards(doc).length, 4);
 });
 
 test('the strip counts sites, coordinates, critical sites and offline agents', async (t) => {
@@ -136,8 +154,9 @@ test('the strip counts sites, coordinates, critical sites and offline agents', a
 });
 
 test('a site takes the WORST health of its agents, and shows it as a badge', async (t) => {
-  const { doc } = boot({ t, routes: SESSION(), leaflet: true });
+  const { doc, window } = boot({ t, routes: SESSION(), leaflet: true });
   await settle();
+  await toList(doc, window);
   const oslo = rows(doc).find((r) => /Oslo HQ/.test(r.textContent));
   // Oslo has one bad and one ok agent — the row reads critical, not healthy.
   assert.match(cell(oslo, 1), /Critical/i);
@@ -170,6 +189,7 @@ test('a marker carries a token colour, not a hex literal, and the worst status',
 test('the table sorts from its header and the site name opens the location', async (t) => {
   const { doc, window } = boot({ t, routes: SESSION(), leaflet: true });
   await settle();
+  await toList(doc, window);
   const header = [...doc.querySelectorAll('#view .panel-ui table.dt thead th')]
     .find((th) => /^Site/.test(th.textContent));
   header.dispatchEvent(new window.Event('click', { bubbles: true }));
@@ -217,8 +237,9 @@ test('a 500 on /locations is an ErrorState with the shell and header intact', as
 });
 
 test('a 404 on the fleet rollup degrades to "unknown", it does not break the page', async (t) => {
-  const { doc, errors } = boot({ t, routes: SESSION({ 'GET /api/fleet/health': { status: 404, body: { error: 'Not Found' } } }), leaflet: true });
+  const { doc, errors, window } = boot({ t, routes: SESSION({ 'GET /api/fleet/health': { status: 404, body: { error: 'Not Found' } } }), leaflet: true });
   await settle();
+  await toList(doc, window);
   assert.deepEqual(errors, []);
   assert.equal(rows(doc).length, 3, 'the page went down with the rollup');
   const oslo = rows(doc).find((r) => /Oslo HQ/.test(r.textContent));

@@ -143,10 +143,20 @@ const SESSION = (over = {}) => Object.assign({
 }, over);
 
 const rows = (doc) => [...doc.querySelectorAll('#view .panel-ui table.dt tbody tr')];
+// The Map lens hides the table and the List lens drops the map (ui.modeSwitch,
+// docs/ui-contract.md -> ModeSwitch), so a test about the TABLE asks for the
+// table first. A map that cannot answer anything — no library, no flows — draws
+// the table either way, which is why those tests do not call this.
+const toList = async (doc, window) => {
+  const btn = doc.querySelector('#view .mode-switch .mode-btn[data-mode="list"]');
+  assert.ok(btn, 'no mode switch in the page header');
+  btn.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+  await settle();
+};
 const drawer = (doc) => doc.querySelector('.ui-drawer');
 
 test('Destinations is a ListPage: PageHeader, Toolbar, map Panel, DataTable — the side panel is gone', async (t) => {
-  const { doc, errors } = boot({ t, routes: SESSION() });
+  const { doc, errors, window } = boot({ t, routes: SESSION() });
   await settle();
   assert.deepEqual(errors, []);
   assert.ok(doc.querySelector('#view .ui.ui-page'), 'the page is not on the contract');
@@ -154,7 +164,12 @@ test('Destinations is a ListPage: PageHeader, Toolbar, map Panel, DataTable — 
   assert.equal(doc.querySelectorAll('#view .geo-panel').length, 0, 'the always-on side panel survived');
   assert.equal(doc.querySelectorAll('#view .geo-top').length, 0, 'the old top table survived');
   assert.equal(doc.querySelectorAll('#view .section-head').length, 0, 'the old section head survived');
+  // Map is the default lens: the canvas is drawn and the table is not, so the
+  // page answers "where" rather than answering it twice.
   assert.ok(doc.querySelector('#view .site-map'), 'no map canvas');
+  assert.equal(rows(doc).length, 0, 'the map lens still draws the table under it');
+  await toList(doc, window);
+  assert.equal(doc.querySelectorAll('#view .site-map').length, 0, 'the map was hidden rather than dropped');
   // Three of the four destinations are placeable; the fourth has no coordinates
   // and still belongs in the table.
   assert.equal(rows(doc).length, 4);
@@ -163,6 +178,7 @@ test('Destinations is a ListPage: PageHeader, Toolbar, map Panel, DataTable — 
 test('a destination row opens the Drawer with the breakdown and the findings', async (t) => {
   const { doc, window } = boot({ t, routes: SESSION() });
   await settle();
+  await toList(doc, window);
   assert.equal(drawer(doc), null, 'the drawer is open before anything was clicked');
   const row = rows(doc).find((r) => /Google/.test(r.textContent));
   row.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
@@ -182,6 +198,7 @@ test('a destination row opens the Drawer with the breakdown and the findings', a
 test('a 404 on the flows is "no data", not an error', async (t) => {
   const { doc, window, errors } = boot({ t, routes: SESSION({ 'GET /api/geo/select/flows': { status: 404, body: { error: 'Not Found' } } }) });
   await settle();
+  await toList(doc, window);
   rows(doc)[0].dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
   await settle();
   const d = drawer(doc);
@@ -194,6 +211,7 @@ test('a 404 on the flows is "no data", not an error', async (t) => {
 test('a 500 on the flows IS an error, and names the call', async (t) => {
   const { doc, window, errors } = boot({ t, routes: SESSION({ 'GET /api/geo/select/flows': { status: 500, body: { error: 'boom' } } }) });
   await settle();
+  await toList(doc, window);
   rows(doc)[0].dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
   await settle();
   const d = drawer(doc);
@@ -234,6 +252,7 @@ test('sites and destinations keep two separate colour scales, both from tokens',
 test('the deviation is a badge on the row, and the table sorts by it', async (t) => {
   const { doc, window } = boot({ t, routes: SESSION() });
   await settle();
+  await toList(doc, window);
   // Default sort is volume, descending.
   assert.match(rows(doc)[0].textContent, /Google/);
   const header = [...doc.querySelectorAll('#view .panel-ui table.dt thead th')]

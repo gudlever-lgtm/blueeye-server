@@ -54,8 +54,17 @@ function createGeoRouter({
       if (!/^\d+$/.test(String(query.asn))) return { error: 'asn must be an integer' };
       asn = Number(query.asn);
     }
+    // The city narrows a (country, ASN) destination to the one circle that was
+    // clicked. It is matched literally against what we wrote on the row, so it
+    // is length-capped like the column and nothing else.
+    let city = null;
+    if (query.city !== undefined && query.city !== '') {
+      const c = String(query.city);
+      if (c.length > 100) return { error: 'city must be 100 characters or fewer' };
+      city = c;
+    }
     if (!country && asn === null) return { error: 'country or asn is required' };
-    return { country, asn };
+    return { country, asn, city };
   }
 
   // A destination is aggregated per (country, ASN), so the only honest place to
@@ -65,8 +74,22 @@ function createGeoRouter({
   // region can never find it. A country we have no centroid for keeps lat/lng
   // null and is table-only.
   function placeDestination(d) {
+    // The city wins when the enricher wrote one: it only did so where the claim
+    // survives src/geo/destinationPlace.js (no cloud, no CDN, and both
+    // databases naming the same country). Everything else is the centroid, and
+    // `precision` says which of the two the circle is standing on so the map
+    // never has to guess.
+    if (d.city && d.cityLat != null && d.cityLng != null) {
+      return { ...d, lat: Number(d.cityLat), lng: Number(d.cityLng), precision: 'city' };
+    }
     const point = centroids && typeof centroids.get === 'function' ? centroids.get(d.country) : null;
-    return { ...d, lat: point ? point.lat : null, lng: point ? point.lng : null };
+    return {
+      ...d,
+      city: null,
+      lat: point ? point.lat : null,
+      lng: point ? point.lng : null,
+      precision: point ? 'country' : null,
+    };
   }
 
   // GET /api/geo/config — map tile source (so the frontend never hardcodes it).
@@ -105,7 +128,7 @@ function createGeoRouter({
     });
   }));
 
-  // GET /api/geo/select/findings?country=&asn=&since= — findings for the hosts
+  // GET /api/geo/select/findings?country=&asn=&city=&since= — findings for the hosts
   // that talked to the selected destination. 404 when the destination is unknown.
   router.get('/select/findings', ...staff, asyncHandler(async (req, res) => {
     const win = parseWindow(req.query);
@@ -125,10 +148,10 @@ function createGeoRouter({
     }
     findings.sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
 
-    res.json({ country: sel.country, asn: sel.asn, since: win.since.toISOString(), until: win.until.toISOString(), hosts: agentIds, findings });
+    res.json({ country: sel.country, asn: sel.asn, city: sel.city, since: win.since.toISOString(), until: win.until.toISOString(), hosts: agentIds, findings });
   }));
 
-  // GET /api/geo/select/flows?country=&asn=&since= — aggregated flow detail for
+  // GET /api/geo/select/flows?country=&asn=&city=&since= — aggregated flow detail for
   // the selected destination. 404 when the destination is unknown.
   router.get('/select/flows', ...staff, asyncHandler(async (req, res) => {
     const win = parseWindow(req.query);
@@ -140,7 +163,7 @@ function createGeoRouter({
     if (!exists) return res.status(404).json({ error: 'No traffic for the selected destination' });
 
     const detail = await flowsRepo.selectFlows({ ...sel, since: win.since, until: win.until });
-    res.json({ country: sel.country, asn: sel.asn, since: win.since.toISOString(), until: win.until.toISOString(), ...detail });
+    res.json({ country: sel.country, asn: sel.asn, city: sel.city, since: win.since.toISOString(), until: win.until.toISOString(), ...detail });
   }));
 
   // ---- hop location corrections (`hop_locations`, migration 144) -----------

@@ -12094,6 +12094,9 @@ function destQuery(d) {
   const qs = new URLSearchParams();
   if (d.country) qs.set('country', d.country);
   if (d.asn != null && d.asn !== '') qs.set('asn', d.asn);
+  // Only a city-placed destination carries one, and then the detail must be
+  // that circle's rather than the whole country's.
+  if (d.city) qs.set('city', d.city);
   if (geoState.sinceIso) qs.set('since', geoState.sinceIso);
   return qs.toString();
 }
@@ -12122,18 +12125,24 @@ function drawGeoMarkers(opts) {
   }
   for (const d of geoState.dests) {
     const colour = opts.devColor(d.deviation);
+    // A country-level circle is drawn with a dashed ring, the same way the path
+    // map marks a stop it only knows the country of: the position is a
+    // centroid, not a place the traffic is.
+    const rough = d.precision !== 'city';
     const c = L.circleMarker([d.lat, d.lng], {
-      radius: radiusForBytes(d.bytes), color: colour,
-      fillColor: colour, fillOpacity: 0.5, weight: 1,
+      radius: radiusForBytes(d.bytes), color: colour, dashArray: rough ? '3 3' : null,
+      fillColor: colour, fillOpacity: rough ? 0.35 : 0.5, weight: 1,
     });
-    c.bindTooltip(`${destTitleOf(d)} — ${fmtBytes(d.bytes)}`);
+    c.bindTooltip(`${destTitleOf(d)} — ${fmtBytes(d.bytes)}`
+      + (rough ? ` · ${t('dest.atCountry')}` : ''));
     c.on('click', () => opts.onDestination(d));
     geoState.ext.addLayer(c);
     geoState.destMarkers.push({ d, marker: c });
   }
 }
 function destTitleOf(d) {
-  return `${d.country || '??'}${d.asn ? ` · AS${d.asn}` : ''}${d.asnName ? ` ${d.asnName}` : ''}`;
+  const place = d.city ? `${d.city}, ${d.country || '??'}` : (d.country || '??');
+  return `${place}${d.asn ? ` · AS${d.asn}` : ''}${d.asnName ? ` ${d.asnName}` : ''}`;
 }
 function pickGeoCenter() {
   const h = (geoState.internalHosts || []).find((x) => x.lat != null && x.lng != null);

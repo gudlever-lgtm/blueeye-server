@@ -81,3 +81,52 @@ test('enrichMany maps a batch and tolerates non-arrays', () => {
   assert.equal(out[0].country, 'DE');
   assert.equal(out[1].internal, true);
 });
+
+// ---- city placement (migration 145) ----------------------------------------
+// The enricher asks destinationPlace.js, which only says yes where the claim
+// holds; without a city table nothing changes at all.
+const cityTable = (hit) => ({ lookup: () => hit });
+
+test('writes the city when the city table agrees with the country table', () => {
+  const enricher = createGeoEnricher({
+    provider: spyProvider({ country: 'CA', asn: 852, asnName: 'TELUS' }),
+    centroids,
+    cityProvider: cityTable({ city: 'Montreal', country: 'CA', lat: 45.5, lng: -73.57 }),
+  });
+  const r = enricher.enrich({ agentId: 1, srcIp: '10.0.0.5', dstIp: '203.0.113.9', bytes: 10 });
+  assert.equal(r.city, 'Montreal');
+  assert.equal(r.cityLat, 45.5);
+  assert.equal(r.cityLng, -73.57);
+  // The country centroid is still there — the map falls back to it per
+  // destination, so it must never be dropped.
+  assert.ok(r.lat != null && r.lng != null);
+});
+
+test('leaves the city null for a CDN, and whenever no city table is wired', () => {
+  const cdn = createGeoEnricher({
+    provider: spyProvider({ country: 'CA', asn: 13335, asnName: 'CLOUDFLARENET' }),
+    centroids,
+    cityProvider: cityTable({ city: 'Montreal', country: 'CA', lat: 45.5, lng: -73.57 }),
+  });
+  const a = cdn.enrich({ agentId: 1, srcIp: '10.0.0.5', dstIp: '203.0.113.9', bytes: 10 });
+  assert.equal(a.city, null);
+  assert.equal(a.cityLat, null);
+
+  const plain = createGeoEnricher({ provider: spyProvider(), centroids });
+  const b = plain.enrich({ agentId: 1, srcIp: '10.0.0.5', dstIp: '203.0.113.9', bytes: 10 });
+  assert.equal(b.city, null);
+  assert.equal(b.cityLat, null);
+  assert.equal(b.cityLng, null);
+});
+
+test('an internal flow carries no city either', () => {
+  const enricher = createGeoEnricher({
+    provider: spyProvider(),
+    centroids,
+    cityProvider: cityTable({ city: 'Montreal', country: 'CA', lat: 45.5, lng: -73.57 }),
+  });
+  const r = enricher.enrich({ agentId: 1, srcIp: '10.0.0.5', dstIp: '10.0.0.9', bytes: 10 });
+  assert.equal(r.internal, true);
+  assert.equal(r.city, null);
+  assert.equal(r.cityLat, null);
+});

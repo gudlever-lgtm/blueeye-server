@@ -67,3 +67,57 @@ test('destinationExists is true when only the rollup has the destination', async
   const repo = createFlowsRepository({ pool });
   assert.equal(await repo.destinationExists({ country: 'DE', ...win }), true);
 });
+
+// ---- city-level destinations (migration 145) -------------------------------
+// flow_rollup has no city column, so a window spanning the raw-retention
+// horizon shows the recent half on its city and the older half on the country.
+test('aggregateExternalDestinations keeps city and country rows apart', async () => {
+  const pool = {
+    async query(sql) {
+      if (/FROM flow_records/.test(sql) && /GROUP BY country, asn, city/.test(sql)) {
+        return [[
+          { country: 'CA', asn: 852, asnName: 'TELUS', city: 'Montreal', cityLat: 45.5, cityLng: -73.57, bytes: 70, flowCount: 7 },
+          { country: 'CA', asn: 13335, asnName: 'CLOUDFLARENET', city: null, cityLat: null, cityLng: null, bytes: 5, flowCount: 1 },
+        ]];
+      }
+      if (/FROM flow_rollup/.test(sql) && /GROUP BY country, asn/.test(sql)) {
+        return [[{ country: 'CA', asn: 852, asnName: 'TELUS', bytes: 30, flowCount: 3 }]];
+      }
+      return [[]];
+    },
+  };
+  const repo = createFlowsRepository({ pool });
+  const out = await repo.aggregateExternalDestinations(win);
+
+  const city = out.find((d) => d.city === 'Montreal');
+  assert.equal(city.bytes, 70);
+  assert.equal(city.cityLat, 45.5);
+  assert.equal(city.cityLng, -73.57);
+
+  // The rollup half of the SAME country+ASN cannot be split by city, so it is
+  // its own country-level row rather than being folded into Montreal.
+  const rolled = out.find((d) => d.asn === 852 && d.city === null);
+  assert.equal(rolled.bytes, 30);
+  assert.equal(rolled.cityLat, null);
+
+  const cdn = out.find((d) => d.asn === 13335);
+  assert.equal(cdn.city, null);
+  assert.equal(cdn.bytes, 5);
+});
+
+test('a city selection reads raw only — the rollup has no city to filter on', async () => {
+  const asked = [];
+  const pool = {
+    async query(sql, params) {
+      asked.push({ sql, params });
+      if (/SELECT 1 /.test(sql)) return [[{ x: 1 }]];
+      return [[]];
+    },
+  };
+  const repo = createFlowsRepository({ pool });
+  await repo.destinationExists({ country: 'CA', asn: 852, city: 'Montreal', ...win });
+  const tables = asked.map((a) => a.sql);
+  assert.ok(tables.some((s) => /FROM flow_records/.test(s) && /city = \?/.test(s)));
+  assert.ok(!tables.some((s) => /FROM flow_rollup/.test(s)), 'the rollup must not be asked for a city');
+  assert.ok(asked[0].params.includes('Montreal'));
+});

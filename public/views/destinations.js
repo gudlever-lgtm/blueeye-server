@@ -116,8 +116,11 @@
       return ui.inlineNote(t('pathmap.destUnplaced', { hop: dest.hop, ip: dest.ip || '*' }), 'info');
     }
 
+    // A city is shown only when the server placed the destination on one; a
+    // country-level destination says so by not naming a place it isn't in.
     function destTitle(d) {
-      return (d.country || '??')
+      return (d.city ? d.city + ', ' : '')
+        + (d.country || '??')
         + (d.asn ? ' · AS' + d.asn : '')
         + (d.asnName ? ' ' + d.asnName : '');
     }

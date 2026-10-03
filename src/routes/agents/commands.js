@@ -149,6 +149,9 @@ function createAgentCommandsRouter(ctx) {
       }
       const reply = out.reply || {};
       // A runtime that declines (docker/unmanaged) is a terminal outcome we know now.
+      // An ack that never arrived is NOT one: the command went out on a live
+      // socket and the agent may well be rebuilding right now, so the audit row
+      // stays 'requested' and the agent closes it when it reports back.
       if (reply.accepted === false) await markFailed(auditId, reply.reason || 'declined');
       // An unsigned push is a known-bad outcome on a pinned fleet, so it belongs
       // in the system log next to the failure it will cause — not only in a toast
@@ -168,6 +171,13 @@ function createAgentCommandsRouter(ctx) {
         connected: true,
         acked: !!out.acked,
         accepted: !!reply.accepted,
+        // The command was delivered but the agent did not ack inside the window.
+        // Stated separately because it is NOT a refusal: the dashboard used to
+        // read `accepted: false` on its own and tell the operator the agent had
+        // refused the update "without a reason", which is how a half-open socket
+        // (the heartbeat runs every 30s, so a dead one lingers) looked exactly
+        // like a declined command — and why clicking Update twice "worked".
+        timedOut: !!out.timedOut,
         runtime: reply.runtime || null,
         reason: reply.reason || null,
         targetVersion,

@@ -3895,6 +3895,13 @@
       return el('span', { class: 'sa-sev sa-sev-' + String(severity || '').toLowerCase() }, String(severity || ''));
     }
 
+    // The incident's state as a pill, in the same vocabulary as a run status or
+    // a certificate — one page, one way of showing state.
+    function stateChip(status) {
+      var key = String(status || 'open').toLowerCase();
+      return el('span', { class: 'sa-status sa-state-' + key }, statusWord(status));
+    }
+
     // Days remaining, coloured by how much trouble it is. A number on its own
     // does not say whether 12 is fine — the chip does.
     function daysChip(days, status) {
@@ -3913,13 +3920,18 @@
       var rows = incidents.map(function (incident) {
         return el('tr', {},
           el('td', {},
+            // "Details", not "Open": the state next to it is also called open,
+            // and two pills a line apart both reading "Open" is a row where
+            // nobody can tell the button from the label.
             el('button', {
               class: 'ghost small',
+              title: t('sa.incident.openHint'),
               onclick: function () { incidentDetail(incident.id); },
-            }, t('sa.incident.open')),
-            // The state it is in, which used to be invisible because the list
-            // only ever showed one.
-            el('div', { class: 'chip' }, statusWord(incident.status))),
+            }, t('sa.incident.open'))),
+          // The state it is in, in its own column with its own heading, in the
+          // page's status-pill vocabulary — not a .chip, which is a toggle
+          // everywhere else on this page and so read as a second button.
+          el('td', {}, stateChip(incident.status)),
           el('td', {}, severityChip(incident.severity),
             // A severity a rule changed says so. A downgraded critical that
             // looks exactly like a detected warning is how a dashboard goes
@@ -3961,6 +3973,7 @@
         el('table', { class: 'data-table' },
           el('thead', {}, el('tr', {},
             el('th', {}, ''),
+            el('th', {}, t('sa.health.state')),
             el('th', {}, t('sa.health.severity')), el('th', {}, t('sa.health.subject')),
             el('th', {}, t('sa.health.whatHappened')), el('th', {}, t('sa.health.since')),
             el('th', {}, t('sa.health.seen')), el('th', {}, ''))),
@@ -3985,7 +3998,7 @@
             el('div', { class: 'sa-incident-head' },
               el('code', { class: 'sa-incident-ref' }, incident.reference || ''),
               severityChip(incident.severity),
-              el('span', { class: 'chip' }, statusWord(incident.status))),
+              stateChip(incident.status)),
             el('h4', {}, incident.subject_label || incident.subject_key),
             el('p', {}, incident.summary || ''),
             el('div', { class: 'sa-stats' },

@@ -132,7 +132,9 @@ async function openHealth(doc) {
 
 async function openIncident(doc) {
   await openHealth(doc);
-  const open = byText(doc, '#view button', 'Open');
+  // "Details", not "Open": the state pill beside it says "Open", and the row
+  // used to carry both words as two pills nobody could tell apart.
+  const open = byText(doc, '#view button', 'Details');
   assert.ok(open, 'no way to open an incident');
   await click(open, 400);
   const dialog = doc.querySelector('.sa-modal');
@@ -155,6 +157,33 @@ test('the Health tab shows incidents in every active state, not only open ones',
   }
   assert.match(doc.querySelector('#view').textContent, /Sign in/, 'the incident under investigation is not on screen');
   assert.deepEqual(errors, []);
+});
+
+test('the row\'s button and its state cannot be mistaken for each other', async (t) => {
+  // They were both pills reading "Open", a line apart: one opened the incident,
+  // the other was the status. The button says what it does; the state is a pill
+  // in its own column, under its own heading, and is not a control.
+  const { doc } = await boot(t, healthRoutes());
+  await openHealth(doc);
+  const panel = [...doc.querySelectorAll('#view .sa-panel')]
+    .find((p) => /Open incidents/.test(p.textContent));
+  assert.ok(panel, 'no Open incidents panel');
+
+  const row = panel.querySelector('tbody tr');
+  const buttons = [...row.querySelectorAll('button')].map((b) => b.textContent.trim());
+  assert.ok(buttons.includes('Details'), 'the action does not say what it does');
+  assert.equal(buttons.filter((x) => x === 'Open').length, 0, 'a control still reads "Open"');
+
+  const state = row.querySelector('.sa-status');
+  assert.ok(state, 'the state is not a status pill');
+  assert.equal(state.tagName, 'SPAN', 'the state is still built as something pressable');
+  assert.equal(state.textContent.trim(), 'Open');
+  assert.equal(row.querySelectorAll('.chip').length, 0, 'the toggle-chip class is back on a label');
+
+  // Its own column, so it is not stacked under the button.
+  const heads = [...panel.querySelectorAll('thead th')].map((th) => th.textContent.trim());
+  assert.ok(heads.includes('Status'), 'the state column has no heading');
+  assert.equal(state.closest('td'), row.children[heads.indexOf('Status')], 'the state is not in the Status column');
 });
 
 // -------------------------------------------------------------- the detail
@@ -265,7 +294,7 @@ test('the whole module is operator+, so there is no read-only incident view to g
   const nav = doc.querySelector('.tabs button[data-view="serviceAssurance"]');
   assert.ok(nav, 'the nav entry is gone from the markup, so this spec tests nothing');
   await click(nav, 400);
-  assert.equal(byText(doc, '#view button', 'Open'), null, 'a viewer got as far as an incident');
+  assert.equal(byText(doc, '#view button', 'Details'), null, 'a viewer got as far as an incident');
 });
 
 test('an incident that will not load says so rather than sitting on Loading', async (t) => {

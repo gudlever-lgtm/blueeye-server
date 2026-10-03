@@ -16,6 +16,7 @@ Open source components with permissive licences (MIT/BSD) only:
 | jsonwebtoken  | MIT     | Issue/verify JWT               |
 | bcryptjs      | MIT     | Password hashing (pure JS)     |
 | ws            | MIT     | WebSocket (agent live channel) |
+| nodemailer    | MIT     | SMTP (alert + report e-mail)   |
 | dotenv        | BSD-2   | Load `.env`                    |
 | supertest     | MIT     | HTTP tests (`devDeps` only)    |
 

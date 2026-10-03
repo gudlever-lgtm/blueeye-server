@@ -15,7 +15,7 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 // data layer (internal = 0).
 function createGeoRouter({
   flowsRepo, agentsRepo, findingStore, tileConfig = {}, getMapConfig = null, geoProvider = null,
-  hopLocationsRepo = null, hopCorrections = null, featureGate,
+  hopLocationsRepo = null, hopCorrections = null, centroids = null, featureGate,
 }) {
   const router = express.Router();
   // GeoIP enrichment status (configured? how many ranges?) — viewer-safe, no file
@@ -58,6 +58,17 @@ function createGeoRouter({
     return { country, asn };
   }
 
+  // A destination is aggregated per (country, ASN), so the only honest place to
+  // draw it is its country's centroid — country level, never city (docs/geo.md).
+  // Without the coordinates the dashboard filters the destination out of the
+  // map entirely: it stays in the table, but no circle is drawn and a dragged
+  // region can never find it. A country we have no centroid for keeps lat/lng
+  // null and is table-only.
+  function placeDestination(d) {
+    const point = centroids && typeof centroids.get === 'function' ? centroids.get(d.country) : null;
+    return { ...d, lat: point ? point.lat : null, lng: point ? point.lng : null };
+  }
+
   // GET /api/geo/config — map tile source (so the frontend never hardcodes it).
   // Uses the effective (admin-editable) config when available.
   router.get('/config', ...staff, asyncHandler(async (req, res) => {
@@ -90,7 +101,7 @@ function createGeoRouter({
       since: win.since.toISOString(),
       until: win.until.toISOString(),
       internalHosts,
-      externalDestinations,
+      externalDestinations: externalDestinations.map(placeDestination),
     });
   }));
 

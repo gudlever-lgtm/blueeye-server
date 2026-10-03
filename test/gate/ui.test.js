@@ -442,3 +442,61 @@ test('every view named in VIEW_RESOURCES is a real screen', () => {
     'that was meant to keep it.'
   );
 });
+
+// ---------------------------------------------- the attack bar's geometry
+// Two bugs that only a layout engine can see, pinned here as source rules
+// because `node --test` has no layout engine.
+//
+//   1. Every <button> in the app has `min-height: var(--control-h)` (40px) so
+//      a control is tappable. The strip is 3px, and without an explicit floor
+//      of its own that rule won — the "3px line" was a 40px slab of red across
+//      the top of every screen.
+//   2. Growing the BUTTON on hover is a hover loop. The pointer below the 3px
+//      line is inside the grown box and outside the collapsed one, so leaving
+//      it starts a shrink, the shrinking box passes back under the pointer,
+//      :hover applies again. It blinked about thirty times a second. The label
+//      is an absolutely positioned panel instead: outside the button's box for
+//      layout, inside it for hit-testing, so the strip's own geometry never
+//      moves.
+test('the attack bar stays 3px: its own min-height, and nothing grows it on hover', () => {
+  const css = fs.readFileSync(path.join(PUBLIC, 'css', 'components.css'), 'utf8')
+    .replace(/\/\*[\s\S]*?\*\//g, '');
+  const rule = (selector) => {
+    const m = css.match(new RegExp(`${selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*\\{([^}]*)\\}`));
+    return m ? m[1] : null;
+  };
+
+  const bar = rule('.attack-bar');
+  assert.ok(bar, 'no .attack-bar rule');
+  assert.match(bar, /height:\s*3px/, 'the strip is not 3px');
+  assert.match(bar, /min-height:\s*0/,
+    'the strip has no min-height of its own, so button { min-height: var(--control-h) }\n'
+    + 'wins and the "3px line" renders as a 40px slab of red.');
+
+  // No hover/focus rule may change the button's own box.
+  for (const m of css.matchAll(/\.attack-bar:(hover|focus-visible)(?![\w-])([^{]*)\{([^}]*)\}/g)) {
+    const [, state, rest, body] = m;
+    if (rest.includes('.attack-bar-panel')) continue; // the panel, not the button
+    assert.doesNotMatch(body, /(^|[;\s])(height|min-height|padding|font-size|line-height)\s*:/,
+      `.attack-bar:${state} resizes the button itself — that is the hover loop.\n`
+      + 'Put the change on .attack-bar-panel, which is absolutely positioned.');
+  }
+
+  const panel = rule('.attack-bar-panel');
+  assert.ok(panel, 'no .attack-bar-panel rule');
+  assert.match(panel, /position:\s*absolute/, 'the panel is in the flow, so opening it moves the page');
+  assert.match(panel, /pointer-events:\s*none/, 'the hidden panel swallows clicks meant for the topbar');
+  assert.match(panel, /z-index:\s*var\(--z-attack\)/, 'the panel is not on the token layer ladder');
+  const shown = css.match(/\.attack-bar:hover \.attack-bar-panel[^{]*\{([^}]*)\}/);
+  assert.ok(shown && /pointer-events:\s*auto/.test(shown[1]),
+    'the shown panel takes no pointer events, so reading it drops :hover and it flickers');
+});
+
+test('the attack bar carries the panel the CSS expects', () => {
+  const bar = dom0.window.document.querySelector('#attack-bar');
+  assert.ok(bar, 'no attack bar in the shell');
+  const panel = bar.querySelector('.attack-bar-panel');
+  assert.ok(panel, 'the label is not inside .attack-bar-panel — the strip will grow on hover');
+  assert.ok(panel.querySelector('#attack-bar-label'), 'the label moved out of the panel');
+  assert.ok(panel.querySelector('#attack-bar-detail'), 'the detail moved out of the panel');
+});

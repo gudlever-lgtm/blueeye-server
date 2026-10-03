@@ -52,6 +52,10 @@
       }), tabsHost, bodyHost);
 
       function drawBody() {
+        // Only the generator has a lens. render() empties the slot on
+        // navigation, but moving between THIS page's sections is not a
+        // navigation, so a Document/Data pill would sit over the audit trail.
+        ui.clearHeaderMode();
         bodyHost.replaceChildren(ui.panel({ children: [ui.loadingState(5)] }));
         var want = active;
         return Promise.resolve()

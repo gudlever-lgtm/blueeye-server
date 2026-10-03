@@ -19619,11 +19619,11 @@ async function reportGenerator() {
   const actions = el('div', { class: 'rg-actions' },
     el('button', { class: 'small', onclick: doPreview }, 'Preview'),
     el('button', { class: 'small', onclick: doExport }));
-  // The generator has no PageHeader of its own — the one at the top of the
-  // page belongs to Reporting, which has five sections. So the lens sits
-  // directly above the thing it re-draws, full width, which is the same
-  // relationship the `modes:` slot gives the other six screens.
-  const rgLens = ui.modeSwitch({
+  // The seventh lens, in the same place as the other six. The generator has
+  // no PageHeader of its own — the one at the top belongs to Reporting and
+  // its five sections — but that is a reason to call headerMode() directly,
+  // not a reason for this one screen to keep its lens somewhere else.
+  ui.headerMode({
     label: t('mode.label'),
     store: 'reporting',
     value: rgMode,
@@ -19636,7 +19636,7 @@ async function reportGenerator() {
     // On a long spec the preview is below the fold even from here.
     reveal: () => preview,
   });
-  wrap.append(actions, rgLens, preview);
+  wrap.append(actions, preview);
 
   async function doPreview() {
     const spec = buildSpec();
@@ -21143,7 +21143,12 @@ async function render({ silent = false } = {}) {
     // content, so keyboard/screen-reader users land on it instead of being left
     // on the nav button. #view has tabindex="-1" to be programmatically focusable.
     if (!silent) {
-      if (typeof view.focus === 'function') view.focus();
+      // preventScroll: focusing #view scrolled it to the top of the viewport,
+      // which on a tall screen put the page's own title behind the sticky
+      // topbar — you landed on Troubleshooting already scrolled past its
+      // heading, and now past its lens. Focus is for the keyboard; where the
+      // page sits is not its business.
+      if (typeof view.focus === 'function') view.focus({ preventScroll: true });
       announceView(t('view.loaded'));
     }
   } catch (err) {

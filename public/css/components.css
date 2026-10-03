@@ -81,6 +81,13 @@
 .ui .subtab[aria-selected="true"], .ui .subtab.active {
   background: none; color: var(--accent); border-bottom-color: var(--accent); font-weight: 600; }
 
+/* In the topbar the switch is sized BY the bar, not the other way round:
+   the bar has a height already and a lens must not change it. min-height as
+   well as height, because styles.css gives every <button> a 40px floor that
+   `height` alone cannot win against. */
+.ui.topbar-mode .mode-switch { padding: 0; }
+.ui.topbar-mode .mode-btn { height: var(--control-h-xs); min-height: var(--control-h-xs); }
+
 /* ---- ModeSwitch — two lenses on one screen -------------------------------
    Built by ui.modeSwitch(). It sits in the PageHeader's actions, so it is
    sized like a control rather than like a tab: the pressed half is a raised

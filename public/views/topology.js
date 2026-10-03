@@ -263,7 +263,9 @@
               drawLayersMode();
             },
           }));
-          acts.push(ui.button('ghost', t('topo.recompute'), {
+          // Recompute is an action and it stands next to What-if: one
+          // cluster, one weight.
+          acts.push(ui.button('secondary', t('topo.recompute'), {
             title: t('topo.recomputeHint'),
             onclick: function (e) {
               var btn = e.currentTarget;

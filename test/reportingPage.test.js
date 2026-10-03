@@ -219,3 +219,24 @@ test('the wait is a skeleton, not the same grey box as the error', async (t) => 
   assert.equal(doc.querySelectorAll('#view .state.is-error').length, 0, 'a section still loading reads as failed');
   assert.equal(doc.querySelectorAll('#view .empty').length, 0, 'the old "Loading…" box is still drawn');
 });
+
+// The seventh lens. The generator has no PageHeader of its own, so it calls
+// ui.headerMode() directly — but it lands in the same topbar slot as the
+// other six, and moving to another section takes it away again.
+test('the report generator mounts its lens in the topbar, and a section change removes it', async (t) => {
+  const { doc, window } = boot({ t, routes: SESSION(), url: 'http://server.test/reporting/generator' });
+  await settle();
+  const slot = doc.getElementById('topbar-mode');
+  assert.ok(slot, 'no topbar slot');
+  const sw = slot.querySelector('.mode-switch');
+  assert.ok(sw, 'the generator kept its lens in the page body');
+  assert.deepEqual([...sw.querySelectorAll('.mode-btn')].map((b) => b.dataset.mode), ['doc', 'data']);
+  assert.equal(doc.querySelectorAll('#view .mode-switch').length, 0, 'a second copy is in the body');
+
+  const audit = [...doc.querySelectorAll('#view .subtab, #view [role="tab"]')]
+    .find((b) => /Audit|Schedules|NIS2|Findings/i.test(b.textContent));
+  assert.ok(audit, 'no other section to move to');
+  audit.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+  await settle();
+  assert.equal(slot.querySelector('.mode-switch'), null, 'the Document/Data lens outlived the generator');
+});

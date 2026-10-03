@@ -440,6 +440,19 @@ Heading, optional actions right, padding `--s-4`/`--s-5`, optional `.panel-foot`
 only), `btn-danger`. Radius `--r-btn`, height `--control-h`; `btn-icon` is the
 same height, `btn-xs` is the in-row size.
 
+**One cluster, one weight.** Inside a single row of actions — a Toolbar's
+right-hand side, a PageHeader's actions, a Panel's actions — every button
+carries the same weight, apart from the one primary if the cluster has one. A
+borderless button beside an outlined one does not read as a hierarchy; it
+reads as a link beside a button, and the reader stops believing it is
+pressable. "Export CSV" next to "Select region" was exactly that.
+
+`ghost` is for a control that **undoes** rather than does: clear the filters,
+reset the zoom, clear the path, hide the panel, the `×` on a legend series,
+the `⋯` in a row. An action that produces something — an export, a recompute,
+a delete — is never ghost, however secondary it feels to the screen's
+purpose.
+
 ### Badge
 
 **Status, severity and state only.** `crit` / `warn` / `info` / `ok` /

@@ -972,6 +972,20 @@ pre { padding: 10px; overflow: auto; }
 button.ghost.danger { background: transparent; color: var(--bad); border-color: var(--border); font-weight: 700; line-height: 1; }
 @media (max-width: 640px) { .tc-row { grid-template-columns: 1fr 1fr; } .tc-head { display: none; } }
 
+/* Settings → Map → the hop locations the server has been told about. Same row
+   grammar as .tc-row (a header line plus data rows in one grid), but read-only
+   text rather than inputs, so the columns are sized for an address, a place and
+   a coordinate pair. */
+.hopfix-list { margin-top: 10px; }
+.hopfix-row { display: grid; grid-template-columns: 150px 1fr 140px 80px 1fr 150px 70px; gap: 8px; align-items: center; padding: 4px 0; }
+.hopfix-row + .hopfix-row { border-top: 1px solid var(--border); }
+.hopfix-head { font-size: 12px; border-bottom: 1px solid var(--border); padding-bottom: 4px; }
+.hopfix-row .mono { font-family: var(--mono); font-size: 12px; }
+@media (max-width: 900px) {
+  .hopfix-row { grid-template-columns: 1fr 1fr; }
+  .hopfix-head { display: none; }
+}
+
 /* Settings → Authentication (LDAP/AD). Reuses .settings-card / .form-grid /
    .tablewrap; these only add the inline add-row + the title's refresh button. */
 .ldap-add { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px; margin-top: 12px; }

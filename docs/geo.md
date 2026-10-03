@@ -266,9 +266,22 @@ downgrades it: the person who runs the network outranks a published range.
 | `source` | `manual` (somebody corrected it) or `ripe` (imported, below) |
 | `note` | why they know — shown next to the hop, so the next person does not re-litigate it |
 
-**In the UI.** Under a path map, each suspect hop has **Correct location**
-(operator+): a point picker that opens on what the neighbouring hops suggest, a
-choice between this address and the whole `/24`, and the city/country/note.
+**In the UI, two places.** Under a path map, each suspect hop has **Correct
+location** (operator+): a point picker that opens on what the neighbouring hops
+suggest, a choice between this address and the whole `/24`, and the
+city/country/note. **Settings → Data → Map** then lists every correction the
+server holds — address, place, coordinates, source, note and who last changed it
+— in lookup order (longest prefix first), with **Edit**, **Remove correction**
+and **Add correction** for an address somebody already knows the answer for.
+
+It sits on the Map screen rather than behind a nav entry of its own because it
+answers the same question the GeoIP card above it answers: where the map gets a
+position from. A screen in the sidebar for a table that is empty on every fresh
+install would be read once and never again. Editing an existing row keeps its
+prefix locked — `(ip, prefix_len)` is the row's key, so re-scoping in place would
+write a second row and leave the first one on the map; a different scope is a
+remove and an add. Typing an address instead (Add correction) takes a CIDR, and
+the suffix is the scope.
 `PUT /api/geo/hops` writes it, `DELETE /api/geo/hops?ip=&prefixLen=` goes back to
 what GeoIP says, `GET /api/geo/hops` lists them (viewer+). Every write reloads
 the in-memory index (`src/geo/hopCorrections.js`), so the next path drawn is

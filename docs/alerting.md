@@ -42,14 +42,16 @@ silent. An install that really wants alerting off sets **Off** (or
 
 All share the interface `send(finding, group) → { ok, detail }`.
 
-- **email** — SMTP via nodemailer (lazy-required; point at a European/self-hosted
-  host). No hard dependency — if nodemailer isn't installed the channel reports
-  a clean failure. Transport is injectable for tests. **To enable email in a real
-  install:** `npm install nodemailer` (it is intentionally NOT a default dependency
-  to keep the footprint minimal). Until it is installed, `GET /api/alerting/config`
-  reports the email channel as `available: false` with `reason: "nodemailer not
-  installed"`, so the dashboard shows WHY an enabled email channel isn't delivering
-  rather than failing silently.
+- **email** — SMTP via nodemailer (a dependency; still `require()`d lazily so the
+  transport is only built when SMTP is configured — point it at a
+  European/self-hosted host). Transport is injectable for tests. When the channel
+  cannot send it says which of the two reasons it is: no SMTP host configured, or
+  nodemailer missing from the install (a trimmed `node_modules` — reinstall with
+  `npm install`). The same sentence comes back from the **Test** button
+  (`POST /api/alerting/test`), from a scheduled report's mail, and from
+  `GET /api/alerting/config` as `available: false` + `reason`, so the dashboard
+  shows WHY an enabled email channel isn't delivering rather than failing
+  silently.
 - **webhook** — `POST`s the finding (+ correlation group) as JSON to a configured
   URL, **HMAC-SHA256 signed** with a shared secret. The receiver verifies
   `X-BlueEye-Signature: sha256=<hex>` against the raw body.

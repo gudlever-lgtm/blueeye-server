@@ -1,5 +1,7 @@
 'use strict';
 
+const { smtpUnavailableReason } = require('../analysis/alerting/channels/email');
+
 const silentLogger = { info() {}, warn() {}, error() {} };
 
 // Formats a DATETIME/epoch as an unambiguous UTC string for the email body, so
@@ -110,7 +112,7 @@ function createUserMailer({ getEmailConfig = () => ({}), transport = null, creat
     const cfg = getEmailConfig() || {};
     const tx = currentTransport(cfg.smtp);
     if (!tx || typeof tx.sendMail !== 'function') {
-      throw new Error('no mail transport configured (set SMTP host in Settings → Alerting)');
+      throw new Error(smtpUnavailableReason(cfg.smtp) || 'no mail transport configured');
     }
     const { subject, text, html } = renderTempPasswordEmail({ name, tempPassword, loginUrl, expiresAt });
     try {

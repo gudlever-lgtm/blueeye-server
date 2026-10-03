@@ -18,6 +18,17 @@ function isNodemailerAvailable() {
   }
 }
 
+// Why a transport cannot be built from these SMTP settings, or null when it can.
+// Both callers of createSmtpTransport() get null back when something is missing,
+// so this is what turns that null into a sentence an operator can act on —
+// "no mail transport configured" on a screen with a filled-in SMTP host tells
+// nobody anything.
+function smtpUnavailableReason(smtp) {
+  if (!smtp || !smtp.host) return 'SMTP host not set (Settings → Alerting → SMTP host)';
+  if (!isNodemailerAvailable()) return 'nodemailer is not installed on the server (npm install nodemailer, then restart)';
+  return null;
+}
+
 // Lazily builds a nodemailer SMTP transport from config, IF nodemailer is
 // installed. Kept lazy so the server has no hard dependency on it (and tests
 // never need it — they inject a transport). Point SMTP at a European/self-hosted
@@ -61,7 +72,7 @@ function createEmailChannel({ config = {}, transport = null, createTransport = n
   async function send(finding, group) {
     const tx = currentTransport();
     if (!tx || typeof tx.sendMail !== 'function') {
-      return { ok: false, detail: 'no mail transport configured' };
+      return { ok: false, detail: smtpUnavailableReason(config.smtp) || 'no mail transport configured' };
     }
     if (!config.to) return { ok: false, detail: 'no recipient configured' };
 
@@ -102,8 +113,9 @@ function createEmailChannel({ config = {}, transport = null, createTransport = n
   // transport (tests/custom) is always available; otherwise we need nodemailer.
   function status() {
     if (transport) return { available: true };
-    if (typeof createTransport === 'function' && !isNodemailerAvailable()) {
-      return { available: false, reason: 'nodemailer not installed (npm install nodemailer)' };
+    if (typeof createTransport === 'function') {
+      const reason = smtpUnavailableReason(config.smtp);
+      if (reason) return { available: false, reason };
     }
     return { available: true };
   }
@@ -111,4 +123,4 @@ function createEmailChannel({ config = {}, transport = null, createTransport = n
   return { name: 'email', send, status };
 }
 
-module.exports = { createEmailChannel, createSmtpTransport, isNodemailerAvailable };
+module.exports = { createEmailChannel, createSmtpTransport, isNodemailerAvailable, smtpUnavailableReason };

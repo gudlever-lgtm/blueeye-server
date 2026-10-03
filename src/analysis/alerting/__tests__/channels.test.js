@@ -69,12 +69,16 @@ test('channel status() surfaces availability for describe()', () => {
   assert.deepEqual(createEmailChannel({ config: {}, transport: { sendMail: async () => {} } }).status(), { available: true });
   assert.equal(createWebhookChannel({ config: {} }).status().available, true);
   assert.equal(createSyslogChannel({ config: {} }).status().available, true);
-  // With a createTransport factory but no nodemailer installed, email reports why.
+  // With a createTransport factory and no SMTP host, email reports exactly that
+  // (rather than a blanket "no transport"), so the dashboard can say what to fix.
   const st = createEmailChannel({ config: {}, createTransport: () => null }).status();
-  // In a default install nodemailer is absent → unavailable with a reason; if it
-  // happens to be installed, available with no reason. Assert the shape holds.
-  if (st.available === false) assert.match(st.reason, /nodemailer/);
-  else assert.equal(st.available, true);
+  assert.equal(st.available, false);
+  assert.match(st.reason, /SMTP host not set/);
+  // With a host configured it is available (nodemailer is a dependency); if it
+  // were missing from the install, the reason says so instead.
+  const st2 = createEmailChannel({ config: { smtp: { host: 'mail1' } }, createTransport: () => null }).status();
+  if (st2.available === false) assert.match(st2.reason, /nodemailer/);
+  else assert.equal(st2.available, true);
 });
 
 test('email builds its transport lazily from createTransport and rebuilds when SMTP changes', async () => {

@@ -60,7 +60,7 @@ test('sendTempPassword throws when no transport is configured', async () => {
   const mailer = createUserMailer({ getEmailConfig: () => ({ from: 'x', smtp: {} }) });
   await assert.rejects(
     () => mailer.sendTempPassword({ to: 'u@x', tempPassword: 'pw', loginUrl: '', expiresAt: null }),
-    /no mail transport/
+    /SMTP host not set/
   );
 });
 

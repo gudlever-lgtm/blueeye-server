@@ -8,6 +8,8 @@
 // injected factory, so editing SMTP at runtime takes effect without a restart,
 // and tests inject a transport with a sendMail() and assert on what was sent.
 
+const { smtpUnavailableReason } = require('../analysis/alerting/channels/email');
+
 const silentLogger = { info() {}, warn() {}, error() {} };
 
 function createReportMailer({ getEmailConfig, createTransport = null, transport = null, logger = silentLogger }) {
@@ -28,7 +30,9 @@ function createReportMailer({ getEmailConfig, createTransport = null, transport 
   async function send({ to, subject, text, filename, contentType, body }) {
     const cfg = (typeof getEmailConfig === 'function' ? getEmailConfig() : null) || {};
     const tx = currentTransport(cfg.smtp);
-    if (!tx || typeof tx.sendMail !== 'function') return { ok: false, detail: 'no mail transport configured' };
+    if (!tx || typeof tx.sendMail !== 'function') {
+      return { ok: false, detail: smtpUnavailableReason(cfg.smtp) || 'no mail transport configured' };
+    }
     if (!Array.isArray(to) || to.length === 0) return { ok: false, detail: 'no recipients' };
     try {
       await tx.sendMail({

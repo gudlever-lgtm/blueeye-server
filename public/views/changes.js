@@ -63,7 +63,11 @@
       // feed already in `data`, and the filters above apply to both.
       var MODES = ['overview', 'list'];
       var mode = ui.storedMode('changes', MODES, 'list');
-      var modeCtl = ui.modeSwitch({
+      // The lens switch goes in the TOPBAR, beside the brand: both lenses draw
+      // below the stat strip, the toolbar and the notes, so from the PageHeader
+      // it was a control whose effect was off-screen. The topbar is sticky, so
+      // it is still reachable from inside the lens.
+      var modeCtl = ui.headerMode({
         label: t('mode.label'),
         store: 'changes',
         value: mode,
@@ -72,6 +76,9 @@
           { key: 'list', label: t('mode.list'), icon: 'list', title: t('mode.listHintChanges') },
         ],
         onchange: function (key) { mode = key; draw(); },
+        // Both lenses render as panels under the toolbar and the notes; the
+        // first panel is where the lens starts.
+        reveal: function () { return body.querySelector('.panel-ui'); },
       });
       // Going to the list from a rollup row presses the switch rather than
       // setting `mode` behind its back: the control has to show which lens is
@@ -112,7 +119,6 @@
         },
         // One primary. "Fleet grid" is a way out of the page, so it is secondary.
         actions: [
-          modeCtl,
           ui.button('secondary', t('changes.fleetLink'), { onclick: function () { deps.gotoView('fleet'); } }),
           markSeen,
         ],

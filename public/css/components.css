@@ -960,3 +960,20 @@
 @media (prefers-reduced-motion: reduce) {
   .loading-bar > span { transition: width 240ms linear, opacity 200ms linear; }
 }
+
+/* ---- Reveal flash ---------------------------------------------------------
+   The one-second outline a region gets when a control in the PageHeader (a
+   ModeSwitch) rewrote it while it was below the fold. The page scrolls to it
+   and this says "this is the part that changed" — without it, the scroll
+   itself is the only feedback, and a reader who was already mid-page cannot
+   tell what moved. Colour comes from tokens; reduced motion drops the
+   animation and keeps the ring. */
+.ui .reveal-flash { animation: reveal-flash 1.2s ease-out; border-radius: var(--radius); }
+@keyframes reveal-flash {
+  0%   { box-shadow: var(--ring); }
+  70%  { box-shadow: var(--ring); }
+  100% { box-shadow: 0 0 0 3px transparent; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ui .reveal-flash { animation: none; box-shadow: var(--ring); }
+}

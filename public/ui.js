@@ -274,6 +274,42 @@
       return svg;
     }
 
+    // The switch sits in the topbar, and what it changes is often a screen
+    // further down — a table below a stat strip, a toolbar and an overview. A
+    // reader who presses it while the changed part is off-screen sees nothing
+    // move and concludes the control is dead. `reveal` is the answer: a
+    // function (or element) naming the region the switch rewrites, which is
+    // scrolled into view and flashed once if it is not already on screen.
+    // Nothing happens when it IS on screen — the reader is already looking at
+    // the change, and a page that jumps under a visible change is worse.
+    function revealRegion(target) {
+      var node = typeof target === 'function' ? target() : target;
+      if (!node || !node.getBoundingClientRect || !node.isConnected) return;
+      var r = node.getBoundingClientRect();
+      // The node's OWN window: `window` is not a global in every host that
+      // loads this module, and the document the node lives in is the one whose
+      // viewport decides whether it is on screen.
+      var docu = node.ownerDocument || document;
+      var win = docu.defaultView || (typeof window === 'undefined' ? null : window);
+      var h = (win && win.innerHeight) || (docu.documentElement && docu.documentElement.clientHeight) || 0;
+      if (!r.height) return;
+      // "On screen" means a usable slice of it is, not one pixel: a table whose
+      // header is just peeking over the fold still reads as nothing happened.
+      var shown = Math.min(r.bottom, h) - Math.max(r.top, 0);
+      if (shown >= Math.min(r.height, 160)) return;
+      try {
+        node.scrollIntoView({ behavior: prefersReducedMotion(win) ? 'auto' : 'smooth', block: 'start' });
+      } catch (e) { node.scrollIntoView(); }
+      node.classList.add('reveal-flash');
+      setTimeout(function () { node.classList.remove('reveal-flash'); }, 1200);
+    }
+    function prefersReducedMotion(win) {
+      var w = win || (typeof window === 'undefined' ? null : window);
+      try {
+        return !!(w && w.matchMedia && w.matchMedia('(prefers-reduced-motion: reduce)').matches);
+      } catch (e) { return false; }
+    }
+
     // items: [{ key, label, icon, title }] — two of them, in reading order.
     // The pressed one is aria-pressed="true"; left/right move between them, so
     // it behaves like the one control it looks like rather than two buttons
@@ -295,6 +331,9 @@
         btns.forEach(function (b, bi) { b.setAttribute('aria-pressed', String(bi === i)); });
         rememberMode(opts.store, key);
         if (opts.onchange) opts.onchange(key);
+        // After the redraw, not before: the region the switch names is usually
+        // replaced by that very onchange.
+        if (opts.reveal) revealRegion(opts.reveal);
       }
       btns.forEach(function (b, i) {
         b.addEventListener('click', function () { pick(i); });
@@ -308,6 +347,33 @@
       });
       group.append.apply(group, btns);
       return group;
+    }
+
+    // ---- The topbar slot -----------------------------------------------------
+    // The ModeSwitch does not live in the PageHeader any more: on every one of
+    // these screens the thing it re-draws is a screenful below the title, so
+    // pressing it scrolled nothing into view and read as a dead control. The
+    // topbar is sticky, so from here the switch is still on screen when the
+    // reader is down in the table it changes.
+    //
+    // It is per SCREEN, not per app: render() empties the slot on every
+    // navigation and the view fills it again, so "Graph/List" never survives
+    // onto a page that has no graph.
+    var HEADER_MODE_SLOT = 'topbar-mode';
+    function headerModeSlot() {
+      return typeof document === 'undefined' ? null : document.getElementById(HEADER_MODE_SLOT);
+    }
+    function clearHeaderMode() {
+      var slot = headerModeSlot();
+      if (slot) slot.replaceChildren();
+    }
+    // Same options as modeSwitch(). Returns the switch so a caller can press a
+    // half from elsewhere on the page (Changes does, from its rollup rows).
+    function headerMode(opts) {
+      var sw = modeSwitch(opts);
+      var slot = headerModeSlot();
+      if (slot) slot.replaceChildren(sw);
+      return sw;
     }
 
     // ---- StatStrip -----------------------------------------------------------
@@ -1217,6 +1283,9 @@
       pageHeader: pageHeader,
       tabs: tabs,
       modeSwitch: modeSwitch,
+      headerMode: headerMode,
+      clearHeaderMode: clearHeaderMode,
+      revealRegion: revealRegion,
       storedMode: storedMode,
       statStrip: statStrip,
       toolbar: toolbar,

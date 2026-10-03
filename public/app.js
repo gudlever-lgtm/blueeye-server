@@ -19585,6 +19585,8 @@ async function reportGenerator() {
       ],
       // Nothing is re-fetched: the preview already holds every row.
       onchange: (key) => { rgMode = key; if (rgReport) preview.replaceChildren(renderRgPreview(rgReport, rgMode)); },
+      // The preview is below the section pickers; on a long spec it is off-screen.
+      reveal: () => preview,
     }));
   wrap.append(actions, preview);
 
@@ -21075,6 +21077,10 @@ async function render({ silent = false } = {}) {
   syncCrumb();
 
   const view = $('#view');
+  // The topbar lens switch belongs to the screen that is going away: empty it
+  // before the next view builds, so a page with one lens shows no switch at all
+  // rather than the previous page's. The view fills it again from ui.headerMode().
+  if (ui && ui.clearHeaderMode) ui.clearHeaderMode();
   if (!silent) {
     view.replaceChildren(el('div', { class: 'empty' }, t('view.loading')));
     announceView(t('view.loading'));

@@ -169,8 +169,8 @@ test('the ModeSwitch swaps the explanation for the numbers it rests on', async (
   assert.ok(head(doc).includes('Explanation'), `no explanation column: ${head(doc).join(', ')}`);
   const before = log.length;
 
-  const evidence = doc.querySelector('#view .mode-switch .mode-btn[data-mode="evidence"]');
-  assert.ok(evidence, 'no mode switch in the page header');
+  const evidence = doc.querySelector('#topbar-mode .mode-switch .mode-btn[data-mode="evidence"]');
+  assert.ok(evidence, 'no mode switch in the topbar');
   evidence.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
   await settle();
 
@@ -340,4 +340,21 @@ test('Accept scopes to that host and the screen re-reads', async (t) => {
   // Scoped to the row it was clicked on, so it accepts what the row says and
   // nothing wider. `key` drops the query string, so the scope is on `url`.
   assert.match(call.url, /hostId=7/);
+});
+
+test('the lens switch sits in the sticky topbar and does not outlive the screen', async (t) => {
+  const { doc, window } = boot({ t, routes: SESSION() });
+  await settle();
+  const slot = doc.querySelector('#topbar-mode');
+  assert.ok(slot, 'the topbar has no slot for the lens switch');
+  assert.ok(slot.querySelector('.mode-btn[data-mode="evidence"]'), 'Analysis did not fill it');
+  // Not in the page body: from down in the rows, a switch up in the PageHeader
+  // is a control the reader cannot reach OR see the effect of.
+  assert.equal(doc.querySelectorAll('#view .mode-switch').length, 0, 'the switch is still in the page');
+
+  // A screen with one lens carries none — "Explanation/Evidence" on a page with
+  // no findings table would be a control that does nothing.
+  doc.querySelector('.tabs button[data-view="enrollment"]').dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+  await settle();
+  assert.equal(slot.children.length, 0, 'the previous screen\'s switch is still in the topbar');
 });

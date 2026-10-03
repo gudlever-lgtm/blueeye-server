@@ -341,8 +341,9 @@ an underline row rather than the legacy row of filled buttons.
 
 ### ModeSwitch
 
-Two lenses on **one** screen, built by `ui.modeSwitch()` and placed in the
-PageHeader's actions, left of the buttons.
+Two lenses on **one** screen, built by `ui.headerMode()` and mounted in the
+**topbar**, beside the brand — `#topbar-mode`, which `render()` empties on every
+navigation so a screen with one lens carries no switch.
 
 The line against SubTabs is what makes it a separate component: a **tab moves
 you to other content**, a **mode re-draws the same content for a different
@@ -352,14 +353,27 @@ document or as the rows the document is built from; Sites and Destinations as a
 map or as a table; Changes as a rollup or as every row; Traffic as the live
 chart or as every agent's rate. Neither half is a different page, so neither
 gets a tab — and the sidebar keeps the entries it had, because the rail is
-navigation and this is not.
+navigation and this is not. (The Report Generator's pair is the one exception to
+the topbar rule: it belongs to the preview widget inside the page, not to the
+screen, so it stays next to Preview/Export where it is built.)
 
-It stays in the PageHeader rather than next to the logo for the same reason: a
-lens belongs to the screen it re-draws, not to the app. "Overview" means the
-rollup on Changes and the live chart on Traffic, and a control that changes
-meaning on every navigation cannot live in the chrome that never changes. In
-the header it sits beside the title it re-draws, where the reader is already
-looking when they think "this is not the view I want".
+It used to sit in the PageHeader, beside the title it re-draws. That failed in
+practice: on every one of these screens the lens is a stat strip, a toolbar and
+a panel or two below the title, so the reader pressed the switch, the part that
+changed was off-screen, and the control read as broken. The topbar is **sticky**,
+which is the property that matters — the switch is still there when the reader
+is scrolled down inside the lens, and pressing it is visible work.
+
+It is still per **screen**, not per app: the slot is filled by the view and
+emptied by `render()`, so "Graph/List" never survives onto a page with no graph,
+and "Overview" goes on meaning the rollup on Changes and the live chart on
+Traffic.
+
+Because the lens can be off-screen when it is pressed, `modeSwitch()` takes
+`reveal:` — a function naming the region it re-draws. If that region is not
+meaningfully on screen after the redraw, the page scrolls to it and flashes it
+once (`.reveal-flash`); if it is already visible nothing moves, because a page
+that jumps under a change the reader can see is worse than one that does not.
 
 Rules:
 

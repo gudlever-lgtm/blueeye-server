@@ -148,7 +148,7 @@ const rows = (doc) => [...doc.querySelectorAll('#view .panel-ui table.dt tbody t
 // table first. A map that cannot answer anything — no library, no flows — draws
 // the table either way, which is why those tests do not call this.
 const toList = async (doc, window) => {
-  const btn = doc.querySelector('#view .mode-switch .mode-btn[data-mode="list"]');
+  const btn = doc.querySelector('#topbar-mode .mode-switch .mode-btn[data-mode="list"]');
   assert.ok(btn, 'no mode switch in the page header');
   btn.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
   await settle();

@@ -367,7 +367,7 @@ test('a failed mute says so and keeps the rows', async (t) => {
 // ModeSwitch). Neither fetches: both are drawn from the feed already read.
 
 const toMode = async (doc, window, key) => {
-  const btn = doc.querySelector('#view .mode-switch .mode-btn[data-mode="' + key + '"]');
+  const btn = doc.querySelector('#topbar-mode .mode-switch .mode-btn[data-mode="' + key + '"]');
   assert.ok(btn, 'no mode switch in the page header');
   btn.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
   await settle();
@@ -420,7 +420,7 @@ test('a host row in the rollup presses List and narrows the filter to that host'
   await settle();
   // The switch has to SHOW which lens is on — setting the mode behind its back
   // would leave "Overview" pressed over a list.
-  const pressed = doc.querySelector('#view .mode-switch .mode-btn[aria-pressed="true"]');
+  const pressed = doc.querySelector('#topbar-mode .mode-switch .mode-btn[aria-pressed="true"]');
   assert.equal(pressed.dataset.mode, 'list');
   const rows = [...doc.querySelectorAll('#view .panel-ui table.dt tbody tr')];
   assert.equal(rows.length, 1, 'the host filter did not narrow the list');

@@ -146,21 +146,26 @@
       var mode = ui.storedMode('destinations', MODES, 'map');
 
       var info = deps.help();
+      // The lens switch lives in the TOPBAR, beside the brand, rather than in
+      // the PageHeader: what it re-draws is further down the page than the
+      // title is, so from up there pressing it looked like nothing happened.
+      // The topbar is sticky, so it stays reachable from inside the lens.
+      ui.headerMode({
+        label: t('mode.label'),
+        store: 'destinations',
+        value: mode,
+        items: [
+          { key: 'map', label: t('mode.map'), icon: 'map', title: t('mode.mapHint') },
+          { key: 'list', label: t('mode.list'), icon: 'list', title: t('mode.listHintPlaces') },
+        ],
+        onchange: function (key) { mode = key; drawLens(); },
+        reveal: function () { return mapHost.firstChild || tableHost.firstChild; },
+      });
       page.append(ui.pageHeader({
         title: t('dest.title'),
         lead: info.lead,
         help: { title: info.title, body: info.body },
         actions: [
-          ui.modeSwitch({
-            label: t('mode.label'),
-            store: 'destinations',
-            value: mode,
-            items: [
-              { key: 'map', label: t('mode.map'), icon: 'map', title: t('mode.mapHint') },
-              { key: 'list', label: t('mode.list'), icon: 'list', title: t('mode.listHintPlaces') },
-            ],
-            onchange: function (key) { mode = key; drawLens(); },
-          }),
           ui.button('secondary', t('dest.openProbes'), {
             onclick: function () { deps.gotoView('probes'); },
           }),

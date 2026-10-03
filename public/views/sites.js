@@ -69,21 +69,29 @@
       var mode = ui.storedMode('sites', MODES, 'map');
 
       var info = deps.help();
+      // The lens switch lives in the TOPBAR, beside the brand, rather than in
+      // the PageHeader: what it re-draws is further down the page than the
+      // title is, so from up there pressing it looked like nothing happened.
+      // The topbar is sticky, so it stays reachable from inside the lens.
+      ui.headerMode({
+        label: t('mode.label'),
+        store: 'sites',
+        value: mode,
+        items: [
+          { key: 'map', label: t('mode.map'), icon: 'map', title: t('mode.mapHint') },
+          { key: 'list', label: t('mode.list'), icon: 'list', title: t('mode.listHintPlaces') },
+        ],
+        onchange: function (key) { mode = key; draw(); },
+        // Whichever host actually drew: on an estate with no located site the
+        // map lens still renders the table, and revealing an empty host would
+        // scroll to nothing.
+        reveal: function () { return mapHost.firstChild || tableHost.firstChild; },
+      });
       root2.append(ui.pageHeader({
         title: t('sites.title'),
         lead: info.lead,
         help: { title: info.title, body: info.body },
         actions: [
-          ui.modeSwitch({
-            label: t('mode.label'),
-            store: 'sites',
-            value: mode,
-            items: [
-              { key: 'map', label: t('mode.map'), icon: 'map', title: t('mode.mapHint') },
-              { key: 'list', label: t('mode.list'), icon: 'list', title: t('mode.listHintPlaces') },
-            ],
-            onchange: function (key) { mode = key; draw(); },
-          }),
           deps.canWrite()
             ? ui.button('primary', t('sites.new'), { onclick: function () { deps.newSite(); } })
             : null,

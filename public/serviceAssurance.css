@@ -112,6 +112,15 @@
 .sa-status-invalid { background: var(--crit-weak); color: var(--sev-crit); }
 .sa-status-unreachable { background: var(--surface-alt); color: var(--text-muted); }
 
+/* Incident states, on the same pill as a run status: an open incident is a
+   live problem (warn), one being worked is in progress (info), a concluded one
+   is done. */
+.sa-state-open { background: var(--warn-weak); color: var(--sev-warn); }
+.sa-state-investigating { background: var(--info-weak); color: var(--sev-info); }
+.sa-state-identified { background: var(--info-weak); color: var(--sev-info); }
+.sa-state-resolved { background: var(--ok-weak); color: var(--sev-ok); }
+.sa-state-closed { background: var(--surface-alt); color: var(--text-muted); }
+
 /* ---- incident severity + days remaining ---- */
 .sa-sev {
   display: inline-block; padding: 2px 8px; border-radius: 999px;

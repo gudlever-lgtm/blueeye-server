@@ -455,6 +455,8 @@
   --z-sticky: 2;      /* sticky table head, inside its panel */
   --z-inline: 20;     /* inline suggestion list, anchored to its input */
   --z-topbar: 30;     /* sticky page topbar */
+  --z-attack: 35;     /* the attack bar's hover panel: over the sticky topbar
+                         it drops across, under the nav rail beside it */
   --z-sidebar: 40;    /* nav rail (its mobile scrim sits one below) */
   --z-popover: 50;    /* help popover, dropdown menu */
   --z-rowmenu: 55;    /* row action menu */

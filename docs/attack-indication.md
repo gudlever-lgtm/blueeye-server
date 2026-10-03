@@ -413,11 +413,21 @@ taking no space, when there is none — which is almost always.
   wall-mounted dashboard and cost nothing on every other day. A banner pushes
   the page down, gets dismissed, and is then never seen again; three pixels at
   the top edge are either there or not.
-- **The whole strip is a button.** Hovering or focusing it expands it into the
-  sentence the detector wrote; clicking opens the event case the finding was
+- **The whole strip is a button.** Hovering or focusing it drops a panel with
+  the sentence the detector wrote; clicking opens the event case the finding was
   grouped into, or — when it has none yet — the Analysis screen filtered to that
   metric. It is a `<button>`, not a decorated `<div>`, so it is reachable by
   keyboard and announced as a control.
+- **The strip never changes size.** The panel is absolutely positioned: outside
+  the button's box for layout, inside it for hit-testing, so the pointer can
+  walk down into the text without losing `:hover`, and nothing on the page moves
+  when a mouse crosses the top edge. Growing the button itself is a hover loop —
+  the pointer below the 3px line is inside the grown box and outside the
+  collapsed one, so leaving it starts a shrink, the shrinking box passes back
+  under the pointer, `:hover` applies again, about thirty times a second.
+- **It carries its own `min-height: 0`.** Every `<button>` in the app has
+  `min-height: var(--control-h)` so a control is tappable. Without a floor of
+  its own, the strip rendered 40px tall — a slab, not a line.
 - **CRIT breathes, WARN does not.** Same colour, a slow pulse for the critical
   one, behind `prefers-reduced-motion`.
 - **Acknowledging is how it clears.** There is no private dismiss: accepting the

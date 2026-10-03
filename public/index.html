@@ -185,14 +185,22 @@
              WARN-or-worse finding on the attack-indication list exists
              (docs/attack-indication.md). Hidden, and taking no space, when
              there is none. It is a button because it is the control that opens
-             the finding behind it; hovering or focusing it expands the strip
-             into its label. Wiring is in app.js (refreshAttackBar) — no inline
-             handlers, per the gate's UI sweep. -->
+             the finding behind it; hovering or focusing it reveals the panel
+             below it. Wiring is in app.js (refreshAttackBar) — no inline
+             handlers, per the gate's UI sweep.
+
+             THE PANEL IS A SEPARATE ELEMENT, LAID OVER THE PAGE. The strip
+             itself never changes size: growing the button on hover made it
+             shrink again the moment the pointer sat below the 3px line, which
+             re-entered it mid-transition, which grew it again — a hover loop
+             that blinked about thirty times a second. -->
         <button type="button" id="attack-bar" class="attack-bar" hidden
                 data-i18n-title="attack.bar.title" data-i18n-aria-label="attack.bar.title"
                 title="Attack indication — open the finding">
-          <span class="attack-bar-label" id="attack-bar-label"></span>
-          <span class="attack-bar-detail" id="attack-bar-detail"></span>
+          <span class="attack-bar-panel">
+            <span class="attack-bar-label" id="attack-bar-label"></span>
+            <span class="attack-bar-detail" id="attack-bar-detail"></span>
+          </span>
         </button>
         <header class="topbar">
           <button id="nav-toggle" class="ghost nav-toggle" data-i18n-title="nav.toggle" data-i18n-aria-label="nav.toggle" title="Toggle navigation" aria-label="Toggle navigation">☰</button>

@@ -10951,9 +10951,15 @@ async function loadAgentDependencies(id, host) {
           : null);
     })));
 
+  // SEVEN COLUMNS IN A THIRD OF A ROW. The dependency panel sits in the card
+  // grid beside Config history and the CMDB asset, and the table is wider than
+  // that column on any normal screen — so the last columns (the hour-against-
+  // normal cell and the Baseline button) were simply cut off at the card's
+  // edge, with no way to reach them. The contract's table wrap scrolls instead
+  // of clipping.
   const children = [];
-  if (outbound.length) children.push(el('h4', { class: 'sub' }, t('ad.dep.talksToN', { count: outbound.length })), depTable(outbound, 'out'));
-  if (inbound.length) children.push(el('h4', { class: 'sub' }, t('ad.dep.talkedToByN', { count: inbound.length })), depTable(inbound, 'in'));
+  if (outbound.length) children.push(el('h4', { class: 'sub' }, t('ad.dep.talksToN', { count: outbound.length })), el('div', { class: 'table-wrap-ui' }, depTable(outbound, 'out')));
+  if (inbound.length) children.push(el('h4', { class: 'sub' }, t('ad.dep.talkedToByN', { count: inbound.length })), el('div', { class: 'table-wrap-ui' }, depTable(inbound, 'in')));
   host.replaceChildren(...children);
 }
 

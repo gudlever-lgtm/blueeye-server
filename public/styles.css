@@ -252,6 +252,10 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 /* When collapsed, hide the group's nav items (keep the label visible). */
 .nav-group.collapsed button[data-view] { display: none; }
 .tabs button.role-hidden { display: none; }
+/* A section with no sub-items is one entry, not a folder with a single leaf:
+   Service Assurance draws its own tab strip on the page, so the rail names the
+   module once. It sits flush with the grouped items around it. */
+.tabs > button.nav-solo { font-weight: 600; color: var(--text); }
 .tabs button { display: flex; align-items: center; justify-content: flex-start; width: 100%;
   min-height: var(--control-h-sm); position: relative; text-align: left;
   padding: var(--s-2) var(--s-3); border-radius: var(--radius-sm);

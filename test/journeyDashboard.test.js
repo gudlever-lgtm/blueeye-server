@@ -116,9 +116,10 @@ const TESTS = [
 
 // Navigates: Service Assurance → Journeys → the journey itself.
 async function openJourney(doc, extra = {}) {
-  const nav = doc.querySelector('.tabs button[data-view="serviceAssurance"][data-sa-tab="journeys"]');
+  const nav = doc.querySelector('.tabs button[data-view="serviceAssurance"]');
   assert.ok(nav, 'no Journeys nav button');
   await click(nav, 200);
+  await click(doc.querySelector('#view .subtabs .subtab[data-tab="journeys"]'), 200);
   const card = doc.querySelector('#view .sa-journey');
   assert.ok(card, 'the journey list did not render');
   await click(card, 200);
@@ -262,7 +263,7 @@ test('a viewer gets neither Run nor Edit nor Delete', async (t) => {
     'GET /me': { ...ME, role: 'viewer' },
     ...listRoutes(),
   }, 'viewer');
-  const nav = doc.querySelector('.tabs button[data-view="serviceAssurance"][data-sa-tab="journeys"]');
+  const nav = doc.querySelector('.tabs button[data-view="serviceAssurance"]');
   // The whole module is operator+, so a viewer never reaches the screen. That
   // is the control; the buttons are not a second one to get wrong.
   assert.ok(nav.classList.contains('role-hidden'), 'a viewer was offered the Service Assurance nav');
@@ -287,8 +288,9 @@ test('the period control says which option is on, not just which looks on', asyn
       certificates: { total: 0, expiring: 0 },
     },
   });
-  const nav = doc.querySelector('.tabs button[data-view="serviceAssurance"][data-sa-tab="health"]');
+  const nav = doc.querySelector('.tabs button[data-view="serviceAssurance"]');
   await click(nav, 300);
+  await click(doc.querySelector('#view .subtabs .subtab[data-tab="health"]'), 300);
 
   // Asserted, never skipped. A test that quietly returns when it cannot find
   // the thing it is about passes forever while the thing is broken — which is

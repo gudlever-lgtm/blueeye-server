@@ -155,9 +155,10 @@
         var ran = checks.filter(function (c) { return c.status !== 'skipped'; }).length;
         var skipped = checks.length - ran;
 
-        noteHost.replaceChildren(skipped
-          ? ui.inlineNote(t('coverage.note.skipped', { n: skipped }), 'warn')
-          : null);
+        // replaceChildren(null) inserts the TEXT "null" — which is what the
+        // screen printed under the stat strip whenever no check was skipped.
+        if (skipped) noteHost.replaceChildren(ui.inlineNote(t('coverage.note.skipped', { n: skipped }), 'warn'));
+        else noteHost.replaceChildren();
 
         if (!gaps.length) {
           listHost.replaceChildren(ui.panel({

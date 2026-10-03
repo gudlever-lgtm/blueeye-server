@@ -345,3 +345,64 @@ test('a narrow window still returns a well-formed payload', async () => {
   assert.equal(res.status, 200);
   assert.equal(res.body.window.minutes, 15);
 });
+
+// --- POST /ack: "mark seen", one root cause at a time ------------------------
+// The screen's unit of work is the cause. Acknowledging it accepts the raw
+// findings behind it (the same rows GET /faults lists under it) and moves a
+// situation open → acknowledged; an event case keeps its status, because "seen"
+// is not "resolved".
+const ACK = '/api/troubleshooting/ack';
+
+test('POST /ack accepts the findings behind a situation and acknowledges it', async () => {
+  const findingStore = makeFindingStore();
+  const eventClustersRepo = makeEventClustersRepo();
+  const members = await clusterWithMembers(findingStore, eventClustersRepo);
+  const app = await fullApp({ findingStore, eventClustersRepo, skipCluster: true });
+
+  const open = await eventClustersRepo.listOpen(10);
+  const clusterId = open[0].id;
+
+  const res = await request(app).post(ACK)
+    .set('Authorization', authHeader('operator'))
+    .send({ source: 'cluster', id: clusterId });
+  assert.equal(res.status, 200);
+  assert.equal(res.body.findings, members.length);
+  assert.equal(res.body.acked, members.length);
+  assert.equal(res.body.cluster, true);
+
+  for (const m of members) {
+    const row = await findingStore.get(m.id);
+    assert.equal(Boolean(row.acked), true, `finding ${m.id} was not accepted`);
+  }
+  const after = await eventClustersRepo.findById(clusterId);
+  assert.equal(after.status, 'acknowledged');
+
+  // Twice is not an error, and the second call accepts nothing new.
+  const again = await request(app).post(ACK)
+    .set('Authorization', authHeader('operator'))
+    .send({ source: 'cluster', id: clusterId });
+  assert.equal(again.status, 200);
+  assert.equal(again.body.acked, 0);
+});
+
+test('POST /ack: 404 for a cause that is not live, 400 for a bad body', async () => {
+  const app = await fullApp();
+  const auth = authHeader('operator');
+
+  const gone = await request(app).post(ACK).set('Authorization', auth).send({ source: 'cluster', id: 99999 });
+  assert.equal(gone.status, 404);
+
+  for (const body of [{}, { source: 'nonsense', id: 1 }, { source: 'cluster' }, { source: 'cluster', id: 0 }, { source: 'case', id: 'abc' }]) {
+    // eslint-disable-next-line no-await-in-loop
+    const res = await request(app).post(ACK).set('Authorization', auth).send(body);
+    assert.equal(res.status, 400, `expected 400 for ${JSON.stringify(body)}`);
+  }
+});
+
+test('POST /ack is operator+: 401 without a token, 403 for a viewer', async () => {
+  const app = await fullApp();
+  const anon = await request(app).post(ACK).send({ source: 'cluster', id: 1 });
+  assert.equal(anon.status, 401);
+  const viewer = await request(app).post(ACK).set('Authorization', authHeader('viewer')).send({ source: 'cluster', id: 1 });
+  assert.equal(viewer.status, 403);
+});

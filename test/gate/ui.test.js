@@ -386,8 +386,10 @@ test('boot: switching the language relabels the static sidebar, and the nav-grou
   // The "Fleet" group (Agents / Interfaces / NICs) is gone: those three are
   // column sets and a drawer on the Fleet screen under Monitoring now
   // (docs/fleet-and-sites-consolidation.md).
+  // "Service Assurance" is no longer a group either: the module draws its own
+  // tab strip, so the rail carries one solo entry instead of repeating it.
   const cats = [...doc.querySelectorAll('.tabs .nav-group')].map((g) => g.dataset.category);
-  assert.deepEqual(cats, ['Monitoring', 'Diagnostics', 'Service Assurance', 'Insights', 'Guides', 'Administration']);
+  assert.deepEqual(cats, ['Monitoring', 'Diagnostics', 'Insights', 'Guides', 'Administration']);
 });
 
 test('boot: a 401 on an authenticated call tears the session down', async (t) => {

@@ -475,9 +475,12 @@ Two known touch-points in existing code, both minimal and backward-compatible
 
 ## 9. UI (spec §14, §29, §39)
 
-One nav entry under **Diagnostics**, beside Probes & Tests and Transaktionstests.
-Sub-tabs inside the view: **Applications · Discovery · Suggested tests · Tests ·
-Schedules · Runs**.
+**One nav entry**, its own in the rail between Diagnostics and Insights, and
+nothing under it. The tabs live inside the view — **Applications · Journeys ·
+Tests · Runs · History · Health · Schedules · Monitors** — and the rail used to
+repeat seven of them, so the same list stood twice on screen, side by side.
+A deep link still opens a tab (`/service-assurance/<tab>`); it is the menu that
+stopped duplicating the strip.
 
 The Test Designer is a vertical list of step cards, reordered with the HTML5 drag
 & drop API (`draggable="true"` + `dragover`/`drop`) — no library, matching the

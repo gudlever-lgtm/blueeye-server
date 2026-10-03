@@ -145,9 +145,10 @@ const runRoutes = (over = {}) => ({
 });
 
 async function openRun(doc) {
-  const nav = doc.querySelector('.tabs button[data-view="serviceAssurance"][data-sa-tab="runs"]');
+  const nav = doc.querySelector('.tabs button[data-view="serviceAssurance"]');
   assert.ok(nav, 'no Runs nav button');
   await click(nav, 300);
+  await click(doc.querySelector('#view .subtabs .subtab[data-tab="runs"]'), 300);
   const row = doc.querySelector('#view tbody tr');
   assert.ok(row, 'the runs list did not render');
   await click(row, 500);
@@ -284,8 +285,9 @@ const appRoutes = (over = {}) => ({
 });
 
 async function openApplication(doc) {
-  const nav = doc.querySelector('.tabs button[data-view="serviceAssurance"][data-sa-tab="applications"]');
+  const nav = doc.querySelector('.tabs button[data-view="serviceAssurance"]');
   await click(nav, 300);
+  await click(doc.querySelector('#view .subtabs .subtab[data-tab="applications"]'), 300);
   const row = doc.querySelector('#view tbody tr');
   assert.ok(row, 'the application list did not render');
   await click(row, 500);

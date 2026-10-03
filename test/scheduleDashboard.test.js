@@ -126,9 +126,10 @@ const routes = (over = {}) => ({
 
 async function openSchedules(t, over = {}) {
   const ctx = await boot(t, routes(over));
-  const nav = ctx.doc.querySelector('.tabs button[data-view="serviceAssurance"][data-sa-tab="schedules"]');
+  const nav = ctx.doc.querySelector('.tabs button[data-view="serviceAssurance"]');
   assert.ok(nav, 'no Schedules nav button');
   await click(nav, 250);
+  await click(ctx.doc.querySelector('#view .subtabs .subtab[data-tab="schedules"]'), 250);
   return ctx;
 }
 

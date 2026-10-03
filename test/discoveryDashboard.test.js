@@ -110,9 +110,10 @@ const appRoutes = (detail) => ({
 
 // Navigates: Service Assurance → Applications → the application itself.
 async function openApplication(doc, extraTicks = 200) {
-  const nav = doc.querySelector('.tabs button[data-view="serviceAssurance"][data-sa-tab="applications"]');
+  const nav = doc.querySelector('.tabs button[data-view="serviceAssurance"]');
   assert.ok(nav, 'no Applications nav button');
   await click(nav, extraTicks);
+  await click(doc.querySelector('#view .subtabs .subtab[data-tab="applications"]'), extraTicks);
   const row = byText(doc, '#view td', 'Kundeportal') || doc.querySelector('#view tbody tr');
   assert.ok(row, 'the application list did not render');
   await click(row, extraTicks);
@@ -302,7 +303,7 @@ test('a discovery that never asked to sign in shows no note at all', async (t) =
 // ------------------------------------------------------------------- RBAC
 test('a viewer never reaches the screen at all — the whole module is operator+', async (t) => {
   const { doc } = await boot(t, appRoutes(appDetail()), 'viewer');
-  const nav = doc.querySelector('.tabs button[data-view="serviceAssurance"][data-sa-tab="applications"]');
+  const nav = doc.querySelector('.tabs button[data-view="serviceAssurance"]');
   assert.ok(nav, 'the nav entry is gone from the markup, so this spec is testing nothing');
   await click(nav, 200);
   assert.ok(!doc.querySelector('#view button.primary, #view .sa-panel')

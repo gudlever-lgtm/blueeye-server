@@ -412,3 +412,112 @@ test('fault rows from a case link to that event', async (t) => {
   await settle();
   assert.ok(log.some((x) => x.key === 'GET /api/events/5'));
 });
+
+// --- the strip: four cards, four destinations -------------------------------
+// Three of these were figures drawn as buttons. Pressing "Affected devices" did
+// nothing at all, which reads as a broken screen rather than as a number.
+test('every card on the strip is either a control or plainly not one', async (t) => {
+  const { doc } = boot({
+    t,
+    routes: SESSION({
+      'GET /api/troubleshooting/overview': { ...OVERVIEW, summary: { ...OVERVIEW.summary, anomalies: 1 } },
+    }),
+  });
+  await settle();
+  const live = cards(doc).filter((c) => !c.classList.contains('is-static'));
+  // Active faults, Affected devices, Root causes — the three with a figure in
+  // this fixture. Baseline deviations has one row, so it is live too.
+  assert.equal(live.length, 4, 'a card with a figure was left dead');
+  for (const c of live) {
+    assert.equal(c.disabled, false, `${c.textContent} is a control that cannot be pressed`);
+    assert.ok(c.getAttribute('title'), `${c.textContent} does not say where it goes`);
+  }
+});
+
+test('a card with nothing behind it is disabled rather than a button that does nothing', async (t) => {
+  const { doc } = boot({
+    t,
+    routes: SESSION({
+      'GET /api/troubleshooting/overview': {
+        ...OVERVIEW,
+        summary: { activeFaults: 0, affectedDevices: 0, devicesDown: 0, devicesUnreachable: 0, rootCauses: 0 },
+        rootCauses: [], anomalies: [],
+      },
+    }),
+  });
+  await settle();
+  const live = cards(doc).filter((c) => !c.classList.contains('is-static'));
+  assert.equal(live.length, 0, 'an empty figure still looks pressable');
+  for (const c of cards(doc)) assert.equal(c.disabled, true);
+});
+
+test('the deviations are their own zone, so the card that counts them can reach them', async (t) => {
+  const { doc } = boot({ t, routes: SESSION() });
+  await settle();
+  const panels = [...doc.querySelectorAll('#view .panel-ui')].map((p) => p.textContent);
+  assert.ok(panels.some((x) => /deviation/i.test(x)), 'the deviations panel is gone');
+});
+
+// --- mark seen --------------------------------------------------------------
+test('a root cause can be marked seen, and the screen re-reads afterwards', async (t) => {
+  const { doc, window, log } = boot({
+    t,
+    routes: SESSION({ 'POST /api/troubleshooting/ack': { source: 'cluster', id: 11, findings: 4, acked: 4, cluster: true } }),
+  });
+  await settle();
+  const menu = causes(doc)[0].querySelector('.row-act > button:last-child');
+  menu.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+  const item = [...doc.querySelectorAll('.ui-rowmenu button')].find((b) => /Mark seen/i.test(b.textContent));
+  assert.ok(item, 'no "Mark seen" on a root cause');
+  item.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+  await settle();
+
+  const posts = log.filter((x) => x.key === 'POST /api/troubleshooting/ack');
+  assert.equal(posts.length, 1, 'marking seen did not reach the server');
+  // The figures at the top are what was just changed, so the page re-reads.
+  assert.ok(log.filter((x) => x.key === 'GET /api/troubleshooting/overview').length >= 2,
+    'the screen kept showing the figures it had just changed');
+});
+
+test('a viewer is not offered "Mark seen"', async (t) => {
+  const { doc, window } = boot({
+    t, role: 'viewer',
+    routes: SESSION({ 'GET /me': { id: 2, email: 'v@y.dk', role: 'viewer', preferences: {} } }),
+  });
+  await settle();
+  const menu = causes(doc)[0].querySelector('.row-act > button:last-child');
+  menu.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+  const item = [...doc.querySelectorAll('.ui-rowmenu button')].find((b) => /Mark seen/i.test(b.textContent));
+  assert.equal(item, undefined, 'a viewer was offered a write they cannot do');
+});
+
+test('the fault list marks the ticked alarms seen in one request', async (t) => {
+  const page = {
+    total: 2,
+    faults: [
+      { findingId: 'f-1', severity: 'CRIT', hostId: 7, metric: 'probe.loss', createdAt: '2026-09-12T13:45:00.000Z', cause: 'sw-core-01 stopped answering' },
+      { findingId: 'f-2', severity: 'WARN', hostId: 7, metric: 'probe.rtt', createdAt: '2026-09-12T13:46:00.000Z', cause: 'sw-core-01 stopped answering' },
+    ],
+  };
+  const { doc, window, log } = boot({
+    t,
+    routes: SESSION({
+      'GET /api/troubleshooting/faults': page,
+      'POST /api/findings/ack': { acked: 2, requested: 2 },
+    }),
+  });
+  await settle();
+  cards(doc).find((c) => /Active faults/i.test(c.textContent)).dispatchEvent(new window.Event('click', { bubbles: true }));
+  await settle();
+
+  const boxes = faultRows(doc).map((tr) => tr.querySelector('input.dt-check')).filter(Boolean);
+  assert.equal(boxes.length, 2, 'the rows carry no way to pick them');
+  for (const b of boxes) { b.checked = true; b.dispatchEvent(new window.Event('change', { bubbles: true })); }
+  await settle();
+
+  const go = [...doc.querySelectorAll('#view .panel-ui .btn')].find((b) => /Mark 2 seen/i.test(b.textContent));
+  assert.ok(go, 'no bulk action once rows are picked');
+  go.dispatchEvent(new window.Event('click', { bubbles: true }));
+  await settle();
+  assert.equal(log.filter((x) => x.key === 'POST /api/findings/ack').length, 1);
+});

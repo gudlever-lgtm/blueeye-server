@@ -500,12 +500,17 @@ function createTroubleshootingOverviewService({
   // back short and the "x of y" counter would never reach its total. (A case
   // has no stored member list, so its purged findings are simply not members
   // any more; the placeholder is a cluster-path thing.)
-  async function getFaults({
+  // The refs behind the fault list: (findingId -> owning cause), deduped and in
+  // a stable order. Shared with ackCause below, so "mark seen" acts on exactly
+  // the rows the list shows and never on a wider set.
+  //
+  // `found` says whether the named cause is among the live ones at all — an
+  // empty ref list from a cause that does not exist and one from a cause whose
+  // findings retention purged are different answers.
+  async function collectFaultRefs({
     clusterLimit = DEFAULT_CLUSTER_LIMIT, caseLimit = DEFAULT_CASE_LIMIT,
-    limit = DEFAULT_FAULT_PAGE, offset = 0, clusterId = null, caseId = null, source = null,
+    clusterId = null, caseId = null, source = null,
   } = {}) {
-    const pageSize = Math.min(Math.max(Math.floor(Number(limit)) || DEFAULT_FAULT_PAGE, 1), MAX_FAULT_PAGE);
-    const start = Math.max(Math.floor(Number(offset)) || 0, 0);
     const wantClusters = caseId == null && source !== 'case';
     const wantCases = clusterId == null && source !== 'cluster';
 
@@ -516,7 +521,6 @@ function createTroubleshootingOverviewService({
       ? asArray(clusters)
       : asArray(clusters).filter((c) => c && Number(c.id) === Number(clusterId)));
 
-    // Flatten to (findingId -> owning group) refs, deduped, in order.
     const refs = [];
     const seen = new Set();
     for (const c of clusterRows) {
@@ -544,6 +548,19 @@ function createTroubleshootingOverviewService({
         }
       }
     }
+
+    const found = clusterId != null ? clusterRows.length > 0
+      : (caseId != null ? cases.length > 0 : true);
+    return { refs, clusters, cases, caseMembers, found };
+  }
+
+  async function getFaults({
+    clusterLimit = DEFAULT_CLUSTER_LIMIT, caseLimit = DEFAULT_CASE_LIMIT,
+    limit = DEFAULT_FAULT_PAGE, offset = 0, clusterId = null, caseId = null, source = null,
+  } = {}) {
+    const pageSize = Math.min(Math.max(Math.floor(Number(limit)) || DEFAULT_FAULT_PAGE, 1), MAX_FAULT_PAGE);
+    const start = Math.max(Math.floor(Number(offset)) || 0, 0);
+    const { refs, cases, caseMembers } = await collectFaultRefs({ clusterLimit, caseLimit, clusterId, caseId, source });
 
     const page = refs.slice(start, start + pageSize);
     const byId = new Map();
@@ -612,7 +629,62 @@ function createTroubleshootingOverviewService({
     };
   }
 
-  return { getOverview, getFaults, DEFAULT_WINDOW_MINUTES, MAX_WINDOW_MINUTES };
+  // -------------------------------------------------------------------------
+  // ackCause — "I have seen this", for ONE root cause.
+  //
+  // The screen's unit of work is the cause, not the single alarm: an operator
+  // who has read "sw-core-01 stopped answering" has seen all 86 alarms behind
+  // it, and ticking them one at a time is not an action anybody performs. So
+  // the acknowledgement lands on the raw findings the cause is made of — the
+  // same rows the fault list shows under it — through the same ackMany the
+  // Analysis screen uses.
+  //
+  // A situation is acknowledged as a RECORD too (open → acknowledged, audited
+  // by the router), because that status is what the Situations screen reads.
+  // An event case keeps its status: "seen" is not "resolved", and resolving is
+  // a transition with its own rules on the event screen.
+  //
+  // Returns null when the cause is not among the live ones — the router turns
+  // that into a 404 rather than reporting an acknowledgement that acked
+  // nothing.
+  async function ackCause({ source = 'cluster', id = null, by = null } = {}) {
+    const which = source === 'case' ? 'case' : 'cluster';
+    const numeric = Number(id);
+    if (!Number.isInteger(numeric) || numeric < 1) return null;
+
+    const refs = await collectFaultRefs(which === 'cluster'
+      ? { clusterId: numeric, source: 'cluster' }
+      : { caseId: numeric, source: 'case' });
+    if (!refs.found) return null;
+
+    const ids = refs.refs.map((r) => r.id);
+    let acked = 0;
+    if (ids.length && findingStore && typeof findingStore.ackMany === 'function') {
+      acked = Number(await findingStore.ackMany({ ids })) || 0;
+    } else if (ids.length && findingStore && typeof findingStore.ack === 'function') {
+      // A store without the bulk write still works, one row at a time.
+      for (const one of ids) {
+        // eslint-disable-next-line no-await-in-loop
+        if (await findingStore.ack(one)) acked += 1;
+      }
+    }
+
+    // Best-effort, and after the findings: only an OPEN situation can move to
+    // acknowledged, and a cluster already acknowledged by somebody else must
+    // not make this call report a failure.
+    let cluster = false;
+    if (which === 'cluster' && clustersRepo && typeof clustersRepo.acknowledge === 'function') {
+      try {
+        cluster = Boolean(await clustersRepo.acknowledge(numeric, { by, at: new Date() }));
+      } catch (err) {
+        logger.warn(`troubleshooting: could not acknowledge situation ${numeric} (${err && err.message})`);
+      }
+    }
+
+    return { source: which, id: numeric, findings: ids.length, acked, cluster };
+  }
+
+  return { getOverview, getFaults, ackCause, DEFAULT_WINDOW_MINUTES, MAX_WINDOW_MINUTES };
 }
 
 module.exports = {

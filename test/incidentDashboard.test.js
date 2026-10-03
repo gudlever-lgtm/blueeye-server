@@ -124,9 +124,10 @@ const healthRoutes = (over = {}) => ({
 });
 
 async function openHealth(doc) {
-  const nav = doc.querySelector('.tabs button[data-view="serviceAssurance"][data-sa-tab="health"]');
+  const nav = doc.querySelector('.tabs button[data-view="serviceAssurance"]');
   assert.ok(nav, 'no Health nav button');
   await click(nav, 400);
+  await click(doc.querySelector('#view .subtabs .subtab[data-tab="health"]'), 400);
 }
 
 async function openIncident(doc) {
@@ -261,7 +262,7 @@ test('the whole module is operator+, so there is no read-only incident view to g
   // reading — that a viewer sees incidents and must be denied the buttons — is
   // the one somebody would write a guard for that protects nothing.
   const { doc } = await boot(t, healthRoutes(), 'viewer');
-  const nav = doc.querySelector('.tabs button[data-view="serviceAssurance"][data-sa-tab="health"]');
+  const nav = doc.querySelector('.tabs button[data-view="serviceAssurance"]');
   assert.ok(nav, 'the nav entry is gone from the markup, so this spec tests nothing');
   await click(nav, 400);
   assert.equal(byText(doc, '#view button', 'Open'), null, 'a viewer got as far as an incident');

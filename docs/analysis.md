@@ -225,6 +225,54 @@ finding never claims anything the dashboard verdict doesn't:
 - `probe.cert` (WARN ≤14 d / CRIT ≤3 d) — TLS certificate expiry from the **http**
   probe, judged independently of reachability.
 
+### Agent health is about the agent, not about the internet
+
+`src/health/probeHealth.js` answers one question: **can the server rely on this
+agent?** It used to answer a different one — "is everything this agent measures
+healthy" — and the two are not the same.
+
+What that cost: an agent whose traceroute to `us.cnn.com` lost a hop was
+CRITICAL. Red in the fleet, red on the map, counted in the critical chip.
+Nothing was wrong with the agent. Nothing was wrong with the customer's network
+either. A router on the far side of the Atlantic declined to send an ICMP
+time-exceeded, which is a thing routers do by configuration. Red that means
+"somebody else's network did something ordinary" is red nobody reads.
+
+| verdict | what it means |
+| --- | --- |
+| **CRITICAL** | the agent is not reporting; its own segment is silent; its own condition is broken (clock skew, dropped collector datagrams — its numbers cannot be trusted); or an attack indication is open on it |
+| **WARNING** | something about the agent is off but its reports still stand — an interface with errors, data quality degrading, loss or latency on its own segment |
+| **STALE** | connected, but nothing fresh has arrived |
+| **HEALTHY** | reporting, fresh, nothing wrong with the agent |
+
+**The agent's own segment** is decided by address: a private (RFC1918,
+link-local, IPv6 ULA) target is the network the agent lives on — its gateway,
+its resolvers, the hosts an operator chose to watch locally. The agent tags its
+gateway probe `role: 'gateway'` internally, but that tag never reaches the wire,
+and adding it would mean a migration, an agent release and a fleet that only
+tells the truth once every host has updated (there are v0.11 agents in the
+field). A private address is a fact the server already has, on every row, from
+every agent version. It is a proxy, and an honest one: a private target that is
+not the gateway counts too, which is the right error to make.
+
+**What the agent measures beyond it is still measured.** Loss, latency, jitter
+and a public target going dark keep their real severity, stay in `metrics` and
+`evidence`, and still raise their own findings — a dead public target is still a
+CRIT `probe.reachability` finding on the Analysis screen and in the Changes
+feed. The evidence rows carry `external: true`, which is what keeps them out of
+the agent's badge and its headline.
+
+Downgrading those rows instead would have been the easy version of this change
+and the wrong one: the findings are built from the same rows
+(`src/analysis/probeFindings.js`), so a lower level there stops raising them as
+well, and then nothing anywhere says the target is down.
+
+**A speed test measures the internet**, so it is evidence and never a verdict: a
+slow result is the ISP, the far end, or the time of day. **An interface signal
+is capped at a warning**: a port with errors is the agent's own hardware and
+worth saying, but one unused link down must not sit in the critical chip for
+ever.
+
 ### Latency needs a floor, not just a z-score
 
 A z-score answers "is this unusual for this target". It does not answer "is this

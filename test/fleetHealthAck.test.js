@@ -23,9 +23,12 @@ const NOW = Date.parse('2026-06-02T12:00:00Z');
 const ago = (ms) => new Date(NOW - ms).toISOString();
 
 // Rows that produce a `bad` verdict: heavy loss on one reachable target.
+// Loss on the agent's OWN gateway, which is what a CRIT verdict is about now:
+// loss to a public address is a finding about that path, not about the agent
+// (src/health/probeHealth.js).
 function lossRows(agentId, lossPct = 40) {
   return [30, 31, 29].map((rttMs, i) => ({
-    agentId, ts: ago(1000 + i * 60000), type: 'ping', target: '8.8.8.8',
+    agentId, ts: ago(1000 + i * 60000), type: 'ping', target: '192.168.1.1',
     ok: true, rttMs, lossPct, jitterMs: 2,
   }));
 }
@@ -104,7 +107,7 @@ test('a verdict that changes re-opens the row', async () => {
   // which is a different verdict with a different reason.
   const agentsRepo = makeAgentsRepo({ findAll: async () => [{ id: 9, hostname: 'a9', status: 'online' }] });
   const probeResultsRepo = makeProbeResultsRepo({
-    fleetHealth: async () => [{ agentId: 9, ts: ago(1000), type: 'ping', target: '8.8.8.8', ok: false, rttMs: 0, lossPct: 100 }],
+    fleetHealth: async () => [{ agentId: 9, ts: ago(1000), type: 'ping', target: '192.168.1.1', ok: false, rttMs: 0, lossPct: 100 }],
   });
   const res = await request(makeApp({ agentsRepo, probeResultsRepo, healthAcksRepo }))
     .get('/api/fleet/health').set('Authorization', authHeader('viewer'));

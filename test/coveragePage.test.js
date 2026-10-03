@@ -147,11 +147,11 @@ test('a failed load is an ErrorState that names the call and retries', async (t)
   assert.ok([...state.querySelectorAll('button')].some((b) => /retry/i.test(b.textContent)));
 });
 
-test('the nav entry is admin-only, and so is the address', async (t) => {
+test('the nav entry is operator+, and so is the address', async (t) => {
   const { doc } = boot({ t, routes: SESSION() });
   await settle();
   const btn = doc.querySelector('.tabs button[data-view="coverage"]');
-  assert.equal(btn.dataset.minRole, 'admin');
+  assert.equal(btn.dataset.minRole, 'operator');
   const routes = require('../public/routes.js');
   assert.equal(routes.pathFor('coverage'), '/coverage');
   assert.equal(routes.match('/coverage').view, 'coverage');

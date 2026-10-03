@@ -1517,6 +1517,9 @@
       'agentUpdate.win.buttonTitle': 'Get the PowerShell command that updates this Windows agent in place (no re-enrollment)',
       'agentUpdate.win.error': 'Could not build the update command: {message}',
       'agentUpdate.close': 'Close',
+      // Two answers that are NOT refusals, and used to be reported as one.
+      'agentUpdate.queued': 'the agent is offline, so the update to v{version} is queued and goes out on its next connection.',
+      'agentUpdate.noAck': 'the update was sent, but the agent has not confirmed it yet. Its connection may have dropped without the server noticing — the outcome lands in Update / delete history either way.',
       'agentUpdate.refused.reason': 'the agent refused the update — {reason}',
       'agentUpdate.refused.noReason': 'it gave no reason',
       'agentUpdate.refused.wrongKey': 'this agent trusts a different signing key than this server signs with, so it refuses every signed command. Re-pin it \u2014 the dialog that just opened sends it this server\u2019s current key.',
@@ -7242,6 +7245,8 @@
       'agentUpdate.win.buttonTitle': 'Hent PowerShell-kommandoen, der opdaterer denne Windows-agent på stedet (uden ny tilmelding)',
       'agentUpdate.win.error': 'Kunne ikke danne opdateringskommandoen: {message}',
       'agentUpdate.close': 'Luk',
+      'agentUpdate.queued': 'agenten er offline, s\u00e5 opdateringen til v{version} er sat i k\u00f8 og sendes ved n\u00e6ste forbindelse.',
+      'agentUpdate.noAck': 'opdateringen blev sendt, men agenten har endnu ikke bekr\u00e6ftet den. Dens forbindelse kan v\u00e6re faldet, uden at serveren har opdaget det \u2014 resultatet havner i Opdaterings-/sletningshistorik under alle omst\u00e6ndigheder.',
       'agentUpdate.refused.reason': 'agenten afviste opdateringen \u2014 {reason}',
       'agentUpdate.refused.noReason': 'den angav ingen \u00e5rsag',
       'agentUpdate.refused.wrongKey': 'denne agent har fastl\u00e5st en anden signeringsn\u00f8gle end den, serveren signerer med, og afviser derfor alle signerede kommandoer. Fastl\u00e5s den p\u00e5 ny \u2014 dialogen, der lige \u00e5bnede, sender den serverens nuv\u00e6rende n\u00f8gle.',

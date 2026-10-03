@@ -2377,6 +2377,30 @@ async function updateAgent(a, target, { confirmed = false } = {}) {
   if (!confirmed && !confirm(`Update ${name} ${verText}?\n\nThe agent will rebuild from the server's source bundle and restart, briefly interrupting monitoring on that host.`)) return;
   try {
     const r = await api(`/agents/${a.id}/update`, { method: 'POST' });
+    // NOT EVERY NON-ACCEPTED ANSWER IS A REFUSAL. The server has three good
+    // outcomes and this used to recognise one, so the other two fell through to
+    // "the agent refused the update — it gave no reason" and the operator
+    // clicked Update again. That second click is what "worked", and the first
+    // one had usually worked too.
+    //
+    //   queued   — the agent was not connected at that instant. The command is
+    //              stored and signed at delivery on its next connection, which
+    //              on a flapping socket is seconds away.
+    //   timedOut — the command WAS delivered, the agent just did not ack inside
+    //              the window. It acks before it downloads, so this means a
+    //              half-open socket or a blocked event loop — not a decline.
+    if (r.queued) {
+      toast(`${name}: ${t('agentUpdate.queued', { version: r.targetVersion || '?' })}`);
+      // The outcome lands in the same audit row whenever the agent takes it, so
+      // follow it: a queued update that completes should not be silent.
+      if (r.auditId) followAgentAction(a, r.auditId);
+      return;
+    }
+    if (!r.accepted && r.timedOut) {
+      toast(`${name}: ${t('agentUpdate.noAck')}`, true);
+      if (r.auditId) followAgentAction(a, r.auditId);
+      return;
+    }
     if (r.accepted) {
       // An UNSIGNED push is the one an agent pinned to a release key refuses,
       // and it refuses it after accepting the command — so say it here, while
@@ -2530,6 +2554,7 @@ async function bulkUpdateAgents(list, target) {
   const n = list.length;
   if (!confirm(`Update ${n} outdated agent${n > 1 ? 's' : ''} to v${target || '?'}?\n\nThey're updated one at a time, ${BULK_UPDATE_STAGGER_MS / 1000}s apart, so they don't all download the new build at once. Each rebuilds and restarts, briefly interrupting monitoring on that host.`)) return;
   let sent = 0;
+  let queued = 0;
   const declined = [];
   const failed = [];
   for (let i = 0; i < list.length; i += 1) {
@@ -2537,7 +2562,11 @@ async function bulkUpdateAgents(list, target) {
     const name = agent.display_name || agent.hostname || `#${agent.id}`;
     try {
       const r = await api(`/agents/${agent.id}/update`, { method: 'POST' });
-      if (r.accepted) sent += 1;
+      // An offline agent has the update QUEUED for its next connection, and an
+      // agent that did not ack in time still got the command. Neither declined,
+      // so neither belongs in the failure count (see updateAgent above).
+      if (r.queued) queued += 1;
+      else if (r.accepted || r.timedOut) sent += 1;
       // A runtime that declines says WHY (docker, unmanaged): keep it.
       else declined.push({ name, reason: r.reason || 'declined' });
     } catch (e) {
@@ -2565,6 +2594,7 @@ async function bulkUpdateAgents(list, target) {
 
   const bits = [];
   if (sent) bits.push(`${sent} updating`);
+  if (queued) bits.push(`${queued} queued (offline — they take it on their next connection)`);
   if (declined.length) bits.push(`${declined.length} declined: ${group(declined).join(' · ')}`);
   if (failed.length) bits.push(`${failed.length} failed: ${group(failed).join(' · ')}`);
   if (!bits.length) bits.push('nothing to update');

@@ -500,3 +500,24 @@ test('the attack bar carries the panel the CSS expects', () => {
   assert.ok(panel.querySelector('#attack-bar-label'), 'the label moved out of the panel');
   assert.ok(panel.querySelector('#attack-bar-detail'), 'the detail moved out of the panel');
 });
+
+// A lens is not an action. The PageHeader has a `modes:` slot that puts it
+// full width under the title (docs/ui-contract.md -> ModeSwitch); a switch
+// handed to `actions:` instead comes out pill-sized in the button row, where
+// the half that is OFF reads as disabled text. The sweep is over the view
+// files because that is where a new screen adds one — app.js's report
+// generator is the one place with no PageHeader of its own, and it puts the
+// switch directly above the preview instead.
+test('a screen with a ModeSwitch gives it the PageHeader modes slot, not the action row', () => {
+  const viewsDir = path.join(PUBLIC, 'views');
+  const offenders = [];
+  for (const f of fs.readdirSync(viewsDir).filter((x) => x.endsWith('.js'))) {
+    const src = fs.readFileSync(path.join(viewsDir, f), 'utf8');
+    if (!src.includes('ui.modeSwitch(')) continue;
+    if (!/^\s*modes:/m.test(src)) offenders.push(`${f}: builds a ModeSwitch and never passes modes:`);
+    // The switch must not be written inline inside an actions array.
+    const actionsInline = /actions:\s*\[[^\]]*ui\.modeSwitch\(/s.test(src);
+    if (actionsInline) offenders.push(`${f}: the ModeSwitch is inline in actions:`);
+  }
+  assert.deepEqual(offenders, []);
+});

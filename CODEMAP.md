@@ -355,8 +355,8 @@ A single vanilla-JS SPA. Key building blocks:
   screens on `/ui-preview/changes` and `/ui-preview/probes` (admin only, removed
   when those two screens migrate). See docs/ui-contract.md.
 - **ModeSwitch** — two lenses on ONE screen (`ui.modeSwitch()` in
-  `public/ui.js`, `.mode-switch` in `components.css`), in the PageHeader's
-  actions. A tab moves you to other content; a mode re-draws the same content
+  `public/ui.js`, `.mode-switch` + `.mode-wide` in `components.css`), handed to
+  the PageHeader's `modes:` slot, which draws it full width under the title. A tab moves you to other content; a mode re-draws the same content
   for a different reader, so the sidebar is untouched. Six screens have one:
   Analysis (Explanation ⟷ Evidence — the same rows, the explanation column
   swapped for baseline/observed/kind), Troubleshooting (Graph ⟷ List — the
@@ -369,7 +369,9 @@ A single vanilla-JS SPA. Key building blocks:
   remembered PER SCREEN in `localStorage` (`blueeye.mode.<screen>`, read with
   `ui.storedMode`), the labels are one catalogue entry per lens (`mode.*`), and
   the pane that is off is dropped rather than hidden so a Leaflet map does not
-  keep redrawing off screen. See docs/ui-contract.md → ModeSwitch.
+  keep redrawing off screen. A gate rule (`test/gate/ui.test.js`) fails a view
+  that puts the switch in `actions:` instead. See docs/ui-contract.md →
+  ModeSwitch.
 - **Elevation** — four levels in `public/css/tokens.css`, each a PAIR of a
   shadow and a surface (`--elev-1…4` + `--elev-surface-1…4`): resting panel →
   hovered card → menu/popover/drawer → modal. The surface half is what carries

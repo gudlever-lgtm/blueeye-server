@@ -19574,19 +19574,23 @@ async function reportGenerator() {
   let rgReport = null;
   const actions = el('div', { class: 'rg-actions' },
     el('button', { class: 'small', onclick: doPreview }, 'Preview'),
-    el('button', { class: 'small', onclick: doExport }, '⤓ Export'),
-    ui.modeSwitch({
-      label: t('mode.label'),
-      store: 'reporting',
-      value: rgMode,
-      items: [
-        { key: 'doc', label: t('mode.document'), icon: 'doc', title: t('mode.documentHint') },
-        { key: 'data', label: t('mode.data'), icon: 'data', title: t('mode.dataHint') },
-      ],
-      // Nothing is re-fetched: the preview already holds every row.
-      onchange: (key) => { rgMode = key; if (rgReport) preview.replaceChildren(renderRgPreview(rgReport, rgMode)); },
-    }));
-  wrap.append(actions, preview);
+    el('button', { class: 'small', onclick: doExport }, '⤓ Export'));
+  // The generator has no PageHeader of its own — the one at the top of the
+  // page belongs to Reporting, which has five sections. So the lens sits
+  // directly above the thing it re-draws, full width, which is the same
+  // relationship the `modes:` slot gives the other six screens.
+  const rgLens = ui.modeSwitch({
+    label: t('mode.label'),
+    store: 'reporting',
+    value: rgMode,
+    items: [
+      { key: 'doc', label: t('mode.document'), icon: 'doc', title: t('mode.documentHint') },
+      { key: 'data', label: t('mode.data'), icon: 'data', title: t('mode.dataHint') },
+    ],
+    // Nothing is re-fetched: the preview already holds every row.
+    onchange: (key) => { rgMode = key; if (rgReport) preview.replaceChildren(renderRgPreview(rgReport, rgMode)); },
+  });
+  wrap.append(actions, rgLens, preview);
 
   async function doPreview() {
     const spec = buildSpec();

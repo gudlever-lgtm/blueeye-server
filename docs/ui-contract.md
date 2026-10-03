@@ -341,8 +341,9 @@ an underline row rather than the legacy row of filled buttons.
 
 ### ModeSwitch
 
-Two lenses on **one** screen, built by `ui.modeSwitch()` and placed in the
-PageHeader's actions, left of the buttons.
+Two lenses on **one** screen, built by `ui.modeSwitch()` and handed to the
+PageHeader's **`modes:`** slot, which draws it full width under the title —
+a segmented control across the page, not a pill in the action row.
 
 The line against SubTabs is what makes it a separate component: a **tab moves
 you to other content**, a **mode re-draws the same content for a different
@@ -354,12 +355,24 @@ chart or as every agent's rate. Neither half is a different page, so neither
 gets a tab — and the sidebar keeps the entries it had, because the rail is
 navigation and this is not.
 
-It stays in the PageHeader rather than next to the logo for the same reason: a
-lens belongs to the screen it re-draws, not to the app. "Overview" means the
-rollup on Changes and the live chart on Traffic, and a control that changes
-meaning on every navigation cannot live in the chrome that never changes. In
-the header it sits beside the title it re-draws, where the reader is already
-looking when they think "this is not the view I want".
+It stays in the PageHeader rather than next to the logo: a lens belongs to the
+screen it re-draws, not to the app. "Overview" means the rollup on Changes and
+the live chart on Traffic, and a control that changes meaning on every
+navigation cannot live in the chrome that never changes.
+
+Inside the header it is its own row, not one more thing in the action row. In
+the action row a lens was the same height as Export and as wide as its own
+label, so the half that was OFF read as disabled text rather than as somewhere
+to press. Full width with equal halves says the opposite — two places to be,
+you are in one of them — and "Explanation" and "Evidence" cannot come out two
+different sizes. `ui.pageHeader({ modes })` is the only placement; a gate rule
+fails a view that puts a `ui.modeSwitch()` in `actions:` instead. The report
+generator is the one exception, because the PageHeader on that page belongs to
+Reporting and its five sections: there the switch sits directly above the
+preview it re-draws, full width all the same.
+
+`wide: false` returns the old pill. Nothing ships with it — it is in the
+kitchen sink so the two can be compared.
 
 Rules:
 

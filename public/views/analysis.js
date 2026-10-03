@@ -84,7 +84,8 @@
         help: { title: info.title, body: info.body },
         // The switch sits left of the exports: it changes what the page says,
         // and an export is what you do once it has said it.
-        actions: [ui.modeSwitch({
+        actions: deps.headerActions(),
+        modes: ui.modeSwitch({
           label: t('mode.label'),
           store: 'analysis',
           value: mode,
@@ -93,7 +94,7 @@
             { key: 'evidence', label: t('mode.evidence'), icon: 'evidence', title: t('mode.evidenceHint') },
           ],
           onchange: function (key) { mode = key; drawList(); },
-        })].concat(deps.headerActions()),
+        }),
       }), stripHost, toolbarHost, aiHost, overviewHost, listHost, breakdownHost);
 
       // ---- AI, where the picture is ------------------------------------------

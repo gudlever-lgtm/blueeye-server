@@ -150,17 +150,17 @@
         title: t('dest.title'),
         lead: info.lead,
         help: { title: info.title, body: info.body },
+        modes: ui.modeSwitch({
+          label: t('mode.label'),
+          store: 'destinations',
+          value: mode,
+          items: [
+            { key: 'map', label: t('mode.map'), icon: 'map', title: t('mode.mapHint') },
+            { key: 'list', label: t('mode.list'), icon: 'list', title: t('mode.listHintPlaces') },
+          ],
+          onchange: function (key) { mode = key; drawLens(); },
+        }),
         actions: [
-          ui.modeSwitch({
-            label: t('mode.label'),
-            store: 'destinations',
-            value: mode,
-            items: [
-              { key: 'map', label: t('mode.map'), icon: 'map', title: t('mode.mapHint') },
-              { key: 'list', label: t('mode.list'), icon: 'list', title: t('mode.listHintPlaces') },
-            ],
-            onchange: function (key) { mode = key; drawLens(); },
-          }),
           ui.button('secondary', t('dest.openProbes'), {
             onclick: function () { deps.gotoView('probes'); },
           }),

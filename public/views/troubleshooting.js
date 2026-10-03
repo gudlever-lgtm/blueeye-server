@@ -78,24 +78,24 @@
         title: t('tshoot.title'),
         lead: info.lead,
         help: { title: info.title, body: info.body },
+        modes: ui.modeSwitch({
+          label: t('mode.label'),
+          store: 'troubleshooting',
+          value: mode,
+          items: [
+            { key: 'graph', label: t('mode.graph'), icon: 'graph', title: t('mode.graphHint') },
+            { key: 'list', label: t('mode.list'), icon: 'list', title: t('mode.listHint') },
+          ],
+          onchange: function (key) {
+            mode = key;
+            // The graph holds an SVG and a selection; dropping the reference
+            // when it leaves the page is what stops a redraw writing into a
+            // node that is no longer in the document.
+            if (mode !== 'graph') graphEl = null;
+            if (data) drawTopology();
+          },
+        }),
         actions: [
-          ui.modeSwitch({
-            label: t('mode.label'),
-            store: 'troubleshooting',
-            value: mode,
-            items: [
-              { key: 'graph', label: t('mode.graph'), icon: 'graph', title: t('mode.graphHint') },
-              { key: 'list', label: t('mode.list'), icon: 'list', title: t('mode.listHint') },
-            ],
-            onchange: function (key) {
-              mode = key;
-              // The graph holds an SVG and a selection; dropping the reference
-              // when it leaves the page is what stops a redraw writing into a
-              // node that is no longer in the document.
-              if (mode !== 'graph') graphEl = null;
-              if (data) drawTopology();
-            },
-          }),
           ui.button('secondary', t('tshoot.openTopology'), {
             onclick: function () { deps.gotoView('topology'); },
           }),

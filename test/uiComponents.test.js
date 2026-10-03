@@ -623,3 +623,48 @@ test('ModeSwitch: left and right move between the halves', () => {
   assert.deepEqual(seen, ['data']);
   assert.equal(sw.querySelectorAll('[aria-pressed="true"]').length, 1);
 });
+
+test('ModeSwitch: the full-width variant is the default, and the pill is opt-in', () => {
+  const { ui, doc, window } = mount();
+  withStorage(window);
+  const items = [{ key: 'overview', label: 'Overview', icon: 'overview' }, { key: 'data', label: 'Data', icon: 'data' }];
+  const wide = ui.modeSwitch({ value: 'overview', items });
+  const pill = ui.modeSwitch({ wide: false, value: 'overview', items });
+  doc.body.append(wide, pill);
+  assert.ok(wide.classList.contains('mode-wide'), 'a screen has to ask for the pill, not for the default');
+  assert.equal(pill.classList.contains('mode-wide'), false);
+  // Same control either way: the variant is width, not behaviour.
+  assert.equal(wide.querySelectorAll('.mode-btn').length, 2);
+  assert.equal(wide.querySelectorAll('[aria-pressed="true"]').length, 1);
+  assert.ok(wide.querySelector('.mode-btn .mode-label'), 'the wide half lost its label');
+});
+
+test('PageHeader: the ModeSwitch goes under the title, never into the action row', () => {
+  const { ui, doc, window } = mount();
+  withStorage(window);
+  const modes = ui.modeSwitch({
+    value: 'overview',
+    items: [{ key: 'overview', label: 'Overview', icon: 'overview' }, { key: 'data', label: 'Data', icon: 'data' }],
+  });
+  const head = ui.pageHeader({
+    title: 'Traffic',
+    lead: 'what is moving right now',
+    modes,
+    actions: [ui.button('secondary', 'Fleet grid')],
+  });
+  doc.body.append(head);
+  assert.ok(head.classList.contains('has-modes'));
+  // The title and the actions share a row; the lens is the row under it, so it
+  // is not sized like one more button next to Export.
+  const row = head.querySelector('.page-head-row');
+  assert.ok(row, 'the header lost its title row');
+  assert.ok(row.querySelector('h1'), 'the title left the row');
+  assert.ok(row.querySelector('.page-head-actions .btn'), 'the actions left the row');
+  assert.equal(row.querySelector('.mode-switch'), null, 'the lens is still in the action row');
+  assert.equal(head.lastElementChild, modes, 'the lens is not the row under the title');
+
+  // A header without one keeps its shape and its class.
+  const plain = ui.pageHeader({ title: 'Changes', actions: [ui.button('secondary', 'Fleet grid')] });
+  assert.equal(plain.classList.contains('has-modes'), false);
+  assert.ok(plain.querySelector('.page-head-row .page-head-actions'));
+});

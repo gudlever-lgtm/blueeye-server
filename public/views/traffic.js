@@ -71,17 +71,17 @@
         title: t('traffic.title'),
         lead: info.lead,
         help: { title: info.title, body: info.body },
+        modes: ui.modeSwitch({
+          label: t('mode.label'),
+          store: 'traffic',
+          value: mode,
+          items: [
+            { key: 'overview', label: t('mode.overview'), icon: 'overview', title: t('mode.overviewHint') },
+            { key: 'data', label: t('mode.data'), icon: 'data', title: t('mode.dataHintTraffic') },
+          ],
+          onchange: function (key) { mode = key; drawLens(); },
+        }),
         actions: [
-          ui.modeSwitch({
-            label: t('mode.label'),
-            store: 'traffic',
-            value: mode,
-            items: [
-              { key: 'overview', label: t('mode.overview'), icon: 'overview', title: t('mode.overviewHint') },
-              { key: 'data', label: t('mode.data'), icon: 'data', title: t('mode.dataHintTraffic') },
-            ],
-            onchange: function (key) { mode = key; drawLens(); },
-          }),
           ui.button('secondary', t('traffic.openFleet'), { onclick: function () { deps.gotoView('fleet'); } }),
         ],
       }), alertHost, stripHost, lensHost);

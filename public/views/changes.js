@@ -111,8 +111,8 @@
           },
         },
         // One primary. "Fleet grid" is a way out of the page, so it is secondary.
+        modes: modeCtl,
         actions: [
-          modeCtl,
           ui.button('secondary', t('changes.fleetLink'), { onclick: function () { deps.gotoView('fleet'); } }),
           markSeen,
         ],

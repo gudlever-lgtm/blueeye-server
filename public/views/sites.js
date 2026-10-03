@@ -73,17 +73,17 @@
         title: t('sites.title'),
         lead: info.lead,
         help: { title: info.title, body: info.body },
+        modes: ui.modeSwitch({
+          label: t('mode.label'),
+          store: 'sites',
+          value: mode,
+          items: [
+            { key: 'map', label: t('mode.map'), icon: 'map', title: t('mode.mapHint') },
+            { key: 'list', label: t('mode.list'), icon: 'list', title: t('mode.listHintPlaces') },
+          ],
+          onchange: function (key) { mode = key; draw(); },
+        }),
         actions: [
-          ui.modeSwitch({
-            label: t('mode.label'),
-            store: 'sites',
-            value: mode,
-            items: [
-              { key: 'map', label: t('mode.map'), icon: 'map', title: t('mode.mapHint') },
-              { key: 'list', label: t('mode.list'), icon: 'list', title: t('mode.listHintPlaces') },
-            ],
-            onchange: function (key) { mode = key; draw(); },
-          }),
           deps.canWrite()
             ? ui.button('primary', t('sites.new'), { onclick: function () { deps.newSite(); } })
             : null,

@@ -114,7 +114,9 @@ test('diagnostic probes (dhcp, tls, rdns, path_mtu) are not targets in the gener
 
   // A real outage still reads as one, with the diagnostic rows beside it.
   const down = computeAgentHealth([ping('10.0.0.1', false), ...rows.slice(1)], { now: at.getTime() });
-  assert.match(down.reason, /1\/2 targets not responding \(e\.g\. 10\.0\.0\.1\)/);
+  // 10.0.0.1 is on the agent's own segment, so this IS the agent's problem and
+  // the headline says whose network it is about.
+  assert.match(down.reason, /1\/2 targets on this agent's own network not responding \(e\.g\. 10\.0\.0\.1\)/);
 
   // Only diagnostics: no reachability verdict at all, rather than a false one.
   assert.equal(computeAgentHealth(rows.slice(2), { now: at.getTime() }).status, 'unknown');

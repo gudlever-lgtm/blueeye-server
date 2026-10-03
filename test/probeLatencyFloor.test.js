@@ -38,16 +38,26 @@ test('the screenshot case: 0.9 ms against a 0.5 ms baseline is NOT critical', ()
   assert.equal(health.evidence.filter((e) => e.metric === 'latency').length, 0);
 });
 
-test('a real WAN degradation is still reported — as a warning', () => {
+test('a real WAN degradation is still reported — as evidence, and as a finding', () => {
   // The other row from the same screen: 309.8 ms where ~118.6 ms is normal.
-  // 191 ms is a genuine problem and must survive the floor. Latency has no
-  // 'bad' tier, so it is a warning however far it moved.
+  // 191 ms is a genuine problem and must survive the floor.
+  //
+  // It no longer colours the AGENT, though: mundtrold.dk is out on the
+  // internet, and an agent is not unhealthy because a path to a public host
+  // got slower. The evidence row survives at its real level, which is what
+  // src/analysis/probeFindings.js turns into the probe.latency finding.
   const now = Date.now();
   const health = computeAgentHealth(rows([309.8].concat(STABLE_WAN), { target: 'mundtrold.dk', now }), { now });
-  assert.equal(health.status, 'warn');
+  assert.equal(health.status, 'ok', 'the agent is fine; the path is not');
   const lat = health.evidence.find((e) => e.metric === 'latency');
   assert.ok(lat, 'the latency evidence is what names the target');
   assert.equal(lat.target, 'mundtrold.dk');
+  assert.equal(lat.level, 'warn', 'so the finding is still raised');
+  assert.equal(lat.external, true);
+
+  // The same degradation on the agent's own segment IS the agent's problem.
+  const local = computeAgentHealth(rows([309.8].concat(STABLE_WAN), { target: '192.168.1.1', now }), { now });
+  assert.equal(local.status, 'warn');
 });
 
 test('both bars have to be cleared, not either one', () => {

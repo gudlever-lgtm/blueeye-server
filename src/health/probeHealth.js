@@ -6,11 +6,34 @@ const { throughputHealthSummary } = require('./throughputHealth');
 // fleet-health read and the uptime figure.
 const { DIAGNOSTIC_TYPES } = require('../repositories/probeResultsRepository');
 
-// Fleet probe-health: turns an agent's recent active-probe results (ping / TCP /
-// DNS / traceroute) into a single, explainable health verdict driven by the
-// three signals a network/firewall tech reasons about — reachability, loss,
-// latency and jitter. Pure + dependency-free so it is unit-tested directly and
-// reused by the /api/fleet route and (per-agent) drill-down.
+// AGENT HEALTH ANSWERS ONE QUESTION: can the server rely on this agent?
+//
+// It used to answer a different one — "is everything this agent measures
+// healthy" — and the two are not the same. An agent whose traceroute to
+// us.cnn.com lost a hop somewhere on the internet was CRITICAL: red in the
+// fleet, red on the map, counted in the critical chip. Nothing was wrong with
+// the agent. Nothing was wrong with the customer's network either. A router on
+// the far side of the Atlantic declined to send an ICMP time-exceeded, which is
+// a thing routers do by configuration.
+//
+// Red that means "somebody else's network did something ordinary" is red
+// nobody reads. So the verdict is now about the agent itself:
+//
+//   CRITICAL  the agent is not reporting; its own segment is unreachable (the
+//             gateway and the hosts on its own subnet); its own condition is
+//             broken (clock skew, dropped collector datagrams — its numbers
+//             cannot be trusted); or an attack indication is open on it.
+//   WARNING   something about the agent is off but its reports still stand —
+//             an interface with errors, data quality degrading.
+//   STALE     connected, but nothing fresh has arrived.
+//   HEALTHY   reporting, fresh, nothing wrong with the agent.
+//
+// What the agent measures OUT THERE — loss, latency, jitter, a public target
+// not answering — is still measured, still carried in `metrics` and `evidence`,
+// and still raises its own findings (src/analysis/probeFindings.js) which land
+// on Analysis and in the Changes feed. It just does not decide whether the
+// AGENT is healthy. The evidence rows for it carry `external: true`, so the
+// fold below can tell the two apart and so can a reader of the API.
 //
 // "Local + explainable" per the repo conventions: latency is judged against the
 // agent's OWN recent baseline using robust statistics (median + MAD z-score),
@@ -53,6 +76,43 @@ const LAT_MIN_FRACTION = 0.2;
 const MIN_BASELINE = 8; // samples before a latency baseline is trusted
 const STALE_MS = 15 * 60 * 1000; // newest probe older than this ⇒ data is stale
 const MAD_TO_SIGMA = 1.4826; // MAD ⇒ std-dev for a normal distribution
+
+// IS THIS TARGET ON THE AGENT'S OWN SEGMENT?
+//
+// The agent auto-probes its default gateway and its resolvers, and an operator
+// adds the hosts that matter locally. Those are the targets whose silence says
+// something about the AGENT: if its own gateway does not answer, it is
+// network-isolated, and the connection to this server is living on borrowed
+// time. A public target that does not answer says something about the internet.
+//
+// WHY AN ADDRESS TEST AND NOT A ROLE FLAG. The agent tags its gateway probe
+// `role: 'gateway'` internally, but that tag never reaches the wire — adding it
+// means a migration, an agent release and a fleet that only tells the truth
+// once every host has updated (there are v0.11 agents in the field). A private
+// address is a fact the server already has, on every row, from every agent
+// version.
+//
+// It is a PROXY, and an honest one: a private target that is not the gateway
+// counts too. That is the right error to make — a LAN host the operator chose
+// to watch going silent is about this network, which is what this verdict is
+// about. A hostname is treated as external: a name that resolves to a private
+// address is rare on purpose here, and guessing would need a resolver.
+const PRIVATE_V4 = [
+  /^10\./,
+  /^192\.168\./,
+  /^172\.(1[6-9]|2\d|3[01])\./,
+  /^169\.254\./, // link-local: no DHCP answered, which is its own kind of local
+  /^127\./,
+];
+
+function isOwnSegment(target) {
+  const raw = String(target == null ? '' : target).trim();
+  if (!raw) return false;
+  // Strip a :port (tcp targets) and IPv6 brackets.
+  const host = raw.startsWith('[') ? raw.slice(1, raw.indexOf(']')) : raw.split(':').length === 2 ? raw.split(':')[0] : raw;
+  if (/^(::1|fe80:|fc|fd)/i.test(host)) return true; // IPv6 loopback, link-local, unique-local
+  return PRIVATE_V4.some((re) => re.test(host));
+}
 
 const round1 = (n) => (n == null || !Number.isFinite(n) ? null : Math.round(n * 10) / 10);
 const round2 = (n) => (n == null || !Number.isFinite(n) ? null : Math.round(n * 100) / 100);
@@ -180,20 +240,75 @@ function computeAgentHealth(rows, { now = Date.now() } = {}) {
   // on the same agent is bad.
   const note = (level, metric, t, extra) => evidence.push({ metric, level, target: t.target, type: t.type, ...extra });
 
-  if (unreachable.length === targets.length) {
+  // THE AGENT'S OWN SEGMENT decides the verdict. Its gateway and the hosts on
+  // its own subnet are the network the agent lives on; if they stop answering,
+  // it is isolated and the connection to this server is living on borrowed
+  // time. That is a CRITICAL about the agent.
+  const ownSegment = targets.filter((t) => isOwnSegment(t.target));
+  const localDown = ownSegment.filter((t) => !t.ok);
+
+  if (ownSegment.length && localDown.length === ownSegment.length) {
+    // Everything local is silent: not one hop of this agent's own network
+    // answers. 'down' rather than 'bad' — there is nothing left to be partly
+    // right about.
     status = 'down';
-    note('down', 'reachability', unreachable[0], { ok: false, of: targets.length, unreachable: unreachable.length });
-  } else {
-    if (unreachable.length) { status = worse(status, 'bad'); note('bad', 'reachability', unreachable[0], { ok: false, of: targets.length, unreachable: unreachable.length }); }
-    if (worstLoss && worstLoss.lossPct >= LOSS_BAD) { status = worse(status, 'bad'); note('bad', 'loss', worstLoss, { lossPct: round1(worstLoss.lossPct) }); }
-    else if (worstLoss && worstLoss.lossPct >= LOSS_WARN) { status = worse(status, 'warn'); note('warn', 'loss', worstLoss, { lossPct: round1(worstLoss.lossPct) }); }
-    // `latencyMoved` is the gate described at LAT_MIN_DELTA_MS: a z-score on a
-    // target that barely moved says nothing worth reporting. Past it, latency
-    // is a warning at any z — see Z_WARN.
-    const latMoved = worstLat ? latencyMoved(worstLat) : false;
-    if (latMoved && worstLat.z >= Z_WARN) { status = worse(status, 'warn'); note('warn', 'latency', worstLat, { rttMs: round1(worstLat.rttMs), baselineMs: round1(worstLat.baselineMs), z: round1(worstLat.z) }); }
-    if (worstJit && worstJit.jitterMs >= JITTER_BAD) { status = worse(status, 'bad'); note('bad', 'jitter', worstJit, { jitterMs: round1(worstJit.jitterMs) }); }
-    else if (worstJit && worstJit.jitterMs >= JITTER_WARN) { status = worse(status, 'warn'); note('warn', 'jitter', worstJit, { jitterMs: round1(worstJit.jitterMs) }); }
+    note('down', 'reachability', localDown[0], { ok: false, of: ownSegment.length, unreachable: localDown.length, scope: 'local' });
+  } else if (localDown.length) {
+    status = worse(status, 'bad');
+    note('bad', 'reachability', localDown[0], { ok: false, of: ownSegment.length, unreachable: localDown.length, scope: 'local' });
+  }
+
+  // EVERYTHING BEYOND IT IS EVIDENCE, NOT A VERDICT.
+  //
+  // These rows KEEP THEIR REAL LEVEL — 'warn' and 'bad', exactly as before —
+  // because they are also what src/analysis/probeFindings.js turns into
+  // findings, and a target on the internet going dark is still a CRIT finding
+  // on the Analysis screen and in the Changes feed. That is where it belongs.
+  // What changed is that `external: true` keeps them out of the agent's own
+  // verdict and out of its headline: the finding is raised, the badge stays
+  // green, and the two statements are both true.
+  //
+  // Downgrading the level instead would have been the easy version of this
+  // change and the wrong one: it silently stops raising the findings as well,
+  // and then nothing anywhere says the target is down.
+  const externalDown = unreachable.filter((t) => !isOwnSegment(t.target));
+  if (externalDown.length) {
+    note('bad', 'reachability', externalDown[0], { ok: false, of: targets.length, unreachable: externalDown.length, external: true });
+  }
+
+  // A target that did not answer at all has 100% loss by definition, so when
+  // NOTHING answered, "unreachable" and "100% loss" are two names for one fact
+  // and only the first is worth a row (and a finding). The signals below are
+  // therefore read only while something is still answering — which is what the
+  // old if/else shape did, kept here deliberately rather than by accident.
+  const externalNote = (metric, t, extra, level = 'warn') => { if (t && !isOwnSegment(t.target)) note(level, metric, t, { ...extra, external: true }); };
+  const somethingAnswers = unreachable.length < targets.length;
+  if (somethingAnswers && worstLoss && worstLoss.lossPct >= LOSS_WARN) {
+    if (isOwnSegment(worstLoss.target)) {
+      // Loss on the agent's own segment IS about the agent's network.
+      const level = worstLoss.lossPct >= LOSS_BAD ? 'bad' : 'warn';
+      status = worse(status, level);
+      note(level, 'loss', worstLoss, { lossPct: round1(worstLoss.lossPct), scope: 'local' });
+    } else externalNote('loss', worstLoss, { lossPct: round1(worstLoss.lossPct) }, worstLoss.lossPct >= LOSS_BAD ? 'bad' : 'warn');
+  }
+  // `latencyMoved` is the gate described at LAT_MIN_DELTA_MS: a z-score on a
+  // target that barely moved says nothing worth reporting.
+  const latMoved = somethingAnswers && worstLat ? latencyMoved(worstLat) : false;
+  if (latMoved && worstLat.z >= Z_WARN) {
+    if (isOwnSegment(worstLat.target)) { status = worse(status, 'warn'); note('warn', 'latency', worstLat, { rttMs: round1(worstLat.rttMs), baselineMs: round1(worstLat.baselineMs), z: round1(worstLat.z), scope: 'local' }); }
+    else externalNote('latency', worstLat, { rttMs: round1(worstLat.rttMs), baselineMs: round1(worstLat.baselineMs), z: round1(worstLat.z) });
+  }
+  if (somethingAnswers && worstJit && worstJit.jitterMs >= JITTER_WARN) {
+    if (isOwnSegment(worstJit.target)) {
+      // Jitter is graded like loss, and for the same reason: on the agent's OWN
+      // segment these two say the link under it is failing — a hundred
+      // milliseconds of jitter to your own gateway is a duplex mismatch or a
+      // dying switch port, not a busy internet. The connection this agent
+      // reports over runs across that link.
+      const level = worstJit.jitterMs >= JITTER_BAD ? 'bad' : 'warn';
+      status = worse(status, level);
+      note(level, 'jitter', worstJit, { jitterMs: round1(worstJit.jitterMs), scope: 'local' });
+    } else externalNote('jitter', worstJit, { jitterMs: round1(worstJit.jitterMs) }, worstJit.jitterMs >= JITTER_BAD ? 'bad' : 'warn');
   }
 
   // Quiet/offline agent: a healthy-but-old verdict is "stale", not "ok".
@@ -218,12 +333,20 @@ function computeAgentHealth(rows, { now = Date.now() } = {}) {
 // A one-line explanation of the verdict (the headline in the UI/title).
 function reasonFor(status, m, evidence, stale) {
   if (status === 'unknown') return 'No probe data yet — run a probe from the agent.';
-  const top = evidence[0];
+  // The headline comes from what DROVE the verdict. An `info` row is a
+  // measurement about somewhere else — it is carried, shown and turned into its
+  // own finding, but it must never be the sentence under a HEALTHY badge.
+  const top = evidence.find((e) => e && !e.external);
   const staleNote = stale && status !== 'stale' ? ' (data is stale)' : '';
   if (status === 'stale') return `No fresh measurements — latest probe is > 15 min. old.`;
-  if (status === 'down') return `All ${m.targets} targets are not responding.`;
-  if (!top) return `All ${m.reachable} targets are healthy — low latency, no loss.`;
-  if (top.metric === 'reachability') return `${m.unreachable}/${m.targets} targets not responding (e.g. ${top.target}).${staleNote}`;
+  if (status === 'down') return `Nothing on this agent's own network is responding (e.g. ${(evidence.find((e) => e.scope === 'local') || {}).target || 'its gateway'}).`;
+  if (!top) {
+    // Healthy agent, and possibly a sick internet. Say both, in that order.
+    const external = m.targets - m.reachable;
+    if (external > 0) return `The agent is healthy. ${external} of ${m.targets} targets outside its own network are not responding — see its findings.`;
+    return `All ${m.reachable} targets are healthy — low latency, no loss.`;
+  }
+  if (top.metric === 'reachability') return `${top.unreachable}/${top.of} targets on this agent's own network not responding (e.g. ${top.target}).${staleNote}`;
   if (top.metric === 'loss') return `Packet loss ${top.lossPct}% to ${top.target}.${staleNote}`;
   if (top.metric === 'latency') return `Latency ${top.rttMs} ms to ${top.target} — ~${top.baselineMs} ms normal (z=${top.z}).${staleNote}`;
   if (top.metric === 'jitter') return `Jitter ${top.jitterMs} ms to ${top.target}.${staleNote}`;
@@ -248,7 +371,12 @@ function combineStatus(a, b) {
 // when there is no interface data.
 function mergeHealth(probe, iface) {
   if (!iface || !iface.status) return probe;
-  const ifaceTier = iface.status === 'down' ? 'bad' : iface.status; // ok|warn|bad
+  // CAPPED AT A WARNING. A port with errors, or one link down out of twelve, is
+  // worth saying — it is the agent's own hardware — but it does not make the
+  // agent unreliable, and an unused port that has been down since the machine
+  // was racked must not sit in the critical chip for ever. The interface
+  // findings carry the detail, and the Ports panel on the agent shows it.
+  const ifaceTier = iface.status === 'down' || iface.status === 'bad' ? 'warn' : iface.status; // ok|warn
   const status = combineStatus(probe.status, ifaceTier);
   const w = iface.worst || {};
   // The interface is the headline only when it is the (strictly) dominant signal
@@ -286,23 +414,72 @@ function interfaceReason(iface) {
   return 'Interfaces healthy.';
 }
 
+// Fold the agent's own DATA QUALITY into its verdict (src/health/dataQuality.js:
+// clock skew against the server, collector datagrams dropped, agent version).
+//
+// THIS IS ABOUT THE AGENT, so unlike the measurements it takes, it does decide.
+// An agent whose clock is a minute out timestamps everything it reports wrongly
+// — its findings land in the wrong place on every timeline, and a correlation
+// window that should have caught two events together misses them. An agent
+// dropping 5% of the datagrams it was sent is not measuring the traffic it
+// claims to measure. Both mean: do not trust this agent's numbers, which is
+// exactly what a health verdict is for.
+function mergeQuality(health, quality) {
+  if (!quality || !quality.status || quality.status === 'unknown') return health;
+  const tier = quality.status === 'bad' ? 'bad' : quality.status; // ok|warn|bad
+  const status = combineStatus(health.status, tier);
+  const drives = TIER[tier] < TIER[health.status];
+  const ev = { metric: 'quality', level: tier, status: quality.status, clockSkewMs: quality.clockSkewMs, dropPct: quality.dropPct, version: quality.version };
+  const evidence = drives ? [ev, ...health.evidence] : [...health.evidence, ev];
+  return {
+    status,
+    reason: drives ? quality.reason : health.reason,
+    evidence,
+    metrics: { ...health.metrics, qualityStatus: quality.status },
+  };
+}
+
+// Fold an OPEN ATTACK INDICATION on this agent into its verdict
+// (src/analysis/attackIndication.js decides what counts as one, and the same
+// corroboration rule the red line uses applies — a lone WARN is a candidate,
+// not a conclusion).
+//
+// An agent reporting a host sweeping its network is not an unhealthy agent in
+// the strict sense: it is doing its job, well. But the fleet list is where
+// somebody looks first, and an agent that has something attacking the network
+// it watches should not sit there in green while it does. `attack` is
+// { count, worst, metric, explanation } or null.
+function mergeAttack(health, attack) {
+  if (!attack || !attack.count) return health;
+  const status = combineStatus(health.status, 'bad');
+  const drives = TIER.bad < TIER[health.status];
+  const ev = { metric: 'attack', level: 'bad', count: attack.count, worst: attack.worst || null, attackMetric: attack.metric || null };
+  const evidence = drives ? [ev, ...health.evidence] : [...health.evidence, ev];
+  const reason = drives
+    ? (attack.count === 1
+      ? `Attack indication on this agent: ${attack.metric || 'see findings'}.`
+      : `${attack.count} attack indications on this agent (worst ${attack.worst || 'WARN'}).`)
+    : health.reason;
+  return { status, reason, evidence, metrics: { ...health.metrics, attackCount: attack.count } };
+}
+
 // Fold an agent's active-throughput signal into its verdict. `thr` is a
 // throughputHealthSummary ({ status: ok|warn|bad, downMbps, upMbps, reason }) or
 // null (disabled / no measurement → verdict unchanged). Mirrors mergeHealth: the
 // throughput becomes the headline only when it is the dominant signal.
+// A SPEED TEST MEASURES THE INTERNET, so it is evidence and never a verdict.
+// It runs against a server out on the far side of the customer's uplink: a slow
+// result is their ISP, the far end, or the time of day — not the agent. It is
+// still carried (the Fleet row shows the Mbps, and the throughput finding is
+// raised as before), just no longer able to colour an agent red for a bad
+// evening on a shared line.
 function mergeThroughput(health, thr) {
   if (!thr || !thr.status) return health;
-  const status = combineStatus(health.status, thr.status);
-  // As with the interface fold: throughput is the headline only when it is a
-  // worse signal. A passing speed test alone never manufactures a HEALTHY verdict.
-  const drives = TIER[thr.status] < TIER[health.status];
-  const ev = { metric: 'throughput', downMbps: thr.downMbps, upMbps: thr.upMbps, status: thr.status };
-  const evidence = drives ? [ev, ...health.evidence] : [...health.evidence, ev];
-  const reason = drives ? thr.reason : health.reason;
+  const ev = { metric: 'throughput', level: 'info', external: true, downMbps: thr.downMbps, upMbps: thr.upMbps, status: thr.status };
   return {
-    status,
-    reason,
-    evidence,
+    status: health.status,
+    reason: health.reason,
+    evidence: [...health.evidence, ev],
     metrics: { ...health.metrics, downMbps: thr.downMbps, upMbps: thr.upMbps, throughputStatus: thr.status },
   };
 }
@@ -370,6 +547,9 @@ function computeFleet(agents, rowsByAgentId, { now = Date.now(), ifaceByAgentId 
 }
 
 module.exports = {
+  mergeQuality,
+  mergeAttack,
+  isOwnSegment,
   computeAgentHealth,
   computeFleet,
   mergeHealth,

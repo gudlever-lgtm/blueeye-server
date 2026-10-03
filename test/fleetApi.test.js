@@ -7,7 +7,7 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const request = require('supertest');
 
-const { makeApp, makeAgentsRepo, makeProbeResultsRepo, makeResultsRepo, makeSpeedtestResultsRepo, makeSettingsService, authHeader, throwingAsync } = require('../test-support/fakes');
+const { makeApp, makeAgentsRepo, makeProbeResultsRepo, makeResultsRepo, makeSpeedtestResultsRepo, makeSettingsService, makeFindingStore, authHeader, throwingAsync } = require('../test-support/fakes');
 const { computeAgentHealth, computeFleet, mergeHealth, mergeConnection, robustStats } = require('../src/health/probeHealth');
 const { interfaceHealthSummary } = require('../src/health/interfaceHealth');
 
@@ -48,26 +48,83 @@ test('computeAgentHealth is "ok" for reachable, low-loss, stable targets', () =>
   assert.equal(h.metrics.lossPct, 0);
 });
 
-test('computeAgentHealth flags elevated latency vs the target\'s own baseline (warn)', () => {
-  // baseline ~10 ms (MAD 1), latest 16 ms ⇒ robust z ≈ 4 ⇒ warn.
-  const h = computeAgentHealth(samples('gw', [16, 11, 9, 10, 12, 8, 11, 9, 10]), { now: NOW });
-  assert.equal(h.status, 'warn');
-  assert.ok(h.evidence.some((e) => e.metric === 'latency'));
-  assert.ok(h.metrics.latencyZ >= 3 && h.metrics.latencyZ < 6);
+// ---- the agent's own network decides; the internet does not ---------------
+//
+// The verdict answers "can the server rely on this agent", not "is everything
+// this agent measures healthy". An agent whose traceroute to a host on the
+// other side of the Atlantic lost a hop used to be CRITICAL — red in the fleet,
+// red on the map, counted in the critical chip — with nothing wrong with the
+// agent and nothing wrong with the customer's network either.
+
+test('a target on the agent\'s OWN network going silent is critical', () => {
+  // Its gateway. If that stops answering, the agent is isolated and its
+  // connection to this server is living on borrowed time — and that the
+  // internet still answers from somewhere else does not soften it.
+  const rows = [...samples('192.168.1.1', [0], { ok: false }), ...samples('8.8.8.8', [10, 10, 10])];
+  const h = computeAgentHealth(rows, { now: NOW });
+  assert.equal(h.status, 'down', 'nothing on its own network answered');
+  assert.match(h.reason, /own network/);
+
+  // One of two local targets: a problem, but not a blackout.
+  const partial = computeAgentHealth([
+    ...samples('192.168.1.1', [1, 1, 1]),
+    ...samples('10.0.0.9', [0], { ok: false, type: 'tcp' }),
+  ], { now: NOW });
+  assert.equal(partial.status, 'bad');
+  assert.match(partial.reason, /own network/);
 });
 
-test('computeAgentHealth is "bad" on heavy packet loss', () => {
-  const h = computeAgentHealth(samples('8.8.8.8', [20, 21, 19], { lossPct: 25 }), { now: NOW });
-  assert.equal(h.status, 'bad');
-  assert.equal(h.evidence[0].metric, 'loss');
-  assert.equal(h.metrics.lossPct, 25);
+test('a PUBLIC target going silent leaves the agent healthy — and still raises its evidence', () => {
+  // The exact shape that started this: the gateway answers, a traceroute to a
+  // public host does not.
+  const rows = [...samples('192.168.1.1', [1, 1, 1]), ...samples('us.cnn.com:443', [0], { ok: false, type: 'tcptraceroute' })];
+  const h = computeAgentHealth(rows, { now: NOW });
+  assert.equal(h.status, 'ok', 'the agent itself is fine');
+  assert.equal(h.metrics.reachable, 1, 'and the 1/2 is still reported');
+  assert.equal(h.metrics.targets, 2);
+  // The row survives at its real level, because probeFindings turns it into a
+  // CRIT finding on the Analysis screen. Health and findings disagree on
+  // purpose: one is about the agent, the other about the path.
+  const ev = h.evidence.find((e) => e.metric === 'reachability');
+  assert.ok(ev, 'the measurement was dropped, so no finding would be raised either');
+  assert.equal(ev.external, true);
+  assert.equal(ev.level, 'bad');
+  assert.match(h.reason, /outside its own network/);
 });
 
-test('computeAgentHealth is "down" when every target is unreachable', () => {
-  const rows = [...samples('a', [0], { ok: false }), ...samples('b', [0], { ok: false, type: 'tcp' })];
+test('every LOCAL target silent is "down" — nothing of this agent\'s network answers', () => {
+  const rows = [...samples('192.168.1.1', [0], { ok: false }), ...samples('10.0.0.5', [0], { ok: false, type: 'tcp' })];
   const h = computeAgentHealth(rows, { now: NOW });
   assert.equal(h.status, 'down');
   assert.equal(h.metrics.unreachable, 2);
+});
+
+test('every PUBLIC target silent is not the agent\'s fault', () => {
+  // The uplink is down, or the ISP is. Worth a finding, worth an alert on the
+  // site — but the agent is reporting, and it is reporting the truth.
+  const rows = [...samples('1.1.1.1', [0], { ok: false }), ...samples('8.8.8.8', [0], { ok: false, type: 'tcp' })];
+  const h = computeAgentHealth(rows, { now: NOW });
+  assert.equal(h.status, 'ok');
+  assert.equal(h.metrics.unreachable, 2);
+});
+
+test('loss, latency and jitter count on the local segment and are evidence beyond it', () => {
+  const local = computeAgentHealth(samples('192.168.1.1', [20, 21, 19], { lossPct: 25 }), { now: NOW });
+  assert.equal(local.status, 'bad', 'a quarter of the packets to its own gateway are gone');
+  assert.equal(local.evidence[0].metric, 'loss');
+
+  const far = computeAgentHealth(samples('8.8.8.8', [20, 21, 19], { lossPct: 25 }), { now: NOW });
+  assert.equal(far.status, 'ok');
+  assert.equal(far.evidence[0].external, true, 'carried, so the finding is still raised');
+  assert.equal(far.metrics.lossPct, 25, 'and still measured');
+
+  // Latency: a warning on the local segment, evidence beyond it.
+  const latLocal = computeAgentHealth(samples('192.168.1.1', [16, 11, 9, 10, 12, 8, 11, 9, 10]), { now: NOW });
+  assert.equal(latLocal.status, 'warn');
+  assert.ok(latLocal.metrics.latencyZ >= 3 && latLocal.metrics.latencyZ < 6);
+  const latFar = computeAgentHealth(samples('1.1.1.1', [16, 11, 9, 10, 12, 8, 11, 9, 10]), { now: NOW });
+  assert.equal(latFar.status, 'ok');
+  assert.ok(latFar.evidence.some((e) => e.metric === 'latency' && e.external));
 });
 
 test('computeAgentHealth downgrades a healthy-but-old verdict to "stale"', () => {
@@ -83,10 +140,11 @@ test('computeFleet sorts worst-first and counts a summary', () => {
     { id: 2, hostname: 'down-host', status: 'online' },
     { id: 3, hostname: 'loss-host', status: 'online' },
   ];
+  // Local targets, so these are verdicts about the agents themselves.
   const byAgent = {
-    1: samples('1.1.1.1', [10, 10, 10]),
-    2: samples('x', [0], { ok: false }),
-    3: samples('8.8.8.8', [20, 20], { lossPct: 30 }),
+    1: samples('192.168.1.1', [10, 10, 10]),
+    2: samples('192.168.1.1', [0], { ok: false }),
+    3: samples('192.168.1.1', [20, 20], { lossPct: 30 }),
   };
   const { agents: fleet, summary } = computeFleet(agents, byAgent, { now: NOW });
   assert.deepEqual(fleet.map((a) => a.health.status), ['down', 'bad', 'ok']);
@@ -142,19 +200,24 @@ test('mergeHealth folds the interface signal into the probe verdict', () => {
   const ifaceWarn = interfaceHealthSummary(trafficWithIface({ rxDrop: 5 }));
   const ifaceOk = interfaceHealthSummary(trafficWithIface({}));
 
-  // ok probe + bad interface ⇒ bad, and the interface is the headline.
+  // ok probe + bad interface ⇒ WARNING, and the interface is the headline.
+  // CAPPED AT A WARNING on purpose: a port with errors, or one unused link
+  // down out of twelve, is worth saying — it is the agent's own hardware — but
+  // it does not make the agent unreliable, and a port that has been down since
+  // the machine was racked must not sit in the critical chip for ever.
   const a = mergeHealth(probeOk, ifaceBad);
-  assert.equal(a.status, 'bad');
+  assert.equal(a.status, 'warn');
   assert.equal(a.evidence[0].metric, 'interface');
-  assert.equal(a.metrics.ifaceStatus, 'bad');
+  assert.equal(a.metrics.ifaceStatus, 'bad', 'the interface signal itself is still reported in full');
 
   // no probes at all but interface warns ⇒ warn (not 'unknown').
   assert.equal(mergeHealth(probeUnknown, ifaceWarn).status, 'warn');
 
-  // a worse probe signal stays the headline; the interface is kept as evidence.
+  // Loss to a PUBLIC target is not the agent's verdict any more, so here the
+  // interface is the only thing about the agent itself and it leads.
   const c = mergeHealth(probeLoss, ifaceOk);
-  assert.equal(c.status, 'bad');
-  assert.equal(c.evidence[0].metric, 'loss');
+  assert.equal(c.status, 'ok');
+  assert.ok(c.evidence.some((e) => e.metric === 'loss' && e.external));
 
   // no interface data ⇒ the probe verdict is returned unchanged.
   assert.equal(mergeHealth(probeOk, null), probeOk);
@@ -191,11 +254,18 @@ test('mergeConnection: a disconnected agent never reads HEALTHY', () => {
 });
 
 test('mergeConnection: a real problem stays the headline when disconnected', () => {
-  const probeLoss = computeAgentHealth(samples('8.8.8.8', [20, 20], { lossPct: 30 }), { now: NOW });
+  // A problem ON THE AGENT'S OWN NETWORK, which is what counts now: loss to a
+  // public target would leave the verdict at the disconnection floor.
+  const probeLoss = computeAgentHealth(samples('192.168.1.1', [20, 20], { lossPct: 30 }), { now: NOW });
   const offline = mergeConnection(probeLoss, true);
   assert.equal(offline.status, 'bad'); // loss is worse than the disconnection floor
   assert.equal(offline.evidence[0].metric, 'loss'); // loss still leads
   assert.ok(offline.evidence.some((e) => e.metric === 'connection')); // disconnect kept as evidence
+
+  // ...and the public-target version really does stop at the floor.
+  const far = mergeConnection(computeAgentHealth(samples('8.8.8.8', [20, 20], { lossPct: 30 }), { now: NOW }), true);
+  assert.equal(far.status, 'stale');
+  assert.match(far.reason, /disconnected/i);
 });
 
 test('computeFleet folds a disconnected agent so a fresh-but-offline agent is not HEALTHY', () => {
@@ -225,7 +295,8 @@ test('GET /api/fleet/agent/:id downgrades an offline agent from HEALTHY', async 
 
 test('GET /api/fleet/health returns a worst-first rollup (200)', async () => {
   const agentsRepo = makeAgentsRepo({ findAll: async () => [{ id: 9, hostname: 'a9', status: 'online' }, { id: 10, hostname: 'a10', status: 'online' }] });
-  const probeResultsRepo = makeProbeResultsRepo({ fleetHealth: async () => samples('8.8.8.8', [30, 31], { lossPct: 40 }).map((r) => ({ ...r, agentId: 9 })) });
+  // A LOCAL target: the verdict is about the agent's own network now.
+  const probeResultsRepo = makeProbeResultsRepo({ fleetHealth: async () => samples('192.168.1.1', [30, 31], { lossPct: 40 }).map((r) => ({ ...r, agentId: 9 })) });
   const res = await request(makeApp({ agentsRepo, probeResultsRepo })).get('/api/fleet/health').set('Authorization', authHeader('viewer'));
   assert.equal(res.status, 200);
   assert.equal(res.body.summary.total, 2);
@@ -241,7 +312,9 @@ test('GET /api/fleet/health folds interface health in — no probes + iface erro
   const res = await request(makeApp({ agentsRepo, resultsRepo })).get('/api/fleet/health').set('Authorization', authHeader('viewer'));
   assert.equal(res.status, 200);
   const a5 = res.body.agents.find((a) => a.agentId === 5);
-  assert.equal(a5.health.status, 'bad'); // would be 'unknown' without the interface fold
+  // A WARNING, not a critical: an interface with errors is the agent's own
+  // hardware and worth saying, but it does not make the agent unreliable.
+  assert.equal(a5.health.status, 'warn'); // would be 'unknown' without the interface fold
   assert.equal(a5.health.metrics.ifaceStatus, 'bad');
 });
 
@@ -271,8 +344,14 @@ test('GET /api/fleet/health folds throughput when enabled and flags a slow agent
   const res = await request(makeApp({ agentsRepo, speedtestResultsRepo, settingsService })).get('/api/fleet/health').set('Authorization', authHeader('viewer'));
   assert.equal(res.status, 200);
   const a8 = res.body.agents.find((a) => a.agentId === 8);
-  assert.equal(a8.health.status, 'bad'); // 10 Mbps < downBad 50
+  // A SPEED TEST MEASURES THE INTERNET. 10 Mbps against a 50 Mbps floor is a
+  // finding about the uplink — the ISP, the far end, the time of day — not a
+  // reason to call the agent broken. The number is still carried.
+  // Unchanged by the speed test: this agent has no probe rows, so the verdict
+  // is still 'unknown' rather than a critical manufactured from the uplink.
+  assert.equal(a8.health.status, 'unknown');
   assert.equal(a8.health.metrics.throughputStatus, 'bad');
+  assert.equal(a8.health.metrics.downMbps, 10);
   assert.equal(a8.throughput.downMbps, 10);
 });
 
@@ -292,10 +371,13 @@ test('GET /api/fleet/agent/:id includes throughput and folds it when enabled', a
   const res = await request(makeApp({ agentsRepo, speedtestResultsRepo, settingsService })).get('/api/fleet/agent/9').set('Authorization', authHeader('viewer'));
   assert.equal(res.status, 200);
   assert.equal(res.body.throughput.downMbps, 5);
-  assert.equal(res.body.health.status, 'bad');
+  // Carried, not folded: a slow speed test is a finding about the uplink, and
+  // this agent has no probe rows, so its verdict is still 'unknown'.
+  assert.equal(res.body.health.metrics.throughputStatus, 'bad');
+  assert.equal(res.body.health.status, 'unknown');
 });
 
-// A mixed fleet: 1 critical (heavy loss ⇒ bad), 1 warning (elevated latency),
+// A mixed fleet: 1 critical (heavy loss on its own segment ⇒ bad), 1 warning (elevated latency),
 // 1 healthy, 1 offline-with-no-probes (⇒ unknown). Reused by the severity tests.
 function mixedFleet() {
   const agentsRepo = makeAgentsRepo({ findAll: async () => [
@@ -304,10 +386,12 @@ function mixedFleet() {
     { id: 4, hostname: 'a4', status: 'online' },
     { id: 5, hostname: 'a5', status: 'offline' },
   ] });
+  // Local targets where the fixture means "this agent has a problem": the
+  // verdict is about the agent's own network, not about the internet.
   const rows = [
-    ...samples('8.8.8.8', [30, 31], { lossPct: 40 }).map((r) => ({ ...r, agentId: 1 })),   // bad
-    ...samples('gw', [16, 11, 9, 10, 12, 8, 11, 9, 10]).map((r) => ({ ...r, agentId: 3 })), // warn
-    ...samples('1.1.1.1', [10, 10, 10]).map((r) => ({ ...r, agentId: 4 })),                 // ok
+    ...samples('192.168.1.1', [30, 31], { lossPct: 40 }).map((r) => ({ ...r, agentId: 1 })),   // bad
+    ...samples('192.168.1.1', [16, 11, 9, 10, 12, 8, 11, 9, 10]).map((r) => ({ ...r, agentId: 3 })), // warn
+    ...samples('1.1.1.1', [10, 10, 10]).map((r) => ({ ...r, agentId: 4 })),                      // ok
     // agent 5: no probe rows ⇒ unknown; its offline status feeds summary.offline.
   ];
   const probeResultsRepo = makeProbeResultsRepo({ fleetHealth: async () => rows });
@@ -356,11 +440,11 @@ test('GET /api/fleet/health requires auth (401) and surfaces a repo failure (500
 test('GET /api/fleet/agent/:id returns one agent verdict (200) and validates id (400/404)', async () => {
   const agentsRepo = makeAgentsRepo({ findById: async (id) => ({ id, hostname: 'h9', display_name: 'H9' }) });
   // findByAgent is oldest-first; the route reverses to newest-first for the verdict.
-  const probeResultsRepo = makeProbeResultsRepo({ findByAgent: async () => samples('8.8.8.8', [20, 21], { lossPct: 30 }).reverse() });
+  const probeResultsRepo = makeProbeResultsRepo({ findByAgent: async () => samples('192.168.1.1', [20, 21], { lossPct: 30 }).reverse() });
   const ok = await request(makeApp({ agentsRepo, probeResultsRepo })).get('/api/fleet/agent/9').set('Authorization', authHeader('viewer'));
   assert.equal(ok.status, 200);
   assert.equal(ok.body.agentId, 9);
-  assert.equal(ok.body.health.status, 'bad');
+  assert.equal(ok.body.health.status, 'bad'); // loss on its OWN segment
 
   const bad = await request(makeApp({ agentsRepo })).get('/api/fleet/agent/abc').set('Authorization', authHeader('viewer'));
   assert.equal(bad.status, 400);
@@ -418,4 +502,63 @@ test('GET /api/fleet/health passes a windowMin through to the repo', async () =>
   assert.equal(res.status, 200);
   assert.equal(res.body.windowMin, 30);
   assert.equal(captured.windowMs, 30 * 60 * 1000);
+});
+
+// ---- what makes an agent CRITICAL now --------------------------------------
+//
+// Four things, and all four are about the agent rather than about what it
+// measures: it is not reporting; its own network is silent; its own condition
+// is broken; or something is attacking the network it watches.
+
+test('a broken clock makes the agent critical — its timestamps are wrong everywhere', async () => {
+  // Every finding it raises lands in the wrong place on every timeline, and a
+  // correlation window that should have caught two events together misses them.
+  const agentsRepo = makeAgentsRepo({ findAll: async () => [{ id: 11, hostname: 'skewed', status: 'online', capabilities: { agentVersion: '0.47.0' } }] });
+  const recv = new Date(NOW);
+  const agentSays = new Date(NOW - 5 * 60 * 1000).toISOString(); // five minutes behind
+  const resultsRepo = makeResultsRepo({ latestPerAgent: async () => [{ agent_id: 11, created_at: recv, payload: { finishedAt: agentSays, traffic: { source: 'proc', interfaces: [] } } }] });
+  const res = await request(makeApp({ agentsRepo, resultsRepo })).get('/api/fleet/health').set('Authorization', authHeader('viewer'));
+  const a = res.body.agents.find((x) => x.agentId === 11);
+  assert.equal(a.quality.status, 'bad');
+  assert.equal(a.health.status, 'bad', 'data quality must reach the verdict, not just the quality chip');
+  assert.ok(a.health.evidence.some((e) => e.metric === 'quality'));
+});
+
+test('an open attack indication on the agent makes it critical', async () => {
+  // Not because the agent is broken — it is doing its job — but because the
+  // fleet list is where somebody looks first, and an agent watching a network
+  // with something sweeping it should not sit there in green.
+  const agentsRepo = makeAgentsRepo({ findAll: async () => [{ id: 12, hostname: 'watcher', status: 'online' }] });
+  const findingStore = makeFindingStore();
+  findingStore.rows.push(
+    // Real clock, not the fixture's NOW: the attack window is the red line's
+    // own 24 hours, measured from when the request is served.
+    { id: 'scan', hostId: '12', metric: 'net.scan', severity: 'WARN', eventCaseId: 3, acked: false, createdAt: new Date().toISOString(), explanation: '192.168.1.11 reached 175 distinct ports' },
+    { id: 'asn', hostId: '12', metric: 'peer.new_asn', severity: 'INFO', eventCaseId: 3, acked: false, createdAt: new Date().toISOString(), explanation: 'first time in 400 days' },
+  );
+  const res = await request(makeApp({ agentsRepo, findingStore })).get('/api/fleet/health').set('Authorization', authHeader('viewer'));
+  const a = res.body.agents.find((x) => x.agentId === 12);
+  assert.equal(a.health.status, 'bad');
+  assert.match(a.health.reason, /[Aa]ttack indication/);
+  assert.equal(a.health.metrics.attackCount, 1);
+});
+
+test('an UNCORROBORATED scan does not turn the agent red either', async () => {
+  // The red line's rule, applied here: one detector saying "this source touched
+  // a lot of ports" is a candidate, not a conclusion. The finding exists and is
+  // on the Analysis screen; the agent stays as it was.
+  const agentsRepo = makeAgentsRepo({ findAll: async () => [{ id: 13, hostname: 'quiet', status: 'online' }] });
+  const findingStore = makeFindingStore();
+  findingStore.rows.push({ id: 'lone', hostId: '13', metric: 'net.scan', severity: 'WARN', eventCaseId: null, acked: false, createdAt: new Date().toISOString(), explanation: 'a backup agent walking the LAN looks the same' });
+  const res = await request(makeApp({ agentsRepo, findingStore })).get('/api/fleet/health').set('Authorization', authHeader('viewer'));
+  const a = res.body.agents.find((x) => x.agentId === 13);
+  assert.notEqual(a.health.status, 'bad');
+});
+
+test('a fleet read without a finding store still answers — the dimension is dropped', async () => {
+  // An older wiring, or a deployment whose store predates this.
+  const agentsRepo = makeAgentsRepo({ findAll: async () => [{ id: 14, hostname: 'a14', status: 'online' }] });
+  const res = await request(makeApp({ agentsRepo })).get('/api/fleet/health').set('Authorization', authHeader('viewer'));
+  assert.equal(res.status, 200);
+  assert.equal(res.body.agents.length, 1);
 });

@@ -4,7 +4,10 @@ const express = require('express');
 const { asyncHandler } = require('../middleware/asyncHandler');
 const { requireAuth, requireRole } = require('../auth/middleware');
 const { ROLES } = require('../auth/roles');
-const { computeFleet, computeAgentHealth, mergeHealth, mergeThroughput, mergeConnection } = require('../health/probeHealth');
+const {
+  computeFleet, computeAgentHealth, mergeHealth, mergeThroughput, mergeConnection, mergeQuality, mergeAttack,
+} = require('../health/probeHealth');
+const { ATTACK_METRICS, ATTACK_METRIC_PREFIXES, BANNER_SEVERITIES, BANNER_WINDOW_HOURS } = require('../analysis/attackIndication');
 const { interfaceHealthSummary } = require('../health/interfaceHealth');
 const { throughputHealthSummary } = require('../health/throughputHealth');
 const { computeDataQuality } = require('../health/dataQuality');
@@ -49,9 +52,41 @@ function parseSeverityParam(v) {
 // new storage.
 function createFleetRouter({
   agentsRepo, probeResultsRepo, resultsRepo, speedtestResultsRepo = null, settingsService = null,
-  healthAcksRepo = null, auditLogger = null, logger = silentLogger,
+  healthAcksRepo = null, auditLogger = null, findingStore = null, logger = silentLogger,
 }) {
   const router = express.Router();
+
+  // OPEN ATTACK INDICATIONS PER AGENT — one read for the whole fleet.
+  //
+  // The membership list and the corroboration rule are the red line's
+  // (src/analysis/attackIndication.js), so an agent turns critical here for
+  // exactly the findings that light the bar at the top of the page. A store
+  // that predates this (an older wiring, a fake in a test) answers nothing,
+  // which drops the dimension rather than failing the overview.
+  async function attackByAgentId() {
+    if (!findingStore || typeof findingStore.attackIndication !== 'function') return {};
+    try {
+      const out = await findingStore.attackIndication({
+        metrics: ATTACK_METRICS,
+        prefixes: ATTACK_METRIC_PREFIXES,
+        severities: BANNER_SEVERITIES,
+        since: new Date(Date.now() - BANNER_WINDOW_HOURS * 60 * 60 * 1000),
+        limit: 50,
+      });
+      const byAgent = {};
+      for (const f of (out && out.findings) || []) {
+        const key = String(f.hostId);
+        if (!byAgent[key]) byAgent[key] = { count: 0, worst: null, metric: null };
+        const a = byAgent[key];
+        a.count += 1;
+        if (f.severity === 'CRIT' || !a.worst) { a.worst = f.severity; a.metric = f.metric; }
+      }
+      return byAgent;
+    } catch (err) {
+      logger.warn(`fleet: attack-indication read failed (${err.message}); dropping that dimension`);
+      return {};
+    }
+  }
 
   // Latest result row per agent, keyed by agent id. Best-effort: a results read
   // failure must not sink the overview, just drop the interface/quality dimensions.
@@ -110,18 +145,26 @@ function createFleetRouter({
     const latestSpeed = speed && speed[0] ? speed[0] : null;
     const thr = throughputHealthSummary(latestSpeed, thresholds || {});
     if (thr) health = mergeThroughput(health, thr);
+    // The agent's own condition, and whether something is attacking the network
+    // it watches — the two dimensions that ARE about the agent.
+    health = mergeQuality(health, computeDataQuality({
+      capabilities: agent.capabilities || null,
+      latest: latest && latest[0] ? { payload: latest[0].payload, created_at: latest[0].created_at } : null,
+    }));
+    health = mergeAttack(health, (await attackByAgentId())[String(agent.id)] || null);
     health = mergeConnection(health, agent.status === 'offline');
     return { health, latest, latestSpeed };
   }
 
   router.get('/health', requireAuth, requireRole(ROLES.VIEWER, ROLES.OPERATOR, ROLES.ADMIN), asyncHandler(async (req, res) => {
     const windowMs = parseWindow(req.query.windowMin);
-    const [agents, rows, latestMap, thrCtx, acks] = await Promise.all([
+    const [agents, rows, latestMap, thrCtx, acks, attacks] = await Promise.all([
       agentsRepo.findAll(),
       probeResultsRepo.fleetHealth({ windowMs }),
       latestPerAgentMap(),
       throughputContext(),
       acksById(),
+      attackByAgentId(),
     ]);
     const byAgent = {};
     for (const r of rows) {
@@ -150,6 +193,11 @@ function createFleetRouter({
     for (const a of fleet) {
       const latest = latestMap[a.agentId];
       a.quality = computeDataQuality({ capabilities: capsById[a.agentId], latest: latest ? { payload: latest.payload, created_at: latest.created_at } : null });
+      // The two dimensions that are about the AGENT rather than about what it
+      // measures, folded in the same order the per-agent verdict uses, so the
+      // list and the drill-down never disagree.
+      a.health = mergeQuality(a.health, a.quality);
+      a.health = mergeAttack(a.health, attacks[String(a.agentId)] || null);
       // An acknowledgement annotates the verdict; it never changes it. The
       // status, the summary counts and the worst-first sort are what they were,
       // so a cleared agent is still a CRIT agent — it just says who has it.

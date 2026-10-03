@@ -475,8 +475,9 @@ Two known touch-points in existing code, both minimal and backward-compatible
 
 ## 9. UI (spec §14, §29, §39)
 
-**One nav entry**, its own in the rail between Diagnostics and Insights, and
-nothing under it. The tabs live inside the view — **Applications · Journeys ·
+**One nav entry**, at the top of the rail above the folded categories, and
+nothing under it — it is the entry people open daily, and under a collapsed
+group it cost two clicks. The tabs live inside the view — **Applications · Journeys ·
 Tests · Runs · History · Health · Schedules · Monitors** — and the rail used to
 repeat seven of them, so the same list stood twice on screen, side by side.
 A deep link still opens a tab (`/service-assurance/<tab>`); it is the menu that

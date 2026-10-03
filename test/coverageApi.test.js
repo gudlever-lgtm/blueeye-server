@@ -27,12 +27,17 @@ test('401 without a token', async () => {
   assert.equal(res.status, 401);
 });
 
-test('403 for viewer and operator: a list of blind spots is admin-only', async () => {
-  const app = makeApp();
-  for (const role of ['viewer', 'operator']) {
-    const res = await request(app).get('/api/coverage').set(auth(role));
-    assert.equal(res.status, 403, role);
-  }
+test('403 for a viewer: a list of blind spots is not viewer-readable', async () => {
+  const res = await request(makeApp()).get('/api/coverage').set(auth('viewer'));
+  assert.equal(res.status, 403);
+});
+
+// The person who notices the gap is not the person who closes it: an operator
+// working an outage is the one who finds that a site produced no flow in 24 h.
+test('200 for an operator: reading where we cannot see is not an admin write', async () => {
+  const res = await request(makeApp()).get('/api/coverage').set(auth('operator'));
+  assert.equal(res.status, 200);
+  assert.ok(res.body.checks.length > 0);
 });
 
 test('200 for admin, with summary, gaps, checks and windows', async () => {

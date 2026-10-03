@@ -103,6 +103,14 @@
              start collapsed here to match the default; setupNavGroups then applies
              the per-browser remembered state. -->
         <nav class="tabs">
+          <!-- Service Assurance sits at the TOP of the rail, above the folded
+               categories: it is the one entry people open daily, and under a
+               collapsed group it took two clicks to reach. One entry, not a
+               folder — the module draws its own tab strip (Applications /
+               Journeys / Tests / Runs / History / Health / Schedules /
+               Monitors), and the rail repeating those tabs was the same list
+               twice. The entry opens the module; the tabs do the rest. -->
+          <button class="nav-solo" data-view="serviceAssurance" data-min-role="operator" data-feature="service_tests" data-i18n="sa.title">Service Assurance</button>
           <div class="nav-group collapsed" data-category="Monitoring">
             <button type="button" class="nav-group-label" aria-expanded="false" data-i18n="nav.group.monitoring">Monitoring</button>
             <button data-view="changes" class="active" data-i18n="nav.view.changes">Changes</button>
@@ -124,12 +132,6 @@
             <button data-view="troubleshooting" data-i18n="nav.view.troubleshooting">Troubleshooting</button>
             <button data-view="investigation" data-min-role="operator" data-i18n="nav.view.investigation">Investigate</button>
           </div>
-          <!-- Service Assurance is one entry, not a folder: the module draws
-               its own tab strip (Applications / Journeys / Tests / Runs /
-               History / Health / Schedules / Monitors) at the top of the page,
-               and the rail repeating those tabs was the same list twice. The
-               entry opens the module; the tabs inside it do the rest. -->
-          <button class="nav-solo" data-view="serviceAssurance" data-min-role="operator" data-feature="service_tests" data-i18n="sa.title">Service Assurance</button>
           <div class="nav-group collapsed" data-category="Insights">
             <button type="button" class="nav-group-label" aria-expanded="false" data-i18n="nav.group.insights">Insights</button>
             <button data-view="findings" data-feature="analysis" data-i18n="nav.view.findings">Analysis</button>
@@ -157,7 +159,7 @@
             <button data-view="nicInventory" data-i18n="nav.view.nicInventory">NIC inventory</button>
             <button data-view="enrollment" data-min-role="operator" data-i18n="nav.view.enrollment">Enrollment</button>
             <button data-view="discovery" data-min-role="admin" data-i18n="nav.view.discovery">Discovery</button>
-            <button data-view="coverage" data-min-role="admin" data-i18n="nav.view.coverage">Coverage gaps</button>
+            <button data-view="coverage" data-min-role="operator" data-i18n="nav.view.coverage">Coverage gaps</button>
             <button data-view="logs" data-min-role="admin" data-i18n="nav.view.logs">System Logs</button>
             <button data-view="userLogs" data-min-role="admin" data-i18n="nav.view.userLogs">User Logs</button>
             <button data-view="auditLog" data-min-role="admin" data-feature="audit_log" data-i18n="nav.view.auditLog">Audit log integrity</button>

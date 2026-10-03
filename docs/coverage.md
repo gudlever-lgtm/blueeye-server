@@ -6,7 +6,7 @@ with no agent, a switch nothing polls, an unmanaged switch in the path, a /24
 the ARP tables keep mentioning that no agent sits in — with the evidence for
 each and a suggested next step.
 
-- API: `GET /api/coverage` (admin) — `src/routes/coverage.js`
+- API: `GET /api/coverage` (operator+) — `src/routes/coverage.js`
 - Rules (pure): `src/coverage/coverageGaps.js`
 - Gathering (I/O): `src/coverage/coverageService.js`
 - UI: **Administration → Coverage gaps** (`/coverage`, `public/views/coverage.js`),
@@ -34,12 +34,18 @@ a `suggestion` key; the few heuristics are named constants, listed below.
 dashboard words them in the reader's language (the same split as the setup
 checklist).
 
-**Admin only.** A list of blind spots — sites without an agent, switches
-nothing can poll, subnets no agent sits in, unmanaged devices in the path — is
-the map somebody would want before doing something they would rather not be
-seen doing. Every fix it suggests (add a switch, a credential, a traffic source,
-promote a discovery candidate) is also an admin action. Same reasoning as
+**Operator+.** A list of blind spots — sites without an agent, switches nothing
+can poll, subnets no agent sits in, unmanaged devices in the path — is the map
+somebody would want before doing something they would rather not be seen doing,
+so it stays off a viewer's session, the same reasoning as
 `GET /api/setup/checklist`.
+
+It was admin-only because every fix it suggests (add a switch, a credential, a
+traffic source, promote a discovery candidate) is an admin action. The person
+who NOTICES the gap is not the person who closes it: an operator working an
+outage is the one who finds that a site has produced no flow in 24 hours.
+Reading where we cannot see is not the same permission as changing it, and each
+suggested write is still gated on its own route.
 
 ## API
 
@@ -49,7 +55,7 @@ promote a discovery candidate) is also an admin action. Same reasoning as
 |---|---|
 | `limit` | rows listed **per gap kind**, 1–200, default 50. Anything else is `400 { error: 'Validation failed', details: { limit } }` — a caller asking for 1000 and silently getting 50 would read the list as complete. |
 
-Answers: 401 without a session, 403 below admin, 404 for any sub-path, 500 only
+Answers: 401 without a session, 403 for a viewer, 404 for any sub-path, 500 only
 if the report itself fails (a failing *source* is a skipped check, not a 500).
 
 ```jsonc

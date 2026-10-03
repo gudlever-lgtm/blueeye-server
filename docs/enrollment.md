@@ -96,8 +96,40 @@ Routes (admin): `GET/POST/DELETE /api/settings/agent-release-key` — status / g
 }
 ```
 
-`serverUrl` comes from `BLUEEYE_PUBLIC_URL` (recommended behind a proxy) or is
-derived from the request; `checksum` is the server's cached hash of the bundle.
+`serverUrl` is resolved in `resolveServerUrl()` (`src/routes/enroll.js`), in this
+order: **Settings → Agents → Address agents use**, then `BLUEEYE_PUBLIC_URL`,
+then the request's own `Host`. `checksum` is the server's cached hash of the
+bundle.
+
+### The address agents are told to use
+
+One string ends up in every install script, every update one-liner and every
+enrolled agent's launcher — and an agent carries its token and the customer's
+network metadata on that connection. Two rules follow:
+
+- **HTTPS is the default, whatever is configured.** An `http://` address is
+  upgraded to `https://` before it is handed out, unless the host is loopback or
+  an admin has ticked *Plain HTTP is deliberate here*. The port is kept: whoever
+  wrote `:3000` meant `:3000`. A stored plain-http address is almost never
+  chosen — it is what the server happened to see when the first agent enrolled,
+  before the certificate arrived, and it then outlives the reason it existed.
+- **It is a setting, not only an env var.** The env var needs a shell and a
+  redeploy; the address changes for reasons that reach the dashboard first (a
+  certificate arrives, a proxy starts forcing https, a hostname moves). The
+  setting wins over the env var, and takes effect on the next script rather than
+  the next restart — `src/server.js` passes it as a getter over a live object.
+
+The dashboard compares the resolved address with the one **it** was loaded from
+on every render, and says so when they disagree (`checkPublicUrl()` in
+`public/app.js`, the banner above the view). That check exists because of one
+incident: a proxy began redirecting http to https, the stored address still said
+http, and a WebSocket handshake does not follow redirects — so the fleet
+reconnected for a day while nothing on screen said why.
+
+`TRUST_PROXY` is the other half. Without it `req.protocol` is the protocol of
+the hop *from the proxy* — plain http — so a server behind a TLS-terminating
+proxy derives `http://host` for a browser that arrived over https. The upgrade
+above covers the deployment that forgot it; it does not excuse leaving it off.
 An `os` field (`linux` | `macos` | `windows`) is derived from the requested
 `platform` so the dashboard can label the command. `steps` is `null` for
 Linux/macOS; for Windows it is the same command split in two —

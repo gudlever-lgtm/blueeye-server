@@ -277,6 +277,12 @@
              t(), so it carries no data-i18n of its own. role="alert" because it
              appears without the user having asked for anything. -->
         <div id="trust-banner" class="trust-banner hidden" role="alert" aria-live="assertive"></div>
+        <!-- The address agents are told to use, checked against the address
+             THIS page was loaded from. Same place and same reasoning as the
+             trust banner above it: a server telling its fleet to use an
+             address that no longer works is not a property of the page you
+             happen to be on. Filled by checkPublicUrl() in app.js. -->
+        <div id="public-url-banner" class="trust-banner hidden" role="alert" aria-live="assertive"></div>
         <p id="view-status" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></p>
         <main id="view" tabindex="-1"></main>
       </div>

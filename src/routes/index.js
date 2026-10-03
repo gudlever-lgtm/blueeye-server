@@ -358,7 +358,12 @@ function createApiRouter({
     // Local user creation with a one-time password: mailer + the auth services
     // used to detect (and refuse under) an active SSO/LDAP setup.
     userMailer, ldapAuth, oidcAuth, samlAuth,
-    publicUrl: (enrollConfig && enrollConfig.publicUrl) || '',
+    // enrollConfig.publicUrl is a getter when the server wires it (Settings can
+    // change the address while it runs); a plain string in tests.
+    publicUrl: (() => {
+      const v = enrollConfig && enrollConfig.publicUrl;
+      return (typeof v === 'function' ? v() : v) || '';
+    })(),
     // An admin's password reset is subject to the same history rule.
     passwordHistory,
     logger,

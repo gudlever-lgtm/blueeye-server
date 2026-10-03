@@ -673,7 +673,9 @@
         var evalBtn = ui.button('secondary', t('diag.evaluate'), { onclick: evaluate });
 
         function say(text, tone) {
-          statusHost.replaceChildren(text ? ui.inlineNote(text, tone || null) : null);
+          // Not replaceChildren(null): that inserts the text "null".
+          if (text) statusHost.replaceChildren(ui.inlineNote(text, tone || null));
+          else statusHost.replaceChildren();
         }
 
         function runRounds() {

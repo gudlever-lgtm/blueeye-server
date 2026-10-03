@@ -8256,6 +8256,12 @@ function getTroubleshootingView() {
     },
     agentName: agentLabel,
     fetchFaults: async (limit, offset) => api(`/api/troubleshooting/faults?limit=${limit}&offset=${offset}`),
+    // "Mark seen". One cause at a time (the alarms behind it, accepted
+    // server-side), or the rows ticked in the fault list — those are findings,
+    // so they go through the findings acceptance every other screen uses.
+    canWrite,
+    ackCause: async (source, id) => api('/api/troubleshooting/ack', { method: 'POST', body: { source, id } }),
+    ackFindings: async (ids) => api('/api/findings/ack', { method: 'POST', body: { ids: ids.map(String) } }),
     blastRadius: async (anchorId) => {
       const radius = await api(`/api/topology/blast-radius/${encodeURIComponent(anchorId)}`);
       return window.TroubleshootingView.pathNodeIds([

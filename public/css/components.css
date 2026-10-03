@@ -143,6 +143,9 @@
   background: var(--surface); border: 1px solid var(--border); border-left: 3px solid var(--border);
   border-radius: var(--r-panel); }
 .ui .stat-card:hover { background: var(--surface-alt); }
+/* A card with nothing behind it is a figure, not a control. */
+.ui .stat-card.is-static { cursor: default; opacity: 1; }
+.ui .stat-card.is-static:hover { background: var(--surface); }
 .ui .stat-card[aria-pressed="true"] { background: var(--accent-weak); border-color: var(--accent); }
 .ui .stat-n { font-size: var(--fs-stat); font-weight: 650; line-height: 1.1; font-variant-numeric: tabular-nums; }
 .ui .stat-l { font-size: var(--fs-xs); color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; }

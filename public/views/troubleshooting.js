@@ -51,6 +51,10 @@
       var stripHost = el('div', {});
       var topoHost = el('div', {});
       var causeHost = el('div', { class: 'panel-stack' });
+      // The deviations are their own zone rather than a tail on the root-cause
+      // stack: the strip's fourth card points at them, and a card that scrolls
+      // to "somewhere inside another panel" is not an answer.
+      var anomHost = el('div', {});
       var faultsHost = el('div', {});
       var timelineHost = el('div', {});
 
@@ -62,7 +66,15 @@
       // A fleet can carry tens of thousands of raw alarms behind its root
       // causes, so this list is opt-in and paged; the overview read never
       // touches it.
-      var faults = { open: !!state.faultsOpen, rows: [], total: 0, loading: false, error: null, loaded: false };
+      var faults = {
+        open: !!state.faultsOpen, rows: [], total: 0, loading: false, error: null, loaded: false,
+        // The rows ticked for "mark seen". Kept here, not on deps.state: a
+        // selection over a page that has been re-read is not the same selection.
+        picked: [],
+      };
+      // Lives across re-draws of the fault panel so ticking a box does not
+      // rebuild (and reset) the table under the reader's hand.
+      var faultBulkHost = el('div', {});
 
       // The two lenses on the estate. The graph answers "what is behind what",
       // which is the question a blast radius is; the list answers "which ones",
@@ -112,7 +124,7 @@
       // of the window spent on two dots and a dotted line, while "9 root
       // causes" sat in a number tile nobody can act on. What is failing and why
       // is the reason somebody opened this tab; the map is how they confirm it.
-      }), toolbarHost, noteHost, stripHost, causeHost, topoHost, faultsHost, timelineHost);
+      }), toolbarHost, noteHost, stripHost, causeHost, anomHost, topoHost, faultsHost, timelineHost);
 
       // ---- Toolbar -----------------------------------------------------------
       var refreshBtn = null;
@@ -139,12 +151,28 @@
       // ---- StatStrip ---------------------------------------------------------
       // The figure is free (it comes off the cluster rows); the rows behind it
       // are not. So the card is the doorway, and opening it is a decision.
+      // Every card on this strip goes somewhere. Three of them used to be
+      // figures drawn as buttons: the reader pressed "Affected devices" and the
+      // page did nothing, which reads as a broken screen rather than as a
+      // number. Each now reveals the zone it counts, and the fourth still opens
+      // the fault list (the figure is free, the rows are not).
+      var ZONE = {
+        affectedDevices: function () { return topoHost; },
+        rootCauses: function () { return causeHost; },
+        anomalies: function () { return anomHost; },
+      };
       function drawStrip() {
         var cards = TV.kpiCards(data.summary);
         stripHost.replaceChildren(ui.statStrip(cards.map(function (c) {
           var tone = !c.value ? undefined
             : (c.key === 'rootCauses' || c.key === 'activeFaults') ? 'crit' : 'warn';
           var card = { value: c.value, label: c.label, title: c.hint, tone: tone };
+          // A zero does not go anywhere: revealing an empty zone is the same
+          // "nothing happened" in a different place.
+          if (ZONE[c.key] && c.value) {
+            card.title = t('tshoot.kpi.goto.' + c.key);
+            card.onclick = function () { ui.revealRegion(ZONE[c.key]().firstChild || ZONE[c.key]()); };
+          }
           // The affected-device figure counts degraded nodes too (reachable,
           // with an open fault on them), so its breakdown has to name them.
           if (c.key === 'affectedDevices' && Number(data.summary && data.summary.devicesDegraded) > 0) {
@@ -343,6 +371,23 @@
         host.replaceChildren(ui.metaXs(t('tshoot.changes.some', { n: changes.length })), ul);
       }
 
+      // "Mark seen" for one cause: the raw findings behind it are accepted
+      // server-side (POST /api/troubleshooting/ack), and a situation moves
+      // open → acknowledged with it. The screen then re-reads, because the
+      // figures at the top are what the operator just changed.
+      function ackCause(model, host) {
+        host.replaceChildren(ui.metaXs(t('tshoot.ack.working')));
+        deps.ackCause(model.source === 'case' ? 'case' : 'cluster',
+          model.source === 'case' ? model.caseId : model.clusterId)
+          .then(function (r) {
+            ui.toast(t('tshoot.ack.done', { acked: (r && r.acked) || 0, n: (r && r.findings) || 0 }), model.cause);
+            load();
+          })
+          .catch(function (e) {
+            host.replaceChildren(ui.inlineNote(t('tshoot.ack.failed', { message: deps.errText(e) }), 'crit'));
+          });
+      }
+
       // WHICH devices a cause affects, by name and as links — the count alone
       // left the reader to find them on the graph.
       function nodeLabel(id) {
@@ -398,6 +443,13 @@
                 fromCase
                   ? { label: t('tshoot.openEvent'), onclick: function () { deps.openEvent(m.caseId); } }
                   : { label: t('tshoot.openSituation'), onclick: function () { deps.openCluster(m.clusterId); } },
+                // "I have seen this" — the screen's unit of work is the cause,
+                // so it accepts the alarms behind it in one action rather than
+                // leaving the operator to tick 86 rows. Operator+, because it
+                // changes what the next reader sees.
+                deps.canWrite && deps.canWrite()
+                  ? { label: t('tshoot.ack'), onclick: function () { ackCause(m, slot); } }
+                  : null,
               ]);
             return el('div', { class: 'ts-cause', 'data-source': m.source },
               el('div', { class: 'ts-cause-head' },
@@ -422,42 +474,41 @@
               slot);
           })));
         }
-        var panels = [ui.panel({
+        causeHost.replaceChildren(ui.panel({
           title: t('tshoot.causes'),
           note: causes.length
             ? t('tshoot.causes.note', { alarms: data.summary.activeFaults, causes: causes.length })
             : null,
           children: children,
-        })];
+        }));
 
         // Baseline deviations ride under the causes: they are the same
-        // question asked of the flows rather than of the alarms.
+        // question asked of the flows rather than of the alarms. Their own
+        // zone, because the strip's fourth card scrolls to it.
         var anoms = data.anomalies || [];
-        if (anoms.length) {
-          panels.push(ui.panel({
-            title: t('tshoot.anoms'),
-            note: t('tshoot.anoms.note'),
-            children: [ui.dataTable({
-              dense: true,
-              columns: [
-                { key: 'pair', label: t('tshoot.anoms.pair') },
-                { key: 'dev', label: t('tshoot.anoms.dev'), width: '170px', num: true },
-                { key: 'since', label: t('tshoot.anoms.since'), width: '190px', time: true },
-              ],
-              rows: anoms.slice(0, 25).map(function (a) {
-                return {
-                  cells: {
-                    pair: el('code', {}, a.linkId),
-                    dev: a.currentVsBaselinePct == null ? '—'
-                      : (a.currentVsBaselinePct > 0 ? '+' : '') + a.currentVsBaselinePct + '%',
-                    since: a.since ? ui.fmt.abs(a.since) : '—',
-                  },
-                };
-              }),
-            })],
-          }));
-        }
-        causeHost.replaceChildren.apply(causeHost, panels);
+        if (!anoms.length) { anomHost.replaceChildren(); return; }
+        anomHost.replaceChildren(ui.panel({
+          title: t('tshoot.anoms'),
+          note: t('tshoot.anoms.note'),
+          children: [ui.dataTable({
+            dense: true,
+            columns: [
+              { key: 'pair', label: t('tshoot.anoms.pair') },
+              { key: 'dev', label: t('tshoot.anoms.dev'), width: '170px', num: true },
+              { key: 'since', label: t('tshoot.anoms.since'), width: '190px', time: true },
+            ],
+            rows: anoms.slice(0, 25).map(function (a) {
+              return {
+                cells: {
+                  pair: el('code', {}, a.linkId),
+                  dev: a.currentVsBaselinePct == null ? '—'
+                    : (a.currentVsBaselinePct > 0 ? '+' : '') + a.currentVsBaselinePct + '%',
+                  since: a.since ? ui.fmt.abs(a.since) : '—',
+                },
+              };
+            }),
+          })],
+        }));
       }
 
       // ---- the raw fault list (opt-in) ---------------------------------------
@@ -496,6 +547,15 @@
         } else {
           children.push(ui.dataTable({
             dense: true,
+            // Operator+ only: a viewer cannot accept an alarm, so they get no
+            // checkbox rather than a checkbox and then a 403.
+            select: deps.canWrite && deps.canWrite() ? {
+              selected: faults.picked,
+              // A purged row has no finding left to accept, and an accepted
+              // one is already seen.
+              isSelectable: function (row) { return !!row.ackable; },
+              onChange: function (keys) { faults.picked = keys; drawFaultBulk(); },
+            } : null,
             columns: [
               { key: 'sev', label: t('tshoot.faults.colSeverity'), width: '110px' },
               { key: 'host', label: t('tshoot.faults.colHost'), width: '220px' },
@@ -506,6 +566,8 @@
             rows: faults.rows.map(function (f) {
               var m = TV.faultRowModel(f, labels);
               return {
+                key: m.findingId,
+                ackable: !m.missing && !m.acked && m.findingId != null,
                 // A fault whose finding retention has already purged still gets
                 // a row — the cluster counts it, so hiding it would make the
                 // "x of y" counter unreachable — dimmed, with nothing invented.
@@ -529,6 +591,8 @@
             }),
           }));
         }
+        children.unshift(faultBulkHost);
+        drawFaultBulk();
         faultsHost.replaceChildren(ui.panel({
           title: t('tshoot.faults.title'),
           note: t(progress.key, progress.params),
@@ -540,6 +604,42 @@
             })
             : null,
         }));
+      }
+
+      // "Mark seen" over the ticked rows. The alarms are findings, so this is
+      // the same acceptance the Analysis screen does — one request, not one per
+      // row: a cause can carry thousands.
+      function drawFaultBulk() {
+        var picked = faults.picked || [];
+        if (!picked.length || !(deps.canWrite && deps.canWrite())) {
+          faultBulkHost.replaceChildren();
+          return;
+        }
+        var msg = ui.meta('');
+        var go = ui.button('primary', t('tshoot.faults.ackSelected', { n: picked.length }), {
+          onclick: function () {
+            go.disabled = true;
+            msg.textContent = t('tshoot.ack.working');
+            deps.ackFindings(picked)
+              .then(function (r) {
+                ui.toast(t('tshoot.faults.ackDone', { n: (r && r.acked) || 0 }));
+                faults.picked = [];
+                // The accepted rows carry a badge now, and the figures above
+                // them have moved: re-read rather than patch the table.
+                load();
+              })
+              .catch(function (e) {
+                go.disabled = false;
+                msg.replaceWith(ui.inlineNote(t('tshoot.ack.failed', { message: deps.errText(e) }), 'crit'));
+              });
+          },
+        });
+        faultBulkHost.replaceChildren(el('div', { class: 'panel-body' }, ui.toolbar({
+          filters: [ui.filter('', msg)],
+          actions: [go, ui.button('ghost', t('tshoot.faults.ackClear'), {
+            onclick: function () { faults.picked = []; drawFaults(); },
+          })],
+        })));
       }
 
       // One page at a time, appended. `offset` is the number of rows already
@@ -633,6 +733,7 @@
             faults.total = 0;
             faults.loaded = false;
             faults.error = null;
+            faults.picked = [];
             drawStrip();
             drawTopology();
             drawRootCauses();
@@ -654,6 +755,7 @@
           .catch(function (e) {
             stripHost.replaceChildren();
             causeHost.replaceChildren();
+            anomHost.replaceChildren();
             timelineHost.replaceChildren();
             faults.open = false;
             drawFaults();

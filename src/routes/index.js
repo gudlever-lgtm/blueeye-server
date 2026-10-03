@@ -423,6 +423,7 @@ function createApiRouter({
         eventCasesRepo,
         logger,
       }),
+      auditLogger,
     }));
   }
   // Symptom-first diagnosis — "describe the problem" → a plan → verdicts.

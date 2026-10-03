@@ -394,14 +394,21 @@
     }
 
     // ---- StatStrip -----------------------------------------------------------
+    // A card with no onclick is a FIGURE, not a control: it keeps the card look
+    // but loses the hover, the focus stop and the pressed state, so nobody
+    // clicks it twice waiting for something to happen. (That is what the
+    // Troubleshooting strip did: four cards that looked alike, one of which
+    // was wired.)
     function statStrip(cards) {
       return el('div', { class: 'statstrip' }, cards.filter(Boolean).map(function (c) {
+        var live = typeof c.onclick === 'function';
         return el('button', {
-          class: 'stat-card' + (c.tone ? ' ' + c.tone : ''),
+          class: 'stat-card' + (c.tone ? ' ' + c.tone : '') + (live ? '' : ' is-static'),
           type: 'button',
-          'aria-pressed': String(!!c.active),
+          disabled: live ? null : 'disabled',
+          'aria-pressed': live ? String(!!c.active) : null,
           title: c.title || null,
-          onclick: c.onclick,
+          onclick: c.onclick || null,
         }, el('span', { class: 'stat-n' }, String(c.value)), el('span', { class: 'stat-l' }, c.label));
       }));
     }

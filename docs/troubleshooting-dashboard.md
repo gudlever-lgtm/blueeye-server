@@ -130,6 +130,41 @@ deviation). Paged, and fetched **only when the operator asks to list them**.
 Same RBAC and the same source as the overview, so this widens nothing: it is the
 detail of a number the overview already shows.
 
+### `POST /api/troubleshooting/ack` — operator+
+
+"I have seen this", for ONE root cause. The screen's unit of work is the cause,
+not the single alarm: somebody who has read *"sw-core-01 stopped answering"* has
+seen all 86 alarms behind it, and ticking them one at a time is not an action
+anybody performs.
+
+```jsonc
+// request
+{ "source": "cluster", "id": 12 }        // or { "source": "case", "id": 41 }
+// response
+{ "source": "cluster", "id": 12, "findings": 86, "acked": 86, "cluster": true }
+```
+
+What it does:
+
+* the **raw findings** behind the cause — exactly the rows `GET /faults` lists
+  under it — are accepted, through the same `FindingStore.ackMany({ ids })` the
+  Analysis screen uses. `acked` counts what THIS call changed, so acknowledging
+  twice reports `0` the second time rather than restating the total;
+* a **situation** also moves `open → acknowledged`, because that status is what
+  the Situations screen reads (`cluster: true` says it moved). Best-effort: a
+  situation somebody else already acknowledged does not fail the call;
+* an **event case keeps its status**. "Seen" is not "resolved", and resolving an
+  event is a transition with its own rules on the event screen.
+
+Audited (`analysis` / `troubleshooting_cause_ack`). Status codes: `200` ·
+`400` bad body (`source` must be `cluster`|`case`, `id` a positive integer) ·
+`401` unauthenticated · `403` viewer · `404` no such live cause ·
+`500` unexpected fault · `503` service not wired.
+
+The fault list itself has no endpoint of its own for this: the rows ticked there
+are findings, so the dashboard posts them to `POST /api/findings/ack { ids }`,
+the acceptance every other screen uses.
+
 **Order** is stable, which is what makes `offset` stable across pages: the live
 clusters by newest activity with members in the order the correlator grouped
 them, then the open cases by newest activity with their findings oldest first

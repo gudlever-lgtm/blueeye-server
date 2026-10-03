@@ -27,9 +27,10 @@ const FAULT_SOURCES = ['cluster', 'case'];
 // Read-only: nothing here pushes an agent command, so no signed command and no
 // audit write. Adding an action later means an Ed25519-signed command over
 // agentCommander plus a hash-chained audit entry, as the evidence path does.
-function createTroubleshootingRouter({ overviewService = null } = {}) {
+function createTroubleshootingRouter({ overviewService = null, auditLogger = null } = {}) {
   const router = express.Router();
   const reader = requireRole(ROLES.VIEWER, ROLES.OPERATOR, ROLES.ADMIN);
+  const writer = requireRole(ROLES.OPERATOR, ROLES.ADMIN);
 
   // GET /api/troubleshooting/overview?minutes=&limit=
   //   400 invalid query · 401 unauthenticated · 403 no recognised role
@@ -146,6 +147,51 @@ function createTroubleshootingRouter({ overviewService = null } = {}) {
     });
 
     return res.json(page);
+  }));
+
+  // POST /api/troubleshooting/ack — "I have seen this", for ONE root cause.
+  //   { source: 'cluster'|'case', id }
+  //
+  // The screen's unit of work is the cause, so this is the only write on it:
+  // the raw findings behind the cause are accepted (the same rows GET /faults
+  // lists under it), and a situation is moved open → acknowledged as well,
+  // because that status is what the Situations screen reads. An event case
+  // keeps its status — "seen" is not "resolved", and resolving an event is a
+  // transition with its own rules on the event screen.
+  //
+  // Operator+, audited: it changes what the next reader sees.
+  //
+  //   400 bad body · 401 unauthenticated · 403 viewer · 404 no such live cause
+  //   503 when the aggregation service is not wired · 500 on an unexpected fault
+  router.post('/ack', requireAuth, writer, asyncHandler(async (req, res) => {
+    if (!overviewService || typeof overviewService.ackCause !== 'function') {
+      return res.status(503).json({ error: 'Troubleshooting overview is not available' });
+    }
+    const body = req.body || {};
+    const source = String(body.source || '');
+    if (!FAULT_SOURCES.includes(source)) {
+      return res.status(400).json({ error: `source must be one of ${FAULT_SOURCES.join(', ')}` });
+    }
+    const id = Number(body.id);
+    if (!Number.isInteger(id) || id < 1) {
+      return res.status(400).json({ error: 'id must be a positive integer' });
+    }
+
+    const result = await overviewService.ackCause({
+      source, id, by: (req.user && req.user.id) || null,
+    });
+    if (!result) return res.status(404).json({ error: 'No such live root cause' });
+
+    if (auditLogger) {
+      await auditLogger.record(req, {
+        category: 'analysis', action: 'troubleshooting_cause_ack',
+        target: `${source}:${id}`,
+        detail: `accepted ${result.acked} of ${result.findings} finding(s)`
+          + (result.cluster ? ' · situation open→acknowledged' : ''),
+      });
+    }
+
+    return res.json(result);
   }));
 
   return router;

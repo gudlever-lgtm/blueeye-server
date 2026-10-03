@@ -140,9 +140,10 @@ const routes = (over = {}) => ({
 
 async function openMonitor(t, over = {}) {
   const ctx = await boot(t, routes(over));
-  const nav = ctx.doc.querySelector('.tabs button[data-view="serviceAssurance"][data-sa-tab="monitors"]');
+  const nav = ctx.doc.querySelector('.tabs button[data-view="serviceAssurance"]');
   assert.ok(nav, 'no Monitors nav button');
   await click(nav, 250);
+  await click(ctx.doc.querySelector('#view .subtabs .subtab[data-tab="monitors"]'), 250);
   const row = ctx.doc.querySelector('#view table.data-table tbody tr');
   assert.ok(row, 'no monitor row');
   await click(row, 300);

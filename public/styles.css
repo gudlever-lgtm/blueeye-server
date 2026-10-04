@@ -801,6 +801,42 @@ tr:last-child td { border-bottom: 0; }
 /* License feature matrix: highlight the customer's active plan column; tick
    marks centre under each plan. .tablewrap lets wide grids scroll on mobile. */
 .tablewrap { overflow-x: auto; }
+
+/* Horizontal overflow guard.
+ *
+ * A table is as wide as its data; a phone is 360px wide. The loser was the
+ * PAGE: one Schedules row with a long description made the document wider than
+ * the viewport, so the sidebar, the topbar and the left edge of every other
+ * card scrolled away with it — the screenshot of a card whose first column is
+ * off-screen is this, not a broken card.
+ *
+ * `.tablewrap` already solved it, for the sixteen call sites that remembered to
+ * use it. The other seventy did not, and a rule nobody can see is a rule that
+ * is already broken. So the wrapper is applied to whatever is rendered —
+ * `startTableScrollGuard()` in app.js — and a screen written tomorrow is
+ * covered without knowing this exists.
+ *
+ * Deliberately styleless: it adds a scroll axis and nothing else, so each table
+ * keeps the frame its own screen gave it. `min-width: 100%` on the table stops
+ * a narrow table from shrinking to its content inside the box.
+ */
+.tablescroll { overflow-x: auto; max-width: 100%; }
+.tablescroll > table { min-width: 100%; }
+/* The data-card frame reset, for the table one level deeper than it was. */
+.data-card > .tablescroll > table { border: 0; border-radius: 0; box-shadow: none; }
+
+/* The other half of "out of bounds": not a table but one long unbroken string —
+ * a URL, a certificate CN, a selector — in a cell or a card. It cannot wrap at
+ * a space it does not have, so it pushes its column instead.
+ *
+ * `break-word`, NOT `anywhere`, and the difference is the whole rule. `anywhere`
+ * also counts toward the table's min-content width, which means a table can
+ * always be squeezed to one letter per column — so instead of scrolling, the
+ * Schedules table rendered "APPLICATION" as a vertical stack of letters. Only a
+ * word that genuinely does not fit breaks here; everything else keeps its width
+ * and the scroll box above does the work.
+ */
+td, th, .card p, .card li, .data-card p { overflow-wrap: break-word; }
 table.matrix td:not(:first-child), table.matrix th:not(:first-child) { text-align: center; }
 table.matrix .active { background: var(--accent-weak); font-weight: 600; }
 

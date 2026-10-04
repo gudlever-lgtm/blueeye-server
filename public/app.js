@@ -106,6 +106,17 @@ const el = (tag, attrs = {}, ...kids) => {
 };
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
+// Wide tables scroll inside their own box instead of pushing the page sideways
+// on a phone. The guard itself lives in tableScroll.js, loaded before this file;
+// it watches everything rendered from here on, so no screen has to remember it.
+if (window.tableScroll) {
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', () => window.tableScroll.startTableScrollGuard());
+  } else {
+    window.tableScroll.startTableScrollGuard();
+  }
+}
+
 // Capture a federated (OIDC/SAML) sign-in BEFORE reading the stored session: the
 // /auth/*/callback redirects back with the freshly-minted JWT in the URL FRAGMENT
 // (#sso_token=…&role=…&email=…) — fragments never reach the server, so the token

@@ -1025,10 +1025,27 @@
             el('td', {}, test.history && test.history.success_rate !== null
               ? Math.round(test.history.success_rate * 100) + '%' : '—'),
             el('td', {}, ms(test.history && test.history.avg_duration_ms)),
-            el('td', {}, isOperator() ? el('button', {
+            el('td', { class: 'sa-actions' }, isOperator() ? el('button', {
               class: 'ghost small',
               onclick: function (e) { e.stopPropagation(); runTest(test); },
-            }, t('sa.test.run')) : null));
+            }, t('sa.test.run')) : null,
+            // Delete from the list, not only from the detail page. The list is
+            // where duplicates are visible as duplicates, so it is where
+            // somebody clears them up.
+            //
+            // The journeys a test belongs to are not in the list payload, and
+            // that warning is the whole point of the confirm, so the row reads
+            // the test first and only then asks. A failed read falls back to
+            // the list row — the server still refuses what it should refuse.
+            isOperator() ? el('button', {
+              class: 'ghost small danger',
+              onclick: function (e) {
+                e.stopPropagation();
+                api(API + '/tests/' + test.id)
+                  .then(function (full) { deleteTest(full); })
+                  .catch(function () { deleteTest(test); });
+              },
+            }, t('sa.delete')) : null));
         });
         mount(body, head, recordingsPanel(recordings), el('table', { class: 'data-table' },
           el('thead', {}, el('tr', {},

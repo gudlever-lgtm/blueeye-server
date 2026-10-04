@@ -4116,6 +4116,9 @@ function sortableTable(columns, opts = {}) {
 // ---- Analysis (findings + AI assistant) ----------------------------------
 // hostId of a finding is the agent id (the analysis pipeline keys on it).
 const findingsState = { hostId: '', severity: '', metric: '', sort: { key: 'time', dir: 'desc' } };
+// Explanation vs. Evidence: a sidebar entry each, and an address each
+// (/analysis, /analysis/evidence). Was a lens switch in the topbar.
+let analysisTab = 'explain';
 
 // Authenticated download of a server export (CSV/JSON) → triggers a file save.
 async function downloadExport(resource, format, params = {}) {
@@ -4165,6 +4168,7 @@ function getAnalysisView() {
     },
     askHost: (question, hostId) => api('/api/assistant/explain', { method: 'POST', body: { question, hostId: hostId || undefined } }),
     state: findingsState,
+    mode: () => analysisTab,
     isAdmin: () => isAdmin(),
     // "I have seen this host's problems and I accept them." Scoped to the
     // filters the screen is showing, so it accepts what the row says and
@@ -8164,6 +8168,9 @@ function tshootTopologySvg(topology, { onSelect, layerFilter } = {}) {
 // The topology SVG, the timeline rows and the brush geometry stay here: they
 // are their own components, and two of them are shared with other screens.
 let troubleshootingView = null;
+// Graph vs. List: a sidebar entry each, and an address each (/troubleshooting,
+// /troubleshooting/list). Was a lens switch in the topbar.
+let troubleshootingTab = 'graph';
 const troubleshootingState = {};
 
 // The event timeline's drag-to-brush, as an object the view can paint into: one
@@ -8233,6 +8240,7 @@ function getTroubleshootingView() {
   if (typeof window === 'undefined' || !window.TroubleshootingPage || !ui) return null;
   troubleshootingView = window.TroubleshootingPage.create({
     el, t, ui, errText, openAgent, openCluster, gotoView,
+    mode: () => troubleshootingTab,
     // A root cause from a single host's open event case opens that event.
     openEvent,
     onContext: writeContextParams,
@@ -20611,6 +20619,8 @@ function routeTabFor(view) {
     case 'guide': return guideTrack;
     case 'fleet': return fleetSet;
     case 'map': return sitesTab;
+    case 'findings': return analysisTab;
+    case 'troubleshooting': return troubleshootingTab;
     case 'reporting': return reportingState.section;
     case 'docs': return docsTopic;
     default: return null;
@@ -20637,6 +20647,8 @@ function setRouteTab(view, tab) {
   else if (view === 'guide') guideTrack = tab;
   else if (view === 'fleet') fleetSet = tab;
   else if (view === 'map') sitesTab = tab;
+  else if (view === 'findings') analysisTab = tab;
+  else if (view === 'troubleshooting') troubleshootingTab = tab;
   else if (view === 'reporting') reportingState.section = tab;
   else if (view === 'docs') docsTopic = tab;
 }
@@ -20875,7 +20887,8 @@ function syncCrumb() {
   const tab = routeTabFor(currentView);
   const btn = [...document.querySelectorAll(NAV_BUTTONS)].find((b) => b.dataset.view === marks
     && (!b.dataset.saTab || b.dataset.saTab === tab)
-    && (!b.dataset.guide || b.dataset.guide === tab))
+    && (!b.dataset.guide || b.dataset.guide === tab)
+    && (!b.dataset.tab || b.dataset.tab === tab))
     || document.querySelector(`[data-view="${marks}"]`);
   const group = btn && btn.closest('.nav-group');
   const groupLabel = group && group.querySelector('.nav-group-label');
@@ -21130,7 +21143,8 @@ async function render({ silent = false } = {}) {
     const marks = DETAIL_OF[currentView] || SECTION_OF[currentView] || currentView;
     const active = b.dataset.view === marks
       && (!b.dataset.saTab || b.dataset.saTab === serviceAssuranceTab)
-      && (!b.dataset.guide || b.dataset.guide === guideTrack);
+      && (!b.dataset.guide || b.dataset.guide === guideTrack)
+      && (!b.dataset.tab || b.dataset.tab === routeTabFor(marks));
     b.classList.toggle('active', active);
     // The section you are in is open. Groups start collapsed and the collapsed
     // set is remembered per browser, so without this a deep link (or a reload
@@ -21400,6 +21414,10 @@ for (const b of document.querySelectorAll(NAV_BUTTONS)) {
     // opens where the operator clicked rather than on its default tab.
     if (b.dataset.saTab) serviceAssuranceTab = b.dataset.saTab;
     if (b.dataset.guide) guideTrack = b.dataset.guide;
+    // The general form of the two lines above: a nav entry names the sub-tab
+    // of the view it opens. Analysis (Explanation / Evidence) and
+    // Troubleshooting (Graph / List) are two rail entries each.
+    if (b.dataset.tab) setRouteTab(b.dataset.view, b.dataset.tab);
     currentView = b.dataset.view; render();
   });
 }

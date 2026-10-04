@@ -162,25 +162,34 @@ test('Analysis is a ListPage: PageHeader, StatStrip, Toolbar, DataTable, no bann
   assert.match(stats[1].textContent, /2/);
 });
 
-test('the ModeSwitch swaps the explanation for the numbers it rests on', async (t) => {
-  const { doc, window, log } = boot({ t, routes: SESSION() });
-  await settle();
-  const head = (doc) => [...doc.querySelectorAll('#view .panel-ui table.dt thead th')].map((th) => th.textContent.trim());
-  assert.ok(head(doc).includes('Explanation'), `no explanation column: ${head(doc).join(', ')}`);
-  const before = log.length;
+const head = (doc) => [...doc.querySelectorAll('#view .panel-ui table.dt thead th')].map((th) => th.textContent.trim());
 
-  const evidence = doc.querySelector('#topbar-mode .mode-switch .mode-btn[data-mode="evidence"]');
-  assert.ok(evidence, 'no mode switch in the topbar');
-  evidence.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+test('Evidence is a screen of its own, reached from the rail', async (t) => {
+  const { doc, window } = boot({ t, routes: SESSION() });
+  await settle();
+  assert.ok(head(doc).includes('Explanation'), `no explanation column: ${head(doc).join(', ')}`);
+
+  const entry = doc.querySelector('.tabs button[data-view="findings"][data-tab="evidence"]');
+  assert.ok(entry, 'no Evidence entry in the rail');
+  entry.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
   await settle();
 
   const cols = head(doc);
   assert.ok(!cols.includes('Explanation'), 'the explanation column stayed');
   assert.ok(cols.includes('Baseline') && cols.includes('Observed'),
     `the numbers are not on the table: ${cols.join(', ')}`);
-  // The rows already carried them: a lens that refetches is a tab wearing the
-  // wrong clothes.
-  assert.equal(log.length, before, 'switching the lens went back to the server');
+  // A screen of its own has an address of its own, or it cannot be linked to
+  // and a reload lands somewhere else.
+  assert.equal(window.location.pathname, '/analysis/evidence');
+});
+
+test('/analysis/evidence opens in Evidence, so the link and the reload hold', async (t) => {
+  const { doc } = boot({ t, routes: SESSION(), url: 'http://server.test/analysis/evidence' });
+  await settle();
+  const cols = head(doc);
+  assert.ok(cols.includes('Baseline') && cols.includes('Observed'),
+    `the address did not open the numbers: ${cols.join(', ')}`);
+  assert.ok(!cols.includes('Explanation'), 'the explanation column came with it');
 });
 
 test('the StatStrip filters, and the request carries the filter', async (t) => {
@@ -342,19 +351,18 @@ test('Accept scopes to that host and the screen re-reads', async (t) => {
   assert.match(call.url, /hostId=7/);
 });
 
-test('the lens switch sits in the sticky topbar and does not outlive the screen', async (t) => {
-  const { doc, window } = boot({ t, routes: SESSION() });
+test('Analysis carries no lens switch — the rail carries the two entries', async (t) => {
+  const { doc } = boot({ t, routes: SESSION() });
   await settle();
+  // The switch redrew a list that sits under the stat strip, the toolbar and
+  // the AI panel: from the topbar it was a control whose effect was off-screen.
+  // Two rail entries and two addresses replace it.
   const slot = doc.querySelector('#topbar-mode');
-  assert.ok(slot, 'the topbar has no slot for the lens switch');
-  assert.ok(slot.querySelector('.mode-btn[data-mode="evidence"]'), 'Analysis did not fill it');
-  // Not in the page body: from down in the rows, a switch up in the PageHeader
-  // is a control the reader cannot reach OR see the effect of.
-  assert.equal(doc.querySelectorAll('#view .mode-switch').length, 0, 'the switch is still in the page');
+  assert.ok(slot, 'the topbar lost its mode slot');
+  assert.equal(slot.children.length, 0, 'Analysis still fills the topbar mode slot');
+  assert.equal(doc.querySelectorAll('#view .mode-switch').length, 0, 'the switch is in the page');
 
-  // A screen with one lens carries none — "Explanation/Evidence" on a page with
-  // no findings table would be a control that does nothing.
-  doc.querySelector('.tabs button[data-view="enrollment"]').dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
-  await settle();
-  assert.equal(slot.children.length, 0, 'the previous screen\'s switch is still in the topbar');
+  const rail = [...doc.querySelectorAll('.tabs button[data-view="findings"]')]
+    .map((b) => b.dataset.tab);
+  assert.deepEqual(rail, ['explain', 'evidence'], `the rail does not carry both: ${rail.join(', ')}`);
 });

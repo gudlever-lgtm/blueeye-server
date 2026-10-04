@@ -44,7 +44,15 @@
     // sentence is what most people open the page for; evidence is the same rows
     // with the numbers the sentence rests on, for the reader who wants to check
     // the verdict rather than take it.
+    //
+    // They are two SCREENS now, not a switch on one. `deps.mode()` reports
+    // which address the reader is on; the fallback keeps the module usable on
+    // its own (the kitchen sink, and the tests that build it with no router).
     var MODES = ['explain', 'evidence'];
+    function currentMode() {
+      var m = deps.mode ? deps.mode() : null;
+      return MODES.indexOf(m) >= 0 ? m : ui.storedMode('analysis', MODES, 'explain');
+    }
 
     function view() {
       var state = deps.state;
@@ -58,9 +66,8 @@
       // screen titled "what is wrong, and where". `state.showAccepted` is
       // undefined on a first visit, which is the scoped reading.
       var openOnly = function () { return !state.showAccepted; };
-      // Remembered per screen (ui.storedMode), so the reader who works in the
-      // numbers does not re-pick them on every visit.
-      var mode = ui.storedMode('analysis', MODES, 'explain');
+      // Which lens, from the address (/analysis vs /analysis/evidence).
+      var mode = currentMode();
       var root2 = ui.page();
       var stripHost = el('div', {});
       var toolbarHost = el('div', {});
@@ -85,22 +92,11 @@
         actions: deps.headerActions(),
       }), stripHost, toolbarHost, aiHost, overviewHost, listHost, breakdownHost);
 
-      // The lens switch goes in the TOPBAR, beside the brand. The list it
-      // re-draws sits under the stat strip, the toolbar and the AI panel, so
-      // from the PageHeader it was a control whose effect was off-screen —
-      // press it and the page looked unchanged. The topbar is sticky, so the
-      // switch is still there when the reader is down in the rows.
-      ui.headerMode({
-        label: t('mode.label'),
-        store: 'analysis',
-        value: mode,
-        items: [
-          { key: 'explain', label: t('mode.explanation'), icon: 'explain', title: t('mode.explanationHint') },
-          { key: 'evidence', label: t('mode.evidence'), icon: 'evidence', title: t('mode.evidenceHint') },
-        ],
-        onchange: function (key) { mode = key; drawList(); },
-        reveal: function () { return listHost.firstChild; },
-      });
+      // No lens switch in the topbar any more. It redrew a list that sits under
+      // the stat strip, the toolbar and the AI panel — pressing it from up
+      // there looked like nothing happened. Explanation and Evidence are two
+      // entries in the rail and two addresses, so the reader lands on the one
+      // they picked and can link to it.
 
       // ---- AI, where the picture is ------------------------------------------
       // The assistant used to be a raw <input> and a .small button bolted onto

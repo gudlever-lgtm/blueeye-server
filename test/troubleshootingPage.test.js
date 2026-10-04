@@ -122,25 +122,46 @@ test('Troubleshooting is a DashboardPage: PageHeader, Toolbar, StatStrip, Panels
   assert.equal(causes(doc).length, 2);
 });
 
-test('the ModeSwitch draws the topology as a table, from the same read', async (t) => {
-  const { doc, window, log } = boot({ t, routes: SESSION() });
-  await settle();
-  const topoPanel = () => [...doc.querySelectorAll('#view .panel-ui')]
-    .find((p) => /Topology/i.test(p.querySelector('.panel-head') ? p.querySelector('.panel-head').textContent : ''));
-  assert.ok(topoPanel().querySelector('svg'), 'the graph is not the default lens');
-  const before = log.length;
+const topoPanel = (doc) => [...doc.querySelectorAll('#view .panel-ui')]
+  .find((p) => /Topology/i.test(p.querySelector('.panel-head') ? p.querySelector('.panel-head').textContent : ''));
 
-  const list = doc.querySelector('#topbar-mode .mode-switch .mode-btn[data-mode="list"]');
-  assert.ok(list, 'no mode switch in the page header');
-  list.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+test('the list is a screen of its own, reached from the rail', async (t) => {
+  const { doc, window } = boot({ t, routes: SESSION() });
+  await settle();
+  assert.ok(topoPanel(doc).querySelector('svg'), 'the graph is not what /troubleshooting opens');
+
+  const entry = doc.querySelector('.tabs button[data-view="troubleshooting"][data-tab="list"]');
+  assert.ok(entry, 'no list entry in the rail');
+  entry.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
   await settle();
 
-  const panel = topoPanel();
+  const panel = topoPanel(doc);
   assert.equal(panel.querySelectorAll('svg').length, 0, 'the graph is still laid out off screen');
-  const head = [...panel.querySelectorAll('table.dt thead th')].map((th) => th.textContent.trim());
-  assert.ok(head.length, 'no table in the list lens');
-  // Same /overview payload, no second call.
-  assert.equal(log.length, before, 'switching the lens went back to the server');
+  assert.ok([...panel.querySelectorAll('table.dt thead th')].length, 'no table on the list screen');
+  // A screen of its own has an address of its own, or it cannot be linked to
+  // and a reload lands somewhere else.
+  assert.equal(window.location.pathname, '/troubleshooting/list');
+});
+
+test('/troubleshooting/list opens in the table, so the link and the reload hold', async (t) => {
+  const { doc } = boot({ t, routes: SESSION(), url: 'http://server.test/troubleshooting/list' });
+  await settle();
+  const panel = topoPanel(doc);
+  assert.equal(panel.querySelectorAll('svg').length, 0, 'the address drew the graph');
+  assert.ok([...panel.querySelectorAll('table.dt thead th')].length, 'the address drew no table');
+});
+
+test('Troubleshooting carries no lens switch — the rail carries the two entries', async (t) => {
+  const { doc } = boot({ t, routes: SESSION() });
+  await settle();
+  const slot = doc.querySelector('#topbar-mode');
+  assert.ok(slot, 'the topbar lost its mode slot');
+  assert.equal(slot.children.length, 0, 'Troubleshooting still fills the topbar mode slot');
+  assert.equal(doc.querySelectorAll('#view .mode-switch').length, 0, 'the switch is in the page');
+
+  const rail = [...doc.querySelectorAll('.tabs button[data-view="troubleshooting"]')]
+    .map((b) => b.dataset.tab);
+  assert.deepEqual(rail, ['graph', 'list'], `the rail does not carry both: ${rail.join(', ')}`);
 });
 
 test('the fault list is opt-in: nothing is fetched until the card is clicked', async (t) => {

@@ -3507,6 +3507,7 @@
       'nav.view.flows': 'Flows',
       'nav.view.topology': 'Topology',
       'nav.view.troubleshooting': 'Troubleshooting',
+      'nav.view.troubleshootingList': 'Troubleshooting list',
       'nav.view.diagnose': 'Diagnose',
       'nav.view.deviceLog': 'Device log',
       // Settings -> SNMP communities. A named credential, assigned to the
@@ -4298,6 +4299,7 @@
       'diag.info.p4': 'Reading a plan is viewer+. Running its tests and evaluating them are operator+, because one makes the network do something and the other can send context to a third party. Creation, runs and evaluations are written to the hash-chained audit log.',
       'nav.view.investigation': 'Investigate',
       'nav.view.findings': 'Analysis',
+      'nav.view.evidence': 'Evidence',
       'nav.view.events': 'Events',
       'nav.view.clusters': 'Situations',
       'nav.view.reporting': 'Reporting',
@@ -9270,6 +9272,7 @@
       'nav.view.flows': "Flows",
       'nav.view.topology': "Topologi",
       'nav.view.troubleshooting': "Fejlfinding",
+      'nav.view.troubleshootingList': "Fejlfindingsliste",
       'nav.view.diagnose': 'Diagnosticér',
       'nav.view.deviceLog': 'Enhedslog',
       // Indstillinger -> SNMP-communities. En navngivet legitimation, tildelt de
@@ -10055,6 +10058,7 @@
       'diag.info.p4': 'At læse en plan er viewer+. At køre dens tests og vurdere dem er operator+, fordi det ene får netværket til at gøre noget, og det andet kan sende kontekst til en tredjepart. Oprettelse, kørsler og vurderinger skrives til den hash-kædede audit-log.',
       'nav.view.investigation': "Undersøg",
       'nav.view.findings': "Analyse",
+      'nav.view.evidence': "Evidens",
       'nav.view.events': "Hændelser",
       'nav.view.clusters': "Situationer",
       'nav.view.reporting': "Rapportering",

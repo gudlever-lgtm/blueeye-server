@@ -64,7 +64,8 @@ test('routes: the bare root is Changes, and an unknown address matches nothing',
   assert.equal(Routes.match('/').view, Routes.HOME);
   assert.equal(Routes.match('/index.html').view, Routes.HOME);
   assert.equal(Routes.match('/changes/').view, 'changes', 'a trailing slash is the same screen');
-  for (const bad of ['/nope', '/agents/abc', '/probes/nope', '/agents/1/2', '/ui-preview', '/ui-preview/changes']) {
+  for (const bad of ['/nope', '/agents/abc', '/probes/nope', '/agents/1/2', '/ui-preview', '/ui-preview/changes',
+    '/analysis/nope', '/troubleshooting/nope']) {
     assert.equal(Routes.match(bad), null, `${bad} should match nothing`);
     assert.equal(Routes.isAppPath(bad), false, bad);
   }
@@ -78,7 +79,8 @@ test('routes: a query string or a fragment does not change which screen an addre
 // ---------------------------------------------------------------- the server
 test('a navigation to an app path is answered 200 with the version-stamped shell', async () => {
   const version = require('../package.json').version;
-  for (const p of ['/', '/changes', '/probes/connection', '/agents/12', '/settings/retention', '/ui-kitchen-sink']) {
+  for (const p of ['/', '/changes', '/probes/connection', '/agents/12', '/settings/retention', '/ui-kitchen-sink',
+    '/analysis', '/analysis/evidence', '/troubleshooting', '/troubleshooting/list']) {
     const res = await navigate(p);
     assert.equal(res.status, 200, `${p} → ${res.status}`);
     assert.match(res.headers['content-type'], /text\/html/, p);
@@ -89,7 +91,8 @@ test('a navigation to an app path is answered 200 with the version-stamped shell
 });
 
 test('a navigation to an unknown address is answered 404 with the SAME shell', async () => {
-  for (const p of ['/nope', '/agents/abc', '/ui-preview/changes', '/deep/unknown/path']) {
+  for (const p of ['/nope', '/agents/abc', '/ui-preview/changes', '/deep/unknown/path',
+    '/analysis/nope', '/troubleshooting/nope']) {
     const res = await navigate(p);
     assert.equal(res.status, 404, `${p} → ${res.status}`);
     assert.match(res.headers['content-type'], /text\/html/, p);

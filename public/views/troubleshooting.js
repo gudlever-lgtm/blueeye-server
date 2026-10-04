@@ -80,35 +80,22 @@
       // which is the question a blast radius is; the list answers "which ones",
       // which a picture is bad at — two sites 40 km apart overlap on a map and
       // nothing sorts a dot. Same `data.topology`, no second read.
-      // Remembered per screen, so an operator who works in the table is not
-      // handed the graph again on every visit.
+      // They are two SCREENS now, not a switch on one: each is its own entry in
+      // the rail and its own address, so an operator who works in the table
+      // lands in the table and can link to it. `deps.mode()` reports which
+      // address this is; the fallback keeps the module usable on its own (the
+      // kitchen sink, and the tests that build it with no router).
       var MODES = ['graph', 'list'];
-      var mode = ui.storedMode('troubleshooting', MODES, 'graph');
+      var mode = (function () {
+        var m = deps.mode ? deps.mode() : null;
+        return MODES.indexOf(m) >= 0 ? m : ui.storedMode('troubleshooting', MODES, 'graph');
+      })();
+      // The graph holds an SVG and a selection. On the list address there is no
+      // graph to hold, and a stale reference is what lets a redraw write into a
+      // node that is no longer in the document.
+      if (mode !== 'graph') graphEl = null;
 
       var info = deps.help();
-      // The lens switch lives in the TOPBAR, beside the brand: the topology it
-      // re-draws sits under the toolbar, the note, the stat strip and the
-      // root-cause panels, so from the PageHeader the reader pressed a control
-      // whose effect was a screen below the fold. The topbar is sticky, so the
-      // switch is still reachable from down there.
-      ui.headerMode({
-        label: t('mode.label'),
-        store: 'troubleshooting',
-        value: mode,
-        items: [
-          { key: 'graph', label: t('mode.graph'), icon: 'graph', title: t('mode.graphHint') },
-          { key: 'list', label: t('mode.list'), icon: 'list', title: t('mode.listHint') },
-        ],
-        onchange: function (key) {
-          mode = key;
-          // The graph holds an SVG and a selection; dropping the reference
-          // when it leaves the page is what stops a redraw writing into a
-          // node that is no longer in the document.
-          if (mode !== 'graph') graphEl = null;
-          if (data) drawTopology();
-        },
-        reveal: function () { return topoHost.firstChild; },
-      });
       page.append(ui.pageHeader({
         title: t('tshoot.title'),
         lead: info.lead,

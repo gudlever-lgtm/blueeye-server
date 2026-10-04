@@ -48,7 +48,10 @@
     diagnose: { path: '/diagnose' },
     deviceLog: { path: '/device-log' },
     snmpDevice: { path: '/snmp-devices', param: true },
-    troubleshooting: { path: '/troubleshooting' },
+    // Graph and List are two readings of the same topology, and each is a
+    // sidebar entry of its own — so each needs an address. The tab carries
+    // which reading, the way Sites carries map vs. register.
+    troubleshooting: { path: '/troubleshooting', tabs: ['graph', 'list'], tabKey: 'troubleshootingTab' },
     investigation: { path: '/investigate' },
 
     serviceAssurance: {
@@ -57,7 +60,11 @@
       tabKey: 'serviceAssuranceTab',
     },
 
-    findings: { path: '/analysis' },
+    // Explanation and Evidence are the same findings under two column sets.
+    // Evidence used to be a lens switch in the topbar, which redrew a list far
+    // below the fold — press it and the page looked unchanged. It is its own
+    // entry and its own address now.
+    findings: { path: '/analysis', tabs: ['explain', 'evidence'], tabKey: 'analysisTab' },
     events: { path: '/events' },
     event: { path: '/events', param: true },
     clusters: { path: '/situations' },

@@ -64,6 +64,10 @@ function navTargets(doc) {
     view: b.dataset.view,
     saTab: b.dataset.saTab || null,
     guide: b.dataset.guide || null,
+    // The general form of the two above: a nav entry naming the sub-tab of the
+    // view it opens (Analysis → Explanation/Evidence, Troubleshooting →
+    // Graph/List). Part of the identity, or the two entries read as one.
+    tab: b.dataset.tab || null,
     label: (b.textContent || '').trim(),
   }));
 }
@@ -168,7 +172,8 @@ async function boot(t, { failWith = null, role = 'admin', app = makeApp() } = {}
 async function open(doc, target) {
   const selector = ['.tabs button[data-view="' + target.view + '"]',
     target.saTab ? `[data-sa-tab="${target.saTab}"]` : '',
-    target.guide ? `[data-guide="${target.guide}"]` : ''].join('');
+    target.guide ? `[data-guide="${target.guide}"]` : '',
+    target.tab ? `[data-tab="${target.tab}"]` : ''].join('');
   const btn = doc.querySelector(selector) || doc.querySelector(`#sidebar-foot button[data-view="${target.view}"]`);
   assert.ok(btn, `no nav button for ${target.view}`);
   btn.click();
@@ -244,7 +249,7 @@ test('a 401 from any page tears the session down and shows the login form', asyn
 test('every nav entry is reachable and none of them collide', async (t) => {
   const { doc } = await boot(t);
   const targets = navTargets(doc);
-  const keys = targets.map((x) => [x.view, x.saTab, x.guide].join('|'));
+  const keys = targets.map((x) => [x.view, x.saTab, x.guide, x.tab].join('|'));
   assert.equal(new Set(keys).size, keys.length, 'two nav entries open exactly the same screen');
   for (const target of targets) {
     await open(doc, target);

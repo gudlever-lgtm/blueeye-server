@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.229.0 — Evidence and the topology list are screens, not switches
+
+Two screens carried a lens switch in the topbar: Analysis (Explanation /
+Evidence) and Troubleshooting (Graph / List). In both cases the thing the
+switch redrew sat well below the fold — under the stat strip, the toolbar and
+the AI panel on Analysis; under the toolbar, the note and the root-cause panels
+on Troubleshooting. Pressing it from up in the topbar looked like nothing had
+happened.
+
+Each lens is now an entry in the rail and an address of its own, so a reader
+lands on the one they picked, can link to it, and gets it back on reload.
+
+- **Insights → Evidence** (`/analysis/evidence`) beside Analysis (`/analysis`).
+- **Diagnostics → Troubleshooting list** (`/troubleshooting/list`) beside
+  Troubleshooting (`/troubleshooting`).
+- A nav entry can now name the sub-tab of the view it opens with `data-tab` —
+  the general form of the `data-sa-tab` and `data-guide` attributes Service
+  Assurance and Guides already used. Nav identity and the active marker take it
+  into account, so two entries on one view no longer read as one.
+- The topbar mode slot stays; nothing fills it on these two screens any more.
+
+An unknown sub-tab (`/analysis/nope`) is answered 404 with the ordinary shell,
+the same as any other address that names no screen.
+
 ## 0.222.0 — Every hop correction on one screen
 
 The corrections went in with no way to see them: a path map could write one, and

@@ -5483,6 +5483,9 @@ function probeMeasured(r) {
       // not a healthy certificate.
       const c = r.tls || {};
       const parts = [];
+      // Revoked goes first and in capitals: it is the one fault where the
+      // certificate looks perfect and is dead.
+      if (c.revoked === true) parts.push(t('probe.tls.revokedShort'));
       if (c.expiryDays != null) parts.push(c.expiryDays <= 0 ? `expired ${Math.abs(Math.round(c.expiryDays))}d ago` : `${Math.round(c.expiryDays)}d left`);
       if (!tlsChainTrusted(c)) parts.push('untrusted');
       if (c.hostnameMatches === false) parts.push('name mismatch');
@@ -6601,9 +6604,40 @@ function tlsChainTrusted(c) {
   return c.authorized === true || /ERR_TLS_CERT_ALTNAME_INVALID/.test(String(c.authorizationError || ''));
 }
 
-// The four faults are kept apart here exactly as they are stored, because they
-// have four different fixes — renew, reissue, install the intermediate, or
-// point the client at the right name.
+// Revocation, in one line, and never dressed up as more certain than it is:
+// a `good` is only a good when the issuer's signature on it checked out, and
+// everything else (no answer, an unreachable responder, a status the issuer
+// does not recognise) is said as the gap it is.
+function revocationText(c) {
+  const rev = c.revocation || {};
+  const status = c.revoked === true ? 'revoked' : (rev.status || 'unchecked');
+  const how = rev.source === 'staple' ? t('probe.tls.revStapled') : rev.source === 'ocsp' ? t('probe.tls.revResponder') : null;
+  if (status === 'revoked') {
+    return t('probe.tls.revRevoked', {
+      when: rev.revokedAt ? String(rev.revokedAt).slice(0, 10) : '—',
+      reason: rev.reason || t('probe.tls.revNoReason'),
+    });
+  }
+  if (status === 'good') {
+    return `${t('probe.tls.revGood')}${how ? ` · ${how}` : ''}${rev.stale ? ` · ${t('probe.tls.revStale')}` : ''}`;
+  }
+  if (status === 'unverified') return t('probe.tls.revUnverified', { note: rev.signatureNote || '—' });
+  if (status === 'unknown') return t('probe.tls.revUnknown');
+  if (status === 'off') return t('probe.tls.revOff');
+  return t('probe.tls.revUnchecked', { reason: rev.error || '—' });
+}
+
+function revocationClass(c) {
+  const rev = c.revocation || {};
+  if (c.revoked === true || rev.status === 'revoked') return 'error';
+  if (rev.status === 'unverified' || rev.signatureVerified === false) return 'warn';
+  if (rev.status === 'good' && rev.stale) return 'warn';
+  return null;
+}
+
+// The five faults are kept apart here exactly as they are stored, because they
+// have five different fixes — renew, reissue, install the intermediate, point
+// the client at the right name, or reissue with a new key.
 function tlsDetail(r) {
   // `c` rather than `t`: the translation function is called `t` in this file,
   // and shadowing it here would break every label in the table.
@@ -6631,6 +6665,10 @@ function tlsDetail(r) {
         ? (c.servername ? t('probe.tls.nameBadFor', { name: c.servername }) : t('probe.tls.nameBad'))
         : t('probe.tls.nameUnchecked'),
     c.hostnameMatches === false ? 'error' : null);
+  // Revocation. Only shown when the agent reported it at all (0.47+): an older
+  // agent's row says nothing about revocation, and an empty row would read as
+  // "not revoked", which is a claim nobody made.
+  if (c.revocation || c.revoked === true) kv(t('probe.tls.revocation'), revocationText(c), revocationClass(c));
   if (c.subject) kv(t('probe.tls.subject'), c.subject);
   if (c.issuer) kv(t('probe.tls.issuer'), c.issuer);
   if (c.protocol) kv(t('probe.tls.protocol'), c.protocol);

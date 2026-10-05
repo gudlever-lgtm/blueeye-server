@@ -64,6 +64,11 @@ const FACT_SCHEMA = [
   // whole verdict; the rest is what made it.
   'tls.ok', 'tls.rtt_ms', 'tls.expiry_days', 'tls.expired',
   'tls.chain_trusted', 'tls.hostname_matches', 'tls.protocol',
+  // Revocation (agent 0.47+). `revoked` is the fault; `revocation_status` is
+  // the whole answer, including the ones that are not verdicts at all
+  // ('unchecked', 'unverified', 'off'), so a rule can tell "not revoked" from
+  // "nobody could say".
+  'tls.revoked', 'tls.revocation_status',
   // The interface the agent sits behind.
   'iface.err_per_sec', 'iface.drop_per_sec', 'iface.util_pct', 'iface.speed_mbps',
   'iface.link_down', 'iface.busy_port_count',
@@ -299,6 +304,10 @@ const tlsFacts = (r) => {
     // (an IP probed without SNI). Only the boolean is a measurement.
     hostname_matches: typeof t.hostnameMatches === 'boolean' ? t.hostnameMatches : undefined,
     protocol: typeof t.protocol === 'string' && t.protocol ? t.protocol : undefined,
+    // Only a reported revocation is a fact. An older agent says nothing about
+    // it, and absent must not read as "not revoked".
+    revoked: typeof t.revoked === 'boolean' ? t.revoked : undefined,
+    revocation_status: t.revocation && typeof t.revocation.status === 'string' ? t.revocation.status : undefined,
   });
 };
 

@@ -132,6 +132,9 @@ function mtuBlock(r) {
 // handshake means the chain validated and only the name failed.
 const TLS_NAME_ERROR_RE = /ERR_TLS_CERT_ALTNAME_INVALID|does not match certificate's altnames/i;
 
+// The revocation modes a tls spec may ask for (blueeye-agent/src/probes/ocsp.js).
+const OCSP_MODES = ['staple', 'fetch', 'off'];
+
 function tlsBlock(r) {
   const names = Array.isArray(r.altNames) ? r.altNames : [];
   const authorizationError = str(r.authorizationError, 120);
@@ -170,6 +173,55 @@ function tlsBlock(r) {
     fingerprint256: str(r.fingerprint256, 128),
     chainLength: intOrNull(r.chainLength),
     selfSigned: r.selfSigned === true,
+    // REVOCATION (agent 0.47+) — the fifth fault, and the only one the
+    // certificate in front of you cannot show: a revoked certificate is still
+    // signed, still in date and still for the right name. One flag for the
+    // fault, the whole answer beside it. An older agent sends neither, and
+    // `revoked: false` + a null block is then "nobody asked", which is what the
+    // UI and the analysis read it as — never "it is fine".
+    ...revocationOf(r),
+  };
+}
+
+// The flag and the block, kept in agreement: when there is a block it decides,
+// because the block carries WHY. A flag on its own (or none) is read as sent.
+function revocationOf(r) {
+  const revocation = revocationBlock(r.revocation);
+  return { revoked: revocation ? revocation.revoked : r.revoked === true, revocation };
+}
+
+// 'off' is "we were told not to ask", 'unchecked' is "we asked and learned
+// nothing", 'unverified' is a `good` whose signature could not be verified —
+// which is NOT a good, and is stored as its own word so nothing downstream can
+// read it as one. Anything the agent sends outside the list is kept as
+// 'unchecked': an unknown word must not become a verdict.
+const REVOCATION_STATUS = ['good', 'revoked', 'unknown', 'unverified', 'unchecked', 'error', 'off'];
+const REVOCATION_SOURCE = ['staple', 'ocsp'];
+
+function revocationBlock(r) {
+  if (!r || typeof r !== 'object' || Array.isArray(r)) return null;
+  const status = REVOCATION_STATUS.includes(r.status) ? r.status : 'unchecked';
+  return {
+    checked: r.checked === true,
+    // HOW it was learned: the handshake's staple, or a query to the responder.
+    source: REVOCATION_SOURCE.includes(r.source) ? r.source : null,
+    status,
+    // The fault is only ever the word 'revoked'. An error, a gap or an
+    // unverifiable answer is not one.
+    revoked: status === 'revoked',
+    revokedAt: str(r.revokedAt, 40),
+    reason: str(r.reason, 48),
+    responder: str(r.responder, 255),
+    // Tri-state: true, false (checked and WRONG), null (nothing to check it
+    // with). false is the one that matters — it means the response was signed
+    // by something that had no business signing it.
+    signatureVerified: r.signatureVerified === true ? true : (r.signatureVerified === false ? false : null),
+    signatureNote: str(r.signatureNote, 190),
+    producedAt: str(r.producedAt, 40),
+    thisUpdate: str(r.thisUpdate, 40),
+    nextUpdate: str(r.nextUpdate, 40),
+    stale: r.stale === true,
+    error: str(r.error, 190),
   };
 }
 
@@ -189,6 +241,7 @@ function tlsBlock(r) {
 const TLS_CERT_FIELDS = [
   'authorized', 'authorizationError', 'chainTrusted', 'hostnameMatches', 'expiryDays', 'expired', 'notYetValid',
   'validFrom', 'validTo', 'subject', 'issuer', 'altNames', 'serialNumber', 'fingerprint256',
+  'revoked', 'revocation',
 ];
 function tlsSource(r) {
   if (r.tls && typeof r.tls === 'object' && !Array.isArray(r.tls)) return r.tls;
@@ -640,6 +693,19 @@ function validateProbeSpec(body) {
       const sni = String(b.servername).trim();
       if (!isSafeHost(sni)) return { errors: { servername: 'servername must be a valid hostname' } };
       spec.servername = sni;
+    }
+    // Revocation: how hard to ask whether the issuer has killed the
+    // certificate. 'staple' (the default) rides the handshake and costs
+    // nothing; 'fetch' goes to the issuer's OCSP responder, which is an
+    // outbound request per run and therefore the operator's choice; 'off' does
+    // not ask. A word outside the three is a mistake worth naming rather than
+    // reading as one of them.
+    if (b.ocsp !== undefined && b.ocsp !== null && b.ocsp !== '') {
+      const word = b.ocsp === true ? 'fetch' : b.ocsp === false ? 'off' : String(b.ocsp).trim().toLowerCase();
+      if (!OCSP_MODES.includes(word)) return { errors: { ocsp: `ocsp must be one of ${OCSP_MODES.join(', ')}` } };
+      // The default is not stored: a spec that says nothing means 'staple', and
+      // writing it out would make every existing probe look changed.
+      if (word !== 'staple') spec.ocsp = word;
     }
     if (b.timeout_ms !== undefined || b.timeoutMs !== undefined) {
       const n = Number(b.timeout_ms ?? b.timeoutMs);

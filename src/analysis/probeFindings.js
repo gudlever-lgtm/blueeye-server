@@ -314,6 +314,17 @@ function tlsNameOf(t, target) {
   return host && net.isIP(host) === 0 ? host : null;
 }
 
+// What a revocation means, in the words that lead to the right action: there is
+// nothing to renew and nothing to re-install — the certificate has to be
+// reissued, and keyCompromise says the key itself is gone.
+function revokedAdvice(rev) {
+  const how = rev && rev.source === 'staple' ? "the issuer's stapled OCSP answer" : "the issuer's OCSP responder";
+  const key = rev && rev.reason === 'keyCompromise'
+    ? ' The reason given is keyCompromise, so the private key is to be treated as leaked: reissue with a NEW key.'
+    : ' Reissue it; renewing the date or re-installing the chain changes nothing.';
+  return `A revoked certificate is still signed, still in date and still for this name, so only ${how} shows it.${key}`;
+}
+
 function certFindings(hostId, rows, at) {
   const out = [];
   const seen = new Set();
@@ -339,6 +350,17 @@ function certFindings(hostId, rows, at) {
       // install the intermediate for the chain, renew for the expiry.
       const reasons = [];
       const faults = [];
+      // Revocation first: the others are mistakes, this one is a withdrawal.
+      // The issuer has declared the certificate dead, so renewing the date or
+      // installing an intermediate fixes nothing — it has to be reissued, and
+      // on `keyCompromise` the key behind it is to be treated as leaked.
+      const rev = t.revocation || null;
+      if (t.revoked === true || (rev && rev.status === 'revoked')) {
+        const when = rev && rev.revokedAt ? ` on ${String(rev.revokedAt).slice(0, 10)}` : '';
+        const why = rev && rev.reason ? ` (${rev.reason})` : '';
+        reasons.push(`it has been REVOKED${when} by its issuer${why}`);
+        faults.push('revoked');
+      }
       if (t.expired) { reasons.push('it has expired'); faults.push('expired'); }
       if (t.notYetValid) { reasons.push('it is not valid yet'); faults.push('notYetValid'); }
       if (t.hostnameMatches === false) { reasons.push(`it is not valid for ${nameLabel}`); faults.push('name'); }
@@ -367,13 +389,19 @@ function certFindings(hostId, rows, at) {
           explanation: nameOnly
             ? `TLS certificate on ${address} is not valid for ${nameLabel}: the chain validates, but the certificate is not for that name${sans}. `
               + `Either ${nameLabel} points at the wrong host, or the certificate must be reissued to include it.`
-            : `TLS certificate on ${address}${name && name !== address.replace(/:\d+$/, '') ? ` for ${name}` : ''} cannot be trusted: ${reasons.join('; ')}.`,
+            : `TLS certificate on ${address}${name && name !== address.replace(/:\d+$/, '') ? ` for ${name}` : ''} cannot be trusted: ${reasons.join('; ')}.`
+              + (faults.includes('revoked') ? ` ${revokedAdvice(rev)}` : ''),
           evidence: [{
             metric: 'cert', type: 'tls', target: r.target,
             servername: t.servername || null, faults,
             authorized: t.authorized, chainTrusted, authorizationError: t.authorizationError || null,
             hostnameMatches: t.hostnameMatches,
             expired: t.expired, issuer: t.issuer, subject: t.subject,
+            revoked: t.revoked === true,
+            revocation: rev ? {
+              status: rev.status, source: rev.source, reason: rev.reason, revokedAt: rev.revokedAt,
+              signatureVerified: rev.signatureVerified, responder: rev.responder,
+            } : null,
             ts: at.toISOString(),
           }],
           correlatedWith: [],

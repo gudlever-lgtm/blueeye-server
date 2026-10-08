@@ -1284,6 +1284,7 @@
             table([t('guide.sec.col.detector'), t('guide.sec.col.says'), t('guide.sec.col.metric')], [
               [t('guide.sec.intro.d1.n'), t('guide.sec.intro.d1.s'), 'net.scan'],
               [t('guide.sec.intro.d2.n'), t('guide.sec.intro.d2.s'), 'net.beacon'],
+              [t('guide.sec.intro.d5.n'), t('guide.sec.intro.d5.s'), 'net.lateral'],
               [t('guide.sec.intro.d3.n'), t('guide.sec.intro.d3.s'), 'peer.new_asn / peer.new_country'],
               [t('guide.sec.intro.d4.n'), t('guide.sec.intro.d4.s'), 'security.*'],
             ]),

@@ -8,7 +8,7 @@ const { parseCidr } = require('../discovery/cidr');
 // Express — the same split src/auth/securityPolicy.js uses, so the rules can be
 // tested without either and the settings service stays a thin wrapper.
 //
-// WHY THIS SCREEN EXISTS AT ALL. The four detectors shipped env-driven, and
+// WHY THIS SCREEN EXISTS AT ALL. The detectors shipped env-driven, and
 // two of their knobs are ones a deployment cannot avoid touching:
 //
 //   NEW_PEER_BASELINE_HOURS  — how long a site stays silent while its memory of
@@ -126,6 +126,12 @@ function validateScan(p, errors) {
   readNum(p, 'cooldownMinutes', { min: 1, max: 10080 }, 'scan', errors, v);
   readNum(p, 'maxPerRun', { min: 1, max: 500 }, 'scan', errors, v);
   readAddressList(p, 'ignoreSources', 'scan', errors, v);
+  // Lateral movement: the same fan-out count per destination port, an order of
+  // magnitude lower, on the ports where it means something.
+  readBool(p, 'lateralEnabled', 'scan', errors, v);
+  readNum(p, 'lateralHostThreshold', { min: 2, max: 1000000 }, 'scan', errors, v);
+  readNum(p, 'lateralCritHostThreshold', { min: 2, max: 1000000 }, 'scan', errors, v);
+  readIntList(p, 'lateralPorts', { min: 1, max: 65535 }, 'scan', errors, v);
   return v;
 }
 
@@ -230,6 +236,9 @@ function checkCoherence(effective) {
   }
   if (s.critHostThreshold < s.hostThreshold) {
     errors['scan.critHostThreshold'] = `must be at least the WARN threshold (${s.hostThreshold})`;
+  }
+  if (s.lateralCritHostThreshold < s.lateralHostThreshold) {
+    errors['scan.lateralCritHostThreshold'] = `must be at least the WARN threshold (${s.lateralHostThreshold})`;
   }
   const b = effective.beacon || {};
   if (b.critJitter > b.maxJitter) {

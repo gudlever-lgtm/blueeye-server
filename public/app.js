@@ -15794,7 +15794,7 @@ async function settingsSnmpCommunitiesView() {
 // row, and what that adds up to depends on the database behind it. The screen
 // that made this necessary had 989 events selected against a cap of 500.
 // ---- Settings → Attack indication ------------------------------------------
-// The four detectors' thresholds and ignore lists in one place
+// Every detector's thresholds and ignore lists in one place
 // (docs/attack-indication.md). Every card PUTs its own section of
 // /api/settings/attack-indication, and the server merges — so saving the scan
 // thresholds never restates the beacon ones.
@@ -15845,6 +15845,10 @@ function attackScanCard(v) {
       { key: 'windowMinutes', label: t('set.attack.scan.windowMinutes'), type: 'number', min: 1, max: 1440, step: 1, hint: t('set.attack.scan.windowMinutes.hint') },
       { key: 'cooldownMinutes', label: t('set.attack.scan.cooldownMinutes'), type: 'number', min: 1, max: 10080, step: 1, hint: t('set.attack.scan.cooldownMinutes.hint') },
       { key: 'ignoreSources', label: t('set.attack.scan.ignoreSources'), type: 'text', placeholder: '10.0.0.5, 10.9.0.0/24', hint: t('set.attack.scan.ignoreSources.hint') },
+      { key: 'lateralEnabled', label: t('set.attack.scan.lateralEnabled'), type: 'checkbox', hint: t('set.attack.scan.lateralEnabled.hint') },
+      { key: 'lateralHostThreshold', label: t('set.attack.scan.lateralHostThreshold'), type: 'number', min: 2, max: 1000000, step: 1, hint: t('set.attack.scan.lateralHostThreshold.hint') },
+      { key: 'lateralCritHostThreshold', label: t('set.attack.scan.lateralCritHostThreshold'), type: 'number', min: 2, max: 1000000, step: 1, hint: t('set.attack.scan.lateralCritHostThreshold.hint') },
+      { key: 'lateralPorts', label: t('set.attack.scan.lateralPorts'), type: 'text', placeholder: '445, 139, 135, 3389, 5985, 5986, 22', hint: t('set.attack.scan.lateralPorts.hint') },
     ],
   });
 }
@@ -17748,7 +17752,7 @@ function settingsFormCard({ title, fields, values, endpoint, wrap = null, note =
       else body[f.key] = Number(inputs[f.key].value);
     }
     // Some panels own a SECTION of a larger settings object rather than a flat
-    // one (Settings → Attack indication: four detectors under one key). `wrap`
+    // one (Settings → Attack indication: every detector under one key). `wrap`
     // nests the collected fields under that section so one card saves its own
     // values and never restates another's.
     const payload = wrap ? wrap(body) : body;

@@ -5,6 +5,7 @@ const { asyncHandler } = require('../middleware/asyncHandler');
 const { requireAuth, requireRole } = require('../auth/middleware');
 const { ROLES } = require('../auth/roles');
 const { validatePattern, validateRoute, channelsOf } = require('../events/patterns');
+const { TACTICS, SUGGESTED, navigatorLayer } = require('../events/attack');
 
 // Event patterns — one named match, and where its events go.
 //
@@ -17,6 +18,10 @@ const { validatePattern, validateRoute, channelsOf } = require('../events/patter
 //   PUT    /api/event-patterns/:id/route    ADMIN    where these events alert
 //   DELETE /api/event-patterns/:id/route    ADMIN    back to the default routing
 //   POST   /api/event-patterns/preview      ADMIN    a DRAFT's match count
+//   GET    /api/event-patterns/attack       viewer+  the ATT&CK vocabulary the
+//                                                   form offers (tactics +
+//                                                   suggested techniques)
+//   GET    /api/event-patterns/attack/layer ADMIN    an ATT&CK Navigator layer
 //
 // ADMIN on every write, the same footing as severity rules: a pattern decides
 // what wakes people at 3am and now also where it reaches them, across the whole
@@ -36,6 +41,10 @@ function createEventPatternsRouter({
     const n = Number.parseInt(raw, 10);
     return Number.isInteger(n) && n > 0 && String(n) === String(raw).trim() ? n : null;
   };
+
+  // How many mapped patterns one layer export may count. Each is a COUNT query;
+  // past this the export is a report, not a download.
+  const MAX_LAYER_PATTERNS = 200;
 
   const withChannels = (route) => (route ? { ...route, channel_list: channelsOf(route) } : null);
 
@@ -78,6 +87,42 @@ function createEventPatternsRouter({
       return res.status(404).json({ error: 'That kind of event cannot be counted on this server' });
     }
     return res.json({ source: value.source, matched });
+  }));
+
+  // The ATT&CK vocabulary the pattern form offers: the fourteen Enterprise
+  // tactics, and a short list of suggested techniques. Static — a constant from
+  // src/events/attack.js, served so the dashboard does not keep a second copy
+  // that can drift from the one the validator uses.
+  router.get('/attack', requireAuth, read, (req, res) => {
+    res.json({ tactics: TACTICS, suggested: SUGGESTED });
+  });
+
+  // An ATT&CK Navigator layer (the official, free viewer) for every mapped
+  // pattern, scored by how many open events each covers right now.
+  //
+  // WHY AN EXPORT RATHER THAN A MATRIX HERE. The published matrix is fourteen
+  // columns and some two hundred techniques; an install that maps eight renders
+  // as a grey wall, which reads as "this product sees nothing" when the truth is
+  // the opposite. Navigator draws it properly and a security team already has it
+  // open. src/events/attack.js says the same in more detail.
+  //
+  // One count per mapped pattern, which is why this is a deliberate download and
+  // not something a screen polls.
+  router.get('/attack/layer', requireAuth, admin, asyncHandler(async (req, res) => {
+    const patterns = (await eventPatternsRepo.list())
+      .filter((p) => p.enabled && p.attack_technique && p.attack_tactic)
+      .slice(0, MAX_LAYER_PATTERNS);
+    const counts = new Map();
+    for (const p of patterns) {
+      // A store that cannot count this source (a server without Service
+      // Assurance) leaves the technique at 0 rather than failing the export:
+      // the coverage half of the layer is still worth having.
+      const n = await countMatches(p).catch(() => null);
+      counts.set(p.id, { count: n == null ? 0 : n, worst: null });
+    }
+    const layer = navigatorLayer(patterns, counts, { name: 'BlueEyes coverage' });
+    res.setHeader('Content-Disposition', 'attachment; filename="blueeye-attack-layer.json"');
+    return res.json(layer);
   }));
 
   router.get('/:id', requireAuth, read, asyncHandler(async (req, res) => {

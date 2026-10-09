@@ -3020,10 +3020,21 @@ function makeFindingStore(overrides = {}) {
       for (const h of hits) bySeverity[h.severity] = (bySeverity[h.severity] || 0) + 1;
       const sorted = hits.slice().sort((a, b) => ((b.severity === 'CRIT') - (a.severity === 'CRIT'))
         || String(b.createdAt).localeCompare(String(a.createdAt)));
+      // The same set grouped by what a PATTERN matches on, as the real store
+      // returns it: the red bar's ATT&CK strip is built from these, so a test
+      // that never produced them would pass with the strip permanently empty.
+      const groups = [];
+      for (const h of hits) {
+        const key = `${h.metric}|${h.kind}|${h.hostId}|${h.severity}`;
+        const found = groups.find((g) => g.key === key);
+        if (found) { found.count += 1; continue; }
+        groups.push({ key, metric: h.metric, kind: h.kind, host_id: h.hostId, severity: h.severity, count: 1 });
+      }
       return {
         count: hits.length,
         bySeverity,
         worst: bySeverity.CRIT ? 'CRIT' : (bySeverity.WARN ? 'WARN' : null),
+        groups: groups.map(({ key, ...g }) => g),
         findings: sorted.slice(0, limit).map(lightFinding).map((f, i) => ({
           ...f,
           explanation: sorted[i].explanation ?? null,
@@ -4177,7 +4188,8 @@ function makeEventPatternsRepo(seed = [], { severityRulesRepo = null } = {}) {
   const rows = seed.map((p, i) => ({
     id: i + 1, enabled: true, tenant_id: null,
     match_metric: null, match_kind: null, match_host_id: null, match_application_id: null,
-    reason: null, created_by: null, created_at: new Date(), updated_at: new Date(), ...p,
+    reason: null, attack_technique: null, attack_tactic: null,
+    created_by: null, created_at: new Date(), updated_at: new Date(), ...p,
   }));
   const routes = [];
   const clone = (r) => (r ? JSON.parse(JSON.stringify(r)) : null);
@@ -4208,6 +4220,7 @@ function makeEventPatternsRepo(seed = [], { severityRulesRepo = null } = {}) {
       const row = {
         id: nextId, tenant_id: null,
         match_metric: null, match_kind: null, match_host_id: null, match_application_id: null,
+        attack_technique: null, attack_tactic: null,
         created_at: new Date(), updated_at: new Date(), ...input,
         enabled: input.enabled === false ? false : true,
       };

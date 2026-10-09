@@ -585,6 +585,26 @@ class FindingStore {
     }
     if (!count) return { count: 0, bySeverity: {}, worst: null, findings: [] };
 
+    // The same set, grouped by what a PATTERN matches on (metric, kind, agent)
+    // plus severity, so the caller can map each group onto the operator's
+    // patterns and their ATT&CK tactics without a query per pattern. One
+    // GROUP BY over a set that is already small — open, corroborated,
+    // attack-indication findings inside the window — rather than N counts.
+    //
+    // Bounded like every list here: an estate with more than this many distinct
+    // groups lit at once has a bigger problem than a truncated strip.
+    const [groupRows] = await this.pool.query(
+      `SELECT f.metric AS metric, f.kind AS kind, f.host_id AS host_id, f.severity AS severity,
+              COUNT(*) AS cnt
+         FROM findings f ${clause}
+        GROUP BY f.metric, f.kind, f.host_id, f.severity
+        LIMIT 500`,
+      params,
+    );
+    const groups = groupRows.map((r) => ({
+      metric: r.metric, kind: r.kind, host_id: r.host_id, severity: r.severity, count: Number(r.cnt) || 0,
+    }));
+
     // Worst first, then newest: the bar names one finding, and on a morning
     // with a scan and a beacon it should be the scan.
     const [rows] = await this.pool.query(
@@ -607,6 +627,7 @@ class FindingStore {
       bySeverity,
       worst: bySeverity.CRIT ? 'CRIT' : (bySeverity.WARN ? 'WARN' : 'INFO'),
       findings,
+      groups,
     };
   }
 

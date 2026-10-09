@@ -29,6 +29,16 @@ const BASE_ROUTES = {
   'GET /license': { plan: 'professional', features: {} },
   'GET /license/features': { analysis: true, alerting: true, service_tests: true },
   'GET /license/plan': { plan: 'professional', plan_name: 'Professional', features: {}, modules: {} },
+  'GET /api/event-patterns/attack': {
+    tactics: [
+      { id: 'credential-access', code: 'TA0006', name: 'Credential Access' },
+      { id: 'discovery', code: 'TA0007', name: 'Discovery' },
+    ],
+    suggested: [
+      { technique: 'T1110', name: 'Brute Force', tactic: 'credential-access', metrics: ['security.auth_failure'] },
+      { technique: 'T1046', name: 'Network Service Discovery', tactic: 'discovery', metrics: ['net.scan'] },
+    ],
+  },
   'GET /api/alerting/config': {
     enabled: true,
     channels: {
@@ -167,11 +177,11 @@ test('creating a pattern posts the shape the API documents', async (t) => {
   const form = doc.querySelector('#modal-card form');
   assert.ok(form, 'the new-pattern form did not open');
   const inputs = [...form.querySelectorAll('input, select, textarea')];
-  // name, source, metric, kind, agent, reason, enabled
-  assert.equal(inputs.length, 7, `unexpected field count: ${inputs.length}`);
+  // name, source, metric, kind, agent, technique, tactic, reason, enabled
+  assert.equal(inputs.length, 9, `unexpected field count: ${inputs.length}`);
   inputs[0].value = 'Warehouse links';
   inputs[2].value = 'packet_loss';
-  inputs[5].value = 'wifi, not an SLA';
+  inputs[7].value = 'wifi, not an SLA';
   form.dispatchEvent(new doc.defaultView.Event('submit', { cancelable: true }));
   await tick(80);
 
@@ -187,7 +197,63 @@ test('creating a pattern posts the shape the API documents', async (t) => {
     // Blank means "any", which the API spells as null.
     match_kind: null,
     match_host_id: null,
+    // The ATT&CK mapping is optional and was left blank — both fields null, not
+    // half a mapping (docs/event-patterns.md).
+    attack_technique: null,
+    attack_tactic: null,
   });
+});
+
+// The mapping is the OPERATOR's statement, not the detector's, so it is typed
+// into the pattern form beside the reason — and the tactic list the form offers
+// is the server's own, never a second copy in app.js that could drift.
+test('the ATT&CK fields post the operator\'s mapping, uppercased, with the server\'s tactics', async (t) => {
+  const { doc, calls, errors } = await boot(t, {
+    'GET /api/event-patterns': [],
+    'POST /api/event-patterns': { status: 201, body: PATTERN },
+  });
+  await openPatterns(doc);
+  await click(byText(doc, '#view button', '+ New pattern'), 80);
+
+  const form = doc.querySelector('#modal-card form');
+  const inputs = [...form.querySelectorAll('input, select, textarea')];
+  const tactic = inputs[6];
+  assert.deepEqual([...tactic.options].map((o) => o.value), ['', 'credential-access', 'discovery'],
+    'the tactic list is not the one the server sent');
+  // The suggestion list is a hint, not a restriction — it names the likely
+  // techniques for the match that has been typed.
+  assert.match(form.textContent, /T1110 Brute Force/);
+
+  inputs[0].value = 'Brute force';
+  inputs[2].value = 'security.auth_failure';
+  inputs[5].value = 't1110';
+  tactic.value = 'credential-access';
+  inputs[7].value = 'we treat this as T1110 here';
+  form.dispatchEvent(new doc.defaultView.Event('submit', { cancelable: true }));
+  await tick(80);
+
+  assert.deepEqual(errors, []);
+  const post = calls.find((c) => c.method === 'POST' && c.path === '/api/event-patterns');
+  assert.equal(post.body.attack_technique, 'T1110', 'a lowercase id is what somebody types when they mean T1110');
+  assert.equal(post.body.attack_tactic, 'credential-access');
+});
+
+test('the coverage strip draws the mapped tactics, and an unmapped install gets none', async (t) => {
+  const mapped = {
+    ...PATTERN, attack_technique: 'T1110', attack_tactic: 'credential-access',
+  };
+  const { doc } = await boot(t, { 'GET /api/event-patterns': [mapped] });
+  await openPatterns(doc);
+  const strip = doc.querySelector('#view .attack-chain');
+  assert.ok(strip, 'no coverage strip for a mapped pattern');
+  assert.match(strip.textContent, /Credential Access/);
+  assert.match(strip.textContent, /T1110/);
+  assert.ok(byText(doc, '#view button', 'Download ATT&CK layer'), 'no layer export');
+
+  const plain = await boot(t, { 'GET /api/event-patterns': [PATTERN] });
+  await openPatterns(plain.doc);
+  assert.equal(plain.doc.querySelector('#view .attack-chain'), null,
+    'fourteen empty columns is the wall of grey this strip exists to avoid');
 });
 
 test('Count open events asks for the draft\'s match count without saving it', async (t) => {
@@ -202,7 +268,7 @@ test('Count open events asks for the draft\'s match count without saving it', as
   const inputs = [...form.querySelectorAll('input, select, textarea')];
   inputs[0].value = 'Loss';
   inputs[2].value = 'packet_loss';
-  inputs[5].value = 'r';
+  inputs[7].value = 'r';
   await click(byText(doc, '#modal-card button', 'Count open events'), 80);
 
   assert.deepEqual(errors, []);

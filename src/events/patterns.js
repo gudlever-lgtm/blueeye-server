@@ -4,6 +4,7 @@ const {
   scopeMatches, specificityOf, validateScope, MATCH_FIELDS, SEVERITIES, RANK,
 } = require('./severityRules');
 const { CHANNEL_NAMES } = require('../analysis/alerting/config');
+const { validateAttack } = require('./attack');
 
 // Event patterns — one named match, used by every policy that needs it.
 //
@@ -58,7 +59,11 @@ function routeFor(patterns, routes, event) {
   if (!pattern) return null;
   const list = Array.isArray(routes) ? routes : [];
   const route = list.find((r) => Number(r.pattern_id) === Number(pattern.id) && r.enabled !== false && r.enabled !== 0);
-  if (!route) return null;
+  // A pattern with no route still NAMES the pattern. The caller wants it: the
+  // dispatcher stamps the pattern's ATT&CK technique on the alert whether or
+  // not the pattern also redirects it, and `route: null` is how it knows to
+  // dispatch the default way while still carrying the label.
+  if (!route) return { pattern, route: null, routed: true };
   const floor = route.min_severity ? (RANK[route.min_severity] || 0) : 0;
   const sev = RANK[event && event.severity] || 0;
   if (floor && sev < floor) return { pattern, route, routed: false };
@@ -103,6 +108,10 @@ function validatePattern(input) {
   if (!pinned && !errors.source) {
     errors._ = 'a pattern needs at least one thing to match on, or it would cover every event from this source';
   }
+
+  // The MITRE ATT&CK technique the OPERATOR says this match is (src/events/
+  // attack.js, migration 147). Optional, and both fields or neither.
+  validateAttack(input, value, errors);
 
   // Required, for the same reason a severity rule's reason is: a grouping that
   // routes alerts and cannot say why is the one somebody inherits and dare not

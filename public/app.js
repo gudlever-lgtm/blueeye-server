@@ -997,7 +997,10 @@ async function refreshAttackBar() {
   const top = (data && Array.isArray(data.findings) && data.findings[0]) || null;
   // Redrawing an identical bar on every render would re-announce it to a screen
   // reader once a minute and restart the pulse mid-cycle.
-  const signature = worst ? `${worst}|${data.count}|${top ? top.id : ''}` : '';
+  const tactics = (data && Array.isArray(data.tactics)) ? data.tactics : [];
+  const signature = worst
+    ? `${worst}|${data.count}|${top ? top.id : ''}|${tactics.map((x) => `${x.id}:${x.count}`).join(',')}`
+    : '';
   if (signature === attackBarLast) return;
   attackBarLast = signature;
 
@@ -1012,6 +1015,24 @@ async function refreshAttackBar() {
   host.classList.toggle('crit', worst === 'CRIT');
   const label = $('#attack-bar-label');
   const detail = $('#attack-bar-detail');
+  // The ATT&CK kill-chain strip: the tactics lit now, in the matrix order the
+  // server already sorted them into, each from the operator's OWN pattern
+  // mapping (docs/event-patterns.md). Two cells side by side is a progression —
+  // Discovery then Credential Access — which is the thing worth seeing and the
+  // reason this is a strip rather than a list.
+  //
+  // Empty on an install that has mapped no technique, which is the default.
+  const chain = $('#attack-bar-chain');
+  if (chain) {
+    // Every cell here is lit: the server sends only the tactics with something
+    // open, because a quiet tactic in a panel about what is happening NOW is
+    // noise. The coverage half — mapped but quiet — is Settings → Patterns.
+    chain.replaceChildren(...tactics.map((x) => el('span', {
+      // The techniques behind the cell, so hovering says WHY this tactic is lit
+      // rather than only that it is.
+      title: x.patterns.map((p) => `${p.technique} ${p.technique_name || ''} (${p.name})`.trim()).join(' · '),
+    }, `${x.name}${x.count ? ` ${x.count}` : ''}`)));
+  }
   // One key, both forms: I18n.plural picks .one or .other and fills {count},
   // so the bar says "1 attack indication" rather than "1 attack indication(s)".
   if (label) label.textContent = I18n.plural('attack.bar.count', data.count, { count: data.count });
@@ -17441,6 +17462,54 @@ function severityRuleScope(r) {
   return parts.length ? parts.join(' · ') : t('sev.scope.everything');
 }
 
+// ---- MITRE ATT&CK (operator-owned mapping on a pattern) --------------------
+// The tactics and the suggested techniques come from the server
+// (GET /api/event-patterns/attack) rather than a second copy here: the same
+// constant the validator uses, so the form can never offer a tactic the server
+// refuses. Cached for the session — it is a constant, not state.
+let attackVocab = null;
+async function getAttackVocab() {
+  if (attackVocab) return attackVocab;
+  try { attackVocab = await api('/api/event-patterns/attack'); }
+  catch { attackVocab = { tactics: [], suggested: [] }; }
+  return attackVocab;
+}
+
+// The techniques worth offering for the match the operator has typed, most
+// relevant first. A suggestion list, never a restriction: the field takes any
+// well-formed id, because a customer who has mapped a technique this list has
+// never heard of is right.
+function attackSuggestionsFor(vocab, metric) {
+  const all = (vocab && vocab.suggested) || [];
+  if (!metric) return all;
+  const hit = all.filter((x) => (x.metrics || []).some((m) => m === metric || metric.startsWith(m)));
+  return hit.length ? hit : all;
+}
+
+// The tactic's display name, from the server's own list. Falls back to the slug
+// rather than an empty cell: a tactic the catalogue does not know is a server
+// newer than this page, not a reason to show nothing.
+function tacticLabel(id) {
+  if (!id) return null;
+  const hit = ((attackVocab && attackVocab.tactics) || []).find((x) => x.id === id);
+  return hit ? hit.name : id;
+}
+
+// Mapped patterns grouped by tactic, in the MATRIX ORDER the server sent — not
+// an order this file keeps its own copy of, which is how the two would drift.
+function attackCoverage(patterns) {
+  const order = ((attackVocab && attackVocab.tactics) || []).map((x) => x.id);
+  const byTactic = new Map();
+  for (const p of patterns) {
+    if (!p.attack_technique || !p.attack_tactic) continue;
+    const cell = byTactic.get(p.attack_tactic)
+      || { id: p.attack_tactic, name: tacticLabel(p.attack_tactic), patterns: [] };
+    cell.patterns.push({ name: p.name, technique: p.attack_technique, technique_name: null });
+    byTactic.set(p.attack_tactic, cell);
+  }
+  return [...byTactic.values()].sort((a, b) => order.indexOf(a.id) - order.indexOf(b.id));
+}
+
 // ---- Settings → Patterns ---------------------------------------------------
 // Event patterns (GET/POST/PUT/DELETE /api/event-patterns): one named match,
 // with the severity rules and the alert route that hang off it. The match
@@ -17467,6 +17536,8 @@ async function settingsPatternsView() {
   const [patterns, alerting] = await Promise.all([
     api('/api/event-patterns'),
     api('/api/alerting/config').catch(() => null),
+    // Resolves into the module-level cache the two ATT&CK helpers below read.
+    getAttackVocab(),
   ]);
   const root = el('div');
   root.append(el('p', { class: 'muted settings-intro' }, t('pat.intro')));
@@ -17480,10 +17551,41 @@ async function settingsPatternsView() {
     return root;
   }
 
+  // The ATT&CK coverage strip: the tactics this install has MAPPED, in matrix
+  // order, whatever is firing. The red bar's own strip is the live half (what is
+  // lit now); this is the "what can we even see" half, which is the question an
+  // auditor asks and the one a blank matrix answers badly.
+  //
+  // Only mapped tactics appear. Drawing all fourteen for an install that maps
+  // three would be a wall of empty cells reading "this product sees nothing",
+  // when the truth is that it sees three of them deliberately.
+  const covered = attackCoverage(patterns);
+  if (covered.length) {
+    root.append(el('div', { class: 'section-head' },
+      el('h3', {}, t('pat.attack.title')),
+      // A button, not a link: the endpoint needs the bearer token, and a bare
+      // <a href> would send none and 401 — which is how a download silently
+      // logs somebody out (see authedFetch).
+      isAdmin() ? el('button', {
+        class: 'small ghost', title: t('pat.attack.layerHint'),
+        onclick: () => downloadAuthed('/api/event-patterns/attack/layer', 'blueeye-attack-layer.json'),
+      }, t('pat.attack.layer')) : null));
+    root.append(el('div', { class: 'attack-chain' }, ...covered.map((x) => el('span', {
+      class: 'attack-chain-cell',
+      title: x.patterns.map((q) => `${q.technique} ${q.technique_name || ''} (${q.name})`.trim()).join(' · '),
+    },
+    el('span', { class: 'attack-chain-tactic' }, x.name),
+    el('span', { class: 'muted' }, x.patterns.map((q) => q.technique).join(' · '))))));
+    root.append(el('p', { class: 'muted small' }, t('pat.attack.note')));
+  }
+
   const rows = patterns.map((p) => el('tr', { class: p.enabled ? '' : 'acked' },
     el('td', {}, p.name),
     el('td', { class: 'muted' }, severityRuleSourceLabel(p.source)),
     el('td', {}, severityRuleScope(p)),
+    el('td', { class: p.attack_technique ? '' : 'muted' }, p.attack_technique
+      ? el('span', { class: 'badge', title: tacticLabel(p.attack_tactic) }, p.attack_technique)
+      : t('pat.attack.none')),
     el('td', { class: p.route ? '' : 'muted' }, patternRouteSummary(p)),
     el('td', { class: 'muted' }, p.rule_count
       ? t('pat.rules', { count: p.rule_count })
@@ -17501,7 +17603,8 @@ async function settingsPatternsView() {
   root.append(el('div', { class: 'tablewrap' }, el('table', {},
     el('thead', {}, el('tr', {},
       el('th', {}, t('pat.col.name')), el('th', {}, t('pat.col.source')),
-      el('th', {}, t('pat.col.matches')), el('th', {}, t('pat.col.alerts')),
+      el('th', {}, t('pat.col.matches')), el('th', {}, t('pat.col.attack')),
+      el('th', {}, t('pat.col.alerts')),
       el('th', {}, t('pat.col.rules')), el('th', {}, t('pat.col.why')),
       el('th', {}, t('pat.col.state')), el('th', {}, ''))),
     el('tbody', {}, ...rows))));
@@ -17517,6 +17620,7 @@ async function editPattern(p, prefill) {
   const source = (prefill && prefill.source) || (p && p.source) || 'finding';
   const v = (name) => ((prefill && prefill[name] != null) ? String(prefill[name])
     : (p && p[name] != null ? String(p[name]) : ''));
+  const vocab = await getAttackVocab();
 
   const scopeFields = source === 'finding'
     ? [
@@ -17537,6 +17641,22 @@ async function editPattern(p, prefill) {
       hint: t('sev.field.sourceHint'),
     }]),
     ...scopeFields,
+    // The MITRE ATT&CK mapping — OPTIONAL, and the operator's own statement
+    // rather than the detector's. A free text field on purpose: the suggestion
+    // list is short and ATT&CK is not, so the hint names the likely ones for
+    // this match and the field accepts any well-formed id.
+    { name: 'attack_technique', label: t('pat.field.technique'), type: 'text',
+      value: v('attack_technique'),
+      hint: `${t('pat.field.techniqueHint')} ${attackSuggestionsFor(vocab, (v('match_metric') || '').trim())
+        .slice(0, 4).map((x) => `${x.technique} ${x.name}`).join(' · ')}` },
+    // The tactic IS a closed list: they are the matrix's fourteen columns, and
+    // an export has to name one to open in ATT&CK Navigator at all. A technique
+    // can belong to more than one, so the operator says which they mean.
+    { name: 'attack_tactic', label: t('pat.field.tactic'), type: 'select',
+      value: v('attack_tactic'),
+      options: [{ value: '', label: t('pat.field.tacticNone') },
+        ...(vocab.tactics || []).map((x) => ({ value: x.id, label: `${x.name} (${x.code})` }))],
+      hint: t('pat.field.tacticHint') },
     { name: 'reason', label: t('pat.field.reason'), type: 'textarea', value: v('reason'), hint: t('pat.field.reasonHint') },
     { name: 'enabled', label: t('sev.field.state'), type: 'select',
       value: ((p && p.enabled === false) || (prefill && prefill.enabled === 'false')) ? 'false' : 'true',
@@ -17551,6 +17671,11 @@ async function editPattern(p, prefill) {
       enabled: vals.enabled === 'true',
     };
     for (const f of scopeFields) out[f.name] = (vals[f.name] || '').trim() || null;
+    // Both or neither: half a mapping looks like a mapping on every screen and
+    // groups as nothing, so the server refuses it — and an uppercased id is
+    // what somebody types when they mean T1110.
+    out.attack_technique = (vals.attack_technique || '').trim().toUpperCase() || null;
+    out.attack_tactic = (vals.attack_tactic || '').trim() || null;
     return out;
   };
 

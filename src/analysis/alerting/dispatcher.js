@@ -32,7 +32,11 @@ const silentLogger = { info() {}, warn() {}, error() {} };
 //     across forty agents becomes one alert instead of forty;
 //   * `routed: false` means the event is BELOW the route's minimum, so nothing
 //     is sent. Falling back to the per-channel minimums there would make the
-//     route's threshold decorative.
+//     route's threshold decorative;
+//   * when the pattern carries the operator's ATT&CK mapping (migration 147),
+//     `attackTechnique` / `attackTactic` are stamped on the alert — whether or
+//     not the pattern also has a route. The label is the pattern's, so a
+//     pattern that only names a technique still labels its alerts.
 //
 // Without `routing`, or when nothing matches, dispatch behaves exactly as it did
 // before: every enabled channel, each with its own minimum, per-finding cooldown.
@@ -155,6 +159,21 @@ function createDispatcher({ config, channels = {}, licensed = () => true, channe
     }
     const route = routed ? routed.route : null;
 
+    // The operator's ATT&CK mapping, if their pattern carries one. Stamped on a
+    // COPY the channels see, like `enrich` does with the host name and the link:
+    // the throttle key, the alert log and the caller keep the finding as it was.
+    // Nothing here is the DETECTOR naming a technique — the detector's sentence
+    // is untouched; this is the label a person attached to the match, and it is
+    // what makes the alert greppable in the customer's own SIEM.
+    const labelled = routed && routed.pattern && routed.pattern.attack_technique
+      ? {
+        ...finding,
+        attackTechnique: routed.pattern.attack_technique,
+        attackTactic: routed.pattern.attack_tactic || null,
+        attackPattern: routed.pattern.name,
+      }
+      : finding;
+
     // The cooldown key is the PATTERN when one routes this event, so one
     // condition across many agents is one alert rather than one per agent.
     // Severity stays in the key either way, so a cooldown started by a WARN
@@ -167,7 +186,7 @@ function createDispatcher({ config, channels = {}, licensed = () => true, channe
       return { dispatched: false, reason: 'throttled', results: [] };
     }
 
-    const { attempted, results } = await sendToChannels(finding, group, route);
+    const { attempted, results } = await sendToChannels(labelled, group, route);
     if (attempted && route && routing && typeof routing.recordRouted === 'function') {
       // Not awaited: a statistic is not worth delaying an alert for.
       Promise.resolve(routing.recordRouted(route.id)).catch(() => {});

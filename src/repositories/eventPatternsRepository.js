@@ -14,7 +14,8 @@ function createEventPatternsRepository({ db, now = () => new Date(), ttlMs = 300
   const { pool } = db;
 
   const P_COLS = `id, tenant_id, name, source, match_metric, match_kind, match_host_id,
-    match_application_id, reason, enabled, created_by, created_at, updated_at`;
+    match_application_id, reason, attack_technique, attack_tactic, enabled,
+    created_by, created_at, updated_at`;
   const R_COLS = `id, pattern_id, channels, min_severity, cooldown_ms, reason, enabled,
     matched_count, last_matched_at, created_by, created_at, updated_at`;
 
@@ -33,6 +34,10 @@ function createEventPatternsRepository({ db, now = () => new Date(), ttlMs = 300
       match_host_id: row.match_host_id,
       match_application_id: row.match_application_id,
       reason: row.reason,
+      // The operator's own ATT&CK mapping (migration 147). Null is both the
+      // default and the honest answer for a match that maps to no technique.
+      attack_technique: row.attack_technique ?? null,
+      attack_tactic: row.attack_tactic ?? null,
       enabled: row.enabled === 1 || row.enabled === true,
       created_by: row.created_by,
       created_at: row.created_at,
@@ -125,11 +130,12 @@ function createEventPatternsRepository({ db, now = () => new Date(), ttlMs = 300
     const [res] = await pool.query(
       `INSERT INTO event_patterns
          (name, source, match_metric, match_kind, match_host_id, match_application_id,
-          reason, enabled, created_by)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          reason, attack_technique, attack_tactic, enabled, created_by)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [input.name, input.source, input.match_metric ?? null, input.match_kind ?? null,
         input.match_host_id ?? null, numOrNull(input.match_application_id),
-        input.reason ?? null, input.enabled === false ? 0 : 1, numOrNull(input.created_by)]
+        input.reason ?? null, input.attack_technique ?? null, input.attack_tactic ?? null,
+        input.enabled === false ? 0 : 1, numOrNull(input.created_by)]
     );
     invalidate();
     return findById(res.insertId);
@@ -138,7 +144,8 @@ function createEventPatternsRepository({ db, now = () => new Date(), ttlMs = 300
   async function save(id, input) {
     const sets = [];
     const params = [];
-    for (const f of ['name', 'match_metric', 'match_kind', 'match_host_id', 'reason']) {
+    for (const f of ['name', 'match_metric', 'match_kind', 'match_host_id', 'reason',
+      'attack_technique', 'attack_tactic']) {
       if (input[f] !== undefined) { sets.push(`${f} = ?`); params.push(input[f]); }
     }
     if (input.match_application_id !== undefined) {

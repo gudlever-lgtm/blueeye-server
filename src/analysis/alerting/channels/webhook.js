@@ -24,6 +24,12 @@ function createWebhookChannel({ config = {}, fetchImpl = globalThis.fetch, logge
       // or post the alert on (additive: older receivers ignore them).
       link: finding && finding.link ? finding.link : null,
       hostName: finding && finding.hostName ? finding.hostName : null,
+      // Top level beside the two above, for a receiver that routes on it. The
+      // same values are inside `finding`; these are the ones a rule engine can
+      // read without walking into the object (additive — older receivers
+      // ignore them).
+      technique: finding && finding.attackTechnique ? finding.attackTechnique : null,
+      tactic: finding && finding.attackTactic ? finding.attackTactic : null,
       finding,
       group: group
         ? {

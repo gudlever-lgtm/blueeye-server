@@ -70,10 +70,18 @@ test('routeFor pairs the matched pattern with its route', () => {
   assert.deepEqual(channelsOf(r.route), ['matrix']);
 });
 
-test('a pattern with no route, or a disabled route, routes nothing — and is not an error', () => {
+// A pattern with no route still NAMES the pattern: the dispatcher stamps its
+// ATT&CK technique on the alert whether or not the pattern also redirects it,
+// and `route: null` is how it knows to dispatch the default way with the label.
+test('a pattern with no route, or a disabled route, names the pattern and routes nothing', () => {
   const ps = [pattern({ match_metric: 'packet_loss' })];
-  assert.equal(routeFor(ps, [], event()), null);
-  assert.equal(routeFor(ps, [route({ enabled: false })], event()), null);
+  for (const rs of [[], [route({ enabled: false })]]) {
+    const hit = routeFor(ps, rs, event());
+    assert.equal(hit.pattern.id, 1);
+    assert.equal(hit.route, null);
+    assert.equal(hit.routed, true, 'no route means dispatch as before, not "do not alert"');
+  }
+  assert.equal(routeFor([], [], event()), null, 'no pattern at all is still null');
 });
 
 test("an event below the route's minimum is NOT alerted, rather than falling back", () => {

@@ -16,6 +16,14 @@ its numbers, and the reader draws the conclusion:
 | `net.beacon` | this host called the same external address every N seconds for H hours | regularity over `flow_records` timings |
 | `peer.new_asn` · `peer.new_country` | this site has never reached that network before | first sighting against `known_peers` |
 
+**None of them names a MITRE ATT&CK technique either, and that is the same
+rule.** A technique asserts adversary behaviour, and a counter that is equally
+consistent with a misconfigured backup job cannot assert it. An OPERATOR can:
+an event pattern carries a technique and a tactic they chose, beside the reason
+the pattern requires, and the alert and the kill-chain strip then carry that
+label while the detector's own sentence stays exactly as it is. See
+[event-patterns.md](event-patterns.md).
+
 All three raise ORDINARY findings through the shared sink
 (`src/devices/findingSink.js`): stored, pushed to the dashboards, grouped into
 an event case, alerted through whatever channels are configured, handed to the
@@ -433,6 +441,12 @@ taking no space, when there is none — which is almost always.
 - **Acknowledging is how it clears.** There is no private dismiss: accepting the
   finding is the existing act of saying "seen", and it leaves a record that
   somebody did.
+- **The panel carries a kill-chain strip** when patterns have been mapped to
+  ATT&CK tactics: the tactics lit right now, in matrix order, with counts. Two
+  cells beside each other is a progression — Discovery then Credential Access —
+  which is more than the sum of two facts. Empty, and taking no space, on an
+  install that has mapped none, which is the default. See
+  [event-patterns.md](event-patterns.md).
 - **INFO never raises it.** That is why `peer.new_asn` is INFO by default — and
   why raising it, in Settings or with a severity rule, is also how you make the
   line react to it.

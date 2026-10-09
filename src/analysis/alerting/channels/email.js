@@ -76,7 +76,11 @@ function createEmailChannel({ config = {}, transport = null, createTransport = n
     }
     if (!config.to) return { ok: false, detail: 'no recipient configured' };
 
-    const subject = `[BlueEyes ${finding.severity || 'INFO'}] ${finding.metric || 'finding'} on ${hostLabel(finding)}`;
+    // The operator's ATT&CK technique goes in the SUBJECT, not just the body:
+    // a mail rule, a ticket title and a phone preview all read the subject, and
+    // "T1110" is what a security team greps for.
+    const tag = finding.attackTechnique ? `${finding.attackTechnique} ` : '';
+    const subject = `[BlueEyes ${finding.severity || 'INFO'}] ${tag}${finding.metric || 'finding'} on ${hostLabel(finding)}`;
     const text = [
       finding.explanation || '',
       // The link first after the sentence: on a phone it is the one line that
@@ -87,6 +91,12 @@ function createEmailChannel({ config = {}, transport = null, createTransport = n
       `Metric: ${finding.metric}`,
       `Severity: ${finding.severity}`,
       `Kind: ${finding.kind}`,
+      // Said as the judgement it is: a person mapped this pattern, and the
+      // pattern's name is how they find the decision again.
+      finding.attackTechnique
+        ? `MITRE ATT&CK: ${finding.attackTechnique}${finding.attackTactic ? ` (${finding.attackTactic})` : ''}`
+          + `${finding.attackPattern ? ` — mapped by the pattern "${finding.attackPattern}"` : ''}`
+        : null,
       finding.deviation != null ? `Deviation: ${finding.deviation}` : null,
       group && group.hint ? `\nRoot-cause: ${group.hint}` : null,
       // Cross-agent cluster alert extras (only present on cluster-level alerts).

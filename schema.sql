@@ -3873,13 +3873,16 @@ CREATE TABLE IF NOT EXISTS `event_patterns` (
   `match_host_id` VARCHAR(255)     DEFAULT NULL,
   `match_application_id` INT        DEFAULT NULL,
   `reason` VARCHAR(500)     DEFAULT NULL,
+  `attack_technique` VARCHAR(16) NULL DEFAULT NULL,
+  `attack_tactic` VARCHAR(32) NULL DEFAULT NULL,
   `enabled` TINYINT(1)   NOT NULL DEFAULT 1,
   `created_by` INT UNSIGNED     DEFAULT NULL,
   `created_at` DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
   `updated_at` DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   UNIQUE KEY `uq_event_patterns_name` (`name`),
   KEY `idx_event_patterns_source` (`source`, `enabled`),
-  CONSTRAINT `fk_event_patterns_user` FOREIGN KEY (`created_by`) REFERENCES `users` (`id`) ON DELETE SET NULL
+  CONSTRAINT `fk_event_patterns_user` FOREIGN KEY (`created_by`) REFERENCES `users` (`id`) ON DELETE SET NULL,
+  KEY `idx_event_patterns_tactic` (`attack_tactic`, `enabled`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- Where a pattern's events go, and from which severity. ONE row per pattern:

@@ -91,6 +91,76 @@ Cluster alerts (`dispatchCluster`, `dispatchClusterEvent`) are **not** routed: a
 cluster spans several hosts and metrics by definition, so there is no one
 pattern it belongs to. They keep their own once-per-cluster guard.
 
+## MITRE ATT&CK — the operator's label, not the detector's
+
+A pattern may carry a technique and a tactic (`attack_technique`,
+`attack_tactic`, migration 147). This is the only place in the codebase where an
+ATT&CK technique is asserted, and the author matters.
+
+**ATT&CK is not an indicator feed.** There are no addresses, hashes or domains
+in it — it is a taxonomy of adversary behaviour. So there is nothing here to
+match against: the matching is the one above, and ATT&CK only gives that match a
+name other tools recognise. An IOC feed would be a different feature, and one
+that collides with three house rules at once (metadata only, no cloud, no US
+vendors).
+
+**Why the pattern and not the detector.**
+[attack-indication.md](attack-indication.md) is explicit: each detector "states
+a fact with its numbers", and "none of these detectors classifies traffic as
+malicious, scores a threat or names a technique". That restraint is what makes
+the red line worth looking at — 212 failed logins is equally consistent with a
+misconfigured backup job, and a red line over a sentence that turns out to be
+the backup job teaches an operator to stop reading the line.
+
+A technique on a pattern is a different statement by a different author: the
+operator saying "on this network, we treat this match as T1110", beside the
+`reason` the pattern already requires, with their account in the audit log. The
+detector keeps saying "212 auth failures in 10 minutes on core-sw-1". Both are
+true; only one is a judgement about an adversary.
+
+**Both fields or neither.** A technique can belong to more than one tactic
+(T1133 External Remote Services is Initial Access *and* Persistence), so the
+tactic cannot be derived — the operator picks the one they mean. Half a mapping
+groups as nothing, exports as nothing and draws as nothing while looking on
+every screen like a mapping that works, so it is refused.
+
+**The technique id is checked by shape, the tactic against a list.** Any
+`T####` or `T####.###` is accepted: ATT&CK has some two hundred techniques, this
+product ships a dozen suggestions, and a customer who has mapped one we have
+never heard of is right. The fourteen Enterprise tactics *are* closed — they are
+the columns of the published matrix, and an export has to name one to open in
+ATT&CK Navigator at all.
+
+**Some matches map to nothing, deliberately.** `peer.new_asn` and
+`peer.new_country` ("this site has never reached that network before") are first
+sightings, not adversary behaviour. Forcing T1041 Exfiltration onto them turns a
+cloud migration into an exfiltration alert, so they appear against no suggested
+technique — and an operator who wants one anyway can type it in, with a reason.
+
+### Where it shows
+
+| Surface | Shows |
+|---|---|
+| The red line's panel | the tactics **lit right now**, in matrix order, with counts. Two cells side by side is a progression — Discovery then Credential Access — which is the thing worth seeing and why it is a strip |
+| Settings → Patterns | the tactics this install has **mapped**, lit or not: the "what can we even see" half, which is the question an auditor asks |
+| The alert | `T1110` in the e-mail subject, a line in the Matrix message, `technique=`/`tactic=` in syslog, top-level `technique`/`tactic` in the webhook. Greppable and routable in the customer's own SIEM |
+| `GET /api/event-patterns/attack/layer` | an **ATT&CK Navigator layer** (format 4.5), scored by how many open events each technique covers now |
+
+**Why an export and not a matrix in the dashboard.** The published matrix is
+fourteen columns and some two hundred techniques. An install that maps eight of
+them renders as a grey wall with three dots in it — which reads as "this product
+sees nothing" when the truth is the opposite. Navigator draws the matrix
+properly, it is free, and a security team already has it open. So the product's
+own screens show the tactics actually covered, and the full matrix is a file for
+the tool built to draw one.
+
+The strip in the red line's panel is built from the groups
+`FindingStore.attackIndication()` already returns, matched against the patterns
+with the **same pure matcher** the alerting path uses — so the strip and the
+alert can never disagree about which pattern an event belongs to. It fails
+quietly: every open browser polls that endpoint, and a tactic strip is worth
+nothing beside the bar's own count.
+
 ## Two things a pattern deliberately cannot do
 
 - **It cannot mute.** A route must name at least one channel. Silencing already
@@ -139,12 +209,13 @@ and indefinitely. Every write is audited under the `event_pattern` category.
 | Piece | File |
 |---|---|
 | The judgement (pure — no DB, no clock) | `src/events/patterns.js` |
+| The ATT&CK vocabulary + rollup + layer (pure) | `src/events/attack.js` |
 | The match it reuses | `src/events/severityRules.js` (`scopeMatches`, `specificityOf`, `validateScope`) |
 | Data access + the 30s cache the dispatcher reads | `src/repositories/eventPatternsRepository.js` |
 | Pattern-backed rules, resolved in SQL | `src/repositories/severityRulesRepository.js` |
 | HTTP | `src/routes/eventPatterns.js` |
 | Routing | `src/analysis/alerting/dispatcher.js` (`routing` port, wired in `src/server.js`) |
 | Dashboard | Settings → Patterns (`settingsPatternsView` in `public/app.js`) |
-| Tests | `test/eventPatterns.test.js` |
+| Tests | `test/eventPatterns.test.js`, `test/attackMapping.test.js` |
 
 See also [severity-rules.md](severity-rules.md) and [alerting.md](alerting.md).

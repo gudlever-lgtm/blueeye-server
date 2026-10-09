@@ -126,6 +126,20 @@ async function trendQuery(pool, { bucket, filters, limit }) {
   }));
 }
 
+// The SQL half of a match scope: the columns a severity rule or a named pattern
+// (src/events/patterns.js) pins down, as a WHERE fragment. One place, so the
+// backfill and the pattern's match count can never disagree about what a scope
+// covers.
+function scopeFilter(scope) {
+  const where = [];
+  const params = [];
+  if (!scope) return { where, params };
+  if (scope.match_metric) { where.push('metric = ?'); params.push(scope.match_metric); }
+  if (scope.match_kind) { where.push('kind = ?'); params.push(scope.match_kind); }
+  if (scope.match_host_id) { where.push('host_id = ?'); params.push(scope.match_host_id); }
+  return { where, params };
+}
+
 function parseJson(value, fallback) {
   if (value === null || value === undefined) return fallback;
   if (typeof value === 'string') {
@@ -301,6 +315,20 @@ class FindingStore {
     }
   }
 
+  // How many OPEN findings fall inside a match scope — a severity rule's, or a
+  // named pattern's (src/events/patterns.js). The backfill's own count is this
+  // plus "and the severity would actually change"; a pattern has no severity to
+  // change, so the question it asks is this one.
+  async countMatchingScope(scope) {
+    const f = scopeFilter(scope);
+    const where = ['acked = 0', ...f.where];
+    const [rows] = await this.pool.query(
+      `SELECT COUNT(*) AS n FROM findings WHERE ${where.join(' AND ')}`,
+      f.params
+    );
+    return Number(rows[0] ? rows[0].n : 0);
+  }
+
   // Applies a rule to findings that ALREADY exist — the explicit backfill, never
   // something writing a rule does on its own.
   //
@@ -308,11 +336,9 @@ class FindingStore {
   // already read and acted on is history, and rewriting its severity after the
   // fact would change the record of what they were looking at.
   async applySeverityRule(rule, { dryRun = true } = {}) {
-    const where = ['acked = 0', 'severity <> ?'];
-    const params = [rule.severity];
-    if (rule.match_metric) { where.push('metric = ?'); params.push(rule.match_metric); }
-    if (rule.match_kind) { where.push('kind = ?'); params.push(rule.match_kind); }
-    if (rule.match_host_id) { where.push('host_id = ?'); params.push(rule.match_host_id); }
+    const scope = scopeFilter(rule);
+    const where = ['acked = 0', 'severity <> ?', ...scope.where];
+    const params = [rule.severity, ...scope.params];
 
     const [counted] = await this.pool.query(
       `SELECT COUNT(*) AS n FROM findings WHERE ${where.join(' AND ')}`,

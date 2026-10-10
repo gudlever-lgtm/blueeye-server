@@ -99,12 +99,25 @@ test('the rule table is validated per rule, and an unknown event type is accepte
   assert.ok(validateAttackIndication({ securityEvents: { rules: [] } }).errors['securityEvents.rules']);
 });
 
+test('the lateral fields validate like the rest, and the port list is numbers 1-65535', () => {
+  const ok = validateAttackIndication({ scan: { lateralEnabled: false, lateralHostThreshold: 15, lateralPorts: '445, 3389' } });
+  assert.equal(ok.errors, null);
+  assert.deepEqual(ok.value.scan, { lateralEnabled: false, lateralHostThreshold: 15, lateralPorts: [445, 3389] });
+  assert.ok(validateAttackIndication({ scan: { lateralHostThreshold: 1 } }).errors['scan.lateralHostThreshold']);
+  assert.ok(validateAttackIndication({ scan: { lateralPorts: '445, 70000' } }).errors['scan.lateralPorts']);
+  assert.ok(validateAttackIndication({ scan: { lateralEnabled: 'yes' } }).errors['scan.lateralEnabled']);
+});
+
 test('a CRIT line below its WARN line is refused and named, not clamped', () => {
   const base = { scan: { portThreshold: 50, critPortThreshold: 500, hostThreshold: 50, critHostThreshold: 500 },
     beacon: { maxJitter: 0.15, critJitter: 0.05 }, securityEvents: { rules: {} }, newPeer: {} };
   assert.equal(checkCoherence(base), null);
   assert.match(checkCoherence({ ...base, scan: { ...base.scan, critPortThreshold: 10 } })['scan.critPortThreshold'], /at least/);
   assert.match(checkCoherence({ ...base, beacon: { maxJitter: 0.1, critJitter: 0.5 } })['beacon.critJitter'], /not be above/);
+  assert.match(
+    checkCoherence({ ...base, scan: { ...base.scan, lateralHostThreshold: 10, lateralCritHostThreshold: 5 } })['scan.lateralCritHostThreshold'],
+    /at least/,
+  );
   assert.match(
     checkCoherence({ ...base, securityEvents: { rules: { 'auth.failure': { warn: 10, crit: 2 } } } })['securityEvents.rules.auth.failure.crit'],
     /at least/,

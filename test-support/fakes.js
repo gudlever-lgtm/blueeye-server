@@ -3264,6 +3264,9 @@ function makeFlowsRepo(overrides = {}) {
     exploreFlows: overrides.exploreFlows || (async () => ({ topTalkers: [], byPort: [], byProto: [], series: [], scans: [], totals: { bytes: 0, packets: 0, flowCount: 0, records: 0 } })),
     // Fleet-wide port-scan / fan-out candidates (src/analysis/scanDetector.js).
     scanCandidates: overrides.scanCandidates || (async () => []),
+    // Lateral-movement candidates: fan-out per destination port, internal only
+    // (src/analysis/scanDetector.js).
+    lateralCandidates: overrides.lateralCandidates || (async () => []),
     // The external networks an hour of flows reached (src/analysis/newPeerDetector.js).
     externalPeersSince: overrides.externalPeersSince || (async () => []),
     // The beacon detector's three reads (src/analysis/beaconDetector.js): how

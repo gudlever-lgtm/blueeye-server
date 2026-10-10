@@ -8,7 +8,7 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 
 const {
-  createScanDetector, loadScanConfig, buildIgnoreList, classify,
+  createScanDetector, loadScanConfig, buildIgnoreList, classify, classifyLateral,
 } = require('../src/analysis/scanDetector');
 const { makeFlowsRepo } = require('../test-support/fakes');
 
@@ -153,7 +153,14 @@ test('a wide sweep is capped per run and says so rather than raising hundreds', 
 test('off by flag, off without a licence, and a broken repo never throws', async () => {
   const s = sink();
   const flowsRepo = makeFlowsRepo({ scanCandidates: async () => [candidate()] });
-  assert.equal(await createScanDetector({ flowsRepo, findingSink: s, config: loadScanConfig({ SCAN_ALERTS_ENABLED: 'false' }) }).run(), null);
+  // Scan off still RUNS — the lateral pass has its own switch — but asks the
+  // scan query nothing and raises nothing from it.
+  const scanOff = await createScanDetector({ flowsRepo, findingSink: s, config: loadScanConfig({ SCAN_ALERTS_ENABLED: 'false' }) }).run();
+  assert.equal(scanOff.candidates, 0);
+  assert.equal(scanOff.raised, 0);
+  assert.equal(await createScanDetector({
+    flowsRepo, findingSink: s, config: loadScanConfig({ SCAN_ALERTS_ENABLED: 'false', LATERAL_ALERTS_ENABLED: 'false' }),
+  }).run(), null);
   assert.equal(await createScanDetector({ flowsRepo, findingSink: s, config: loadScanConfig({}), licensed: () => false }).run(), null);
   assert.equal(s.emitted.length, 0);
 
@@ -174,4 +181,173 @@ test('start()/stop() schedule and clear without leaving a handle', () => {
   d.start();
   d.stop();
   d.stop();
+});
+
+// ---------------------------------------------------------------------------
+// Lateral movement: the same fan-out count, per destination port, an order of
+// magnitude lower. The gap this closes is the one shape ransomware has that
+// every count above misses — twenty machines on 445 and nothing else.
+// ---------------------------------------------------------------------------
+
+function lateral(over = {}) {
+  return {
+    agentId: 7,
+    srcIp: '10.0.0.66',
+    dstPort: 445,
+    distinctHosts: 18,
+    bytes: 900000,
+    packets: 4000,
+    flowCount: 40,
+    firstSeen: new Date('2026-09-30T09:47:10Z'),
+    lastSeen: new Date('2026-09-30T09:52:40Z'),
+    internal: true,
+    ...over,
+  };
+}
+
+test('classifyLateral: ten internal hosts on one port, and the CRIT line at thirty', () => {
+  const c = loadScanConfig({});
+  assert.equal(classifyLateral(lateral({ distinctHosts: 9 }), c), null);
+  assert.deepEqual(classifyLateral(lateral({ distinctHosts: 10 }), c), { kind: 'lateral', severity: 'WARN', hosts: 10 });
+  assert.equal(classifyLateral(lateral({ distinctHosts: 30 }), c).severity, 'CRIT');
+  // The generic fan-out count would have said nothing about any of them.
+  assert.equal(classify({ distinctPorts: 1, distinctHosts: 29 }, c), null);
+
+  const tuned = loadScanConfig({ LATERAL_HOST_THRESHOLD: '40', LATERAL_CRIT_HOST_THRESHOLD: '5' });
+  assert.equal(classifyLateral(lateral({ distinctHosts: 39 }), tuned), null);
+  assert.equal(tuned.lateralCritHostThreshold, 40, 'CRIT fell below WARN');
+});
+
+test('raises a net.lateral finding naming the service, the hosts and the window', async () => {
+  const s = sink();
+  const flowsRepo = makeFlowsRepo({ lateralCandidates: async () => [lateral()] });
+  const d = createScanDetector({
+    flowsRepo, findingSink: s, config: loadScanConfig({}), now: () => new Date('2026-09-30T10:00:30Z'),
+  });
+  const out = await d.run();
+  assert.equal(out.raised, 1);
+  const f = s.emitted[0];
+  assert.equal(f.metric, 'net.lateral');
+  assert.equal(f.severity, 'WARN');
+  assert.equal(f.hostId, '7', 'the observing agent is the host key');
+  assert.equal(f.observed, 18);
+  assert.equal(f.evidence[0].target, '10.0.0.66');
+  assert.equal(f.evidence[0].labels.dstPort, 445);
+  assert.equal(f.evidence[0].labels.service, 'SMB');
+  assert.equal(f.window[0].toISOString(), '2026-09-30T09:47:10.000Z');
+  assert.match(f.explanation, /18 distinct internal hosts on port 445 \(SMB\)/);
+  assert.match(f.explanation, /ransomware/, 'the explanation never says what this shape is');
+  assert.match(f.explanation, /not what was sent/, 'the explanation claims more than metadata can say');
+});
+
+test('the query is asked for the configured ports only, and not at all when the pass is off', async () => {
+  const asked = [];
+  const mk = (env) => createScanDetector({
+    flowsRepo: makeFlowsRepo({
+      lateralCandidates: async (args) => { asked.push(args); return []; },
+      scanCandidates: async () => [],
+    }),
+    findingSink: sink(),
+    config: loadScanConfig(env),
+  });
+  await mk({}).run();
+  assert.deepEqual(asked[0].ports, [445, 139, 135, 3389, 5985, 5986, 22]);
+  assert.equal(asked[0].hostThreshold, 10);
+
+  await mk({ LATERAL_PORTS: '445, 3389' }).run();
+  assert.deepEqual(asked[1].ports, [445, 3389]);
+
+  // Off means the query is never run at all, not run and discarded.
+  await mk({ LATERAL_ALERTS_ENABLED: 'false' }).run();
+  assert.equal(asked.length, 2);
+});
+
+test('turning the port-scan counts off leaves lateral movement reported, and both are gated together', async () => {
+  const s = sink();
+  const flowsRepo = makeFlowsRepo({
+    scanCandidates: async () => [candidate()],
+    lateralCandidates: async () => [lateral()],
+  });
+  // Scan off, lateral on: the operator who silenced a load balancer has not
+  // asked to stop hearing about this.
+  const d = createScanDetector({
+    flowsRepo, findingSink: s, config: loadScanConfig({ SCAN_ALERTS_ENABLED: 'false' }),
+  });
+  const out = await d.run();
+  assert.equal(out.raised, 1);
+  assert.equal(s.emitted[0].metric, 'net.lateral');
+
+  // Both off: the job does not run.
+  const off = createScanDetector({
+    flowsRepo,
+    findingSink: sink(),
+    config: loadScanConfig({ SCAN_ALERTS_ENABLED: 'false', LATERAL_ALERTS_ENABLED: 'false' }),
+  });
+  assert.equal(await off.run(), null);
+
+  // Unlicensed: neither runs.
+  const unlicensed = createScanDetector({
+    flowsRepo, findingSink: sink(), config: loadScanConfig({}), licensed: () => false,
+  });
+  assert.equal(await unlicensed.run(), null);
+});
+
+test('one source on two ports is two findings; the same port again is held by the cooldown', async () => {
+  const s = sink();
+  const c = clock('2026-09-30T10:00:00Z');
+  const flowsRepo = makeFlowsRepo({
+    lateralCandidates: async () => [lateral(), lateral({ dstPort: 3389, distinctHosts: 12 })],
+  });
+  const d = createScanDetector({ flowsRepo, findingSink: s, config: loadScanConfig({}), now: c.now });
+  await d.run();
+  assert.deepEqual(s.emitted.map((f) => f.evidence[0].labels.dstPort), [445, 3389]);
+
+  await d.run();
+  assert.equal(s.emitted.length, 2, 'the cooldown is not per port');
+
+  // The scan cooldown and the lateral one are separate keys: a port scan from
+  // this address must not silence the lateral finding about it.
+  const s2 = sink();
+  const both = createScanDetector({
+    flowsRepo: makeFlowsRepo({
+      scanCandidates: async () => [candidate()],
+      lateralCandidates: async () => [lateral()],
+    }),
+    findingSink: s2,
+    config: loadScanConfig({}),
+  });
+  await both.run();
+  // Lateral first: the shared per-run cap must not be spent by a sweep before
+  // the sharper signal gets to it.
+  assert.deepEqual(s2.emitted.map((f) => f.metric), ['net.lateral', 'net.scan']);
+});
+
+test('an address allowed to sweep is not reported as lateral movement either', async () => {
+  const s = sink();
+  const d = createScanDetector({
+    flowsRepo: makeFlowsRepo({ lateralCandidates: async () => [lateral({ srcIp: '10.9.0.7' })] }),
+    findingSink: s,
+    config: loadScanConfig({ SCAN_IGNORE_SOURCES: '10.9.0.0/24' }),
+  });
+  const out = await d.run();
+  assert.equal(out.raised, 0);
+  assert.equal(out.ignored, 1);
+});
+
+test('a failing lateral query takes the run down quietly, like the scan one', async () => {
+  const warned = [];
+  const d = createScanDetector({
+    flowsRepo: makeFlowsRepo({ lateralCandidates: async () => { throw new Error('db down'); } }),
+    findingSink: sink(),
+    config: loadScanConfig({}),
+    logger: { warn: (m) => warned.push(m), info: () => {} },
+  });
+  assert.equal(await d.run(), null);
+  assert.match(warned.join(' '), /run failed/);
+});
+
+test('net.lateral is on the attack-indication list', () => {
+  const { isAttackMetric, ATTACK_METRICS } = require('../src/analysis/attackIndication');
+  assert.ok(isAttackMetric('net.lateral'));
+  assert.ok(ATTACK_METRICS.includes('net.lateral'));
 });

@@ -49,6 +49,8 @@ const { createDeviceCounterSamplesRepository } = require(path.join(ROOT, 'src/re
 const { createFdbEntriesRepository } = require(path.join(ROOT, 'src/repositories/fdbEntriesRepository'));
 const { createSnmpCredentialProfilesRepository } = require(path.join(ROOT, 'src/repositories/snmpCredentialProfilesRepository'));
 const { createLadderRunsRepository } = require(path.join(ROOT, 'src/repositories/ladderRunsRepository'));
+const { createEventPatternsRepository } = require(path.join(ROOT, 'src/repositories/eventPatternsRepository'));
+const { createSeverityRulesRepository } = require(path.join(ROOT, 'src/repositories/severityRulesRepository'));
 const { AUTH_PROTOS, PRIV_PROTOS } = require(path.join(ROOT, 'src/validation/snmpProfileValidation'));
 
 // A stand-in for the real secretBox. The encryption itself is tested
@@ -1249,6 +1251,57 @@ check('flows: scan candidates count distinct ports and hosts per (agent, source)
   assert.deepStrictEqual(one.map((r) => r.srcIp), ['10.40.0.9']);
 });
 
+// The lateral detector's fleet-wide read (src/analysis/scanDetector.js). An IN
+// list built at call time, a third GROUP BY column and a HAVING over a
+// COUNT(DISTINCT ...) alias — none of which the scripted-pool spec can confirm.
+check('flows: lateral candidates group by (agent, source, port), internal only, over the configured ports', async (pool) => {
+  const flows = repoOf('flowsRepository', 'createFlowsRepository')({ pool });
+  const agentId = await newAgent(pool, 'be-lateral');
+  const at = ago(120000);
+  const rows = [];
+  // 14 internal hosts on 445, and 11 on 3389 — two candidate rows, not one sum.
+  for (let h = 1; h <= 14; h += 1) {
+    rows.push({ agentId, ts: at, srcIp: '10.41.0.9', dstIp: `10.41.1.${h}`, dstPort: 445, proto: 'tcp', bytes: 100, packets: 2, flows: 1, internal: true });
+  }
+  for (let h = 1; h <= 11; h += 1) {
+    rows.push({ agentId, ts: at, srcIp: '10.41.0.9', dstIp: `10.41.2.${h}`, dstPort: 3389, proto: 'tcp', bytes: 50, packets: 1, flows: 1, internal: true });
+  }
+  // The same fan-out on a port nobody watches: never a candidate.
+  for (let h = 1; h <= 40; h += 1) {
+    rows.push({ agentId, ts: at, srcIp: '10.41.0.10', dstIp: `10.41.3.${h}`, dstPort: 443, proto: 'tcp', bytes: 10, packets: 1, flows: 1, internal: true });
+  }
+  // The same fan-out on 445 but EXTERNAL: lateral movement is inside.
+  for (let h = 1; h <= 40; h += 1) {
+    rows.push({ agentId, ts: at, srcIp: '10.41.0.11', dstIp: `203.0.113.${h}`, extIp: `203.0.113.${h}`, dstPort: 445, proto: 'tcp', bytes: 10, packets: 1, flows: 1, internal: false });
+  }
+  // Repeat conversations with one host do not add up to many hosts.
+  for (let f = 1; f <= 30; f += 1) {
+    rows.push({ agentId, ts: at, srcIp: '10.41.0.12', dstIp: '10.41.4.1', dstPort: 445, proto: 'tcp', bytes: 10, packets: 1, flows: 1, internal: true });
+  }
+  await flows.insertMany(rows);
+
+  const ports = [445, 139, 135, 3389, 5985, 5986, 22];
+  const found = await flows.lateralCandidates({ from: ago(600000), to: new Date(), agentId, ports, hostThreshold: 10 });
+  assert.deepStrictEqual(
+    found.map((r) => [r.srcIp, r.dstPort, r.distinctHosts]).sort((a, b) => b[2] - a[2]),
+    [['10.41.0.9', 445, 14], ['10.41.0.9', 3389, 11]],
+    'an unwatched port, external traffic or a repeat conversation reached the candidate list',
+  );
+  assert.strictEqual(found[0].bytes, 1400);
+  assert.ok(found[0].firstSeen instanceof Date && found[0].lastSeen instanceof Date);
+
+  // The threshold and the port list both narrow; an empty list asks nothing.
+  assert.deepStrictEqual(
+    (await flows.lateralCandidates({ from: ago(600000), to: new Date(), agentId, ports, hostThreshold: 12 })).map((r) => r.dstPort),
+    [445],
+  );
+  assert.deepStrictEqual(
+    (await flows.lateralCandidates({ from: ago(600000), to: new Date(), agentId, ports: [3389], hostThreshold: 10 })).map((r) => r.dstPort),
+    [3389],
+  );
+  assert.deepStrictEqual(await flows.lateralCandidates({ from: ago(600000), to: new Date(), agentId, ports: [], hostThreshold: 1 }), []);
+});
+
 // The new-peer detector's hourly read (src/analysis/newPeerDetector.js).
 check('flows: external peers group by (agent, asn, country) and never include internal traffic (migration 142)', async (pool) => {
   const flows = repoOf('flowsRepository', 'createFlowsRepository')({ pool });
@@ -1926,6 +1979,58 @@ check('hop locations: an upsert that keeps the first writer, a longest-prefix re
 
   assert.strictEqual(await repo.remove('193.162.153.9', 32), 1);
   assert.strictEqual(await repo.remove('193.162.153.9', 32), 0);
+});
+
+check('event patterns: a pattern-backed rule reads the PATTERN\'s match, and a disabled pattern drops out', async (pool) => {
+  // Two statements here cannot be checked by a scripted pool and are exactly
+  // the kind that take a deploy down: the IF(...)/LEFT JOIN that resolves a
+  // pattern-backed severity rule, and the ON DUPLICATE KEY upsert that keeps
+  // one route per pattern. Both are the feature's correctness, not plumbing —
+  // a rule that resolved to blank match fields would govern every event from
+  // its source.
+  const patterns = createEventPatternsRepository({ db: { pool } });
+  const rules = createSeverityRulesRepository({ db: { pool }, ttlMs: 0 });
+
+  const p = await patterns.create({
+    name: 'Warehouse links', source: 'finding', match_metric: 'packet_loss', reason: 'wifi, not an SLA',
+  });
+  assert.ok(p.id, 'the pattern was not created');
+
+  const rule = await rules.create({ source: 'finding', pattern_id: p.id, severity: 'WARN', reason: 'the grouping' });
+  assert.strictEqual(rule.pattern_id, p.id);
+  assert.strictEqual(rule.pattern_name, 'Warehouse links');
+  assert.strictEqual(rule.match_metric, null, 'the rule stores no match of its own');
+
+  const [resolved] = await rules.active();
+  assert.strictEqual(resolved.match_metric, 'packet_loss', 'the pattern IS the match');
+
+  // One route per pattern: the second save is an update, not a second row.
+  const first = await patterns.saveRoute(p.id, { channels: 'email', min_severity: 'WARN', reason: 'the NOC' });
+  const second = await patterns.saveRoute(p.id, { channels: 'matrix', cooldown_ms: 600000, reason: 'the NOC room' });
+  assert.strictEqual(second.id, first.id, 'the upsert made a second route');
+  assert.strictEqual(second.channels, 'matrix');
+  assert.strictEqual(Number(second.cooldown_ms), 600000);
+  assert.strictEqual(second.min_severity, null, 'an omitted field is cleared, not carried');
+
+  const listed = await patterns.list();
+  assert.strictEqual(listed[0].rule_count, 1);
+  assert.strictEqual(listed[0].route.channels, 'matrix');
+
+  // Switching the pattern off takes its rule and its route out of effect.
+  await patterns.save(p.id, { enabled: false });
+  assert.deepStrictEqual(await rules.active(), [], 'a disabled pattern left its rule applying with no match');
+  const off = await patterns.active();
+  assert.strictEqual(off.patterns.length, 0);
+  assert.strictEqual(off.routes.length, 0);
+
+  await patterns.recordRouted(second.id);
+  assert.strictEqual(Number((await patterns.findRoute(p.id)).matched_count), 1);
+
+  // ON DELETE CASCADE: the rule and the route go with the pattern, because a
+  // rule left behind would have no match of its own.
+  assert.strictEqual(await patterns.remove(p.id), true);
+  assert.strictEqual(await patterns.findRoute(p.id), null);
+  assert.strictEqual((await rules.list()).length, 0, 'the FK did not cascade to the severity rule');
 });
 
 async function main() {

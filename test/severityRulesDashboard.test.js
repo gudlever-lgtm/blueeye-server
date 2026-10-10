@@ -191,7 +191,55 @@ test('creating a rule posts the shape the API documents', async (t) => {
     // a rule matching the empty string, and therefore nothing.
     match_kind: null,
     match_host_id: 'gw-core',
+    // A rule may instead FOLLOW a named pattern (docs/event-patterns.md). No
+    // pattern chosen means the rule carries its own match, spelled null.
+    pattern_id: null,
   });
+});
+
+// The other way to write a rule: point it at a named pattern instead of typing
+// the match again. The picker only appears when there are patterns for the
+// rule's source, and choosing one takes the match fields away — the pattern
+// holds them, and two places saying which events is a rule nobody can read.
+test('choosing a pattern replaces the match fields and posts pattern_id', async (t) => {
+  const PATTERN = {
+    id: 3, name: 'Warehouse links', source: 'finding', enabled: true,
+    match_metric: 'packet_loss', match_kind: null, match_host_id: null, match_application_id: null,
+    reason: 'wifi, not an SLA', rule_count: 0, route: null,
+  };
+  const { doc, calls, errors } = await boot(t, {
+    'GET /api/severity-rules': [],
+    'GET /api/event-patterns': [PATTERN],
+    'POST /api/severity-rules': { status: 201, body: RULE },
+  });
+  await openSeverityRules(doc);
+  await click(byText(doc, '#view button', '+ New rule'), 60);
+
+  let form = doc.querySelector('#modal-card form');
+  let inputs = [...form.querySelectorAll('input, select, textarea')];
+  // source, pattern, metric, kind, agent, severity, reason, enabled
+  assert.equal(inputs.length, 8, `unexpected field count: ${inputs.length}`);
+  const picker = inputs[1];
+  assert.deepEqual([...picker.options].map((o) => o.value), ['', '3']);
+
+  picker.value = '3';
+  picker.dispatchEvent(new doc.defaultView.Event('change'));
+  await tick(80);
+
+  form = doc.querySelector('#modal-card form');
+  inputs = [...form.querySelectorAll('input, select, textarea')];
+  // source, pattern, severity, reason, enabled — the three match fields are gone
+  assert.equal(inputs.length, 5, `the match fields were not replaced: ${inputs.length} fields`);
+  inputs[2].value = 'WARN';
+  inputs[3].value = 'the warehouse grouping';
+  form.dispatchEvent(new doc.defaultView.Event('submit', { cancelable: true }));
+  await tick(80);
+
+  assert.deepEqual(errors, []);
+  const post = calls.find((c) => c.method === 'POST' && c.path === '/api/severity-rules');
+  assert.ok(post, 'the form never posted');
+  assert.equal(post.body.pattern_id, 3);
+  assert.equal(post.body.match_metric, undefined, 'the pattern is the match; the rule sends none of its own');
 });
 
 // Preview before Save: the draft goes to POST /api/severity-rules/preview with

@@ -99,7 +99,7 @@
     license: { path: '/license' },
     settings: {
       path: '/settings',
-      tabs: ['users', 'auth', 'apitokens', 'agentkey', 'analyse', 'alerting', 'severity', 'thresholds', 'runbooks',
+      tabs: ['users', 'auth', 'apitokens', 'agentkey', 'analyse', 'alerting', 'severity', 'patterns', 'thresholds', 'runbooks',
         'events', 'integrations', 'cmdb', 'ai', 'maintenance', 'database', 'retention', 'types', 'map',
         'updates', 'agents', 'snmp', 'screening', 'assurance', 'appearance', 'license'],
       tabKey: 'settingsTab',

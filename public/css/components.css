@@ -907,6 +907,24 @@
 .attack-bar-label { font-weight: 600; }
 .attack-bar-detail { font-weight: 400; opacity: 0.9; }
 
+/* The ATT&CK kill-chain strip, inside the panel.
+   Tactics in matrix order, which is roughly the order an intrusion moves
+   through — so two cells lit side by side is a progression and not two
+   unrelated facts, which is the whole reason to draw it at all.
+   It is INSIDE the absolutely positioned panel, so it cannot grow the 3px line.
+   Empty on an install that has mapped no technique, which is the default: the
+   row then has no children and the flex box collapses. */
+.attack-bar-chain {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-2);
+  margin-top: var(--s-1);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  line-height: 1.3;
+}
+.attack-bar-chain > span { white-space: nowrap; }
+
 /* Motion is how a CRIT differs from a WARN here: same colour, but the critical
    one breathes. Respects the reader's own preference — a pulsing bar on a
    wall display is information, on a migraine it is not.
@@ -1006,3 +1024,28 @@
 @media (prefers-reduced-motion: reduce) {
   .ui .reveal-flash { animation: none; box-shadow: var(--ring); }
 }
+
+/* The ATT&CK coverage strip (Settings → Patterns). The tactics this install has
+   mapped, in the matrix order the server sends, left to right — so two cells
+   beside each other read as a progression rather than as two unrelated labels.
+   Only mapped tactics are drawn: fourteen columns for an install that maps
+   three reads as "this product sees nothing", and the truth is the opposite.
+   The full matrix is the Navigator layer export, which is what the official
+   viewer is for. */
+.attack-chain {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-2);
+  margin-bottom: var(--s-3);
+}
+.attack-chain-cell {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-1);
+  padding: var(--s-2) var(--s-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--panel-2);
+  font-size: var(--fs-xs);
+}
+.attack-chain-tactic { font-weight: 600; }

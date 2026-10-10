@@ -562,6 +562,73 @@ function createFlowsRepository(db) {
     }));
   }
 
+  // FLEET-WIDE lateral-movement candidates over [from, to): one row per
+  // (agent, source address, destination port) that reached at least
+  // `hostThreshold` distinct INTERNAL hosts on ONE of `ports`.
+  //
+  // WHY A SECOND QUERY AND NOT A LOWER THRESHOLD ON THE FIRST ONE.
+  // scanCandidates groups by (agent, source) and counts ports and hosts
+  // independently, so a workstation reaching forty machines on 445 and nothing
+  // else is one row with distinctPorts = 1 and distinctHosts = 40 — under the
+  // 50-host line, and invisible. Dropping that line to ten to catch it would
+  // report every backup agent, every patch run and every monitoring poller on
+  // the network, because at ten hosts the count says nothing on its own.
+  //
+  // The port is what makes ten hosts mean something: file-share and
+  // remote-execution ports are where ransomware spreads and encrypts, and a
+  // host that suddenly talks to thirty peers on 445 is a different statement
+  // from one that talks to thirty peers at all. So the port goes into the
+  // GROUP BY (one row per port, not a sum over them — twelve hosts on 445 and
+  // twelve on 3389 are two findings with two explanations) and the threshold
+  // can be an order of magnitude lower than the generic one.
+  //
+  // internal = 1 only: lateral movement is inside the network by definition,
+  // and an office that uses a hosted file share would otherwise produce this
+  // every morning.
+  //
+  // Raw flow_records only, windowed, capped and served by the (agent_id, ts)
+  // index — same constraints as scanCandidates, same reason: the rollups keep
+  // no per-port detail, and a detector that can table-scan the flow table is a
+  // denial of service on its own server.
+  async function lateralCandidates({
+    from, to, agentId = null, ports = [], hostThreshold = 10, limit = 100,
+  }) {
+    const portList = [...new Set((Array.isArray(ports) ? ports : [])
+      .map((p) => Number.parseInt(p, 10))
+      .filter((p) => Number.isInteger(p) && p >= 1 && p <= 65535))];
+    // No ports configured means nothing to look for — not "every port", which
+    // would be the generic fan-out query with a threshold set far too low.
+    if (!portList.length) return [];
+    const where = ['ts >= ?', 'ts < ?', 'internal = 1', 'src_ip IS NOT NULL',
+      `dst_port IN (${portList.map(() => '?').join(',')})`];
+    const params = [from, to, ...portList];
+    if (agentId != null) { where.push('agent_id = ?'); params.push(agentId); }
+    const lim = Number.isInteger(limit) && limit > 0 && limit <= 500 ? limit : 100;
+    const rows = await q(
+      `SELECT agent_id, src_ip, dst_port,
+              COUNT(DISTINCT dst_ip) AS hosts,
+              SUM(bytes) AS bytes, SUM(packets) AS packets, SUM(flows) AS flowCount,
+              MIN(ts) AS firstSeen, MAX(ts) AS lastSeen
+       FROM flow_records WHERE ${where.join(' AND ')}
+       GROUP BY agent_id, src_ip, dst_port
+       HAVING hosts >= ?
+       ORDER BY hosts DESC LIMIT ?`,
+      [...params, hostThreshold, lim],
+    );
+    return rows.map((r) => ({
+      agentId: Number(r.agent_id),
+      srcIp: r.src_ip,
+      dstPort: r.dst_port == null ? null : Number(r.dst_port),
+      distinctHosts: numOf(r.hosts),
+      bytes: numOf(r.bytes),
+      packets: numOf(r.packets),
+      flowCount: numOf(r.flowCount),
+      firstSeen: r.firstSeen ? new Date(r.firstSeen) : null,
+      lastSeen: r.lastSeen ? new Date(r.lastSeen) : null,
+      internal: true,
+    }));
+  }
+
   // The EXTERNAL networks each agent talked to over [from, to): one row per
   // (agent, ASN, country), with the heaviest conversation's addresses as
   // evidence. Feeds the new-peer memory (known_peers, migration 142).
@@ -717,7 +784,7 @@ function createFlowsRepository(db) {
     return rows.map((r) => new Date(r.ts));
   }
 
-  return { insertMany, aggregateExternalDestinations, destinationExists, agentIdsForDestination, selectFlows, exploreFlows, scanCandidates, externalPeersSince, reportCadence, beaconCandidates, beaconTimestamps, mapFlows, topologyEdges, tcpServiceFlows, agentIdsForIp, agentIdsForPort, asnSeries, lastFlowAtByAgent };
+  return { insertMany, aggregateExternalDestinations, destinationExists, agentIdsForDestination, selectFlows, exploreFlows, scanCandidates, lateralCandidates, externalPeersSince, reportCadence, beaconCandidates, beaconTimestamps, mapFlows, topologyEdges, tcpServiceFlows, agentIdsForIp, agentIdsForPort, asnSeries, lastFlowAtByAgent };
 }
 
 module.exports = { createFlowsRepository, toRow, COLUMNS };

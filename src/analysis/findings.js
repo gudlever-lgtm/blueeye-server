@@ -126,6 +126,20 @@ async function trendQuery(pool, { bucket, filters, limit }) {
   }));
 }
 
+// The SQL half of a match scope: the columns a severity rule or a named pattern
+// (src/events/patterns.js) pins down, as a WHERE fragment. One place, so the
+// backfill and the pattern's match count can never disagree about what a scope
+// covers.
+function scopeFilter(scope) {
+  const where = [];
+  const params = [];
+  if (!scope) return { where, params };
+  if (scope.match_metric) { where.push('metric = ?'); params.push(scope.match_metric); }
+  if (scope.match_kind) { where.push('kind = ?'); params.push(scope.match_kind); }
+  if (scope.match_host_id) { where.push('host_id = ?'); params.push(scope.match_host_id); }
+  return { where, params };
+}
+
 function parseJson(value, fallback) {
   if (value === null || value === undefined) return fallback;
   if (typeof value === 'string') {
@@ -301,6 +315,20 @@ class FindingStore {
     }
   }
 
+  // How many OPEN findings fall inside a match scope — a severity rule's, or a
+  // named pattern's (src/events/patterns.js). The backfill's own count is this
+  // plus "and the severity would actually change"; a pattern has no severity to
+  // change, so the question it asks is this one.
+  async countMatchingScope(scope) {
+    const f = scopeFilter(scope);
+    const where = ['acked = 0', ...f.where];
+    const [rows] = await this.pool.query(
+      `SELECT COUNT(*) AS n FROM findings WHERE ${where.join(' AND ')}`,
+      f.params
+    );
+    return Number(rows[0] ? rows[0].n : 0);
+  }
+
   // Applies a rule to findings that ALREADY exist — the explicit backfill, never
   // something writing a rule does on its own.
   //
@@ -308,11 +336,9 @@ class FindingStore {
   // already read and acted on is history, and rewriting its severity after the
   // fact would change the record of what they were looking at.
   async applySeverityRule(rule, { dryRun = true } = {}) {
-    const where = ['acked = 0', 'severity <> ?'];
-    const params = [rule.severity];
-    if (rule.match_metric) { where.push('metric = ?'); params.push(rule.match_metric); }
-    if (rule.match_kind) { where.push('kind = ?'); params.push(rule.match_kind); }
-    if (rule.match_host_id) { where.push('host_id = ?'); params.push(rule.match_host_id); }
+    const scope = scopeFilter(rule);
+    const where = ['acked = 0', 'severity <> ?', ...scope.where];
+    const params = [rule.severity, ...scope.params];
 
     const [counted] = await this.pool.query(
       `SELECT COUNT(*) AS n FROM findings WHERE ${where.join(' AND ')}`,
@@ -559,6 +585,26 @@ class FindingStore {
     }
     if (!count) return { count: 0, bySeverity: {}, worst: null, findings: [] };
 
+    // The same set, grouped by what a PATTERN matches on (metric, kind, agent)
+    // plus severity, so the caller can map each group onto the operator's
+    // patterns and their ATT&CK tactics without a query per pattern. One
+    // GROUP BY over a set that is already small — open, corroborated,
+    // attack-indication findings inside the window — rather than N counts.
+    //
+    // Bounded like every list here: an estate with more than this many distinct
+    // groups lit at once has a bigger problem than a truncated strip.
+    const [groupRows] = await this.pool.query(
+      `SELECT f.metric AS metric, f.kind AS kind, f.host_id AS host_id, f.severity AS severity,
+              COUNT(*) AS cnt
+         FROM findings f ${clause}
+        GROUP BY f.metric, f.kind, f.host_id, f.severity
+        LIMIT 500`,
+      params,
+    );
+    const groups = groupRows.map((r) => ({
+      metric: r.metric, kind: r.kind, host_id: r.host_id, severity: r.severity, count: Number(r.cnt) || 0,
+    }));
+
     // Worst first, then newest: the bar names one finding, and on a morning
     // with a scan and a beacon it should be the scan.
     const [rows] = await this.pool.query(
@@ -581,6 +627,7 @@ class FindingStore {
       bySeverity,
       worst: bySeverity.CRIT ? 'CRIT' : (bySeverity.WARN ? 'WARN' : 'INFO'),
       findings,
+      groups,
     };
   }
 

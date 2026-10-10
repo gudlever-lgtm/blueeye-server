@@ -29,6 +29,9 @@ const ATTACK_METRICS = Object.freeze([
   'net.scan',
   // Regular outbound contact on a machine's schedule (src/analysis/beaconDetector.js).
   'net.beacon',
+  // One host reaching many internal peers on a file-share or remote-execution
+  // port (src/analysis/scanDetector.js). The shape ransomware spreads in.
+  'net.lateral',
   // A network this site has never reached (src/analysis/newPeerDetector.js).
   'peer.new_asn',
   'peer.new_country',

@@ -13,9 +13,27 @@ const { numOrNull } = require('../lib/num');
 function createSeverityRulesRepository({ db, now = () => new Date(), ttlMs = 30000 }) {
   const { pool } = db;
 
-  const COLS = `id, tenant_id, source, match_metric, match_kind, match_host_id,
+  const COLS = `id, tenant_id, source, pattern_id, match_metric, match_kind, match_host_id,
     match_application_id, severity, reason, enabled, applied_count,
     last_applied_at, created_by, created_at, updated_at`;
+
+  // A rule may take its match from a named PATTERN (migration 146) instead of
+  // carrying its own fields. Resolved here, in SQL, so everything downstream —
+  // the pure matcher, the backfill, the preview — keeps seeing a plain rule with
+  // match_* columns and never has to know a pattern exists.
+  //
+  // IF rather than COALESCE: a pattern that leaves a field blank means "any",
+  // and COALESCE would let the rule's own stale column leak back in and narrow
+  // the match to something nobody wrote. A pattern-backed rule whose pattern is
+  // DISABLED is left out entirely, because its own columns are blank and a rule
+  // with nothing pinned down governs every event from its source.
+  const RESOLVED = `r.id, r.tenant_id, r.source, r.pattern_id,
+    IF(r.pattern_id IS NULL, r.match_metric, p.match_metric) AS match_metric,
+    IF(r.pattern_id IS NULL, r.match_kind, p.match_kind) AS match_kind,
+    IF(r.pattern_id IS NULL, r.match_host_id, p.match_host_id) AS match_host_id,
+    IF(r.pattern_id IS NULL, r.match_application_id, p.match_application_id) AS match_application_id,
+    r.severity, r.reason, r.enabled, r.applied_count, r.last_applied_at,
+    r.created_by, r.created_at, r.updated_at, p.name AS pattern_name`;
 
   let cache = null;
   let cachedAt = 0;
@@ -26,6 +44,8 @@ function createSeverityRulesRepository({ db, now = () => new Date(), ttlMs = 300
       id: row.id,
       tenant_id: row.tenant_id,
       source: row.source,
+      pattern_id: row.pattern_id ?? null,
+      pattern_name: row.pattern_name ?? null,
       match_metric: row.match_metric,
       match_kind: row.match_kind,
       match_host_id: row.match_host_id,
@@ -52,7 +72,12 @@ function createSeverityRulesRepository({ db, now = () => new Date(), ttlMs = 300
   async function active() {
     if (cache && Date.now() - cachedAt < ttlMs) return cache;
     try {
-      const [rows] = await pool.query(`SELECT ${COLS} FROM event_severity_rules WHERE enabled = 1`);
+      const [rows] = await pool.query(
+        `SELECT ${RESOLVED}
+           FROM event_severity_rules r
+           LEFT JOIN event_patterns p ON p.id = r.pattern_id
+          WHERE r.enabled = 1 AND (r.pattern_id IS NULL OR p.enabled = 1)`
+      );
       cache = rows.map(shape);
       cachedAt = Date.now();
     } catch {
@@ -61,20 +86,32 @@ function createSeverityRulesRepository({ db, now = () => new Date(), ttlMs = 300
     return cache;
   }
 
+  // The rule AS STORED, plus its pattern's name — not the resolved match. The
+  // editor has to show what the person wrote, and the API has to say which
+  // pattern a rule follows rather than silently presenting the pattern's fields
+  // as the rule's own.
   async function findById(id) {
-    const [rows] = await pool.query(`SELECT ${COLS} FROM event_severity_rules WHERE id = ? LIMIT 1`, [id]);
+    const [rows] = await pool.query(
+      `SELECT ${COLS.split(',').map((c) => c.trim()).map((c) => `r.${c}`).join(', ')}, p.name AS pattern_name
+         FROM event_severity_rules r
+         LEFT JOIN event_patterns p ON p.id = r.pattern_id
+        WHERE r.id = ? LIMIT 1`, [id]
+    );
     return shape(rows[0]);
   }
 
-  async function list({ source = null, enabledOnly = false } = {}) {
+  async function list({ source = null, enabledOnly = false, patternId = null } = {}) {
     const where = [];
     const params = [];
-    if (source) { where.push('source = ?'); params.push(source); }
-    if (enabledOnly) where.push('enabled = 1');
+    if (source) { where.push('r.source = ?'); params.push(source); }
+    if (enabledOnly) where.push('r.enabled = 1');
+    if (patternId !== null && patternId !== undefined) { where.push('r.pattern_id = ?'); params.push(patternId); }
     const [rows] = await pool.query(
-      `SELECT ${COLS} FROM event_severity_rules
+      `SELECT ${COLS.split(',').map((c) => c.trim()).map((c) => `r.${c}`).join(', ')}, p.name AS pattern_name
+         FROM event_severity_rules r
+         LEFT JOIN event_patterns p ON p.id = r.pattern_id
        ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
-       ORDER BY source, id DESC`,
+       ORDER BY r.source, r.id DESC`,
       params
     );
     return rows.map(shape);
@@ -83,10 +120,10 @@ function createSeverityRulesRepository({ db, now = () => new Date(), ttlMs = 300
   async function create(input) {
     const [res] = await pool.query(
       `INSERT INTO event_severity_rules
-         (source, match_metric, match_kind, match_host_id, match_application_id,
+         (source, pattern_id, match_metric, match_kind, match_host_id, match_application_id,
           severity, reason, enabled, created_by)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [input.source, input.match_metric ?? null, input.match_kind ?? null,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [input.source, numOrNull(input.pattern_id), input.match_metric ?? null, input.match_kind ?? null,
         input.match_host_id ?? null, numOrNull(input.match_application_id),
         input.severity, input.reason ?? null,
         input.enabled === false ? 0 : 1, numOrNull(input.created_by)]
@@ -104,6 +141,10 @@ function createSeverityRulesRepository({ db, now = () => new Date(), ttlMs = 300
     if (input.match_application_id !== undefined) {
       sets.push('match_application_id = ?');
       params.push(numOrNull(input.match_application_id));
+    }
+    if (input.pattern_id !== undefined) {
+      sets.push('pattern_id = ?');
+      params.push(numOrNull(input.pattern_id));
     }
     if (input.enabled !== undefined) { sets.push('enabled = ?'); params.push(input.enabled ? 1 : 0); }
     if (!sets.length) return findById(id);

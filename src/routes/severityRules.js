@@ -4,7 +4,7 @@ const express = require('express');
 const { asyncHandler } = require('../middleware/asyncHandler');
 const { requireAuth, requireRole } = require('../auth/middleware');
 const { ROLES } = require('../auth/roles');
-const { validateRule, describeDecision, applySeverity } = require('../events/severityRules');
+const { validateRule, describeDecision, applySeverity, MATCH_FIELDS } = require('../events/severityRules');
 
 // Severity rules — "this kind of event is a warning for us, not a critical".
 //
@@ -23,10 +23,27 @@ const { validateRule, describeDecision, applySeverity } = require('../events/sev
 // backwards is the separate, explicit route at the end, which reports how many
 // rows it changed. Bundling the two would mean every correction silently became
 // policy, and every policy silently rewrote history.
-function createSeverityRulesRouter({ severityRulesRepo, findingStore, serviceTestIncidentsRepo, auditLogger }) {
+function createSeverityRulesRouter({
+  severityRulesRepo, findingStore, serviceTestIncidentsRepo, auditLogger, eventPatternsRepo = null,
+}) {
   const router = express.Router();
   const read = requireRole(ROLES.VIEWER, ROLES.OPERATOR, ROLES.ADMIN);
   const admin = requireRole(ROLES.ADMIN);
+
+  // A rule may take its match from a named PATTERN instead of its own fields
+  // (src/events/patterns.js). The pattern has to exist and has to govern the
+  // SAME source: a finding rule following a Service Assurance pattern would
+  // match nothing at all, silently, forever.
+  //
+  // Returns an error string, or null when the rule is fine.
+  async function patternProblem(value) {
+    if (!value.pattern_id) return null;
+    if (!eventPatternsRepo) return 'this server has no event patterns';
+    const pattern = await eventPatternsRepo.findById(value.pattern_id);
+    if (!pattern) return 'that pattern does not exist';
+    if (pattern.source !== value.source) return `that pattern matches ${pattern.source} events, not ${value.source} events`;
+    return null;
+  }
 
   const parseId = (raw) => {
     const n = Number.parseInt(raw, 10);
@@ -65,6 +82,8 @@ function createSeverityRulesRouter({ severityRulesRepo, findingStore, serviceTes
   router.post('/', requireAuth, admin, asyncHandler(async (req, res) => {
     const { value, errors } = validateRule(req.body);
     if (errors) return res.status(400).json({ error: 'Validation failed', details: errors });
+    const problem = await patternProblem(value);
+    if (problem) return res.status(400).json({ error: 'Validation failed', details: { pattern_id: problem } });
 
     const created = await severityRulesRepo.create({ ...value, created_by: (req.user && req.user.id) || null });
     if (auditLogger) {
@@ -89,6 +108,8 @@ function createSeverityRulesRouter({ severityRulesRepo, findingStore, serviceTes
     // and turn a narrow rule into one that governs every event from its source.
     const { value, errors } = validateRule({ ...existing, ...req.body, source: existing.source });
     if (errors) return res.status(400).json({ error: 'Validation failed', details: errors });
+    const problem = await patternProblem(value);
+    if (problem) return res.status(400).json({ error: 'Validation failed', details: { pattern_id: problem } });
 
     const saved = await severityRulesRepo.save(id, value);
     if (!saved) return res.status(404).json({ error: 'Rule not found' });
@@ -175,6 +196,16 @@ function createSeverityRulesRouter({ severityRulesRepo, findingStore, serviceTes
   router.post('/preview', requireAuth, read, asyncHandler(async (req, res) => {
     const { value, errors } = validateRule(req.body && req.body.rule);
     if (errors) return res.status(400).json({ error: 'Validation failed', details: errors });
+    // A pattern-backed draft carries no match fields of its own — the pattern
+    // holds them. They are resolved in here, exactly as severityRulesRepo
+    // resolves them for the write path, because a draft previewed with blank
+    // fields would report that it matches every open event on the estate.
+    const problem = await patternProblem(value);
+    if (problem) return res.status(400).json({ error: 'Validation failed', details: { pattern_id: problem } });
+    if (value.pattern_id) {
+      const pattern = await eventPatternsRepo.findById(value.pattern_id);
+      for (const field of MATCH_FIELDS[value.source] || []) value[field] = pattern[field] ?? null;
+    }
     if (req.body && req.body.scope === 'open' && req.body.event === undefined) {
       // Counting the estate's open events is the editor's question, and the
       // editor is admin-only; a viewer keeps the one-event preview.

@@ -20,7 +20,12 @@ function rfc5424(finding, { appName = 'blueeye' } = {}) {
   const host = String(finding.hostId || '-').replace(/\s+/g, '_') || '-';
   const named = finding.hostName ? ` agent="${String(finding.hostName).replace(/"/g, "'")}"` : '';
   const link = finding.link ? ` link=${finding.link}` : '';
-  const msg = `${finding.metric || '-'} severity=${finding.severity || 'INFO'} kind=${finding.kind || '-'}${named}${link} ${finding.explanation || ''}`
+  // Unquoted key=value, like the fields beside it: a SIEM's parser splits on
+  // these, and a technique id has no spaces in it.
+  const attack = finding.attackTechnique
+    ? ` technique=${finding.attackTechnique}${finding.attackTactic ? ` tactic=${finding.attackTactic}` : ''}`
+    : '';
+  const msg = `${finding.metric || '-'} severity=${finding.severity || 'INFO'} kind=${finding.kind || '-'}${named}${link}${attack} ${finding.explanation || ''}`
     .replace(/[\r\n]+/g, ' ')
     .trim();
   return `<${pri}>1 ${ts} ${host} ${appName} - finding - ${msg}`;

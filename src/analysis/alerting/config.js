@@ -45,6 +45,11 @@ function parseEnabledSetting(v) {
   return /^(1|true|yes|on)$/i.test(str);
 }
 
+// The channels this server can send through. A closed set — an alert route
+// (migration 146) names the ones its pattern's events go to, and the validator
+// checks the names against this rather than against a second hand-kept list.
+const CHANNEL_NAMES = ['email', 'webhook', 'matrix', 'syslog'];
+
 // A channel is CONFIGURED when it is switched on and has somewhere to send to.
 // An enabled channel with no address would never deliver, so it does not turn
 // alerting on by itself.
@@ -147,6 +152,6 @@ function loadAlertingConfig(env = process.env) {
 }
 
 module.exports = {
-  loadAlertingConfig, rank, RANK,
+  loadAlertingConfig, rank, RANK, CHANNEL_NAMES,
   parseEnabledSetting, channelConfigured, configuredChannels, resolveAlertingEnabled, refreshEffectiveEnabled,
 };

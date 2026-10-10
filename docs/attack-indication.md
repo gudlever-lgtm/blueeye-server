@@ -1,6 +1,6 @@
 # Attack indication
 
-Four detectors that answer a question the rest of the analysis module cannot:
+Five detectors that answer a question the rest of the analysis module cannot:
 **is something on this network behaving like an attack?**
 
 They are deliberately modest. BlueEyes is a fault and availability analyser —
@@ -13,10 +13,19 @@ its numbers, and the reader draws the conclusion:
 | --- | --- | --- |
 | `security.auth_failure` · `security.acl_denied` · `security.port_violation` · `security.vpn_failure` | this device reported N of these in M minutes | rate over `device_events` |
 | `net.scan` | this source address reached N distinct ports across M distinct hosts | threshold over `flow_records` |
+| `net.lateral` | this host reached N distinct internal hosts on one file-share / remote-execution port | threshold over `flow_records`, per port |
 | `net.beacon` | this host called the same external address every N seconds for H hours | regularity over `flow_records` timings |
 | `peer.new_asn` · `peer.new_country` | this site has never reached that network before | first sighting against `known_peers` |
 
-All three raise ORDINARY findings through the shared sink
+**None of them names a MITRE ATT&CK technique either, and that is the same
+rule.** A technique asserts adversary behaviour, and a counter that is equally
+consistent with a misconfigured backup job cannot assert it. An OPERATOR can:
+an event pattern carries a technique and a tactic they chose, beside the reason
+the pattern requires, and the alert and the kill-chain strip then carry that
+label while the detector's own sentence stays exactly as it is. See
+[event-patterns.md](event-patterns.md).
+
+All of them raise ORDINARY findings through the shared sink
 (`src/devices/findingSink.js`): stored, pushed to the dashboards, grouped into
 an event case, alerted through whatever channels are configured, handed to the
 outbound integrations. There is no separate security pipeline, no second alert
@@ -165,6 +174,68 @@ and the flow explorer's on-screen list, so tuning one moves both. An operator
 who raised the threshold because a load balancer trips it must not still see it
 listed as a scan on the screen the finding links to. `GET /api/flows/explore`
 answers with the thresholds it applied (`scanThresholds`).
+
+### 2b. Lateral movement
+
+**`src/analysis/scanDetector.js`** · finding `net.lateral`
+
+The same detector, a second query, and the one shape the counts above cannot
+see.
+
+`scanCandidates` groups by (agent, source) and counts ports and hosts
+independently. A workstation that reaches forty machines on 445 and nothing
+else is therefore one row with `distinctPorts = 1` and `distinctHosts = 40` —
+under the fifty-host line, and invisible. That shape is not a curiosity: it is
+what lateral movement looks like, and it is what ransomware looks like while it
+spreads and while it encrypts a file server's shares.
+
+Dropping the fan-out line to ten to catch it would report every backup agent,
+every patch run and every inventory sweep on the network, because at ten hosts
+the count says nothing on its own. **The port is what makes ten hosts mean
+something.** So the port goes into the `GROUP BY` and the threshold drops by an
+order of magnitude:
+
+- one row per (agent, source, **destination port**) — twelve hosts on 445 and
+  twelve on 3389 are two findings, two services, two things to check, not a sum
+- `internal = 1` only. Lateral movement is inside the network by definition, and
+  an office on a hosted file share would otherwise produce this every morning
+- **WARN** at `LATERAL_HOST_THRESHOLD` distinct internal hosts, **CRIT** at
+  three times it
+- the window is the burst, same as above
+
+The explanation names the service (`445 (SMB)`, from the same well-known-port
+table the flow explorer uses), says plainly that this is the shape ransomware
+spreads in, and then says what the data cannot tell you: metadata only, so it
+says which hosts were reached — not what was sent, whether anything answered,
+or whether a single file changed. A backup agent, a patch run, an inventory
+sweep and an administrator's scripted maintenance produce the same rows.
+
+The scanner ignore list is shared (`SCAN_IGNORE_SOURCES`): an address an
+operator has already declared allowed to sweep the network is not reported here
+either. The cooldown key is not shared — it carries the metric and the port, so
+a `net.scan` finding about an address never silences the `net.lateral` one about
+it.
+
+The two passes have **independent switches**: an operator who turned the generic
+port-scan counts off because a load balancer trips them has not thereby asked to
+stop hearing about lateral movement. Either one being on runs the job.
+
+#### Configuration
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `LATERAL_ALERTS_ENABLED` | `true` | `false` turns the lateral pass off; the query is then never run |
+| `LATERAL_HOST_THRESHOLD` | `10` | distinct internal hosts on ONE port that make it lateral movement |
+| `LATERAL_CRIT_HOST_THRESHOLD` | `3 ×` the host threshold | never below the WARN line |
+| `LATERAL_PORTS` | `445,139,135,3389,5985,5986,22` | SMB, NetBIOS, MS-RPC, RDP, WinRM, SSH |
+
+It shares `SCAN_WINDOW_MINUTES`, `SCAN_JOB_INTERVAL_MINUTES`,
+`SCAN_COOLDOWN_MINUTES`, `SCAN_MAX_PER_RUN` and `SCAN_IGNORE_SOURCES` with the
+pass above — one job, one window, one per-run cap.
+
+If a backup server or a patch host legitimately reaches every machine on one of
+these ports, either take the port off `LATERAL_PORTS` or add that server to
+`SCAN_IGNORE_SOURCES`. Both are settings on the dashboard screen below.
 
 ---
 
@@ -433,6 +504,12 @@ taking no space, when there is none — which is almost always.
 - **Acknowledging is how it clears.** There is no private dismiss: accepting the
   finding is the existing act of saying "seen", and it leaves a record that
   somebody did.
+- **The panel carries a kill-chain strip** when patterns have been mapped to
+  ATT&CK tactics: the tactics lit right now, in matrix order, with counts. Two
+  cells beside each other is a progression — Discovery then Credential Access —
+  which is more than the sum of two facts. Empty, and taking no space, on an
+  install that has mapped none, which is the default. See
+  [event-patterns.md](event-patterns.md).
 - **INFO never raises it.** That is why `peer.new_asn` is INFO by default — and
   why raising it, in Settings or with a severity rule, is also how you make the
   line react to it.

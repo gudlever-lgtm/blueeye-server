@@ -165,7 +165,9 @@ const { createTestPackagesRepository } = require('./repositories/testPackagesRep
 const { createTransactionsRepository } = require('./repositories/transactionsRepository');
 const { createServiceTestsModule } = require('./serviceTests');
 const { createSeverityRulesRepository } = require('./repositories/severityRulesRepository');
+const { createEventPatternsRepository } = require('./repositories/eventPatternsRepository');
 const { applySeverity } = require('./events/severityRules');
+const { routeFor } = require('./events/patterns');
 const { createTransactionBaselineJob } = require('./analysis/transactionBaselines');
 const { createTestPackageRunner } = require('./services/testPackageRunner');
 const { createTestPackageScheduler } = require('./services/testPackageScheduler');
@@ -442,6 +444,9 @@ function start() {
   // choice: a rule written today must not silently rewrite what you thought
   // last March.
   const severityRulesRepo = createSeverityRulesRepository({ db });
+  // Event patterns (migration 146) — the same match, named once, so a severity
+  // rule and an alert route can both point at it. See docs/event-patterns.md.
+  const eventPatternsRepo = createEventPatternsRepository({ db });
   // The adapter Service Assurance sees. A port rather than an import, so the
   // module keeps its extraction boundary and the matcher stays in one place.
   const severityRulesPort = {
@@ -669,7 +674,7 @@ function start() {
   const analysisConfig = loadAnalysisConfig();
   // THE ATTACK-INDICATION CONFIG, as ONE live object (docs/attack-indication.md).
   //
-  // Four detectors, four sections, built from the environment here and then
+  // Five detectors, four sections, built from the environment here and then
   // MUTATED IN PLACE by Settings → Attack indication (settingsService
   // getAttackIndication/setAttackIndication, and applyStoredOverrides at boot).
   // Each detector holds a reference and re-reads it on every run, so a
@@ -1050,6 +1055,24 @@ function start() {
     // Every alert names its agent and carries a link into the dashboard
     // (BLUEEYE_PUBLIC_URL). Without the URL the alert still goes, unlinked.
     enrich: createAlertContext({ publicUrl: config.publicUrl || null, agentsRepo, logger }).enrich,
+    // Pattern-driven routing. A finding whose pattern has an alert route goes
+    // only to that route's channels, under its minimum severity, with the
+    // cooldown keyed on the PATTERN instead of the finding — so one condition
+    // across forty agents is one alert. Nothing matching = today's behaviour.
+    routing: {
+      async routeFor(finding) {
+        const { patterns, routes } = await eventPatternsRepo.active();
+        if (!patterns.length) return null;
+        return routeFor(patterns, routes, {
+          source: 'finding',
+          metric: finding.metric,
+          kind: finding.kind,
+          host_id: finding.hostId,
+          severity: finding.severity,
+        });
+      },
+      recordRouted: (routeId) => eventPatternsRepo.recordRouted(routeId),
+    },
     logger,
   });
   // One-time-password email for local user creation. It reuses the SAME live
@@ -1587,6 +1610,7 @@ function start() {
     transactionsRepo,
     serviceTests,
     severityRulesRepo,
+    eventPatternsRepo,
     speedtestResultsRepo,
     healthAcksRepo,
     ladderRunsRepo,

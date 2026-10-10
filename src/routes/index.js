@@ -35,6 +35,7 @@ const { createTroubleshootingOverviewService } = require('../troubleshooting/ove
 const { createProbesRouter } = require('./probes');
 const { createReportsRouter } = require('./reports');
 const { createSeverityRulesRouter } = require('./severityRules');
+const { createEventPatternsRouter } = require('./eventPatterns');
 const { createEventsRouter } = require('./events');
 const { createEventClustersRouter } = require('./eventClusters');
 const { createRunbooksRouter } = require('./runbooks');
@@ -155,6 +156,7 @@ function createApiRouter({
   // The operator's own severity rules (migration 086). Absent = every event
   // keeps the severity it was detected with, which is what BlueEyes did before.
   severityRulesRepo = null,
+  eventPatternsRepo = null,
   analysisPipeline,
   probePipeline,
   flowPipeline,
@@ -386,7 +388,7 @@ function createApiRouter({
   const targetTimelineService = findingStore
     ? createTargetTimelineService({ findingStore, probeOutagesRepo, auditEventsRepo, remediationPlaybooksRepo, topologyChangesRepo, deviceEventsRepo })
     : null;
-  if (findingStore) router.use('/api/findings', createFindingsRouter({ findingStore, timelineService: targetTimelineService, auditLogger, agentsRepo }));
+  if (findingStore) router.use('/api/findings', createFindingsRouter({ findingStore, timelineService: targetTimelineService, auditLogger, agentsRepo, eventPatternsRepo }));
   if (assistant) router.use('/api/assistant', createAssistantRouter({ assistant, featureGate, logger }));
   if (flowsRepo) router.use('/api/geo', createGeoRouter({ flowsRepo, agentsRepo, findingStore, tileConfig: geoTileConfig, getMapConfig, geoProvider, hopLocationsRepo, hopCorrections, centroids, featureGate }));
   if (dispatcher) router.use('/api/alerting', createAlertingRouter({ dispatcher }));
@@ -688,6 +690,20 @@ function createApiRouter({
   // ADMIN-only inside the router: a rule changes what wakes people at 3am.
   if (severityRulesRepo) {
     router.use('/api/severity-rules', createSeverityRulesRouter({
+      severityRulesRepo,
+      findingStore,
+      serviceTestIncidentsRepo: serviceTests && serviceTests.repositories
+        ? serviceTests.repositories.incidents : null,
+      auditLogger,
+      eventPatternsRepo,
+    }));
+  }
+  // Event patterns — one named match, with the severity rules and the alert
+  // route that hang off it. The grouping layer under severity rules and
+  // alerting; see docs/event-patterns.md. ADMIN-only on every write inside.
+  if (eventPatternsRepo) {
+    router.use('/api/event-patterns', createEventPatternsRouter({
+      eventPatternsRepo,
       severityRulesRepo,
       findingStore,
       serviceTestIncidentsRepo: serviceTests && serviceTests.repositories

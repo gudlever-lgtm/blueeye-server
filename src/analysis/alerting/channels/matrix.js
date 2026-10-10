@@ -73,6 +73,12 @@ function renderMessage(finding, group) {
 
   const lines = [headline];
   if (finding && finding.explanation) lines.push(finding.explanation);
+  // The operator's ATT&CK mapping, when their pattern carries one. After the
+  // detector's own sentence, never instead of it: the sentence is the fact, the
+  // technique is the label a person put on it.
+  if (finding && finding.attackTechnique) {
+    lines.push(`MITRE ATT&CK: ${finding.attackTechnique}${finding.attackTactic ? ` · ${finding.attackTactic}` : ''}`);
+  }
   if (group && group.likelyCause) lines.push(`Likely cause: ${group.likelyCause}`);
   if (group && group.hint) lines.push(group.hint);
   if (isCluster && group.advisory) lines.push(group.advisory);

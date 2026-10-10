@@ -71,6 +71,21 @@ Deleting a rule does not un-decide what it decided: the foreign key is
 `ON DELETE SET NULL`, so the provenance goes to NULL and the stored severity
 stands.
 
+## Taking the match from a pattern instead
+
+A rule may point at a named **event pattern** (`pattern_id`, migration 146)
+instead of carrying its own match fields. The pattern then IS the match — the
+rule's own `match_*` columns are cleared rather than kept, because two places
+saying which events is a rule nobody can read — and the same match can drive an
+alert route at the same time. Everything above still holds: the resolution
+happens in `severityRulesRepository.active()`, in SQL, so the pure matcher, the
+backfill and the preview all keep seeing a plain rule with match fields.
+
+Deleting a pattern deletes the rules that follow it. A pattern-backed rule left
+behind would have no match of its own, and a rule with nothing pinned down
+governs every event from its source. See
+[event-patterns.md](event-patterns.md).
+
 ## Where it lives
 
 | Piece | File |

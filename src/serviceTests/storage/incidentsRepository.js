@@ -329,11 +329,34 @@ function createIncidentsRepository({ db, now = () => new Date() }) {
   // The explicit backfill for open incidents. Same posture as findings: only
   // OPEN ones, because a resolved incident is a record of what was decided at
   // the time, and rewriting it would make history a function of today's config.
+  // The SQL half of a match scope — the columns a severity rule or a named
+  // pattern (src/events/patterns.js) pins down. One place, so the backfill and
+  // a pattern's match count can never disagree about what a scope covers.
+  function scopeFilter(scope) {
+    const where = [];
+    const params = [];
+    if (!scope) return { where, params };
+    if (scope.match_kind) { where.push('kind = ?'); params.push(scope.match_kind); }
+    if (scope.match_application_id) { where.push('application_id = ?'); params.push(scope.match_application_id); }
+    return { where, params };
+  }
+
+  // How many OPEN incidents fall inside a scope. A pattern has no severity to
+  // change, so this is the question it asks where the backfill asks "and would
+  // the severity actually change".
+  async function countMatchingScope(scope) {
+    const f = scopeFilter(scope);
+    const [rows] = await pool.query(
+      `SELECT COUNT(*) AS n FROM service_test_incidents WHERE ${[ACTIVE_SQL, ...f.where].join(' AND ')}`,
+      [...ACTIVE, ...f.params]
+    );
+    return Number(rows[0] ? rows[0].n : 0);
+  }
+
   async function applySeverityRule(rule, { dryRun = true } = {}) {
-    const where = [ACTIVE_SQL, 'severity <> ?'];
-    const params = [...ACTIVE, rule.severity];
-    if (rule.match_kind) { where.push('kind = ?'); params.push(rule.match_kind); }
-    if (rule.match_application_id) { where.push('application_id = ?'); params.push(rule.match_application_id); }
+    const scope = scopeFilter(rule);
+    const where = [ACTIVE_SQL, 'severity <> ?', ...scope.where];
+    const params = [...ACTIVE, rule.severity, ...scope.params];
 
     const [counted] = await pool.query(
       `SELECT COUNT(*) AS n FROM service_test_incidents WHERE ${where.join(' AND ')}`,
@@ -500,6 +523,7 @@ function createIncidentsRepository({ db, now = () => new Date() }) {
     findById, findOpen, open, touch, resolve, markNotified, list, listBetween,
     countByApplication, seriesByApplication, openCounts, purgeResolvedOlderThan,
     applySeverityRule,
+    countMatchingScope,
     transition, recordAssessment, addEvent, addEvents, timeline,
   };
 }

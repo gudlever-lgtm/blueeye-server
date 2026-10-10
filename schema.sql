@@ -2325,6 +2325,7 @@ CREATE TABLE IF NOT EXISTS `event_severity_rules` (
   `id` INT           NOT NULL AUTO_INCREMENT PRIMARY KEY,
   `tenant_id` INT               DEFAULT NULL,
   `source` ENUM('finding','service_assurance') NOT NULL,
+  `pattern_id` INT NULL DEFAULT NULL,
   `match_metric` VARCHAR(255)      DEFAULT NULL,
   `match_kind` VARCHAR(60)       DEFAULT NULL,
   `match_host_id` VARCHAR(255)      DEFAULT NULL,
@@ -2338,7 +2339,9 @@ CREATE TABLE IF NOT EXISTS `event_severity_rules` (
   `created_at` DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
   `updated_at` DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   INDEX idx_esr_source (source, enabled),
-  CONSTRAINT fk_esr_application FOREIGN KEY (match_application_id) REFERENCES service_test_applications(id) ON DELETE CASCADE
+  CONSTRAINT fk_esr_application FOREIGN KEY (match_application_id) REFERENCES service_test_applications(id) ON DELETE CASCADE,
+  KEY `idx_event_severity_rules_pattern` (`pattern_id`),
+  CONSTRAINT `fk_event_severity_rules_pattern` FOREIGN KEY (`pattern_id`) REFERENCES `event_patterns` (`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 -- Visual regression baselines (V2 §8).
@@ -3833,6 +3836,84 @@ CREATE TABLE IF NOT EXISTS `hop_locations` (
   PRIMARY KEY (`ip`, `prefix_len`),
   KEY `idx_hop_locations_source` (`source`),
   CONSTRAINT `fk_hop_locations_user` FOREIGN KEY (`created_by`) REFERENCES `users` (`id`) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- 146 — event_patterns + alert_routes: one named match, used by every policy.
+--
+-- THE PROBLEM. BlueEyes already has a matcher: event_severity_rules (086) pins
+-- down source/metric/kind/agent/application, blank means "any", and the most
+-- specific rule wins. It is a good matcher and it is welded to exactly one
+-- decision — what severity to store. So an operator who wants
+--
+--     "packet loss on the warehouse links is a warning, and it goes to the
+--      Matrix room rather than to e-mail"
+--
+-- writes the match once as a severity rule and then cannot write it again for
+-- alerting at all: the dispatcher sees only a severity, and its cooldown is
+-- keyed per (host, metric, kind, …), so forty warehouse agents are forty
+-- alerts.
+--
+-- A PATTERN is that same match, given a name and stored once. A severity rule
+-- can point at one instead of carrying its own match fields, and an alert route
+-- hangs off one to say where its events go. Nothing else about the matcher
+-- changes: same fields, same "blank = any", same most-specific-wins — see
+-- src/events/severityRules.js, which patterns reuse rather than reimplement.
+--
+-- WHAT A PATTERN IS NOT. It is not a query language. Four fields and
+-- specificity cover what the matcher has always covered; a pattern with no
+-- field set at all would govern every event from its source and is refused by
+-- the validator, exactly as a severity rule is.
+CREATE TABLE IF NOT EXISTS `event_patterns` (
+  `id` INT          NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  `tenant_id` INT              DEFAULT NULL,
+  `name` VARCHAR(80)  NOT NULL,
+  `source` ENUM('finding','service_assurance') NOT NULL,
+  `match_metric` VARCHAR(255)     DEFAULT NULL,
+  `match_kind` VARCHAR(60)      DEFAULT NULL,
+  `match_host_id` VARCHAR(255)     DEFAULT NULL,
+  `match_application_id` INT        DEFAULT NULL,
+  `reason` VARCHAR(500)     DEFAULT NULL,
+  `attack_technique` VARCHAR(16) NULL DEFAULT NULL,
+  `attack_tactic` VARCHAR(32) NULL DEFAULT NULL,
+  `enabled` TINYINT(1)   NOT NULL DEFAULT 1,
+  `created_by` INT UNSIGNED     DEFAULT NULL,
+  `created_at` DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE KEY `uq_event_patterns_name` (`name`),
+  KEY `idx_event_patterns_source` (`source`, `enabled`),
+  CONSTRAINT `fk_event_patterns_user` FOREIGN KEY (`created_by`) REFERENCES `users` (`id`) ON DELETE SET NULL,
+  KEY `idx_event_patterns_tactic` (`attack_tactic`, `enabled`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Where a pattern's events go, and from which severity. ONE row per pattern:
+-- the pattern is the grouping, and a second route on the same grouping would
+-- mean two answers to "where does this go" with nothing to break the tie. Two
+-- destinations for two severities are two patterns.
+--
+-- WHAT IT CHANGES IN THE DISPATCHER (src/analysis/alerting/dispatcher.js):
+--   * only the channels named here are tried, instead of every enabled one;
+--   * `min_severity` here replaces the per-channel minimum for these events;
+--   * the cooldown is keyed on the PATTERN rather than on (host, metric, kind,
+--     …), so one condition across forty agents is one alert — which is the
+--     reason most of this table exists.
+-- An event that matches no pattern, or a pattern with no route, dispatches
+-- exactly as it does today.
+CREATE TABLE IF NOT EXISTS `alert_routes` (
+  `id` INT          NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  `pattern_id` INT          NOT NULL,
+  `channels` VARCHAR(255) NOT NULL,
+  `min_severity` ENUM('INFO','WARN','CRIT') DEFAULT NULL,
+  `cooldown_ms` INT UNSIGNED     DEFAULT NULL,
+  `reason` VARCHAR(500)     DEFAULT NULL,
+  `enabled` TINYINT(1)   NOT NULL DEFAULT 1,
+  `matched_count` INT UNSIGNED NOT NULL DEFAULT 0,
+  `last_matched_at` DATETIME        DEFAULT NULL,
+  `created_by` INT UNSIGNED     DEFAULT NULL,
+  `created_at` DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE KEY `uq_alert_routes_pattern` (`pattern_id`),
+  CONSTRAINT `fk_alert_routes_pattern` FOREIGN KEY (`pattern_id`) REFERENCES `event_patterns` (`id`) ON DELETE CASCADE,
+  CONSTRAINT `fk_alert_routes_user` FOREIGN KEY (`created_by`) REFERENCES `users` (`id`) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 SET FOREIGN_KEY_CHECKS = 1;

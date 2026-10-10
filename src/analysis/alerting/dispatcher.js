@@ -1,6 +1,7 @@
 'use strict';
 
 const { rank, resolveAlertingEnabled } = require('./config');
+const { channelsOf } = require('../../events/patterns');
 
 const silentLogger = { info() {}, warn() {}, error() {} };
 
@@ -20,7 +21,27 @@ const silentLogger = { info() {}, warn() {}, error() {} };
 // `hostName` and a dashboard `link` (see alertContext.js). It is applied to a
 // COPY handed to the channels; the throttle, the log and the caller keep the
 // subject as it was. A failing enrich costs the extras, never the alert.
-function createDispatcher({ config, channels = {}, licensed = () => true, channelLicensed = () => true, logger = silentLogger, now = () => Date.now(), silencer = null, alertLog = null, enrich = null }) {
+// `routing` (optional) is how an EVENT PATTERN takes over the routing of its
+// own events (migration 146, src/events/patterns.js): `routing.routeFor(finding)`
+// answers `{ pattern, route, routed }` or null, and when it answers,
+//
+//   * only the channels the route names are tried, instead of every enabled one;
+//   * the route's `min_severity` replaces each channel's own minimum;
+//   * the cooldown is keyed on the PATTERN rather than on the finding's
+//     (host, metric, kind, severity, target) — which is the point: one condition
+//     across forty agents becomes one alert instead of forty;
+//   * `routed: false` means the event is BELOW the route's minimum, so nothing
+//     is sent. Falling back to the per-channel minimums there would make the
+//     route's threshold decorative;
+//   * when the pattern carries the operator's ATT&CK mapping (migration 147),
+//     `attackTechnique` / `attackTactic` are stamped on the alert — whether or
+//     not the pattern also has a route. The label is the pattern's, so a
+//     pattern that only names a technique still labels its alerts.
+//
+// Without `routing`, or when nothing matches, dispatch behaves exactly as it did
+// before: every enabled channel, each with its own minimum, per-finding cooldown.
+// A failing resolver costs the routing, never the alert.
+function createDispatcher({ config, channels = {}, licensed = () => true, channelLicensed = () => true, logger = silentLogger, now = () => Date.now(), silencer = null, alertLog = null, enrich = null, routing = null }) {
   const lastSent = new Map(); // `${hostId}|${metric}|${kind}|${severity}|${subject}` -> timestamp
   let silencedBy = typeof silencer === 'function' ? silencer : null;
 
@@ -59,19 +80,27 @@ function createDispatcher({ config, channels = {}, licensed = () => true, channe
     }
   }
 
-  async function sendToChannels(rawSubject, group) {
+  async function sendToChannels(rawSubject, group, route = null) {
     const subject = await withContext(rawSubject);
     const subjectRank = rank(subject.severity);
+    const only = route ? new Set(channelsOf(route)) : null;
     const results = [];
     let attempted = false;
     for (const [name, channel] of Object.entries(channels)) {
       const rule = config.channels && config.channels[name];
       if (!rule || !rule.enabled) continue;
+      // A channel the pattern's route does not name is not a failure — the
+      // route said where these events go, and this is not one of them.
+      if (only && !only.has(name)) {
+        results.push({ channel: name, ok: false, skipped: true, detail: 'not in the pattern route' });
+        continue;
+      }
       if (!channelLicensed(name)) {
         results.push({ channel: name, ok: false, skipped: true, detail: 'channel not licensed' });
         continue;
       }
-      if (subjectRank < rank(rule.minSeverity)) {
+      const floor = (route && route.min_severity) ? route.min_severity : rule.minSeverity;
+      if (subjectRank < rank(floor)) {
         results.push({ channel: name, ok: false, skipped: true, detail: 'below minSeverity' });
         continue;
       }
@@ -113,14 +142,55 @@ function createDispatcher({ config, channels = {}, licensed = () => true, channe
       }
     }
 
-    const key = throttleKey(finding);
+    // Which pattern governs this, if any. A resolver that fails costs the
+    // routing and nothing else: the alert still goes out the default way.
+    let routed = null;
+    if (routing && typeof routing.routeFor === 'function') {
+      try { routed = await routing.routeFor(finding); } catch (err) {
+        logger.warn(`alerting: could not resolve the alert route (${err && err.message})`);
+        routed = null;
+      }
+    }
+    if (routed && routed.routed === false) {
+      return {
+        dispatched: false, reason: 'below-route-minimum', results: [],
+        pattern: routed.pattern && routed.pattern.id,
+      };
+    }
+    const route = routed ? routed.route : null;
+
+    // The operator's ATT&CK mapping, if their pattern carries one. Stamped on a
+    // COPY the channels see, like `enrich` does with the host name and the link:
+    // the throttle key, the alert log and the caller keep the finding as it was.
+    // Nothing here is the DETECTOR naming a technique — the detector's sentence
+    // is untouched; this is the label a person attached to the match, and it is
+    // what makes the alert greppable in the customer's own SIEM.
+    const labelled = routed && routed.pattern && routed.pattern.attack_technique
+      ? {
+        ...finding,
+        attackTechnique: routed.pattern.attack_technique,
+        attackTactic: routed.pattern.attack_tactic || null,
+        attackPattern: routed.pattern.name,
+      }
+      : finding;
+
+    // The cooldown key is the PATTERN when one routes this event, so one
+    // condition across many agents is one alert rather than one per agent.
+    // Severity stays in the key either way, so a cooldown started by a WARN
+    // never suppresses the CRIT escalation behind it.
+    const key = route ? `pattern:${routed.pattern.id}|${finding.severity}` : throttleKey(finding);
     const last = lastSent.get(key);
     const ts = now();
-    if (last !== undefined && ts - last < (config.cooldownMs || 0)) {
+    const cooldown = route && route.cooldown_ms != null ? route.cooldown_ms : (config.cooldownMs || 0);
+    if (last !== undefined && ts - last < cooldown) {
       return { dispatched: false, reason: 'throttled', results: [] };
     }
 
-    const { attempted, results } = await sendToChannels(finding, group);
+    const { attempted, results } = await sendToChannels(labelled, group, route);
+    if (attempted && route && routing && typeof routing.recordRouted === 'function') {
+      // Not awaited: a statistic is not worth delaying an alert for.
+      Promise.resolve(routing.recordRouted(route.id)).catch(() => {});
+    }
 
     // Only start the cooldown once a channel actually matched and was attempted.
     if (attempted) lastSent.set(key, ts);
@@ -134,8 +204,9 @@ function createDispatcher({ config, channels = {}, licensed = () => true, channe
     }
     const outcome = (r) => (r.ok ? 'ok' : r.skipped ? 'skip' : 'fail');
     const summary = results.map((r) => `${r.channel}:${outcome(r)}`).join(', ') || 'no channel';
-    logger.info(`alerting: ${finding.metric} ${finding.severity} -> ${summary}`);
-    return { dispatched: attempted, results };
+    const via = route ? ` via pattern "${routed.pattern.name}"` : '';
+    logger.info(`alerting: ${finding.metric} ${finding.severity}${via} -> ${summary}`);
+    return { dispatched: attempted, results, pattern: routed ? routed.pattern.id : null };
   }
 
   // Fires ONE cluster-level alert (Step 3) for a cross-agent event cluster, reusing

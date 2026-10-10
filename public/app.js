@@ -10271,17 +10271,22 @@ function changesRowEl(event, nameFor, showIndication = true) {
   return row;
 }
 
-// ---- Overview (MIGRATED — see public/views/home.js) ------------------------
-// The landing screen. It owns no data of its own: the three reads are the ones
-// Fleet, Troubleshooting and Changes already make, handed in here so the gate's
-// api()-is-mounted sweep still sees them. `endpoint` is what a failed panel
-// prints under the error, so a reader can say which call failed.
+// ---- Overview / Mission Control (MIGRATED — see public/views/home.js) ------
+// The landing screen. It owns no data of its own: the five reads are ones Fleet,
+// Troubleshooting, Changes, Events and Situations already make, handed in here
+// so the gate's api()-is-mounted sweep still sees them. `endpoint` is what a
+// failed panel prints under the error, so a reader can say which call failed.
+//
+// It stores nothing and decides nothing. A queue row IS an event case, a
+// situation, a correlated cause or an offline agent, and opening it opens that
+// record — see docs/mission-control.md.
 PAGE_INFO.home = {
   get hero() { return t('home.lead'); },
   get title() { return t('home.info.title'); },
   body: () => [
     el('p', {}, t('home.info.p1')),
     el('p', {}, t('home.info.p2')),
+    el('p', {}, t('home.info.p4')),
     el('p', { class: 'muted' }, t('home.info.p3')),
   ],
 };
@@ -10293,17 +10298,31 @@ function getHomePage() {
   if (typeof window === 'undefined' || !window.HomePage || !ui) return null;
   homePage = window.HomePage.create({
     el, t, ui, errText, openAgent,
+    // A queue row opens the RECORD behind it — the event case or the situation —
+    // because that is where its status, its evidence and its work log live.
+    // Mission Control decides nothing itself.
+    openEvent, openCluster,
     healthBadge: healthBadgeUi,
     help: () => ({ title: PAGE_INFO.home.title, body: PAGE_INFO.home.body }),
     endpoint: {
       fleet: 'GET /api/fleet/health',
       tshoot: 'GET /api/troubleshooting/overview',
       changes: 'GET /api/changes',
+      events: 'GET /api/events',
+      situations: 'GET /api/event-clusters',
     },
+    // Five independent reads, all of them endpoints a screen already calls.
+    // The two new ones are what let the queue rank a situation against an
+    // event instead of showing the operator three lists to compare by eye.
     fetch: {
       fleet: () => api('/api/fleet/health'),
       tshoot: () => api(`/api/troubleshooting/overview?minutes=${HOME_WINDOW_MIN}&limit=10`),
       changes: () => api('/api/changes?window=24h&limit=20'),
+      // No status filter in the query: /api/events takes ONE status, and the
+      // queue wants both the open ones and the ones somebody is on. It reads
+      // the recent cases and picks those two itself.
+      events: () => api('/api/events?limit=40'),
+      situations: () => api('/api/event-clusters?limit=20'),
     },
     go: (viewKey) => gotoView(viewKey),
   });

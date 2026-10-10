@@ -106,6 +106,14 @@ for d in "${REPOS[@]}"; do
   fi
 done
 
+# Where each repo stood BEFORE the pull. This is the rollback target printed if
+# the deploy fails its health check — without it, "go back to what worked" means
+# reading the reflog on a host nobody is logged into.
+declare -A SHA_BEFORE=()
+for d in "${REPOS[@]}"; do
+  SHA_BEFORE[$d]="$(git -C "$ROOT_DIR/$d" rev-parse HEAD 2>/dev/null || echo none)"
+done
+
 for d in "${REPOS[@]}"; do
   dir="$ROOT_DIR/$d"
 
@@ -128,6 +136,43 @@ cd "$SERVER_DIR"
 if [ ! -f .env ]; then
   warn ".env not found in $SERVER_DIR."
   warn "For the demo run: node scripts/dev-bootstrap.js   (generates keys + .env)"
+fi
+
+# --- Pre-migration dump ----------------------------------------------------
+# The server container runs `migrate && server`, so the moment the next line
+# starts it, pending migrations run. MySQL commits DDL as it goes: there is no
+# transaction to roll back, and the only honest recovery from a schema change
+# that goes wrong is a dump taken before it. Taking one is cheap; needing one
+# you did not take is not.
+#
+# Skipped when the db service is not part of this stack (an external MySQL), or
+# with BLUEEYE_SKIP_DB_DUMP=1.
+DUMP_DIR="${BLUEEYE_DUMP_DIR:-$SERVER_DIR/backups}"
+DUMP_FILE=""
+if [ "${BLUEEYE_SKIP_DB_DUMP:-0}" = "1" ]; then
+  warn "BLUEEYE_SKIP_DB_DUMP=1 — no pre-migration dump. A failed schema change will have nothing to restore."
+elif ! "${DC[@]}" ps --services 2>/dev/null | grep -qx db; then
+  warn "No 'db' service in this stack (external MySQL?) — skipping the pre-migration dump."
+  warn "Take your own dump before deploying a release that migrates."
+else
+  mkdir -p "$DUMP_DIR"
+  DUMP_FILE="$DUMP_DIR/blueeye-$(date +%Y%m%d-%H%M%S).sql.gz"
+  log "Dumping the database before migrations → $DUMP_FILE"
+  if "${DC[@]}" exec -T db sh -c \
+      'exec mysqldump --single-transaction --routines --triggers --events \
+         -u root -p"$MYSQL_ROOT_PASSWORD" "${MYSQL_DATABASE:-blueeye}"' 2>/dev/null | gzip > "$DUMP_FILE"; then
+    # An empty or truncated dump is worse than none, because it looks like a
+    # backup. 4 KiB is well under any real schema and well over a gzip header.
+    DUMP_SIZE="$(wc -c < "$DUMP_FILE" 2>/dev/null || echo 0)"
+    if [ "$DUMP_SIZE" -lt 4096 ]; then
+      rm -f "$DUMP_FILE"
+      die "The pre-migration dump came out at ${DUMP_SIZE} bytes — that is not a backup. Nothing has been deployed. Check the db credentials, or set BLUEEYE_SKIP_DB_DUMP=1 to deploy without one."
+    fi
+    log "Dump written ($((DUMP_SIZE / 1024)) KiB)"
+  else
+    rm -f "$DUMP_FILE"
+    die "Could not dump the database; nothing has been deployed. Fix it, or set BLUEEYE_SKIP_DB_DUMP=1 to deploy without a backup."
+  fi
 fi
 
 log "Building and starting: ${SERVICES[*]} (licens is left to deploy-licens.sh)"
@@ -209,7 +254,11 @@ else
 fi
 "${DC[@]}" restart server
 
-# --- Health check (non-fatal) ---------------------------------------------
+# --- Health + smoke checks (FATAL) ----------------------------------------
+# A deploy that cannot answer /health has not succeeded. This used to warn and
+# print "Done.", exit 0 — so a broken deploy looked like a good one, and the next
+# person to find out was a customer. It now fails, with the container's own log
+# tail and the exact commands to go back.
 SERVER_PORT="${SERVER_HOST_PORT:-3000}"
 
 http_ok() {
@@ -221,6 +270,40 @@ http_ok() {
   else
     return 2  # no http client available
   fi
+}
+
+# Echoes the status code for a URL, or empty when there is no curl. Used by the
+# smoke checks, which care about WHICH code came back, not just "was it 200".
+http_code() {
+  command -v curl >/dev/null 2>&1 || return 2
+  curl -s -o /dev/null -w '%{http_code}' --max-time 5 "$1" 2>/dev/null
+}
+
+# What to do about a deploy that came up broken. Code rollback only — the
+# database is deliberately NOT rolled back: MySQL DDL does not undo in a
+# transaction, and a half-reverted schema is worse than a stopped one. See
+# docs/deploy-recovery.md.
+abort_deploy() {
+  local why="$1"
+  printf '\n\033[1;31m===== DEPLOY FAILED: %s =====\033[0m\n' "$why" >&2
+  if command -v docker >/dev/null 2>&1; then
+    printf '\n--- last 60 lines of the server log ---\n' >&2
+    "${DC[@]}" logs --tail 60 server 2>&1 >&2 || true
+  fi
+  printf '\n\033[1;33mTo go back to the previous code:\033[0m\n' >&2
+  for d in "${REPOS[@]}"; do
+    printf '  git -C %s checkout %s\n' "$ROOT_DIR/$d" "${SHA_BEFORE[$d]}" >&2
+  done
+  printf '  %s up -d --build %s && %s restart server\n' "${DC[*]}" "${SERVICES[*]}" "${DC[*]}" >&2
+  if [ -n "${DUMP_FILE:-}" ] && [ -f "${DUMP_FILE:-}" ]; then
+    printf '\nPre-deploy dump: %s\n' "$DUMP_FILE" >&2
+    printf '  gunzip < %s | %s exec -T db sh -c \x27exec mysql -u root -p"$MYSQL_ROOT_PASSWORD" "${MYSQL_DATABASE:-blueeye}"\x27\n' "$DUMP_FILE" "${DC[*]}" >&2
+  fi
+  printf '\nThe DATABASE is not rolled back. Any migration this deploy applied is\n' >&2
+  printf 'still applied — migrations are written to be safe for the previous\n' >&2
+  printf 'server version (docs/deploy-recovery.md). If the failure IS the\n' >&2
+  printf 'migration, restore the pre-deploy dump before starting the old code.\n' >&2
+  exit 1
 }
 
 wait_health() {
@@ -236,7 +319,36 @@ wait_health() {
 }
 
 log "Waiting for the server to become healthy"
-wait_health server "http://localhost:${SERVER_PORT}/health" || true
+wait_health server "http://localhost:${SERVER_PORT}/health" \
+  || abort_deploy "the server never answered 200 on /health"
+
+# --- Smoke checks ----------------------------------------------------------
+# Three questions /health cannot answer: does the app actually route, does it
+# still refuse what it should, and is anything answering 5xx? A 500 anywhere
+# here is a deploy that boots but does not work.
+smoke() {
+  local name="$1" url="$2" want="$3" got
+  got="$(http_code "$url")" || { warn "No curl; skipping smoke check '$name'."; return 0; }
+  if [ "$got" = "$want" ]; then
+    log "smoke: $name → $got ✓"
+    return 0
+  fi
+  warn "smoke: $name expected HTTP $want, got ${got:-no answer} ($url)"
+  return 1
+}
+
+SMOKE_FAILED=0
+BASE="http://localhost:${SERVER_PORT}"
+# The dashboard shell is served, so the app is routing at all.
+smoke "dashboard loads"        "$BASE/"                      200 || SMOKE_FAILED=1
+# An unknown path is a 404 and not a 500 — the error handler is wired.
+smoke "unknown path is 404"    "$BASE/no-such-endpoint-$$"   404 || SMOKE_FAILED=1
+smoke "unknown api path is 404" "$BASE/api/no-such-thing-$$" 404 || SMOKE_FAILED=1
+# An auth-gated endpoint still refuses an anonymous caller. A 500 here (or a
+# 200!) is a broken auth chain, which no health probe would notice.
+smoke "protected route is 401" "$BASE/system/version"        401 || SMOKE_FAILED=1
+smoke "agents list is 401"     "$BASE/agents"                401 || SMOKE_FAILED=1
+[ "$SMOKE_FAILED" = "0" ] || abort_deploy "the smoke checks did not pass"
 
 # --- Confirm the offered agent version (optional) --------------------------
 # Verifies the server now actually offers the bundled agent version, closing the

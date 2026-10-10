@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.231.0 — An Overview to arrive on
+
+The dashboard has twenty-odd screens and the landing route was one of them:
+Changes. Arriving meant reading a list before knowing whether there was
+anything to read, and the counts that answer "is the network all right" were
+spread over three screens.
+
+**Monitoring → Overview** (`/overview`) is the landing route now. It is the
+layer above the other screens and owns no data of its own:
+
+- Six counts — agents, offline, not OK, root causes, active faults and changes
+  in the last 24 hours. Each card opens the screen behind its number.
+- Three shortlists: the live root causes, the agents that are not OK, and what
+  changed. Every row links into the screen that owns it; nothing is decided
+  here.
+- The three reads are the ones Fleet, Troubleshooting and Changes already make
+  (`/api/fleet/health`, `/api/troubleshooting/overview`, `/api/changes`) — no
+  new endpoint, no new table.
+- Each read stands on its own: a source answering 404, 500 or 503 takes down
+  its own panel, names the call that failed, and leaves the counts it fed
+  reading as a dash rather than a reassuring zero.
+
+Changes keeps its own entry and its own address; `/` now resolves to
+`/overview`.
+
 ## 0.229.0 — Evidence and the topology list are screens, not switches
 
 Two screens carried a lens switch in the topbar: Analysis (Explanation /

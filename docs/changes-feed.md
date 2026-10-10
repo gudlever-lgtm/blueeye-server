@@ -1,11 +1,12 @@
-# Changes feed — the landing page
+# Changes feed — what changed since you last looked
 
 A status dashboard full of green answers a question nobody asked. A shift starts
 with **"what happened while I was away"**, and until now the only way to answer
 that was to open six screens and compare them to memory.
 
-`GET /api/changes` · viewer+ · read-only aggregation. This is now the default
-route; the fleet grid moved to `/fleet`. It was not deleted — it is still the
+`GET /api/changes` · viewer+ · read-only aggregation. The Overview
+(`/overview`) is the default route and rolls this feed up to its newest few
+rows; `/changes` is the whole feed. It was not deleted — it is still the
 right screen for bulk operations across agents. It was never the right screen to
 open on.
 

@@ -27,6 +27,9 @@
   //   tabKey  the name match() reports the chosen sub-tab under
   //   param   this view takes a trailing id (/agents/12) reported as `id`
   var VIEWS = {
+    // The landing screen: the counts and the three shortlists that answer "is
+    // the network all right" before any list is read (public/views/home.js).
+    home: { path: '/overview' },
     changes: { path: '/changes' },
     // Fleet is ONE screen with three column sets over the same rows — the
     // agents. The tab is which set is shown, not which population: see
@@ -124,7 +127,7 @@
   };
 
   // The view the bare '/' opens, and the view an unknown path renders.
-  var HOME = 'changes';
+  var HOME = 'home';
   var NOT_FOUND = 'notFound';
 
   // Views whose path is only reachable with the role below (the nav rail hides

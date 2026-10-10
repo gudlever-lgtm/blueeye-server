@@ -154,7 +154,18 @@ function createFleetUpdateRouter(ctx) {
         const command = { ...payload.command };
         const auditId = await recordRequested('upgrade', target.agent, req, payload.targetVersion);
         if (auditId) command.auditId = auditId;
-        const out = await agentCommander.sendCommandAndWait(target.id, signCommand(target.id, command), { timeoutMs: 8000 });
+        // A command that cannot be signed is not sent unsigned — it is one
+        // target's failure, not the rollout's: the rest of the batch still moves,
+        // and this row says why it did not.
+        let signed;
+        try {
+          signed = signCommand(target.id, command);
+        } catch (err) {
+          await markFailed(auditId, err.message);
+          results.push({ id: target.id, hostname: target.hostname, outcome: 'refused', reason: err.message });
+          continue;
+        }
+        const out = await agentCommander.sendCommandAndWait(target.id, signed, { timeoutMs: 8000 });
         if (out.delivered === 0) {
           if (!queueOffline) {
             await markFailed(auditId, 'agent not connected');

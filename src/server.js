@@ -582,8 +582,24 @@ function start() {
   // Signs the privileged agent commands (upgrade/delete/install-tool) with the
   // same key that signs releases, so an agent can verify the SERVER asked — not
   // merely something holding its socket. No managed key => commands go out
-  // unsigned exactly as before.
-  const commandSigner = createCommandSigner({ releaseKeyService, logger });
+  // unsigned exactly as before — but a signing FAILURE refuses the command
+  // instead of downgrading it, and lands in the audit trail, because a
+  // privileged action nobody could authenticate is an incident, not a warning.
+  const commandSigner = createCommandSigner({
+    releaseKeyService,
+    logger,
+    onFailure: ({ code, message, command }) => {
+      if (typeof auditEventsRepo.recordRecurring !== 'function') return;
+      auditEventsRepo.recordRecurring({
+        actorType: 'system',
+        action: 'agent.command-signing-failed',
+        targetType: 'command',
+        targetLabel: command || null,
+        detail: { code, reason: message },
+        dedupKey: `system:agent.command-signing-failed:${code}:${command || '-'}`,
+      }).catch(() => { /* best-effort: auditing a refusal must not replace it */ });
+    },
+  });
 
   // Outbound API integrations (ITSM/IPAM connectors). The dispatcher fans domain
   // events (events/anomalies, agent enroll/delete) out to enabled targets with

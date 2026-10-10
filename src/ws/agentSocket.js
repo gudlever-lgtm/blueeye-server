@@ -473,7 +473,16 @@ function attachAgentWebSocket({
       const id = `q${Date.now().toString(36)}-${(seq += 1)}`;
       const command = { ...row.command, id };
       if (row.auditId != null && command.auditId == null) command.auditId = row.auditId;
-      const ok = ws.readyState === ws.OPEN && safeSend(ws, { type: 'command', command: signCommand(agentId, command) });
+      // Signed at delivery, not at enqueue (a signature made when the operator
+      // clicked would be stale by now). A signing failure leaves the command
+      // queued rather than sending it unsigned.
+      let signed = null;
+      try {
+        signed = signCommand(agentId, command);
+      } catch (err) {
+        logger.error(`agent ${agentId}: queued '${row.kind}' command could not be signed (${err.message}); it stays queued.`);
+      }
+      const ok = !!signed && ws.readyState === ws.OPEN && safeSend(ws, { type: 'command', command: signed });
       if (ok) {
         sent += 1;
         logger.info(`agent ${agentId}: delivered queued '${row.kind}' command on connect.`);
@@ -541,7 +550,14 @@ function attachAgentWebSocket({
       }
     }
     const id = `a${Date.now().toString(36)}-${(seq += 1)}`;
-    const ok = safeSend(ws, { type: 'command', command: signCommand(agentId, { ...command, id }) });
+    let signed = null;
+    try {
+      signed = signCommand(agentId, { ...command, id });
+    } catch (err) {
+      logger.error(`agent ${agentId}: self-requested update could not be signed (${err.message}); refused.`);
+      return reply(false, 'sign-failed');
+    }
+    const ok = safeSend(ws, { type: 'command', command: signed });
     if (!ok) return reply(false, 'send-failed');
     lastSelfUpdate.set(String(agentId), Date.now());
     logger.info(`agent ${agentId}: self-requested update from v${current} to v${payload.targetVersion} sent.`);

@@ -74,11 +74,61 @@ test('a server without a managed signing key sends the command unchanged', () =>
   assert.deepEqual(createCommandSigner({}).sign(42, { name: 'delete' }), { name: 'delete' });
 });
 
-test('a signing failure degrades to an unsigned command rather than blocking the action', () => {
+test('a signing failure REFUSES the command — it is never sent unsigned', () => {
+  // The old behaviour was to warn and send it unsigned, which handed an attacker
+  // a downgrade: break the signer and every agent that has not yet latched
+  // accepts socket-only authority again.
   const { service } = makeKeyService({ throws: true });
-  const warnings = [];
-  const signer = createCommandSigner({ releaseKeyService: service, logger: { warn: (m) => warnings.push(m) } });
-  const command = signer.sign(42, { name: 'delete' });
-  assert.deepEqual(command, { name: 'delete' });
-  assert.match(warnings[0], /command signing failed/);
+  const errors = [];
+  const audited = [];
+  const signer = createCommandSigner({
+    releaseKeyService: service,
+    logger: { error: (m) => errors.push(m), warn: () => {}, info: () => {} },
+    onFailure: (f) => audited.push(f),
+  });
+
+  assert.throws(() => signer.sign(42, { name: 'delete' }), (err) => {
+    assert.equal(err.code, 'COMMAND_SIGNING_FAILED');
+    assert.equal(err.statusCode, 503, 'the operator gets a 503, not a silent success');
+    assert.equal(err.expose, true);
+    return true;
+  });
+  assert.match(errors[0], /could not sign/);
+  assert.deepEqual(audited.map((f) => [f.code, f.command]), [['COMMAND_SIGNING_FAILED', 'delete']]);
+});
+
+test('an auditing failure does not swallow the refusal', () => {
+  const { service } = makeKeyService({ throws: true });
+  const signer = createCommandSigner({
+    releaseKeyService: service,
+    onFailure: () => { throw new Error('audit db down'); },
+  });
+  assert.throws(() => signer.sign(42, { name: 'delete' }), /could not sign/);
+});
+
+test('BLUEEYE_REQUIRE_COMMAND_SIGNING refuses a privileged command a keyless server cannot sign', () => {
+  const { service } = makeKeyService({ canSign: false });
+  const signer = createCommandSigner({ releaseKeyService: service, requireSigning: true });
+  assert.throws(() => signer.sign(42, { name: 'delete' }), (err) => {
+    assert.equal(err.code, 'COMMAND_SIGNING_UNAVAILABLE');
+    assert.equal(err.statusCode, 503);
+    return true;
+  });
+});
+
+test('each signed command carries a unique id and an explicit expiry', () => {
+  const { publicPem, service } = makeKeyService();
+  const issued = new Date('2026-01-01T12:00:00.000Z');
+  const signer = createCommandSigner({ releaseKeyService: service, now: () => issued, ttlMs: 120000 });
+
+  const a = signer.sign(42, { name: 'delete' });
+  const b = signer.sign(42, { name: 'delete' });
+  assert.notEqual(a.commandId, b.commandId, 'two identical commands must not share a nonce');
+  assert.match(a.commandId, /^[0-9a-f-]{36}$/);
+  assert.equal(a.expiresAt, '2026-01-01T12:02:00.000Z');
+
+  // Both fields are INSIDE the signature, so neither can be edited in flight.
+  assert.equal(agentVerifies(a, publicPem), true);
+  assert.equal(agentVerifies({ ...a, commandId: b.commandId }, publicPem), false);
+  assert.equal(agentVerifies({ ...a, expiresAt: '2026-12-01T00:00:00.000Z' }, publicPem), false);
 });

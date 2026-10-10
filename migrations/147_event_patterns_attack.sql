@@ -1,0 +1,45 @@
+-- 147 — event_patterns: the MITRE ATT&CK technique an operator says a pattern is.
+--
+-- WHY THIS IS ON THE PATTERN AND NOT ON THE DETECTOR. docs/attack-indication.md
+-- is explicit about what the four attack detectors do and do not do: each one
+-- "states a fact with its numbers", and "none of these detectors classifies
+-- traffic as malicious, scores a threat or names a technique". That restraint is
+-- what makes the red line worth looking at. A detector that printed "T1110
+-- Brute Force" would be claiming adversary behaviour from a counter that is
+-- equally consistent with a misconfigured backup job.
+--
+-- A technique on a PATTERN is a different statement, by a different author:
+-- it is the OPERATOR saying "on this network, we treat this match as T1110",
+-- next to the `reason` the pattern already requires. The detector keeps saying
+-- "212 auth failures in 10 minutes on core-sw-1". Both are true, and only one
+-- of them is a judgement about an adversary — the one with a person's name in
+-- the audit log.
+--
+-- WHY TWO COLUMNS AND NOT ONE. A technique belongs to more than one tactic
+-- (T1133 External Remote Services is Initial Access *and* Persistence), so the
+-- tactic cannot be derived from the technique without guessing which one the
+-- operator meant. The tactic is what the kill-chain strip and the ATT&CK
+-- Navigator export group by, so it is stored, not inferred.
+--
+-- WHAT IS NOT HERE. No technique catalogue table, no STIX import, no sync job
+-- against ATT&CK's own repository. The dashboard offers a short suggestion list
+-- (src/events/attack.js) and accepts any well-formed technique id, because a
+-- customer who has mapped a technique we have never heard of is right and the
+-- product should not argue. The tactic list IS closed: ATT&CK Enterprise has
+-- fourteen, they are the columns of the published matrix, and an export has to
+-- name one of them to open in Navigator at all.
+--
+-- NULL on both is every pattern that exists today, and every pattern whose
+-- match does not honestly map to a technique. `peer.new_asn` ("this site has
+-- never reached that network before") is such a case: it is a first sighting,
+-- not an adversary behaviour, and forcing T1041 Exfiltration onto it would turn
+-- a cloud migration into an exfiltration alert.
+ALTER TABLE `event_patterns`
+  -- 'T1110', or a sub-technique 'T1110.001'. Validated by shape, not against a
+  -- list (see above).
+  ADD COLUMN `attack_technique` VARCHAR(16) NULL DEFAULT NULL AFTER `reason`,
+  -- The ATT&CK Enterprise tactic slug, e.g. 'credential-access' — one of the
+  -- fourteen in src/events/attack.js.
+  ADD COLUMN `attack_tactic` VARCHAR(32) NULL DEFAULT NULL AFTER `attack_technique`,
+  -- The strip and the export group by tactic, and both read only mapped rows.
+  ADD KEY `idx_event_patterns_tactic` (`attack_tactic`, `enabled`);

@@ -65,14 +65,24 @@ function specificityOf(rule) {
   return fields.reduce((n, f) => n + (fieldMatches(rule[f], undefined) ? 0 : 1), 0);
 }
 
-function matches(rule, event) {
-  if (!rule || !event) return false;
-  if (rule.enabled === false || rule.enabled === 0) return false;
-  if (rule.source !== event.source) return false;
-  if (!isSeverity(rule.severity)) return false;
-  const fields = MATCH_FIELDS[rule.source];
+// Does this event fall inside the scope these match fields describe?
+//
+// The scope is the half of a rule that says WHICH events, with no opinion about
+// what to do with them. A severity rule is this plus a severity; a named pattern
+// (src/events/patterns.js) is this and nothing else, which is the whole reason
+// one match can drive both a severity and an alert route.
+function scopeMatches(scope, event) {
+  if (!scope || !event) return false;
+  if (scope.enabled === false || scope.enabled === 0) return false;
+  if (scope.source !== event.source) return false;
+  const fields = MATCH_FIELDS[scope.source];
   if (!fields) return false;
-  return fields.every((f) => fieldMatches(rule[f], event[EVENT_FIELD[f]]));
+  return fields.every((f) => fieldMatches(scope[f], event[EVENT_FIELD[f]]));
+}
+
+function matches(rule, event) {
+  if (!rule || !isSeverity(rule.severity)) return false;
+  return scopeMatches(rule, event);
 }
 
 // The rule that governs this event, or null.
@@ -138,6 +148,47 @@ function describeDecision(decision, { lang = 'en' } = {}) {
     : `${from} ${direction} to ${to} by a rule${why}`;
 }
 
+// The match half of a rule or a pattern: reads `input`'s match_* fields for its
+// source into `value`, records what was wrong in `errors`, and returns how many
+// fields it actually pinned down. Shared so a pattern and a severity rule can
+// never disagree about what a match means.
+//
+// Fields belonging to the OTHER source are rejected rather than ignored: a rule
+// that silently dropped `match_host_id` would match far more than the person who
+// wrote it believed.
+//
+// Only when they carry a VALUE, though. An edit validates the stored row merged
+// with the patch, and a stored row always has every column — including the other
+// source's, sitting at NULL. A null field pins nothing down, so there is nothing
+// to drop and nothing to warn about; refusing it would make every row uneditable.
+function validateScope(input, value, errors, noun = 'rule') {
+  if (!input || typeof input !== 'object') return 0;
+  const fields = MATCH_FIELDS[input.source] || [];
+  let pinned = 0;
+  for (const field of fields) {
+    const raw = input[field];
+    if (raw === undefined || raw === null || String(raw).trim() === '') { value[field] = null; continue; }
+    if (field === 'match_application_id') {
+      const n = Number.parseInt(raw, 10);
+      if (!Number.isInteger(n) || n <= 0) { errors[field] = 'that application does not look valid'; continue; }
+      value[field] = n;
+    } else {
+      const s = String(raw).trim();
+      if (s.length > 255) { errors[field] = 'too long (max 255)'; continue; }
+      value[field] = s;
+    }
+    pinned += 1;
+  }
+  for (const key of Object.keys(input)) {
+    if (!key.startsWith('match_')) continue;
+    if (fields.includes(key)) continue;
+    const raw = input[key];
+    if (raw === undefined || raw === null || String(raw).trim() === '') continue;
+    errors[key] = `${key} does not apply to a ${input.source} ${noun}`;
+  }
+  return pinned;
+}
+
 // Validates a rule the operator is about to save.
 //
 // A rule with no match fields at all would govern EVERY event from its source,
@@ -161,39 +212,22 @@ function validateRule(input) {
     value.severity = input.severity;
   }
 
-  const fields = MATCH_FIELDS[input.source] || [];
-  let pinned = 0;
-  for (const field of fields) {
-    const raw = input[field];
-    if (raw === undefined || raw === null || String(raw).trim() === '') { value[field] = null; continue; }
-    if (field === 'match_application_id') {
-      const n = Number.parseInt(raw, 10);
-      if (!Number.isInteger(n) || n <= 0) { errors[field] = 'that application does not look valid'; continue; }
-      value[field] = n;
-    } else {
-      const s = String(raw).trim();
-      if (s.length > 255) { errors[field] = 'too long (max 255)'; continue; }
-      value[field] = s;
-    }
-    pinned += 1;
+  // A rule may take its match from a named PATTERN instead of carrying its own
+  // fields (migration 146, src/events/patterns.js). Then the pattern IS the
+  // match: the rule's own match columns are cleared rather than kept, because
+  // two sources of truth for "which events" is a rule nobody can read.
+  if (input.pattern_id === undefined || input.pattern_id === null || input.pattern_id === '') {
+    value.pattern_id = null;
+  } else {
+    const n = Number.parseInt(input.pattern_id, 10);
+    if (!Number.isInteger(n) || n <= 0) errors.pattern_id = 'that pattern does not look valid';
+    else value.pattern_id = n;
   }
-  // Fields belonging to the OTHER source are rejected rather than ignored: a
-  // rule that silently dropped `match_host_id` would match far more than the
-  // person who wrote it believed.
-  //
-  // Only when they carry a VALUE. An edit validates the stored row merged with
-  // the patch, and a stored row always has every column — including the other
-  // source's, sitting at NULL. A null field pins nothing down, so there is
-  // nothing to drop and nothing to warn about; refusing it would make every
-  // rule uneditable.
-  for (const key of Object.keys(input)) {
-    if (!key.startsWith('match_')) continue;
-    if (fields.includes(key)) continue;
-    const raw = input[key];
-    if (raw === undefined || raw === null || String(raw).trim() === '') continue;
-    errors[key] = `${key} does not apply to a ${input.source} rule`;
-  }
-  if (!pinned && !errors.source) {
+
+  const pinned = validateScope(input, value, errors, 'rule');
+  if (value.pattern_id) {
+    for (const field of MATCH_FIELDS[input.source] || []) value[field] = null;
+  } else if (!pinned && !errors.source) {
     errors._ = 'a rule needs at least one thing to match on, or it would govern every event from this source';
   }
 
@@ -213,6 +247,7 @@ function validateRule(input) {
 }
 
 module.exports = {
-  applySeverity, ruleFor, matches, specificityOf, describeDecision, validateRule,
+  applySeverity, ruleFor, matches, scopeMatches, specificityOf, describeDecision,
+  validateRule, validateScope,
   SEVERITIES, RANK, MATCH_FIELDS, EVENT_FIELD,
 };

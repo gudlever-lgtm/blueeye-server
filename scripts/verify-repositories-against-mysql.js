@@ -49,6 +49,8 @@ const { createDeviceCounterSamplesRepository } = require(path.join(ROOT, 'src/re
 const { createFdbEntriesRepository } = require(path.join(ROOT, 'src/repositories/fdbEntriesRepository'));
 const { createSnmpCredentialProfilesRepository } = require(path.join(ROOT, 'src/repositories/snmpCredentialProfilesRepository'));
 const { createLadderRunsRepository } = require(path.join(ROOT, 'src/repositories/ladderRunsRepository'));
+const { createEventPatternsRepository } = require(path.join(ROOT, 'src/repositories/eventPatternsRepository'));
+const { createSeverityRulesRepository } = require(path.join(ROOT, 'src/repositories/severityRulesRepository'));
 const { AUTH_PROTOS, PRIV_PROTOS } = require(path.join(ROOT, 'src/validation/snmpProfileValidation'));
 
 // A stand-in for the real secretBox. The encryption itself is tested
@@ -1977,6 +1979,58 @@ check('hop locations: an upsert that keeps the first writer, a longest-prefix re
 
   assert.strictEqual(await repo.remove('193.162.153.9', 32), 1);
   assert.strictEqual(await repo.remove('193.162.153.9', 32), 0);
+});
+
+check('event patterns: a pattern-backed rule reads the PATTERN\'s match, and a disabled pattern drops out', async (pool) => {
+  // Two statements here cannot be checked by a scripted pool and are exactly
+  // the kind that take a deploy down: the IF(...)/LEFT JOIN that resolves a
+  // pattern-backed severity rule, and the ON DUPLICATE KEY upsert that keeps
+  // one route per pattern. Both are the feature's correctness, not plumbing —
+  // a rule that resolved to blank match fields would govern every event from
+  // its source.
+  const patterns = createEventPatternsRepository({ db: { pool } });
+  const rules = createSeverityRulesRepository({ db: { pool }, ttlMs: 0 });
+
+  const p = await patterns.create({
+    name: 'Warehouse links', source: 'finding', match_metric: 'packet_loss', reason: 'wifi, not an SLA',
+  });
+  assert.ok(p.id, 'the pattern was not created');
+
+  const rule = await rules.create({ source: 'finding', pattern_id: p.id, severity: 'WARN', reason: 'the grouping' });
+  assert.strictEqual(rule.pattern_id, p.id);
+  assert.strictEqual(rule.pattern_name, 'Warehouse links');
+  assert.strictEqual(rule.match_metric, null, 'the rule stores no match of its own');
+
+  const [resolved] = await rules.active();
+  assert.strictEqual(resolved.match_metric, 'packet_loss', 'the pattern IS the match');
+
+  // One route per pattern: the second save is an update, not a second row.
+  const first = await patterns.saveRoute(p.id, { channels: 'email', min_severity: 'WARN', reason: 'the NOC' });
+  const second = await patterns.saveRoute(p.id, { channels: 'matrix', cooldown_ms: 600000, reason: 'the NOC room' });
+  assert.strictEqual(second.id, first.id, 'the upsert made a second route');
+  assert.strictEqual(second.channels, 'matrix');
+  assert.strictEqual(Number(second.cooldown_ms), 600000);
+  assert.strictEqual(second.min_severity, null, 'an omitted field is cleared, not carried');
+
+  const listed = await patterns.list();
+  assert.strictEqual(listed[0].rule_count, 1);
+  assert.strictEqual(listed[0].route.channels, 'matrix');
+
+  // Switching the pattern off takes its rule and its route out of effect.
+  await patterns.save(p.id, { enabled: false });
+  assert.deepStrictEqual(await rules.active(), [], 'a disabled pattern left its rule applying with no match');
+  const off = await patterns.active();
+  assert.strictEqual(off.patterns.length, 0);
+  assert.strictEqual(off.routes.length, 0);
+
+  await patterns.recordRouted(second.id);
+  assert.strictEqual(Number((await patterns.findRoute(p.id)).matched_count), 1);
+
+  // ON DELETE CASCADE: the rule and the route go with the pattern, because a
+  // rule left behind would have no match of its own.
+  assert.strictEqual(await patterns.remove(p.id), true);
+  assert.strictEqual(await patterns.findRoute(p.id), null);
+  assert.strictEqual((await rules.list()).length, 0, 'the FK did not cascade to the severity rule');
 });
 
 async function main() {

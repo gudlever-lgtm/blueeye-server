@@ -85,6 +85,13 @@ All share the interface `send(finding, group) → { ok, detail }`.
   condition on the same host doesn't spam (configurable `ALERT_COOLDOWN_MS`).
 - **Isolation** — each channel send is caught individually; one failing channel
   never stops the others.
+- **Pattern routing** (optional, migration 146) — a finding whose **event
+  pattern** has an alert route goes only to that route's channels, under the
+  route's minimum severity, with the cooldown keyed on the **pattern** rather
+  than on the finding. That last part is why the feature exists: one condition
+  across forty agents is one alert instead of forty. A finding matching no
+  pattern, or a pattern with no route, dispatches exactly as described above.
+  See [event-patterns.md](event-patterns.md).
 
 Hooked into the analysis pipeline after `findingStore.save()` + correlation,
 behind the master switch. Dispatch is best-effort and never breaks ingestion.

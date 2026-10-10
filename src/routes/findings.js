@@ -9,6 +9,8 @@ const { isChangeEvent } = require('../timeline/targetTimeline');
 const {
   ATTACK_METRICS, ATTACK_METRIC_PREFIXES, BANNER_SEVERITIES, BANNER_WINDOW_HOURS,
 } = require('../analysis/attackIndication');
+const { patternFor } = require('../events/patterns');
+const { tacticsOf } = require('../events/attack');
 
 const DEFAULT_CONTEXT_MINUTES = 30;
 const MAX_CONTEXT_MINUTES = 24 * 60; // cap the look-back at 24h
@@ -74,7 +76,13 @@ function parseListFilters(query) {
 // is exactly the action that needs a record: one request can retire a hundred
 // thousand findings, and afterwards the only evidence it was deliberate is the
 // hash-chained log.
-function createFindingsRouter({ findingStore, timelineService = null, auditLogger = null, agentsRepo = null }) {
+function createFindingsRouter({
+  findingStore, timelineService = null, auditLogger = null, agentsRepo = null,
+  // The operator's event patterns, for the ATT&CK tactics the red bar's panel
+  // draws (docs/event-patterns.md). Absent = no tactics in the payload, which
+  // is the deployment without patterns and what the bar did before them.
+  eventPatternsRepo = null,
+}) {
   const router = express.Router();
 
   // GET /api/findings?hostId=&since= — list findings (viewer+).
@@ -146,7 +154,41 @@ function createFindingsRouter({ findingStore, timelineService = null, auditLogge
         since,
         limit: 5,
       });
-      res.json({ ...out, since: since.toISOString(), windowHours: BANNER_WINDOW_HOURS });
+      // The ATT&CK tactics lit right now, for the strip in the bar's panel.
+      //
+      // Built from the groups the aggregate already returned, matched against
+      // the operator's patterns with the SAME pure matcher the alerting path
+      // uses — so the strip and the alert can never disagree about which
+      // pattern an event belongs to. One tactic, several patterns and several
+      // metrics all roll up here; a group that matches no mapped pattern simply
+      // does not appear, which is the honest answer rather than an "unknown"
+      // column nobody can act on.
+      //
+      // It fails quietly: a tactic strip is worth nothing beside the bar's own
+      // count, and this endpoint is polled by every open browser.
+      let tactics = [];
+      if (eventPatternsRepo && Array.isArray(out.groups) && out.groups.length) {
+        try {
+          const { patterns } = await eventPatternsRepo.active();
+          const counts = new Map();
+          for (const g of out.groups) {
+            const p = patternFor(patterns, {
+              source: 'finding', metric: g.metric, kind: g.kind, host_id: g.host_id,
+            });
+            if (!p || !p.attack_technique) continue;
+            const cur = counts.get(p.id) || { count: 0, worst: null };
+            cur.count += g.count;
+            if (g.severity === 'CRIT' || (g.severity === 'WARN' && cur.worst !== 'CRIT')) cur.worst = g.severity;
+            counts.set(p.id, cur);
+          }
+          tactics = tacticsOf(patterns, counts).filter((x) => x.count > 0);
+        } catch { tactics = []; }
+      }
+      // `groups` is the raw material for `tactics` and is not part of the
+      // contract the bar reads — kept off the wire rather than shipping a
+      // second, unexplained view of the same numbers.
+      const { groups, ...payload } = out;
+      res.json({ ...payload, tactics, since: since.toISOString(), windowHours: BANNER_WINDOW_HOURS });
     })
   );
 

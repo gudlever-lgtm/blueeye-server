@@ -3020,10 +3020,21 @@ function makeFindingStore(overrides = {}) {
       for (const h of hits) bySeverity[h.severity] = (bySeverity[h.severity] || 0) + 1;
       const sorted = hits.slice().sort((a, b) => ((b.severity === 'CRIT') - (a.severity === 'CRIT'))
         || String(b.createdAt).localeCompare(String(a.createdAt)));
+      // The same set grouped by what a PATTERN matches on, as the real store
+      // returns it: the red bar's ATT&CK strip is built from these, so a test
+      // that never produced them would pass with the strip permanently empty.
+      const groups = [];
+      for (const h of hits) {
+        const key = `${h.metric}|${h.kind}|${h.hostId}|${h.severity}`;
+        const found = groups.find((g) => g.key === key);
+        if (found) { found.count += 1; continue; }
+        groups.push({ key, metric: h.metric, kind: h.kind, host_id: h.hostId, severity: h.severity, count: 1 });
+      }
       return {
         count: hits.length,
         bySeverity,
         worst: bySeverity.CRIT ? 'CRIT' : (bySeverity.WARN ? 'WARN' : null),
+        groups: groups.map(({ key, ...g }) => g),
         findings: sorted.slice(0, limit).map(lightFinding).map((f, i) => ({
           ...f,
           explanation: sorted[i].explanation ?? null,
@@ -3031,6 +3042,12 @@ function makeFindingStore(overrides = {}) {
         })),
       };
     }),
+    // How many OPEN findings a match scope covers — a pattern's question, where
+    // the backfill below also asks "and would the severity change".
+    countMatchingScope: overrides.countMatchingScope || (async (scope) => rows.filter((f) => !f.acked
+      && (!scope.match_metric || f.metric === scope.match_metric)
+      && (!scope.match_kind || f.kind === scope.match_kind)
+      && (!scope.match_host_id || f.hostId === scope.match_host_id)).length),
     // The explicit backfill. Matches the real store: unacknowledged findings
     // only, because one somebody has already read and acted on is history.
     applySeverityRule: overrides.applySeverityRule || (async (rule, { dryRun = true } = {}) => {
@@ -4165,6 +4182,113 @@ function makeInvestigationsRepo(overrides = {}) {
 
 // Severity rules, in memory. The real repository caches `active()` and counts
 // how often a rule fires; both matter to the write path, so both are here.
+// Event patterns + their alert routes (migration 146). Models the real
+// repository's behaviour rather than stubbing it: the rule count, the cascade on
+// delete, and the one-route-per-pattern upsert are the parts a test gets wrong.
+function makeEventPatternsRepo(seed = [], { severityRulesRepo = null } = {}) {
+  let nextId = seed.length + 1;
+  let nextRouteId = 1;
+  const rows = seed.map((p, i) => ({
+    id: i + 1, enabled: true, tenant_id: null,
+    match_metric: null, match_kind: null, match_host_id: null, match_application_id: null,
+    reason: null, attack_technique: null, attack_tactic: null,
+    created_by: null, created_at: new Date(), updated_at: new Date(), ...p,
+  }));
+  const routes = [];
+  const clone = (r) => (r ? JSON.parse(JSON.stringify(r)) : null);
+  const ruleCount = (id) => (severityRulesRepo
+    ? severityRulesRepo.rows.filter((r) => Number(r.pattern_id) === Number(id)).length : 0);
+
+  return {
+    rows,
+    routes,
+    async active() {
+      const patterns = rows.filter((p) => p.enabled);
+      const ids = new Set(patterns.map((p) => p.id));
+      return {
+        patterns: patterns.map(clone),
+        routes: routes.filter((r) => r.enabled && ids.has(Number(r.pattern_id))).map(clone),
+      };
+    },
+    async findById(id) { return clone(rows.find((p) => p.id === Number(id))) || null; },
+    async findByName(name) { return clone(rows.find((p) => p.name === name)) || null; },
+    async list({ source = null } = {}) {
+      return rows.filter((p) => !source || p.source === source).map((p) => ({
+        ...clone(p),
+        rule_count: ruleCount(p.id),
+        route: clone(routes.find((r) => Number(r.pattern_id) === Number(p.id))) || null,
+      }));
+    },
+    async create(input) {
+      const row = {
+        id: nextId, tenant_id: null,
+        match_metric: null, match_kind: null, match_host_id: null, match_application_id: null,
+        attack_technique: null, attack_tactic: null,
+        created_at: new Date(), updated_at: new Date(), ...input,
+        enabled: input.enabled === false ? false : true,
+      };
+      nextId += 1;
+      rows.push(row);
+      return clone(row);
+    },
+    async save(id, patch) {
+      const row = rows.find((p) => p.id === Number(id));
+      if (!row) return null;
+      Object.assign(row, patch, { updated_at: new Date() });
+      return clone(row);
+    },
+    // ON DELETE CASCADE, as the migration has it: the pattern takes its severity
+    // rules and its route with it, because a pattern-backed rule left behind
+    // would have no match of its own.
+    async remove(id) {
+      const i = rows.findIndex((p) => p.id === Number(id));
+      if (i < 0) return false;
+      rows.splice(i, 1);
+      for (let r = routes.length - 1; r >= 0; r -= 1) {
+        if (Number(routes[r].pattern_id) === Number(id)) routes.splice(r, 1);
+      }
+      if (severityRulesRepo) {
+        for (let r = severityRulesRepo.rows.length - 1; r >= 0; r -= 1) {
+          if (Number(severityRulesRepo.rows[r].pattern_id) === Number(id)) severityRulesRepo.rows.splice(r, 1);
+        }
+      }
+      return true;
+    },
+    async findRoute(patternId) {
+      return clone(routes.find((r) => Number(r.pattern_id) === Number(patternId))) || null;
+    },
+    async saveRoute(patternId, input) {
+      const existing = routes.find((r) => Number(r.pattern_id) === Number(patternId));
+      const next = {
+        min_severity: null, cooldown_ms: null, reason: null, matched_count: 0, last_matched_at: null,
+        created_at: new Date(), ...input,
+        pattern_id: Number(patternId),
+        enabled: input.enabled === false ? false : true,
+        updated_at: new Date(),
+      };
+      if (existing) {
+        Object.assign(existing, next, { id: existing.id });
+        return clone(existing);
+      }
+      next.id = nextRouteId;
+      nextRouteId += 1;
+      routes.push(next);
+      return clone(next);
+    },
+    async removeRoute(patternId) {
+      const i = routes.findIndex((r) => Number(r.pattern_id) === Number(patternId));
+      if (i < 0) return false;
+      routes.splice(i, 1);
+      return true;
+    },
+    async recordRouted(routeId) {
+      const r = routes.find((x) => x.id === Number(routeId));
+      if (r) { r.matched_count += 1; r.last_matched_at = new Date(); }
+    },
+    invalidate() {},
+  };
+}
+
 function makeSeverityRulesRepo(seed = []) {
   let nextId = seed.length + 1;
   const rows = seed.map((r, i) => ({
@@ -4317,6 +4441,11 @@ function makeApp(overrides = {}) {
   // paths (port history, loop, duplex) raise findings into the SAME store and
   // alert through the SAME dispatcher the routes read.
   const findingStore = overrides.findingStore || makeFindingStore();
+  // Resolved here rather than inline below: the patterns repo is wired to it, so
+  // deleting a pattern cascades to its severity rules the way the migration's
+  // foreign key does.
+  const severityRulesRepo = overrides.severityRulesRepo === undefined
+    ? makeSeverityRulesRepo() : overrides.severityRulesRepo;
   const dispatcher = overrides.dispatcher || makeDispatcher();
   // The REAL sink, so a rule-based switch finding is stored, grouped and
   // ALERTED end-to-end. Alerting is on: the fake dispatcher only records.
@@ -4442,7 +4571,9 @@ function makeApp(overrides = {}) {
     agentReconnect: overrides.agentReconnect || { waitMs: 200, pollMs: 10 },
     systemInfo: overrides.systemInfo || makeSystemInfo(),
     findingStore,
-    severityRulesRepo: overrides.severityRulesRepo === undefined ? makeSeverityRulesRepo() : overrides.severityRulesRepo,
+    severityRulesRepo,
+    eventPatternsRepo: overrides.eventPatternsRepo === undefined
+      ? makeEventPatternsRepo([], { severityRulesRepo }) : overrides.eventPatternsRepo,
     analysisPipeline: overrides.analysisPipeline || makeAnalysisPipeline(),
     probePipeline: overrides.probePipeline || makeProbePipeline(),
     flowPipeline: overrides.flowPipeline || makeFlowPipeline(),
@@ -4654,6 +4785,7 @@ module.exports = {
   FAKE_RELEASE_KEYPAIR,
   makeDiagnoseSessionsRepo,
   makeSeverityRulesRepo,
+  makeEventPatternsRepo,
   makeLocationsRepo,
   makeUsersRepo,
   makeUserMailer,

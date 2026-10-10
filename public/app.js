@@ -997,7 +997,10 @@ async function refreshAttackBar() {
   const top = (data && Array.isArray(data.findings) && data.findings[0]) || null;
   // Redrawing an identical bar on every render would re-announce it to a screen
   // reader once a minute and restart the pulse mid-cycle.
-  const signature = worst ? `${worst}|${data.count}|${top ? top.id : ''}` : '';
+  const tactics = (data && Array.isArray(data.tactics)) ? data.tactics : [];
+  const signature = worst
+    ? `${worst}|${data.count}|${top ? top.id : ''}|${tactics.map((x) => `${x.id}:${x.count}`).join(',')}`
+    : '';
   if (signature === attackBarLast) return;
   attackBarLast = signature;
 
@@ -1012,6 +1015,24 @@ async function refreshAttackBar() {
   host.classList.toggle('crit', worst === 'CRIT');
   const label = $('#attack-bar-label');
   const detail = $('#attack-bar-detail');
+  // The ATT&CK kill-chain strip: the tactics lit now, in the matrix order the
+  // server already sorted them into, each from the operator's OWN pattern
+  // mapping (docs/event-patterns.md). Two cells side by side is a progression —
+  // Discovery then Credential Access — which is the thing worth seeing and the
+  // reason this is a strip rather than a list.
+  //
+  // Empty on an install that has mapped no technique, which is the default.
+  const chain = $('#attack-bar-chain');
+  if (chain) {
+    // Every cell here is lit: the server sends only the tactics with something
+    // open, because a quiet tactic in a panel about what is happening NOW is
+    // noise. The coverage half — mapped but quiet — is Settings → Patterns.
+    chain.replaceChildren(...tactics.map((x) => el('span', {
+      // The techniques behind the cell, so hovering says WHY this tactic is lit
+      // rather than only that it is.
+      title: x.patterns.map((p) => `${p.technique} ${p.technique_name || ''} (${p.name})`.trim()).join(' · '),
+    }, `${x.name}${x.count ? ` ${x.count}` : ''}`)));
+  }
   // One key, both forms: I18n.plural picks .one or .other and fills {count},
   // so the bar says "1 attack indication" rather than "1 attack indication(s)".
   if (label) label.textContent = I18n.plural('attack.bar.count', data.count, { count: data.count });
@@ -13585,7 +13606,7 @@ let guideTrack = null;
 // tab is [key, label, adminOnly]; non-admins only ever see the personal section.
 const SETTINGS_GROUPS = [
   ['Access & security', [['users', 'Users', true], ['auth', 'Authentication', true], ['apitokens', 'API tokens', true], ['agentkey', 'Agent key', true]]],
-  ['Detection & alerts', [['analyse', 'Analysis', true], ['alerting', 'Alerting', true], ['severity', 'Severity rules', true], ['thresholds', () => t('thr.tab'), true], ['runbooks', 'Runbooks', true], ['events', () => t('set.tab.events'), true], ['attack', () => t('set.tab.attack'), true], ['integrations', 'ITSM', true], ['cmdb', 'CMDB', true], ['ai', 'AI', true], ['maintenance', 'Maintenance', true]]],
+  ['Detection & alerts', [['analyse', 'Analysis', true], ['alerting', 'Alerting', true], ['severity', 'Severity rules', true], ['patterns', () => t('pat.tab'), true], ['thresholds', () => t('thr.tab'), true], ['runbooks', 'Runbooks', true], ['events', () => t('set.tab.events'), true], ['attack', () => t('set.tab.attack'), true], ['integrations', 'ITSM', true], ['cmdb', 'CMDB', true], ['ai', 'AI', true], ['maintenance', 'Maintenance', true]]],
   ['Data', [['database', 'Database', true], ['retention', 'Retention', true], ['types', 'Traffic types', true], ['map', 'Map', true]]],
   ['System', [['setup', 'Setup', true], ['updates', 'Updates', true], ['agents', 'Agents', true], ['snmp', 'SNMP devices', true], ['snmpcommunities', 'SNMP communities', true], ['screening', 'Test Settings', true], ['assurance', 'Service Assurance', true], ['ladder', () => t('set.tab.ladder'), true]]],
   ['Personal', [['appearance', 'Appearance', false], ['license', 'License', false]]],
@@ -14367,6 +14388,7 @@ const SETTINGS_SECTIONS = {
   analyse: settingsAnalyseView,
   alerting: settingsAlertingView,
   severity: settingsSeverityRulesView,
+  patterns: settingsPatternsView,
   thresholds: settingsThresholdsView,
   runbooks: settingsRunbooksView,
   integrations: settingsIntegrationsView,
@@ -17419,6 +17441,9 @@ async function settingsMaintenanceView() {
 // actually decided at the time. It never applies backwards on its own — that is
 // the separate, counted, confirmed action on each row.
 const SEVERITY_RULE_SOURCES = ['finding', 'service_assurance'];
+// The channels an alert route may name. The server validates against its own
+// copy (src/analysis/alerting/config.js); this is only what the form offers.
+const ALERT_CHANNELS = ['email', 'webhook', 'matrix', 'syslog'];
 
 // Spelled out rather than built from the value, because the UI gate sweeps
 // literal t() keys and a key assembled at runtime is a key nobody can find.
@@ -17427,6 +17452,9 @@ function severityRuleSourceLabel(source) {
 }
 
 function severityRuleScope(r) {
+  // A pattern-backed rule has no match fields of its own: the pattern is the
+  // match, and naming it is more use than repeating four columns.
+  if (r.pattern_name) return t('sev.scope.pattern', { name: r.pattern_name });
   const parts = [];
   if (r.match_metric) parts.push(t('sev.scope.metric', { value: r.match_metric }));
   if (r.match_kind) parts.push(t('sev.scope.kind', { value: r.match_kind }));
@@ -17436,6 +17464,374 @@ function severityRuleScope(r) {
   // refused server-side), but said plainly rather than shown as an empty cell
   // if one ever arrives from an older row or the API.
   return parts.length ? parts.join(' · ') : t('sev.scope.everything');
+}
+
+// ---- MITRE ATT&CK (operator-owned mapping on a pattern) --------------------
+// The tactics and the suggested techniques come from the server
+// (GET /api/event-patterns/attack) rather than a second copy here: the same
+// constant the validator uses, so the form can never offer a tactic the server
+// refuses. Cached for the session — it is a constant, not state.
+let attackVocab = null;
+async function getAttackVocab() {
+  if (attackVocab) return attackVocab;
+  try { attackVocab = await api('/api/event-patterns/attack'); }
+  catch { attackVocab = { tactics: [], suggested: [] }; }
+  return attackVocab;
+}
+
+// The techniques worth offering for the match the operator has typed, most
+// relevant first. A suggestion list, never a restriction: the field takes any
+// well-formed id, because a customer who has mapped a technique this list has
+// never heard of is right.
+function attackSuggestionsFor(vocab, metric) {
+  const all = (vocab && vocab.suggested) || [];
+  if (!metric) return all;
+  const hit = all.filter((x) => (x.metrics || []).some((m) => m === metric || metric.startsWith(m)));
+  return hit.length ? hit : all;
+}
+
+// The tactic's display name, from the server's own list. Falls back to the slug
+// rather than an empty cell: a tactic the catalogue does not know is a server
+// newer than this page, not a reason to show nothing.
+function tacticLabel(id) {
+  if (!id) return null;
+  const hit = ((attackVocab && attackVocab.tactics) || []).find((x) => x.id === id);
+  return hit ? hit.name : id;
+}
+
+// Mapped patterns grouped by tactic, in the MATRIX ORDER the server sent — not
+// an order this file keeps its own copy of, which is how the two would drift.
+function attackCoverage(patterns) {
+  const order = ((attackVocab && attackVocab.tactics) || []).map((x) => x.id);
+  const byTactic = new Map();
+  for (const p of patterns) {
+    if (!p.attack_technique || !p.attack_tactic) continue;
+    const cell = byTactic.get(p.attack_tactic)
+      || { id: p.attack_tactic, name: tacticLabel(p.attack_tactic), patterns: [] };
+    cell.patterns.push({ name: p.name, technique: p.attack_technique, technique_name: null });
+    byTactic.set(p.attack_tactic, cell);
+  }
+  return [...byTactic.values()].sort((a, b) => order.indexOf(a.id) - order.indexOf(b.id));
+}
+
+// ---- Settings → Patterns ---------------------------------------------------
+// Event patterns (GET/POST/PUT/DELETE /api/event-patterns): one named match,
+// with the severity rules and the alert route that hang off it. The match
+// itself is the one severity rules have always used, so the scope is worded by
+// severityRuleScope() here too — a pattern and a rule describing the same match
+// in two different sentences would be the bug.
+function patternRouteSummary(p) {
+  if (!p.route) return t('pat.routeDefault');
+  const bits = [(p.route.channel_list || []).join(', ')];
+  if (p.route.min_severity) bits.push(t('pat.routeMin', { severity: p.route.min_severity }));
+  if (p.route.cooldown_ms != null) {
+    bits.push(p.route.cooldown_ms === 0
+      ? t('pat.routeNoCooldown')
+      : t('pat.routeCooldown', { minutes: Math.round(p.route.cooldown_ms / 60000) }));
+  }
+  if (!p.route.enabled) bits.push(t('pat.off'));
+  return bits.join(' · ');
+}
+
+async function settingsPatternsView() {
+  // The channel list is read alongside, so the route form can say which channels
+  // this server can actually deliver through instead of letting an admin route
+  // a pattern into a channel that was never configured.
+  const [patterns, alerting] = await Promise.all([
+    api('/api/event-patterns'),
+    api('/api/alerting/config').catch(() => null),
+    // Resolves into the module-level cache the two ATT&CK helpers below read.
+    getAttackVocab(),
+  ]);
+  const root = el('div');
+  root.append(el('p', { class: 'muted settings-intro' }, t('pat.intro')));
+
+  root.append(el('div', { class: 'section-head' },
+    el('h3', {}, t('pat.title', { count: patterns.length })),
+    isAdmin() ? el('button', { class: 'small', onclick: () => editPattern() }, t('pat.new')) : null));
+
+  if (!patterns.length) {
+    root.append(el('div', { class: 'empty' }, t('pat.empty')));
+    return root;
+  }
+
+  // The ATT&CK coverage strip: the tactics this install has MAPPED, in matrix
+  // order, whatever is firing. The red bar's own strip is the live half (what is
+  // lit now); this is the "what can we even see" half, which is the question an
+  // auditor asks and the one a blank matrix answers badly.
+  //
+  // Only mapped tactics appear. Drawing all fourteen for an install that maps
+  // three would be a wall of empty cells reading "this product sees nothing",
+  // when the truth is that it sees three of them deliberately.
+  const covered = attackCoverage(patterns);
+  if (covered.length) {
+    root.append(el('div', { class: 'section-head' },
+      el('h3', {}, t('pat.attack.title')),
+      // A button, not a link: the endpoint needs the bearer token, and a bare
+      // <a href> would send none and 401 — which is how a download silently
+      // logs somebody out (see authedFetch).
+      isAdmin() ? el('button', {
+        class: 'small ghost', title: t('pat.attack.layerHint'),
+        onclick: () => downloadAuthed('/api/event-patterns/attack/layer', 'blueeye-attack-layer.json'),
+      }, t('pat.attack.layer')) : null));
+    root.append(el('div', { class: 'attack-chain' }, ...covered.map((x) => el('span', {
+      class: 'attack-chain-cell',
+      title: x.patterns.map((q) => `${q.technique} ${q.technique_name || ''} (${q.name})`.trim()).join(' · '),
+    },
+    el('span', { class: 'attack-chain-tactic' }, x.name),
+    el('span', { class: 'muted' }, x.patterns.map((q) => q.technique).join(' · '))))));
+    root.append(el('p', { class: 'muted small' }, t('pat.attack.note')));
+  }
+
+  const rows = patterns.map((p) => el('tr', { class: p.enabled ? '' : 'acked' },
+    el('td', {}, p.name),
+    el('td', { class: 'muted' }, severityRuleSourceLabel(p.source)),
+    el('td', {}, severityRuleScope(p)),
+    el('td', { class: p.attack_technique ? '' : 'muted' }, p.attack_technique
+      ? el('span', { class: 'badge', title: tacticLabel(p.attack_tactic) }, p.attack_technique)
+      : t('pat.attack.none')),
+    el('td', { class: p.route ? '' : 'muted' }, patternRouteSummary(p)),
+    el('td', { class: 'muted' }, p.rule_count
+      ? t('pat.rules', { count: p.rule_count })
+      : t('pat.noRules')),
+    el('td', {}, p.reason || '—'),
+    el('td', {}, p.enabled
+      ? el('span', { class: 'badge active' }, t('pat.on'))
+      : el('span', { class: 'badge' }, t('pat.off'))),
+    el('td', {}, isAdmin() ? el('div', { class: 'row-actions' },
+      el('button', { class: 'small ghost', onclick: () => editPattern(p) }, t('pat.edit')),
+      el('button', { class: 'small ghost', onclick: () => editPatternRoute(p, alerting) }, t('pat.route')),
+      el('button', { class: 'small ghost', onclick: () => countPatternMatches(p) }, t('pat.count')),
+      el('button', { class: 'small ghost', onclick: () => deletePattern(p) }, t('pat.delete'))) : null)));
+
+  root.append(el('div', { class: 'tablewrap' }, el('table', {},
+    el('thead', {}, el('tr', {},
+      el('th', {}, t('pat.col.name')), el('th', {}, t('pat.col.source')),
+      el('th', {}, t('pat.col.matches')), el('th', {}, t('pat.col.attack')),
+      el('th', {}, t('pat.col.alerts')),
+      el('th', {}, t('pat.col.rules')), el('th', {}, t('pat.col.why')),
+      el('th', {}, t('pat.col.state')), el('th', {}, ''))),
+    el('tbody', {}, ...rows))));
+  return root;
+}
+
+// The pattern form. Same shape as the severity-rule form, because it is the same
+// match — only the fields that belong to the chosen source are offered, and
+// switching the source rebuilds the form rather than posting a field the server
+// refuses.
+async function editPattern(p, prefill) {
+  const editing = p && p.id;
+  const source = (prefill && prefill.source) || (p && p.source) || 'finding';
+  const v = (name) => ((prefill && prefill[name] != null) ? String(prefill[name])
+    : (p && p[name] != null ? String(p[name]) : ''));
+  const vocab = await getAttackVocab();
+
+  const scopeFields = source === 'finding'
+    ? [
+      { name: 'match_metric', label: t('sev.field.metric'), type: 'text', value: v('match_metric') },
+      { name: 'match_kind', label: t('sev.field.kind'), type: 'text', value: v('match_kind') },
+      { name: 'match_host_id', label: t('sev.field.agent'), type: 'text', value: v('match_host_id') },
+    ]
+    : [
+      { name: 'match_kind', label: t('sev.field.saKind'), type: 'text', value: v('match_kind') },
+      { name: 'match_application_id', label: t('sev.field.application'), type: 'text', value: v('match_application_id') },
+    ];
+
+  const fields = [
+    { name: 'name', label: t('pat.field.name'), type: 'text', value: v('name'), hint: t('pat.field.nameHint') },
+    ...(editing ? [] : [{
+      name: 'source', label: t('sev.field.source'), type: 'select', value: source,
+      options: SEVERITY_RULE_SOURCES.map((value) => ({ value, label: severityRuleSourceLabel(value) })),
+      hint: t('sev.field.sourceHint'),
+    }]),
+    ...scopeFields,
+    // The MITRE ATT&CK mapping — OPTIONAL, and the operator's own statement
+    // rather than the detector's. A free text field on purpose: the suggestion
+    // list is short and ATT&CK is not, so the hint names the likely ones for
+    // this match and the field accepts any well-formed id.
+    { name: 'attack_technique', label: t('pat.field.technique'), type: 'text',
+      value: v('attack_technique'),
+      hint: `${t('pat.field.techniqueHint')} ${attackSuggestionsFor(vocab, (v('match_metric') || '').trim())
+        .slice(0, 4).map((x) => `${x.technique} ${x.name}`).join(' · ')}` },
+    // The tactic IS a closed list: they are the matrix's fourteen columns, and
+    // an export has to name one to open in ATT&CK Navigator at all. A technique
+    // can belong to more than one, so the operator says which they mean.
+    { name: 'attack_tactic', label: t('pat.field.tactic'), type: 'select',
+      value: v('attack_tactic'),
+      options: [{ value: '', label: t('pat.field.tacticNone') },
+        ...(vocab.tactics || []).map((x) => ({ value: x.id, label: `${x.name} (${x.code})` }))],
+      hint: t('pat.field.tacticHint') },
+    { name: 'reason', label: t('pat.field.reason'), type: 'textarea', value: v('reason'), hint: t('pat.field.reasonHint') },
+    { name: 'enabled', label: t('sev.field.state'), type: 'select',
+      value: ((p && p.enabled === false) || (prefill && prefill.enabled === 'false')) ? 'false' : 'true',
+      options: [{ value: 'true', label: t('pat.on') }, { value: 'false', label: t('pat.off') }] },
+  ];
+
+  const body = (vals) => {
+    const out = {
+      name: vals.name,
+      source: editing ? p.source : vals.source,
+      reason: vals.reason,
+      enabled: vals.enabled === 'true',
+    };
+    for (const f of scopeFields) out[f.name] = (vals[f.name] || '').trim() || null;
+    // Both or neither: half a mapping looks like a mapping on every screen and
+    // groups as nothing, so the server refuses it — and an uppercased id is
+    // what somebody types when they mean T1110.
+    out.attack_technique = (vals.attack_technique || '').trim().toUpperCase() || null;
+    out.attack_tactic = (vals.attack_tactic || '').trim() || null;
+    return out;
+  };
+
+  openModal(editing ? t('pat.editTitle') : t('pat.newTitle'), fields, async (vals) => {
+    await api(editing ? `/api/event-patterns/${p.id}` : '/api/event-patterns', {
+      method: editing ? 'PUT' : 'POST', body: body(vals),
+    });
+    closeModal();
+    toast(t('pat.saved'));
+    render();
+  });
+
+  // How many OPEN events this draft covers, before Save. A pattern matching
+  // nothing is a typo in a match field far more often than it is a pattern for
+  // the future, and this is where that shows.
+  {
+    const card = $('#modal-card');
+    const form = card.querySelector('form');
+    const nodes = [...card.querySelectorAll('form input, form select, form textarea')];
+    const result = el('span', { class: 'muted small', role: 'status' });
+    const previewBtn = el('button', {
+      type: 'button', class: 'ghost small',
+      onclick: async () => {
+        const vals = {};
+        fields.forEach((f, i) => { if (nodes[i]) vals[f.name] = nodes[i].value; });
+        result.className = 'muted small';
+        result.textContent = t('pat.counting');
+        try {
+          const res = await api('/api/event-patterns/preview', { method: 'POST', body: body(vals) });
+          result.textContent = res.matched
+            ? t('pat.countResult', { count: res.matched })
+            : t('pat.countNone');
+        } catch (err) {
+          result.className = 'error small';
+          result.textContent = errText(err);
+        }
+      },
+    }, t('pat.count'));
+    if (form) form.insertBefore(el('div', {}, previewBtn, ' ', result), form.querySelector('p.error'));
+
+    if (!editing) {
+      const i = fields.findIndex((f) => f.name === 'source');
+      if (nodes[i]) {
+        nodes[i].addEventListener('change', () => {
+          const typed = {};
+          fields.forEach((f, j) => { if (nodes[j]) typed[f.name] = nodes[j].value; });
+          editPattern(null, { ...typed, source: nodes[i].value });
+        });
+      }
+    }
+  }
+}
+
+// Where this pattern's events alert. One route per pattern, so this is one form
+// rather than a list: "where do these go" has one answer.
+//
+// `alerting` is GET /api/alerting/config — used only to say which channels this
+// server can actually deliver through. A channel that is off or unconfigured is
+// still offered (an admin may be setting up in either order) but it says so, so
+// nobody routes a pattern into silence by accident.
+function editPatternRoute(p, alerting) {
+  const route = p.route || null;
+  const selected = new Set((route && route.channel_list) || []);
+  const state = (name) => {
+    const c = alerting && alerting.channels && alerting.channels[name];
+    if (!c) return t('pat.field.channelUnknown');
+    if (!c.enabled) return t('pat.field.channelOff');
+    if (c.available === false) return c.reason || t('pat.field.channelUnavailable');
+    return t('pat.field.channelReady');
+  };
+
+  const fields = [
+    ...ALERT_CHANNELS.map((name) => ({
+      name: `ch_${name}`, label: t('pat.field.channel', { channel: name }), type: 'select',
+      value: selected.has(name) ? 'true' : 'false',
+      options: [{ value: 'false', label: t('pat.no') }, { value: 'true', label: t('pat.yes') }],
+      hint: state(name),
+    })),
+    { name: 'min_severity', label: t('pat.field.minSeverity'), type: 'select',
+      value: (route && route.min_severity) || '',
+      options: [{ value: '', label: t('pat.field.minSeverityDefault') },
+        ...['INFO', 'WARN', 'CRIT'].map((x) => ({ value: x, label: x }))],
+      hint: t('pat.field.minSeverityHint') },
+    { name: 'cooldown_min', label: t('pat.field.cooldown'), type: 'number',
+      value: route && route.cooldown_ms != null ? String(Math.round(route.cooldown_ms / 60000)) : '',
+      hint: t('pat.field.cooldownHint') },
+    { name: 'reason', label: t('pat.field.routeReason'), type: 'textarea',
+      value: (route && route.reason) || '', hint: t('pat.field.reasonHint') },
+    { name: 'enabled', label: t('sev.field.state'), type: 'select',
+      value: route && route.enabled === false ? 'false' : 'true',
+      options: [{ value: 'true', label: t('pat.on') }, { value: 'false', label: t('pat.off') }] },
+  ];
+
+  openModal(t('pat.routeTitle', { name: p.name }), fields, async (vals) => {
+    const channels = ALERT_CHANNELS.filter((name) => vals[`ch_${name}`] === 'true');
+    // Caught here as well as server-side, because the server's answer for an
+    // empty list is a 400 and this is a question the form can answer itself.
+    if (!channels.length) throw new Error(t('pat.routeNeedsChannel'));
+    const minutes = (vals.cooldown_min || '').trim();
+    await api(`/api/event-patterns/${p.id}/route`, {
+      method: 'PUT',
+      body: {
+        channels,
+        min_severity: vals.min_severity || null,
+        cooldown_ms: minutes === '' ? null : Math.round(Number(minutes) * 60000),
+        reason: vals.reason,
+        enabled: vals.enabled === 'true',
+      },
+    });
+    closeModal();
+    toast(t('pat.routeSaved'));
+    render();
+  });
+
+  // Back to the default routing — every enabled channel, each with its own
+  // minimum, cooldown per finding. Said plainly: it does not stop the alerts.
+  if (route) {
+    const form = $('#modal-card').querySelector('form');
+    const clear = el('button', { type: 'button', class: 'ghost small', onclick: async () => {
+      if (!confirm(t('pat.routeClearConfirm'))) return;
+      try {
+        await api(`/api/event-patterns/${p.id}/route`, { method: 'DELETE' });
+        closeModal();
+        toast(t('pat.routeCleared'));
+        render();
+      } catch (err) { toast(errText(err), true); }
+    } }, t('pat.routeClear'));
+    if (form) form.insertBefore(el('div', {}, clear), form.querySelector('p.error'));
+  }
+}
+
+// A read, not a dry run: nothing here changes an event.
+async function countPatternMatches(p) {
+  try {
+    const res = await api(`/api/event-patterns/${p.id}/matches`);
+    toast(res.matched ? t('pat.countResult', { count: res.matched }) : t('pat.countNone'));
+  } catch (err) { toast(errText(err), true); }
+}
+
+async function deletePattern(p) {
+  // What goes with it, before it goes: deleting a pattern deletes the severity
+  // rules that follow it and its alert route (the foreign keys cascade), because
+  // a rule left behind would have no match of its own.
+  const msg = p.rule_count
+    ? t('pat.deleteConfirmRules', { count: p.rule_count })
+    : t('pat.deleteConfirm');
+  if (!confirm(msg)) return;
+  try {
+    const res = await api(`/api/event-patterns/${p.id}`, { method: 'DELETE' });
+    toast(t('pat.deleted', { rules: (res && res.severity_rules_deleted) || 0 }));
+    render();
+  } catch (err) { toast(errText(err), true); }
 }
 
 async function settingsSeverityRulesView() {
@@ -17484,7 +17880,11 @@ async function settingsSeverityRulesView() {
 async function editSeverityRule(r, prefill) {
   const editing = r && r.id;
   const source = (r && r.source) || (prefill && prefill.source) || 'finding';
-  const v = (name) => (r && r[name] != null ? String(r[name]) : ((prefill && prefill[name] != null) ? String(prefill[name]) : ''));
+  // Prefill wins over the stored rule: a rebuild (the source or the pattern
+  // picker changed) hands back what is currently in the form, and the stored
+  // value would undo the change that triggered it.
+  const v = (name) => ((prefill && prefill[name] != null) ? String(prefill[name])
+    : (r && r[name] != null ? String(r[name]) : ''));
 
   // Only the fields that belong to this source. Offering the others would let
   // someone write a rule that matches far more than they believe — the server
@@ -17500,6 +17900,15 @@ async function editSeverityRule(r, prefill) {
       { name: 'match_application_id', label: t('sev.field.application'), type: 'text', value: v('match_application_id') },
     ];
 
+  // A rule can take its match from a named PATTERN instead of typing it again
+  // (Settings → Patterns). Then the pattern IS the match and the fields below
+  // are not offered at all: two places to say which events is a rule nobody can
+  // read, and the server clears them anyway.
+  const patterns = (await api(`/api/event-patterns?source=${encodeURIComponent(source)}`).catch(() => []))
+    .filter((p) => p.enabled);
+  const patternId = v('pattern_id');
+  const followsPattern = Boolean(patternId);
+
   const fields = [
     // The source decides which fields mean anything, so it is fixed once the
     // rule exists rather than silently orphaning the ones already filled in.
@@ -17508,7 +17917,13 @@ async function editSeverityRule(r, prefill) {
       options: SEVERITY_RULE_SOURCES.map((value) => ({ value, label: severityRuleSourceLabel(value) })),
       hint: t('sev.field.sourceHint'),
     }]),
-    ...scopeFields,
+    ...(patterns.length ? [{
+      name: 'pattern_id', label: t('sev.field.pattern'), type: 'select', value: patternId,
+      options: [{ value: '', label: t('sev.field.patternNone') },
+        ...patterns.map((p) => ({ value: String(p.id), label: p.name }))],
+      hint: t('sev.field.patternHint'),
+    }] : []),
+    ...(followsPattern ? [] : scopeFields),
     { name: 'severity', label: t('sev.field.severity'), type: 'select', value: v('severity') || 'WARN',
       options: ['INFO', 'WARN', 'CRIT'].map((x) => ({ value: x, label: x })) },
     { name: 'reason', label: t('sev.field.reason'), type: 'textarea', value: v('reason'),
@@ -17525,10 +17940,11 @@ async function editSeverityRule(r, prefill) {
       severity: vals.severity,
       reason: vals.reason,
       enabled: vals.enabled === 'true',
+      pattern_id: (vals.pattern_id || '').trim() ? Number(vals.pattern_id) : null,
     };
     // A blank box means "any", which the API spells as null. Sending '' would
     // be a rule that matches the empty string and therefore nothing.
-    for (const f of scopeFields) body[f.name] = (vals[f.name] || '').trim() || null;
+    if (!body.pattern_id) for (const f of scopeFields) body[f.name] = (vals[f.name] || '').trim() || null;
     return body;
   };
   openModal(editing ? t('sev.editTitle') : t('sev.newTitle'), fields, async (vals) => {
@@ -17579,18 +17995,26 @@ async function editSeverityRule(r, prefill) {
   //
   // What has already been typed is carried across. Only the fields the new
   // source also has survive; the rest could not have meant anything there.
-  if (!editing) {
+  //
+  // The PATTERN picker rebuilds it for the same reason: choosing a pattern takes
+  // the match fields away (the pattern holds them) and clearing it puts them
+  // back, so the form has to be the one the choice implies.
+  {
     const card = $('#modal-card');
-    const picker = card.querySelector('select');
-    if (picker) {
-      const nodes = [...card.querySelectorAll('form input, form select, form textarea')];
-      picker.addEventListener('change', () => {
-        const typed = {};
-        modalFields.forEach((f, i) => { if (nodes[i]) typed[f.name] = nodes[i].value; });
-        typed.source = picker.value;
-        editSeverityRule(null, typed);
-      });
-    }
+    const nodes = [...card.querySelectorAll('form input, form select, form textarea')];
+    const rebuild = (override) => {
+      const typed = {};
+      modalFields.forEach((f, i) => { if (nodes[i]) typed[f.name] = nodes[i].value; });
+      editSeverityRule(editing ? r : null, { ...typed, ...override });
+    };
+    modalFields.forEach((f, i) => {
+      if (f.name === 'source' && !editing && nodes[i]) {
+        nodes[i].addEventListener('change', () => rebuild({ source: nodes[i].value }));
+      }
+      if (f.name === 'pattern_id' && nodes[i]) {
+        nodes[i].addEventListener('change', () => rebuild({ pattern_id: nodes[i].value }));
+      }
+    });
   }
 }
 

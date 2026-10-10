@@ -418,3 +418,100 @@ test('a case with no attack indication gets no attack panel', async (t) => {
   await settle();
   assert.ok(!panelTitles(doc).includes('Attack indication'), 'an ordinary fault was dressed up as an attack');
 });
+
+// --- verification: resolved is not closed -----------------------------------
+//
+// The two states are the whole point: the fix is in, and somebody checked that
+// it held. Until the checklist existed, "Mark closed" sat on a resolved case
+// looking like the tidy-up after resolving — and a case closed without a check
+// carried the same badge as one that had been verified.
+
+const RESOLVED = () => EVENT({ status: 'resolved' });
+
+test('a resolved case asks what to check before it can be closed', async (t) => {
+  const { doc } = boot({ t, routes: SESSION({ 'GET /api/events/11': RESOLVED() }) });
+  await settle();
+
+  const panel = [...doc.querySelectorAll('#view .panel-ui')]
+    .find((p) => /Before you close this/.test((p.querySelector('h2') || {}).textContent || ''));
+  assert.ok(panel, panelTitles(doc).join(' | '));
+  assert.match(panel.textContent, /two different claims/, 'the resolved/closed distinction is not stated');
+
+  // The checklist names what THIS case was built on, not a generic list.
+  const checks = [...panel.querySelectorAll('.verify-checks li')].map((li) => li.textContent);
+  assert.ok(checks.some((c) => /packet_loss/.test(c) && /rtt_ms/.test(c)), checks.join(' | '));
+  assert.ok(checks.some((c) => /13:40|13\.40/.test(c)), 'nothing to compare the re-run against');
+  assert.ok(checks.some((c) => /work log/.test(c)), 'the next shift is not told where to read it');
+
+  // Nothing on the checklist is pressable: an active test on a network
+  // somebody has just worked on is a decision, not a side effect.
+  assert.equal(panel.querySelectorAll('.verify-checks button, .verify-checks a').length, 0);
+  assert.match(panel.textContent, /Nothing is run from here/);
+});
+
+test('the checklist says so when the findings behind the case are gone', async (t) => {
+  const { doc } = boot({
+    t,
+    routes: SESSION({ 'GET /api/events/11': { ...RESOLVED(), anomalies: [] } }),
+  });
+  await settle();
+  const panel = [...doc.querySelectorAll('#view .panel-ui')]
+    .find((p) => /Before you close this/.test((p.querySelector('h2') || {}).textContent || ''));
+  const checks = [...panel.querySelectorAll('.verify-checks li')].map((li) => li.textContent);
+  assert.ok(checks.some((c) => /no longer stored/.test(c)),
+    'with nothing to name, the panel must say so rather than suggest a test it invented');
+});
+
+test('an open case gets no checklist — there is nothing to verify yet', async (t) => {
+  const { doc } = boot({ t, routes: SESSION() });
+  await settle();
+  assert.ok(!panelTitles(doc).includes('Before you close this'));
+});
+
+test('a failed verification goes back to investigation, with a reason, not through closed', async (t) => {
+  const { doc, window, log } = boot({
+    t,
+    routes: SESSION({
+      'GET /api/events/11': RESOLVED(),
+      'PATCH /api/events/11': { event: { ...RESOLVED().event, status: 'investigating' }, ackedFindings: 0 },
+    }),
+  });
+  await settle();
+
+  const btn = headBtns(doc).find((b) => /Verification failed/.test(b.textContent));
+  assert.ok(btn, `no failed-verification action — ${headBtns(doc).map((b) => b.textContent).join(', ')}`);
+  // Not "Mark investigating": the label has to say what the move MEANS, or an
+  // operator reads it as a step backwards for no reason.
+  assert.ok(!headBtns(doc).some((b) => /Mark investigating/.test(b.textContent)));
+
+  window.prompt = () => 'loss came back within the minute';
+  btn.dispatchEvent(new window.Event('click', { bubbles: true }));
+  await settle();
+
+  const patch = log.find((x) => x.key === 'PATCH /api/events/11');
+  assert.ok(patch, 'nothing was sent');
+  const body = JSON.parse(patch.body);
+  assert.equal(body.status, 'investigating');
+  assert.equal(body.comment, 'loss came back within the minute',
+    'a contradiction of what the case says must carry its reason');
+});
+
+test('a failed verification with no reason given sends nothing', async (t) => {
+  const { doc, window, log } = boot({ t, routes: SESSION({ 'GET /api/events/11': RESOLVED() }) });
+  await settle();
+  window.prompt = () => null; // the operator cancelled the prompt
+  headBtns(doc).find((b) => /Verification failed/.test(b.textContent))
+    .dispatchEvent(new window.Event('click', { bubbles: true }));
+  await settle();
+  assert.equal(log.filter((x) => x.key === 'PATCH /api/events/11').length, 0,
+    'the server would have refused it anyway — asking first is what stops the 400');
+});
+
+test('a viewer gets the checklist but no transitions', async (t) => {
+  const { doc } = boot({ t, routes: SESSION({ 'GET /api/events/11': RESOLVED() }), role: 'viewer' });
+  await settle();
+  // Reading what should be checked is not the same permission as deciding it
+  // was.
+  assert.ok(panelTitles(doc).includes('Before you close this'));
+  assert.ok(!headBtns(doc).some((b) => /Verification failed|Mark closed/.test(b.textContent)));
+});

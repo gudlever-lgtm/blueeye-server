@@ -151,7 +151,10 @@ function createEventCasesRepository(db) {
     const params = [to];
     if (to === 'resolved') { sets.push('resolved_at = ?'); params.push(at); }
     if (to === 'closed') { sets.push('closed_by = ?'); params.push(closedBy); }
-    if (to === 'open') { sets.push('resolved_at = NULL', 'closed_by = NULL'); }
+    // Back into the work: the case is not resolved any more, so the timestamp
+    // that says when it was must go. Leaving it would make a case that is being
+    // worked read as resolved to every report that joins on resolved_at.
+    if (to === 'open' || to === 'investigating') { sets.push('resolved_at = NULL', 'closed_by = NULL'); }
     params.push(id, from);
     const [res] = await pool.query(
       `UPDATE event_cases SET ${sets.join(', ')} WHERE id = ? AND status = ?`,
@@ -190,7 +193,7 @@ function createEventCasesRepository(db) {
     const params = [toStatus];
     if (toStatus === 'resolved') { sets.push('resolved_at = ?'); params.push(at); }
     if (toStatus === 'closed') { sets.push('closed_by = ?'); params.push(closedBy); }
-    if (toStatus === 'open') { sets.push('resolved_at = NULL', 'closed_by = NULL'); }
+    if (toStatus === 'open' || toStatus === 'investigating') { sets.push('resolved_at = NULL', 'closed_by = NULL'); }
 
     const where = [`status IN (${froms.map(() => '?').join(', ')})`];
     params.push(...froms);

@@ -4250,7 +4250,17 @@ const INC_STATUS_LABEL = { open: 'Open', investigating: 'Investigating', resolve
 // Mirrors src/eventCases/stateMachine.js, which is what actually enforces it.
 // `open` has two next steps: most events are read and dismissed in one go, and
 // making those walk through `investigating` recorded a step nobody performed.
-const INC_TRANSITIONS = { open: ['investigating', 'resolved'], investigating: ['resolved'], resolved: ['closed'], closed: ['open'] };
+// `resolved` has two next steps as well, and they are the two halves of
+// finishing: `closed` says the fix was CHECKED, `investigating` says the check
+// failed and the work is back on. Saying the latter used to mean closing the
+// case and reopening it, which wrote a verification into the trail that nobody
+// performed.
+const INC_TRANSITIONS = {
+  open: ['investigating', 'resolved'],
+  investigating: ['resolved'],
+  resolved: ['closed', 'investigating'],
+  closed: ['open'],
+};
 const incStatusBadge = (s) => el('span', { class: `badge inc-status-${s}` }, INC_STATUS_LABEL[s] || s);
 const incSevBadge = (s) => el('span', { class: `badge inc-sev-${s}` }, s);
 
@@ -4800,10 +4810,17 @@ function getEventPage() {
     ],
     setStatus: async (id, from, to) => {
       let comment;
-      // Reopening a closed case is the one transition that has to be justified:
-      // it says the previous shift's conclusion was wrong.
+      // Two transitions have to be justified, because each contradicts
+      // something the case already says: reopening a closed case says the
+      // previous shift's conclusion was wrong, and putting a resolved case back
+      // into investigation says the fix did not hold when it was checked. The
+      // server requires the comment in both cases; asking for it here is what
+      // stops the operator meeting a 400.
       if (from === 'closed' && to === 'open') {
         comment = window.prompt(t('ev.reopenReason'));
+        if (!comment) return;
+      } else if (from === 'resolved' && to === 'investigating') {
+        comment = window.prompt(t('ev.verifyFailedReason'));
         if (!comment) return;
       }
       try {

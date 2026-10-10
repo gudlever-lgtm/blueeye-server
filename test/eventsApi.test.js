@@ -393,3 +393,112 @@ test('a store that throws on the accept still reports the transition as done', a
   assert.equal(res.status, 200, 'tidying up behind the transition must not fail the transition');
   assert.equal(res.body.event.status, 'resolved');
 });
+
+// ---- verification: resolved → investigating -------------------------------
+//
+// `resolved` and `closed` are two claims: the fix is in, and somebody checked
+// that it held. Saying the check FAILED used to mean closing the case and
+// reopening it, which wrote a verification into the audit trail that never
+// happened — and "closed, then reopened" says the fix was confirmed and later
+// regressed, which is a different fault from one that was never fixed.
+
+test('PATCH a resolved event back to investigating → 200, with the reason recorded', async () => {
+  const { app, eventCasesRepo, id } = await withEvent({ status: 'resolved' });
+  const res = await request(app)
+    .patch(`/api/events/${id}`)
+    .set('Authorization', authHeader('operator'))
+    .send({ status: 'investigating', comment: 'loss came back within the minute' });
+  assert.equal(res.status, 200);
+  assert.equal(res.body.event.status, 'investigating');
+  const row = eventCasesRepo.rows.find((r) => r.id === id);
+  assert.equal(row.status, 'investigating');
+  // The case is not resolved any more, so the timestamp that says when it was
+  // must be gone — or every report joining on resolved_at still counts it.
+  assert.equal(row.resolved_at ?? null, null, 'resolved_at survived the move back into the work');
+});
+
+test('a failed verification without a reason is refused → 400', async () => {
+  const { app, id } = await withEvent({ status: 'resolved' });
+  const res = await request(app)
+    .patch(`/api/events/${id}`)
+    .set('Authorization', authHeader('operator'))
+    .send({ status: 'investigating' });
+  assert.equal(res.status, 400);
+  assert.match(res.body.error, /comment is required/i);
+  assert.match(res.body.error, /investigation/i, 'the message must name THIS move, not a reopen');
+});
+
+test('resolved → open is still refused: a reopen goes through closed → 409', async () => {
+  const { app, id } = await withEvent({ status: 'resolved' });
+  const res = await request(app)
+    .patch(`/api/events/${id}`)
+    .set('Authorization', authHeader('operator'))
+    .send({ status: 'open', comment: 'x' });
+  assert.equal(res.status, 409);
+});
+
+test('an unfiltered bulk move to investigating does not sweep up the resolved cases', async () => {
+  // "Mark these investigating" means the open ones. Dragging the resolved ones
+  // back into the work — clearing their resolved_at, on a screen that was not
+  // showing them — is not what anybody pressed, and it must not become
+  // possible just because the state machine now allows that move at all.
+  const eventCasesRepo = makeEventCasesRepo();
+  const openId = await eventCasesRepo.create({
+    host_id: 'a', title: 'open one', severity: 'WARN', status: 'open',
+    first_event_at: new Date('2026-06-01T08:00:00Z'), last_event_at: new Date('2026-06-01T08:00:00Z'),
+  });
+  const resolvedId = await eventCasesRepo.create({
+    host_id: 'b', title: 'resolved one', severity: 'WARN', status: 'resolved',
+    first_event_at: new Date('2026-06-01T08:00:00Z'), last_event_at: new Date('2026-06-01T08:00:00Z'),
+  });
+  const app = makeApp({ eventCasesRepo });
+
+  const res = await request(app)
+    .post('/api/events/bulk-status')
+    .set('Authorization', authHeader('operator'))
+    .send({ status: 'investigating', all: true, filters: {} });
+  assert.equal(res.status, 200, JSON.stringify(res.body));
+  assert.equal(eventCasesRepo.rows.find((r) => r.id === openId).status, 'investigating');
+  assert.equal(eventCasesRepo.rows.find((r) => r.id === resolvedId).status, 'resolved',
+    'an unfiltered bulk undid a resolution nobody was looking at');
+});
+
+test('a bulk reopen still works: when the only legal move needs a reason, it stays', async () => {
+  // The guard above drops a reason-carrying move only when a quieter one is
+  // also legal. `closed → open` is the ONLY way into `open`, so dropping it
+  // would answer "no status can move to open" to an operator holding a comment.
+  const eventCasesRepo = makeEventCasesRepo();
+  const id = await eventCasesRepo.create({
+    host_id: 'c', title: 'closed one', severity: 'WARN', status: 'closed',
+    first_event_at: new Date('2026-06-01T08:00:00Z'), last_event_at: new Date('2026-06-01T08:00:00Z'),
+  });
+  const app = makeApp({ eventCasesRepo });
+  const res = await request(app)
+    .post('/api/events/bulk-status')
+    .set('Authorization', authHeader('operator'))
+    .send({ status: 'open', all: true, filters: {}, comment: 'it came back' });
+  assert.equal(res.status, 200, JSON.stringify(res.body));
+  assert.equal(eventCasesRepo.rows.find((r) => r.id === id).status, 'open');
+});
+
+test('asking for the resolved ones explicitly still works, and still needs the reason', async () => {
+  const eventCasesRepo = makeEventCasesRepo();
+  const resolvedId = await eventCasesRepo.create({
+    host_id: 'b', title: 'resolved one', severity: 'WARN', status: 'resolved',
+    first_event_at: new Date('2026-06-01T08:00:00Z'), last_event_at: new Date('2026-06-01T08:00:00Z'),
+  });
+  const app = makeApp({ eventCasesRepo });
+
+  const noReason = await request(app)
+    .post('/api/events/bulk-status')
+    .set('Authorization', authHeader('operator'))
+    .send({ status: 'investigating', all: true, filters: { status: 'resolved' } });
+  assert.equal(noReason.status, 400);
+
+  const res = await request(app)
+    .post('/api/events/bulk-status')
+    .set('Authorization', authHeader('operator'))
+    .send({ status: 'investigating', all: true, filters: { status: 'resolved' }, comment: 'the fix did not hold' });
+  assert.equal(res.status, 200, JSON.stringify(res.body));
+  assert.equal(eventCasesRepo.rows.find((r) => r.id === resolvedId).status, 'investigating');
+});

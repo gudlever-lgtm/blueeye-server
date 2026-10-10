@@ -8,9 +8,21 @@
 //   open          → resolved        (manually — see below)
 //   investigating → resolved        (manually, or automatically after no new
 //                                     anomalies link within the inactivity window)
-//   resolved      → closed          (manually only)
+//   resolved      → closed          (manually only — the VERIFIED state)
+//   resolved      → investigating   (verification failed — manual only, requires
+//                                     a comment saying what was still wrong)
 //   closed        → open            (reopen — manual only, requires a free-text
 //                                     comment which is stored in the audit trail)
+//
+// WHY resolved → investigating EXISTS. `resolved` and `closed` are two states on
+// purpose: resolved means the fix is in, closed means somebody checked that it
+// worked. The check can fail — and until this transition existed, saying so
+// meant closing the case (asserting it was verified) and reopening it, which
+// wrote a verification into the audit trail that never happened. The trail is
+// the product here: a case that reads "closed, then reopened" says the fix was
+// confirmed and later regressed, which is a different fault from one that was
+// never fixed. So a failed check goes back to `investigating`, where the work
+// actually is, and carries a comment saying what was still wrong.
 //
 // WHY open → resolved EXISTS. The chain used to be strictly
 // open → investigating → resolved, on the reasoning that something has to be
@@ -31,7 +43,7 @@ const STATUSES = ['open', 'investigating', 'resolved', 'closed'];
 const TRANSITIONS = {
   open: ['investigating', 'resolved'],
   investigating: ['resolved'],
-  resolved: ['closed'],
+  resolved: ['closed', 'investigating'],
   closed: ['open'],
 };
 
@@ -43,10 +55,17 @@ function canTransition(from, to) {
   return Boolean(TRANSITIONS[from]) && TRANSITIONS[from].includes(to);
 }
 
-// Reopen (closed → open) must carry a comment; it is the only transition that
-// requires one. The comment is not a stored column — it lives in the audit log.
+// The two transitions that must carry a comment, and the reason is the same for
+// both: each one contradicts something the case already says, and a trail that
+// records the contradiction without the why is no better than no trail.
+//
+//   closed → open                a case that was verified is wrong again
+//   resolved → investigating     the fix did not hold when it was checked
+//
+// The comment is not a stored column — it lives in the audit log.
 function requiresComment(from, to) {
-  return from === 'closed' && to === 'open';
+  if (from === 'closed' && to === 'open') return true;
+  return from === 'resolved' && to === 'investigating';
 }
 
 module.exports = { STATUSES, TRANSITIONS, isStatus, canTransition, requiresComment };

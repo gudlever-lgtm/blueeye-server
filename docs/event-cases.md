@@ -115,8 +115,31 @@ another site immediately shows its current name/site on old events too.
 ## State machine
 
 `src/eventCases/stateMachine.js` (pure): `open → investigating → resolved →
-closed`, plus `closed → open` (reopen, **requires a comment**, stored in the audit
-trail). Any other transition is rejected with 409. `autoResolveJob.js` is a
+closed`, plus `resolved → investigating` (**the failed verification**, requires a
+comment) and `closed → open` (reopen, **requires a comment**, stored in the audit
+trail). Any other transition is rejected with 409.
+
+**`resolved` and `closed` are two claims**, not a state and its tidy-up: the fix
+is in, and somebody checked that it held. The check can fail — and saying so
+used to mean closing the case (asserting it was verified) and reopening it,
+which wrote a verification into the trail that never happened. "Closed, then
+reopened" says the fix was confirmed and later regressed; that is a different
+fault from one that was never fixed, and the trail is the product here. So a
+failed check goes back to `investigating`, where the work is, and carries a
+comment saying what was still wrong. `resolved_at` is cleared with it, or every
+report joining on it still counts the case as resolved.
+
+The event screen shows a **pre-close checklist** on a resolved case, derived
+from the findings the case was actually built on: re-run what fired, compare it
+against the numbers from when it started, check the related findings have
+stopped rather than that nobody looked at them, and write what you ran in the
+work log. Nothing is run from that panel — an active test on a network somebody
+has just worked on is a decision, not a side effect of pressing Closed.
+
+The comment-requiring transitions are never swept in by an **unfiltered** bulk
+move: `status=investigating` with no status filter moves the open cases only.
+Asking for the resolved ones explicitly (`filters.status = 'resolved'`) works,
+and still needs the comment. `autoResolveJob.js` is a
 leader-only job that resolves events stuck in `investigating` once no new anomaly
 has linked within the inactivity window (audited, actor `system`) — **unless the
 case is part of a situation that is still open or acknowledged** (below).

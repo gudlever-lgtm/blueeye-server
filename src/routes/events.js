@@ -576,7 +576,20 @@ function createEventsRouter({
     // than answered with "0 moved": the operator asked for something the state
     // machine does not allow, and silence would read as "nothing matched".
     const legal = STATUSES.filter((from) => canTransition(from, to));
-    const froms = filters.status ? legal.filter((f) => f === filters.status) : legal;
+    // A transition that must carry a REASON is not swept in ALONGSIDE ones that
+    // do not. "Mark these investigating" means the open ones; dragging the
+    // resolved ones back into the work — clearing their resolved_at, on a
+    // screen that was not showing them — is not what anybody pressed. Asking
+    // for them explicitly (status=resolved) still works, and still needs the
+    // comment.
+    //
+    // When the reason-carrying move is the ONLY legal one, it stays: a bulk
+    // reopen is `closed → open` and nothing else, and dropping it here would
+    // answer "no status can move to open" with a comment in hand.
+    const quiet = legal.filter((f) => !requiresComment(f, to));
+    const froms = filters.status
+      ? legal.filter((f) => f === filters.status)
+      : (quiet.length ? quiet : legal);
     if (!froms.length) {
       return res.status(400).json({
         error: filters.status
@@ -587,7 +600,11 @@ function createEventsRouter({
     // A reopen carries its reason in every form. Otherwise bulk becomes the
     // door that closes-and-reopens the history with nothing recorded.
     if (froms.some((from) => requiresComment(from, to)) && !value.comment) {
-      return res.status(400).json({ error: 'A comment is required to reopen an event' });
+      return res.status(400).json({
+        error: to === 'investigating'
+          ? 'A comment is required to put a resolved event back into investigation'
+          : 'A comment is required to reopen an event',
+      });
     }
 
     const moved = await eventCasesRepo.updateStatusWhere({
@@ -748,7 +765,11 @@ function createEventsRouter({
       return res.status(409).json({ error: `Illegal transition ${from} → ${to}` });
     }
     if (requiresComment(from, to) && !value.comment) {
-      return res.status(400).json({ error: 'A comment is required to reopen an event' });
+      return res.status(400).json({
+        error: to === 'investigating'
+          ? 'A comment is required to put a resolved event back into investigation'
+          : 'A comment is required to reopen an event',
+      });
     }
 
     const ok = await eventCasesRepo.updateStatus(id, {

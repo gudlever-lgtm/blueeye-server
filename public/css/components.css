@@ -955,6 +955,14 @@
 .attack-finding-head { display: flex; align-items: center; flex-wrap: wrap; gap: var(--s-1); }
 .attack-finding-text { margin: var(--s-2) 0 0; font-size: var(--fs-sm); }
 
+/* ---- The pre-close checklist, on a resolved event -------------------------
+   A plain list of sentences, not a set of controls: nothing on it is pressable,
+   because nothing is run from there. Indented enough that the markers line up
+   under the note above it, and spaced for reading rather than scanning — these
+   are four or five full sentences, each of which is a decision. */
+.verify-checks { margin: 0; padding-left: var(--s-5); font-size: var(--fs-sm); color: var(--text); }
+.verify-checks li + li { margin-top: var(--s-2); }
+
 /* ---- Page-load line ------------------------------------------------------
    Two pixels across the top of the viewport while the dashboard is waiting on
    the server. Every screen here fetches on entry, some of them four or five

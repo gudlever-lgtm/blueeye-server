@@ -216,3 +216,25 @@ test('listStaleInvestigating with holdClustersActiveSince excludes cases of acti
   const repo = createEventCasesRepository({ pool });
   assert.deepEqual(await repo.listStaleInvestigating('CUT', undefined, { holdClustersActiveSince: 'SINCE' }), []);
 });
+
+// ---- verification is a state, not a formality ------------------------------
+
+test('resolved has two next steps, and the second one is the failed check', () => {
+  assert.equal(canTransition('resolved', 'closed'), true);
+  assert.equal(canTransition('resolved', 'investigating'), true);
+  // Reopening still goes through closed: that path means "it was verified and
+  // came back", which is a different fault from "the fix did not hold".
+  assert.equal(canTransition('resolved', 'open'), false);
+  assert.equal(canTransition('investigating', 'closed'), false);
+  assert.equal(canTransition('open', 'closed'), false);
+});
+
+test('both the transitions that contradict the case carry a reason', () => {
+  assert.equal(requiresComment('closed', 'open'), true);
+  assert.equal(requiresComment('resolved', 'investigating'), true);
+  // And no others: a comment on every move is a comment nobody writes.
+  assert.equal(requiresComment('open', 'investigating'), false);
+  assert.equal(requiresComment('investigating', 'resolved'), false);
+  assert.equal(requiresComment('resolved', 'closed'), false);
+  assert.equal(requiresComment('open', 'resolved'), false);
+});

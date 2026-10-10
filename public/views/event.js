@@ -71,10 +71,15 @@
         // Events list uses.
         var moves = deps.canWrite() ? (deps.transitions(inc.status) || []) : [];
         var actions = moves.map(function (to, i) {
-          return ui.button(i === moves.length - 1 ? 'primary' : 'secondary',
-            to === 'open' ? t('ev.reopen') : t('ev.markAs', { state: statusLabel(to) }), {
-              onclick: function () { deps.setStatus(id, inc.status, to); },
-            });
+          // Two moves are not "mark as <state>" and must not be labelled as if
+          // they were: reopening says the last conclusion was wrong, and going
+          // back from resolved says the fix did not hold when it was checked.
+          var label = t('ev.markAs', { state: statusLabel(to) });
+          if (to === 'open') label = t('ev.reopen');
+          else if (inc.status === 'resolved' && to === 'investigating') label = t('ev.verifyFailed');
+          return ui.button(i === moves.length - 1 ? 'primary' : 'secondary', label, {
+            onclick: function () { deps.setStatus(id, inc.status, to); },
+          });
         });
         // Draft the regulator-facing NIS2 record of this case (pre-filled and
         // linked server-side). Secondary: it is a follow-up, not the next move.
@@ -146,7 +151,53 @@
             : ui.emptyState({ title: t('ev.noAnomalies'), body: t('ev.noAnomaliesHint') })],
         });
 
+        // ---- verification (a resolved case is not a finished one) ----------
+        //
+        // `resolved` and `closed` are two states on purpose: the fix is in, and
+        // somebody checked that it worked. Nothing on the screen said so, so
+        // "Mark closed" sat there looking like the tidy-up after resolving —
+        // and a case closed without a check carries the same badge as one that
+        // was verified, which is the distinction being thrown away.
+        //
+        // The checklist is derived from what this case was actually built on
+        // (its findings' own metrics), never invented: re-run what fired, then
+        // judge it against the numbers from when it started. Nothing is run
+        // from here. An active test on a network somebody has just worked on
+        // is a decision, not a side effect of pressing Closed.
+        var verifyPanel = null;
+        if (inc.status === 'resolved') {
+          var metrics = [];
+          anomalies.forEach(function (a) {
+            if (a && a.metric && metrics.indexOf(a.metric) < 0) metrics.push(a.metric);
+          });
+          var checks = [];
+          if (metrics.length) {
+            checks.push(t('ev.verify.check.metrics', { metrics: metrics.join(', ') }));
+            checks.push(t('ev.verify.check.compare', { at: ui.fmt.abs(inc.firstEventAt) }));
+          } else {
+            // No findings left to name (retention may have purged them), so the
+            // honest version of this line is that we cannot say what to re-run.
+            checks.push(t('ev.verify.check.noMetrics'));
+          }
+          checks.push(t('ev.verify.check.related'));
+          if (inc.clusterId != null) checks.push(t('ev.verify.check.situation', { id: inc.clusterId }));
+          checks.push(t('ev.verify.check.log'));
+
+          verifyPanel = ui.panel({
+            title: t('ev.verify.title'),
+            children: [
+              ui.inlineNote(t('ev.verify.lead'), 'warn'),
+              el('div', { class: 'panel-body' },
+                el('ul', { class: 'verify-checks' }, checks.map(function (line) {
+                  return el('li', {}, line);
+                })),
+                ui.metaXs(t('ev.verify.foot'))),
+            ],
+          });
+        }
+
         if (attackPanel) page.append(attackPanel);
+        if (verifyPanel) page.append(verifyPanel);
 
         // Everything else is app.js's, wrapped rather than rebuilt: each panel
         // owns its title, and the loaders fill the body under it.

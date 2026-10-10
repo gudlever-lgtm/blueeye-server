@@ -226,5 +226,10 @@ test('the page follows the language switch', async (t) => {
   // the catalogue, and half a translated page is the bug worth catching.
   assert.equal(doc.querySelector('#view .statstrip .stat-l').textContent, I18n.STRINGS.da[About.AREA_KEYS[About.AREAS[0]]]);
   assert.equal(doc.querySelector('#view .page-head h1').textContent.replace(/\?$/, ''), I18n.STRINGS.da['about.title']);
-  assert.match(doc.querySelector('#view .panel-head h2').textContent.toLowerCase(), /september 2026/);
+  // The newest month, in Danish, derived from the data rather than written
+  // here: a hardcoded month makes this test fail every time somebody adds an
+  // entry, which trains people to edit the assertion instead of reading it.
+  const newest = new Date(`${About.RELEASES[0].d}T00:00:00Z`);
+  const daMonth = newest.toLocaleDateString('da-DK', { month: 'long', year: 'numeric', timeZone: 'UTC' });
+  assert.match(doc.querySelector('#view .panel-head h2').textContent.toLowerCase(), new RegExp(daMonth.toLowerCase()));
 });

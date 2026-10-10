@@ -1,5 +1,109 @@
 # Changelog
 
+## 0.238.0 — A failed verification is a state
+
+`resolved` and `closed` were already two claims — the fix is in, and somebody
+checked that it held — but nothing outside the state machine said so, and if the
+check FAILED the only route back was `closed → open`. That wrote a verification
+nobody performed into the audit trail, and "closed, then reopened" means
+something different from "the fix did not hold".
+
+- `resolved → investigating` is legal, requires a comment, and clears
+  `resolved_at` (leaving it kept the case counted as resolved by every report
+  joining on it). The button says **Verification failed**.
+- The event screen shows a **pre-close checklist** on a resolved case, derived
+  from the findings that case was built on: re-run what fired, compare against
+  the numbers from when it started, check the related findings have stopped,
+  write it in the work log. Nothing is run from the panel.
+- Adding the move exposed a trap in the filter-scoped bulk form, which derives
+  its legal source statuses from the same table: an unfiltered "mark
+  investigating" would have swept up resolved cases nobody was looking at. A
+  reason-carrying transition is no longer swept in alongside quieter ones —
+  unless it is the only legal one (a bulk reopen is `closed → open`).
+
+## 0.237.0 — One queue on the Overview, not three lists
+
+The landing screen showed root causes, unhealthy agents and recent changes side
+by side. Each was correct and none answered "which of these matters most this
+minute", so the reader did that join by eye, on arrival, every shift.
+
+- **Needs attention** is one ranked list built from existing records: a row IS a
+  situation, an event case, a correlated cause or an agent that stopped
+  reporting, and opening it opens that record. No new table, no new endpoint —
+  two more reads of endpoints the Events and Situations screens already call.
+- The ordering is a pure exported function with its own tests: severity ×1000,
+  impact ×50 capped at nine devices, +300 unattended, +120 observed over
+  suspected, age only as a tie-breaker.
+- A **Basis** column says observed / suspected / no data, and impact reads as
+  what was computed ("affects 9 devices"), never as what anyone verified.
+- "Agents worth a look" is **What we cannot see**. An empty queue is an
+  all-clear only when all five sources answered; otherwise it reads "nothing we
+  could see". See [docs/mission-control.md](docs/mission-control.md).
+
+## 0.236.0 — A rail named after the task
+
+Monitoring / Diagnostics / Insights / Guides / Administration named the
+software, not the work. The groups are now Incidents, Investigation, Network,
+Insights & reports, Infrastructure and Administration, with Overview and Service
+Assurance as solo entries above them.
+
+- Three places named the same screen twice; each is one entry plus a tab strip
+  on the screen: Analysis (Explanation/Evidence), Troubleshooting (Graph/List),
+  Guides (six tracks). No address changed, and `/guides/security` finally has
+  one — the Attack indication walkthrough was reachable only from its own rail
+  entry, so a reload landed on Monitoring.
+- The UI gate fails the build if two rail entries name one view again.
+
+## 0.235.1 — Loopback by default, and not root
+
+- The dashboard port is published on `127.0.0.1` unless `SERVER_BIND_ADDR` says
+  otherwise: a stack with a reverse proxy had both the proxy and a plain-HTTP
+  port answering the LAN.
+- The server container runs as `node`. The privilege drop is in an entrypoint
+  rather than a `USER` line because Docker chowns a named volume to the
+  container user only when it creates it — an existing install has a root-owned
+  `/data`, and flipping the user alone would fail on the first write, at boot.
+  `BLUEEYE_RUN_AS_ROOT=1` remains for a bind mount whose uid cannot be changed,
+  and warns on every boot.
+
+## 0.235.0 — A failed deploy fails, and a half-applied migration stops the boot
+
+- `deploy.sh` ran `wait_health … || true`: a server that never answered
+  `/health` was a warning on the way to "Done." and exit 0. The probe is fatal
+  now, followed by five unauthenticated smoke requests (the dashboard loads, an
+  unknown path is 404 and not 500, two protected routes still answer 401).
+  `test/deploySmokeContract.test.js` pins those codes to what the app returns.
+- A `mysqldump` is taken before anything starts, with a size check: a truncated
+  file that looks like a backup is worse than no backup.
+- `migrate.js` wrapped each file in `beginTransaction`/`rollback`, which reads
+  as safety and is not — MySQL commits DDL as it goes. Its one real effect was
+  to erase the evidence that a file had run, so the next boot replayed a
+  migration already half in the schema, failed, and did it again on every boot.
+  A `running` row is now committed BEFORE the SQL; the next run stops, names the
+  file and offers `--mark-applied` or `--retry`, neither of which runs SQL.
+- Plus a MySQL named lock (two replicas cannot both apply one file) and a sha256
+  per migration (editing an applied file is refused). See
+  [docs/deploy-recovery.md](docs/deploy-recovery.md).
+
+## 0.234.0 — A privileged command that cannot be signed is not sent
+
+`commandSigner` caught a signing failure, warned, and sent the command
+**unsigned** — a downgrade an attacker can reach for: break the signer, or catch
+a server whose key cannot be decrypted, and every agent that has not yet latched
+accepts socket-only authority again for `update`, `delete`, `install-tool` and
+`rekey`.
+
+- It throws. The refusal is a 503 the operator can read and an
+  `agent.command-signing-failed` row in the audit trail. A fleet rollout marks
+  that one target refused and keeps going; a queued command stays queued.
+- Signed commands carry a `commandId` nonce and an explicit `expiresAt`. The
+  agent remembers the ids it has carried out and refuses the second delivery, so
+  a captured command can no longer be replayed at the same agent inside the
+  ±5 min window (blueeye-agent 0.48.0). A signed command with no `commandId` is
+  refused rather than accepted without replay protection.
+- `BLUEEYE_REQUIRE_COMMAND_SIGNING=1` extends the refusal to a server with no
+  signing key at all. See [docs/command-signing.md](docs/command-signing.md).
+
 ## 0.231.0 — An Overview to arrive on
 
 The dashboard has twenty-odd screens and the landing route was one of them:

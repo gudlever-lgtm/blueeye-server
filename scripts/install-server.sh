@@ -192,6 +192,14 @@ ADMIN_PASSWORD="$ANSWER"
 ask "${BLUEEYE_SERVER_PORT:-}" "Host port for the dashboard/API" "3000"
 SERVER_PORT="$ANSWER"
 
+# Which address the dashboard port is published on. Loopback means the only way
+# in is the reverse proxy on this host — which is the point of having one. A
+# proxy on ANOTHER host, or no proxy at all, needs a routable address.
+BIND_DEFAULT=0.0.0.0
+[ "$TRUST_PROXY" = "1" ] && BIND_DEFAULT=127.0.0.1
+ask "${BLUEEYE_BIND_ADDR:-}" "Publish the dashboard on which address? (127.0.0.1 = only reachable through a proxy on this host)" "$BIND_DEFAULT"
+BIND_ADDR="$ANSWER"
+
 ask "${BLUEEYE_DB_PORT:-}" "Host port for MySQL (loopback only)" "3307"
 DB_PORT="$ANSWER"
 
@@ -231,6 +239,7 @@ SERVER_JWT_SECRET="$(rand 48)"
 
   printf '# Server\n'
   printf 'SERVER_HOST_PORT=%s\n' "$SERVER_PORT"
+  printf 'SERVER_BIND_ADDR=%s\n' "$BIND_ADDR"
   printf 'SERVER_JWT_SECRET=%s\n' "$(envq "$SERVER_JWT_SECRET")"
   printf 'BLUEEYE_PUBLIC_URL=%s\n' "$(envq "$PUBLIC_URL")"
   printf 'TRUST_PROXY=%s\n\n' "$( [ "$TRUST_PROXY" = "1" ] && printf 1 )"

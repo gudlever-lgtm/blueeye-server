@@ -67,6 +67,28 @@ local changes, retries `git pull` on transient network errors, and works with
 either `docker compose` or `docker-compose`. Host ports for the health check
 honour `SERVER_HOST_PORT` / `LICENS_HOST_PORT`.
 
+It takes a **mysqldump before it starts anything** (migrations run as the server
+container boots), and a failed `/health` probe or smoke check **fails the
+deploy** rather than warning — see [docs/deploy-recovery.md](docs/deploy-recovery.md)
+for what to do when it does.
+
+### Where the dashboard is published
+
+`SERVER_BIND_ADDR` defaults to **`127.0.0.1`**: the server is reached through the
+reverse proxy in front of it, and only through it. Published on `0.0.0.0` it
+answers plain HTTP to anything that can route to the host, which is not what
+having a proxy is for.
+
+Set `SERVER_BIND_ADDR=0.0.0.0` in `.env` when the proxy runs on **another** host
+(or there is none). `scripts/install-server.sh` asks, and defaults to loopback
+when you tell it a trusted proxy is in front.
+
+The server container runs as the unprivileged `node` user. `docker/entrypoint.sh`
+fixes the ownership of `/data` once — an install that has been running as root
+has a root-owned volume — and then drops. `BLUEEYE_RUN_AS_ROOT=1` is the escape
+hatch for a bind mount whose uid cannot be changed; it prints a warning on every
+boot, on purpose.
+
 Startup order is enforced via health checks:
 
 1. **db** (MySQL) — `mysql-init.sql` creates `blueeye` + `blueeye_licens`.

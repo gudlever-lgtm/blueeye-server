@@ -164,7 +164,18 @@ services:
       # reads it. Matches AGENT_SOURCE_DIR below.
       - ../blueeye-agent:/agent-src:ro
     ports:
-      - "${SERVER_HOST_PORT:-3000}:3000"
+      # Bound to loopback by DEFAULT: the server is meant to be reached through
+      # the reverse proxy in front of it, which terminates TLS and is the only
+      # thing that should be answering on the LAN. Published on 0.0.0.0 it is
+      # reachable over plain HTTP by anything that can route to this host, proxy
+      # or no proxy.
+      #
+      # A proxy on ANOTHER host needs a routable bind — that is what the variable
+      # is for: SERVER_BIND_ADDR=0.0.0.0 in .env, deliberately, once.
+      - "${SERVER_BIND_ADDR:-127.0.0.1}:${SERVER_HOST_PORT:-3000}:3000"
+    # No new privileges: nothing in this container ever needs setuid to escalate.
+    security_opt:
+      - no-new-privileges:true
     depends_on:
       db:
         condition: service_healthy

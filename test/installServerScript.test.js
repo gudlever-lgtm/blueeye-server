@@ -118,6 +118,21 @@ test('ports are validated', () => {
   assert.throws(() => install({ BLUEEYE_DB_PORT: '70000' }), /out of range/);
 });
 
+test('the dashboard port is published on loopback when a proxy is in front', () => {
+  // The whole point of a reverse proxy is that it is the only way in. An install
+  // that answers plain HTTP on the LAN as well has the proxy and the hole.
+  const proxied = install({ BLUEEYE_TRUST_PROXY: '1' });
+  assert.equal(envValue(proxied.text, 'SERVER_BIND_ADDR'), '127.0.0.1');
+
+  // No proxy on this host — it has to be reachable, so the default is routable.
+  const direct = install({ BLUEEYE_TRUST_PROXY: '0' });
+  assert.equal(envValue(direct.text, 'SERVER_BIND_ADDR'), '0.0.0.0');
+
+  // And it stays an explicit choice either way.
+  const forced = install({ BLUEEYE_TRUST_PROXY: '1', BLUEEYE_BIND_ADDR: '0.0.0.0' });
+  assert.equal(envValue(forced.text, 'SERVER_BIND_ADDR'), '0.0.0.0');
+});
+
 test('a missing licence key stops the install rather than writing a broken .env', () => {
   assert.throws(() => install({ BLUEEYE_LICENSE_KEY: '' }), /licence key is required/);
 });

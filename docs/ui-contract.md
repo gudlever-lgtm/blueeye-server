@@ -166,7 +166,7 @@ place that knows view ↔ path, and both sides read it: the dashboard parses the
 location on boot and pushes state on navigation, the server decides whether an
 HTML request is a real app path.
 
-- `/` and `/index.html` open Changes.
+- `/` and `/index.html` open the Overview (`/overview`).
 - Sub-tabs are **path segments**, not query parameters: `/probes/connection`,
   `/settings/retention`, `/service-assurance/health`, `/guides/fleet`. Several
   views already own the query string for their own filters (`/fleet?severity=`,
@@ -652,6 +652,7 @@ Administration → login and error screens.
 
 | Screen | Route | Template | Module |
 |---|---|---|---|
+| Overview | `/overview` | B · DashboardPage | [`public/views/home.js`](../public/views/home.js) |
 | Changes | `/changes` | A · ListPage | [`public/views/changes.js`](../public/views/changes.js) |
 | Probes & Tests | `/probes/:tab` | C · FormPage (shell) | [`public/views/probes.js`](../public/views/probes.js) |
 | Analysis | `/analysis` | A · ListPage | [`public/views/analysis.js`](../public/views/analysis.js) |

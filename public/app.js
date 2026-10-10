@@ -1220,7 +1220,7 @@ function showSigningKeySetupPrompt() {
 // Labels mirror the top nav. A link whose target tab is hidden (licence/role)
 // degrades to plain text, so the help never offers a dead end.
 const VIEW_LABELS = {
-  fleet: 'Fleet', overview: 'Traffic', map: 'Sites', geo: 'Destinations',
+  home: 'Overview', fleet: 'Fleet', overview: 'Traffic', map: 'Sites', geo: 'Destinations',
   probes: 'Probes', tests: 'Tests', flows: 'Flows',
   findings: 'Analysis', reporting: 'Reporting', enrollment: 'Enrollment', settings: 'Settings',
   docs: 'Documentation', investigation: 'Investigate', troubleshooting: 'Troubleshooting', diagnose: 'Diagnose', deviceLog: 'Device log', nicInventory: 'NIC inventory', events: 'Events',
@@ -1771,6 +1771,7 @@ const PAGE_INFO = {
 // Analysis is the exception, because the view key is `findings` (the records it
 // lists) while the product calls the screen Analysis.
 const CONTRACT_VIEWS = new Map([
+  ['home', 'home'],
   ['changes', 'changes'],
   ['probes', 'probes'],
   ['findings', 'analysis'],
@@ -10266,6 +10267,51 @@ function changesRowEl(event, nameFor, showIndication = true) {
   return row;
 }
 
+// ---- Overview (MIGRATED — see public/views/home.js) ------------------------
+// The landing screen. It owns no data of its own: the three reads are the ones
+// Fleet, Troubleshooting and Changes already make, handed in here so the gate's
+// api()-is-mounted sweep still sees them. `endpoint` is what a failed panel
+// prints under the error, so a reader can say which call failed.
+PAGE_INFO.home = {
+  get hero() { return t('home.lead'); },
+  get title() { return t('home.info.title'); },
+  body: () => [
+    el('p', {}, t('home.info.p1')),
+    el('p', {}, t('home.info.p2')),
+    el('p', { class: 'muted' }, t('home.info.p3')),
+  ],
+};
+
+const HOME_WINDOW_MIN = 60;
+let homePage = null;
+function getHomePage() {
+  if (homePage) return homePage;
+  if (typeof window === 'undefined' || !window.HomePage || !ui) return null;
+  homePage = window.HomePage.create({
+    el, t, ui, errText, openAgent,
+    healthBadge: healthBadgeUi,
+    help: () => ({ title: PAGE_INFO.home.title, body: PAGE_INFO.home.body }),
+    endpoint: {
+      fleet: 'GET /api/fleet/health',
+      tshoot: 'GET /api/troubleshooting/overview',
+      changes: 'GET /api/changes',
+    },
+    fetch: {
+      fleet: () => api('/api/fleet/health'),
+      tshoot: () => api(`/api/troubleshooting/overview?minutes=${HOME_WINDOW_MIN}&limit=10`),
+      changes: () => api('/api/changes?window=24h&limit=20'),
+    },
+    go: (viewKey) => gotoView(viewKey),
+  });
+  return homePage;
+}
+
+views.home = async () => {
+  const v = getHomePage();
+  if (!v) return el('div', { class: 'empty error' }, t('home.err.title'));
+  return v.view();
+};
+
 // ---- Changes (MIGRATED — see public/views/changes.js) ----------------------
 // The first screen on the UI contract (docs/ui-contract.md). The view itself
 // lives in its own file so `npm run ui:check` can hold it to the contract while
@@ -10376,6 +10422,13 @@ const HEALTH_BADGE = {
 function healthBadge(h) {
   const [cls, label] = HEALTH_BADGE[h.status] || ['grace', h.status];
   return el('span', { class: `badge ${cls}`, title: h.reason || '' }, label);
+}
+// The same verdict as a contract Badge. Top-level because two screens want it:
+// the Fleet table and the Overview's "worth a look" shortlist.
+function healthBadgeUi(h) {
+  const [cls, label] = HEALTH_BADGE[(h && h.status) || 'unknown'] || HEALTH_BADGE.unknown;
+  const tone = { online: 'ok', warn: 'warn', crit: 'crit', down: 'crit', stale: 'neutral', grace: 'neutral' }[cls] || 'neutral';
+  return ui.badge(tone, label);
 }
 // Health verdict → map-marker colour (same palette as the badges / Overview) and
 // a severity rank so a site marker can take the colour of its worst agent.
@@ -10713,11 +10766,7 @@ function getFleetView() {
     diagnose: diagnoseAgent,
     speedtest: showSpeedtest,
     // The health verdict as a contract Badge rather than the legacy .badge.
-    healthBadgeUi: (h) => {
-      const [cls, label] = HEALTH_BADGE[(h && h.status) || 'unknown'] || HEALTH_BADGE.unknown;
-      const tone = { online: 'ok', warn: 'warn', crit: 'crit', down: 'crit', stale: 'neutral', grace: 'neutral' }[cls] || 'neutral';
-      return ui.badge(tone, label);
-    },
+    healthBadgeUi,
     filter: () => fleetFilter,
     setFilter: (next) => { fleetFilter = next; },
     getSortByHealth: () => fleetSortByHealth,

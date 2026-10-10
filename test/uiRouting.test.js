@@ -60,7 +60,7 @@ test('routes: no two views claim the same address', () => {
   }
 });
 
-test('routes: the bare root is Changes, and an unknown address matches nothing', () => {
+test('routes: the bare root is the Overview, and an unknown address matches nothing', () => {
   assert.equal(Routes.match('/').view, Routes.HOME);
   assert.equal(Routes.match('/index.html').view, Routes.HOME);
   assert.equal(Routes.match('/changes/').view, 'changes', 'a trailing slash is the same screen');
@@ -79,7 +79,7 @@ test('routes: a query string or a fragment does not change which screen an addre
 // ---------------------------------------------------------------- the server
 test('a navigation to an app path is answered 200 with the version-stamped shell', async () => {
   const version = require('../package.json').version;
-  for (const p of ['/', '/changes', '/probes/connection', '/agents/12', '/settings/retention', '/ui-kitchen-sink',
+  for (const p of ['/', '/overview', '/changes', '/probes/connection', '/agents/12', '/settings/retention', '/ui-kitchen-sink',
     '/analysis', '/analysis/evidence', '/troubleshooting', '/troubleshooting/list']) {
     const res = await navigate(p);
     assert.equal(res.status, 200, `${p} → ${res.status}`);
@@ -92,7 +92,7 @@ test('a navigation to an app path is answered 200 with the version-stamped shell
 
 test('a navigation to an unknown address is answered 404 with the SAME shell', async () => {
   for (const p of ['/nope', '/agents/abc', '/ui-preview/changes', '/deep/unknown/path',
-    '/analysis/nope', '/troubleshooting/nope']) {
+    '/overviews', '/overview/extra', '/analysis/nope', '/troubleshooting/nope']) {
     const res = await navigate(p);
     assert.equal(res.status, 404, `${p} → ${res.status}`);
     assert.match(res.headers['content-type'], /text\/html/, p);
@@ -181,7 +181,8 @@ const SESSION = (role) => ({
 
 test('boot: the first paint comes from the address, not from a default', async (t) => {
   for (const [url, view, navLabel] of [
-    ['http://server.test/', 'changes', 'Changes'],
+    ['http://server.test/', 'home', 'Overview'],
+    ['http://server.test/changes', 'changes', 'Changes'],
     ['http://server.test/fleet', 'fleet', 'Fleet'],
     ['http://server.test/topology', 'topology', 'Topology'],
     ['http://server.test/probes/connection', 'probes', 'Probes & Tests'],

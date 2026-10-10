@@ -51,6 +51,7 @@ const MIGRATED = [
   'ui.js',
   'kitchenSink.js',
   // Phase 3, in the order docs/ui-contract.md sets out.
+  'views/home.js',
   'views/changes.js',
   'views/probes.js',
   'views/analysis.js',

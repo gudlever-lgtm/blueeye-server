@@ -674,7 +674,7 @@ function start() {
   const analysisConfig = loadAnalysisConfig();
   // THE ATTACK-INDICATION CONFIG, as ONE live object (docs/attack-indication.md).
   //
-  // Four detectors, four sections, built from the environment here and then
+  // Five detectors, four sections, built from the environment here and then
   // MUTATED IN PLACE by Settings → Attack indication (settingsService
   // getAttackIndication/setAttackIndication, and applyStoredOverrides at boot).
   // Each detector holds a reference and re-reads it on every run, so a

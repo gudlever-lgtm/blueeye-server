@@ -78,7 +78,7 @@ test('the suggestions name techniques this product can plausibly see — and ski
   assert.ok(!metrics.includes('peer.new_asn'));
   assert.ok(!metrics.includes('peer.new_country'));
   // The ones it CAN see are mapped.
-  for (const m of ['net.scan', 'net.beacon', 'security.auth_failure', 'security.port_violation']) {
+  for (const m of ['net.scan', 'net.beacon', 'net.lateral', 'security.auth_failure', 'security.port_violation']) {
     assert.ok(metrics.includes(m), `${m} has no suggested technique`);
   }
 });

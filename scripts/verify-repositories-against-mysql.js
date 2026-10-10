@@ -1251,6 +1251,57 @@ check('flows: scan candidates count distinct ports and hosts per (agent, source)
   assert.deepStrictEqual(one.map((r) => r.srcIp), ['10.40.0.9']);
 });
 
+// The lateral detector's fleet-wide read (src/analysis/scanDetector.js). An IN
+// list built at call time, a third GROUP BY column and a HAVING over a
+// COUNT(DISTINCT ...) alias — none of which the scripted-pool spec can confirm.
+check('flows: lateral candidates group by (agent, source, port), internal only, over the configured ports', async (pool) => {
+  const flows = repoOf('flowsRepository', 'createFlowsRepository')({ pool });
+  const agentId = await newAgent(pool, 'be-lateral');
+  const at = ago(120000);
+  const rows = [];
+  // 14 internal hosts on 445, and 11 on 3389 — two candidate rows, not one sum.
+  for (let h = 1; h <= 14; h += 1) {
+    rows.push({ agentId, ts: at, srcIp: '10.41.0.9', dstIp: `10.41.1.${h}`, dstPort: 445, proto: 'tcp', bytes: 100, packets: 2, flows: 1, internal: true });
+  }
+  for (let h = 1; h <= 11; h += 1) {
+    rows.push({ agentId, ts: at, srcIp: '10.41.0.9', dstIp: `10.41.2.${h}`, dstPort: 3389, proto: 'tcp', bytes: 50, packets: 1, flows: 1, internal: true });
+  }
+  // The same fan-out on a port nobody watches: never a candidate.
+  for (let h = 1; h <= 40; h += 1) {
+    rows.push({ agentId, ts: at, srcIp: '10.41.0.10', dstIp: `10.41.3.${h}`, dstPort: 443, proto: 'tcp', bytes: 10, packets: 1, flows: 1, internal: true });
+  }
+  // The same fan-out on 445 but EXTERNAL: lateral movement is inside.
+  for (let h = 1; h <= 40; h += 1) {
+    rows.push({ agentId, ts: at, srcIp: '10.41.0.11', dstIp: `203.0.113.${h}`, extIp: `203.0.113.${h}`, dstPort: 445, proto: 'tcp', bytes: 10, packets: 1, flows: 1, internal: false });
+  }
+  // Repeat conversations with one host do not add up to many hosts.
+  for (let f = 1; f <= 30; f += 1) {
+    rows.push({ agentId, ts: at, srcIp: '10.41.0.12', dstIp: '10.41.4.1', dstPort: 445, proto: 'tcp', bytes: 10, packets: 1, flows: 1, internal: true });
+  }
+  await flows.insertMany(rows);
+
+  const ports = [445, 139, 135, 3389, 5985, 5986, 22];
+  const found = await flows.lateralCandidates({ from: ago(600000), to: new Date(), agentId, ports, hostThreshold: 10 });
+  assert.deepStrictEqual(
+    found.map((r) => [r.srcIp, r.dstPort, r.distinctHosts]).sort((a, b) => b[2] - a[2]),
+    [['10.41.0.9', 445, 14], ['10.41.0.9', 3389, 11]],
+    'an unwatched port, external traffic or a repeat conversation reached the candidate list',
+  );
+  assert.strictEqual(found[0].bytes, 1400);
+  assert.ok(found[0].firstSeen instanceof Date && found[0].lastSeen instanceof Date);
+
+  // The threshold and the port list both narrow; an empty list asks nothing.
+  assert.deepStrictEqual(
+    (await flows.lateralCandidates({ from: ago(600000), to: new Date(), agentId, ports, hostThreshold: 12 })).map((r) => r.dstPort),
+    [445],
+  );
+  assert.deepStrictEqual(
+    (await flows.lateralCandidates({ from: ago(600000), to: new Date(), agentId, ports: [3389], hostThreshold: 10 })).map((r) => r.dstPort),
+    [3389],
+  );
+  assert.deepStrictEqual(await flows.lateralCandidates({ from: ago(600000), to: new Date(), agentId, ports: [], hostThreshold: 1 }), []);
+});
+
 // The new-peer detector's hourly read (src/analysis/newPeerDetector.js).
 check('flows: external peers group by (agent, asn, country) and never include internal traffic (migration 142)', async (pool) => {
   const flows = repoOf('flowsRepository', 'createFlowsRepository')({ pool });

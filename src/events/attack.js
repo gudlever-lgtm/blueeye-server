@@ -68,7 +68,12 @@ const SUGGESTED = [
   { technique: 'T1110', name: 'Brute Force', tactic: 'credential-access', metrics: ['security.auth_failure', 'security.vpn_failure'] },
   { technique: 'T1046', name: 'Network Service Discovery', tactic: 'discovery', metrics: ['net.scan', 'security.acl_denied'] },
   { technique: 'T1018', name: 'Remote System Discovery', tactic: 'discovery', metrics: ['net.scan'] },
-  { technique: 'T1021', name: 'Remote Services', tactic: 'lateral-movement', metrics: [] },
+  // net.lateral is exactly this shape: one host reaching many internal peers
+  // on SMB, RDP, WinRM or SSH. Still a suggestion, not a mapping the server
+  // applies — a backup agent produces the same rows, and the operator says
+  // whether it is a technique, with the reason the pattern requires.
+  { technique: 'T1021', name: 'Remote Services', tactic: 'lateral-movement', metrics: ['net.lateral'] },
+  { technique: 'T1570', name: 'Lateral Tool Transfer', tactic: 'lateral-movement', metrics: ['net.lateral'] },
   { technique: 'T1071', name: 'Application Layer Protocol', tactic: 'command-and-control', metrics: ['net.beacon'] },
   { technique: 'T1571', name: 'Non-Standard Port', tactic: 'command-and-control', metrics: ['net.beacon'] },
   { technique: 'T1572', name: 'Protocol Tunneling', tactic: 'command-and-control', metrics: ['net.beacon'] },

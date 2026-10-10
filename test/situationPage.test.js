@@ -225,7 +225,7 @@ test('the record marks itself in the rail and in the breadcrumb', async (t) => {
   const marked = doc.querySelector('.tabs button.active');
   assert.ok(marked, 'nothing in the sidebar says where the reader is');
   assert.equal(marked.dataset.view, 'clusters');
-  assert.match(doc.querySelector('#crumb').textContent, /Insights.*Situations.*#14/);
+  assert.match(doc.querySelector('#crumb').textContent, /Incidents.*Situations.*#14/);
 });
 
 test('the standalone module still owns its own heading without the flag', async (t) => {

@@ -131,10 +131,18 @@ async function boot(t, routes = {}, role = 'admin') {
 
 const click = async (node, ms) => { node.click(); await tick(ms); };
 
+// Guides is ONE entry at the foot of the rail plus a track strip on the screen
+// (it used to be six rail entries pointing at the same view). So: open the
+// screen, then pick the track — which is what a reader does.
 async function openGuide(doc, track = 'assurance') {
-  const nav = doc.querySelector(`.tabs button[data-view="guide"][data-guide="${track}"]`);
-  assert.ok(nav, `no nav button for the ${track} guide`);
+  const nav = doc.querySelector('.sidebar-foot button[data-view="guide"]');
+  assert.ok(nav, 'no Guides entry in the rail');
   await click(nav, 200);
+
+  const tab = doc.querySelector(`#view .subtabs button[data-tab="${track}"]`);
+  assert.ok(tab, `no track tab for the ${track} guide`);
+  if (!tab.classList.contains('active')) await click(tab, 200);
+
   const guide = doc.querySelector('#view .guide');
   assert.ok(guide, `the ${track} guide did not render`);
   return guide;
@@ -298,12 +306,16 @@ test('a viewer may read every guide, and is told where their role stops', async 
   // guides are viewer+; the Service Assurance one still follows the licence,
   // because a guide to a module you have not bought is a sales brochure.
   const { doc } = await boot(t, { ...fullRoutes(), ...GENERAL_ROUTES }, 'viewer');
-  const nav = [...doc.querySelectorAll('.tabs button[data-view="guide"]')];
-  assert.equal(nav.length, TRACKS.length, 'the nav lost a guide');
-  for (const b of nav) {
-    assert.ok(!b.classList.contains('role-hidden'), `a viewer cannot see the ${b.dataset.guide} guide`);
-  }
-  assert.equal(nav.find((b) => b.dataset.guide === 'assurance').dataset.feature, 'service_tests');
+  const entry = doc.querySelector('.sidebar-foot button[data-view="guide"]');
+  assert.ok(entry, 'the rail lost the Guides entry');
+  assert.ok(!entry.classList.contains('role-hidden'), 'a viewer cannot reach the guides');
+
+  // Every track is offered, and the licence-gated ones are offered because this
+  // licence has them — a track the licence excludes is left OUT of the strip
+  // rather than shown as a tab that refuses to open.
+  await click(entry, 200);
+  const tracks = [...doc.querySelectorAll('#view .subtabs button')].map((b) => b.dataset.tab);
+  assert.deepEqual(tracks, TRACKS, 'the track strip does not list every guide, in order');
 
   await openGuide(doc, 'assurance');
   await click(nextBtn(doc), 120); // → Before you start
@@ -352,10 +364,11 @@ test('the step titles and the shell exist in both catalogues', () => {
 // --------------------------------------------------------------- every guide
 const TRACKS = ['monitoring', 'fleet', 'diagnostics', 'assurance', 'insights', 'security'];
 
-test('the Guides nav group has one entry per guide, and each mounts its own', async (t) => {
+test('the Guides track strip has one tab per guide, and each mounts its own', async (t) => {
   const { doc, errors } = await boot(t, { ...fullRoutes(), ...GENERAL_ROUTES });
-  const nav = [...doc.querySelectorAll('.tabs button[data-view="guide"]')].map((b) => b.dataset.guide);
-  assert.deepEqual(nav, TRACKS, 'the nav does not list every guide, in order');
+  await click(doc.querySelector('.sidebar-foot button[data-view="guide"]'), 200);
+  const nav = [...doc.querySelectorAll('#view .subtabs button')].map((b) => b.dataset.tab);
+  assert.deepEqual(nav, TRACKS, 'the track strip does not list every guide, in order');
 
   const seen = new Set();
   for (const track of TRACKS) {

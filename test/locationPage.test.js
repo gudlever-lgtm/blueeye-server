@@ -239,5 +239,5 @@ test('the record marks itself in the rail and in the breadcrumb', async (t) => {
   // The site's own page marks Sites: the register it came from is a tab there
   // now (docs/fleet-and-sites-consolidation.md).
   assert.equal(marked.dataset.view, 'map');
-  assert.match(doc.querySelector('#crumb').textContent, /Monitoring.*Sites.*#1/);
+  assert.match(doc.querySelector('#crumb').textContent, /Infrastructure.*Sites.*#1/);
 });

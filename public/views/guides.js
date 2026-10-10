@@ -37,6 +37,7 @@
       if (!mod) return null;
 
       var page = ui.page();
+      var tabsHost = el('div', {});
       var noteHost = el('div', {});
       var footHost = el('div', {});
 
@@ -45,7 +46,30 @@
         title: mod.title,
         lead: mod.subtitle,
         help: { title: info.title, body: info.body },
-      }), noteHost, mod.node, footHost);
+      }), tabsHost, noteHost, mod.node, footHost);
+
+      // Which walkthrough, as a tab strip on the screen rather than six rail
+      // entries that all opened this same view. The six entries said the screen
+      // six times in the navigation and still gave no clue they were one thing;
+      // the strip says it by sitting where the content starts. Each track keeps
+      // its own address (/guides/fleet), so a step can be linked to.
+      //
+      // A track the licence excludes is left out rather than shown locked: the
+      // rail used to carry the lock marker, and a tab strip has nowhere to put
+      // one that reads as anything but a broken tab.
+      function drawTabs() {
+        var tracks = deps.tracks ? deps.tracks() : [];
+        if (tracks.length < 2) { tabsHost.replaceChildren(); return; }
+        tabsHost.replaceChildren(ui.tabs(tracks, {
+          active: deps.track ? deps.track() : tracks[0][0],
+          ariaLabel: t('guide.tracksLabel'),
+          onPick: function (key) {
+            if (deps.track && key === deps.track()) return;
+            deps.setTrack(key);
+          },
+        }));
+      }
+      drawTabs();
 
       function drawNote(error) {
         noteHost.replaceChildren.apply(noteHost, error

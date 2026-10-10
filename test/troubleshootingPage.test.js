@@ -125,13 +125,13 @@ test('Troubleshooting is a DashboardPage: PageHeader, Toolbar, StatStrip, Panels
 const topoPanel = (doc) => [...doc.querySelectorAll('#view .panel-ui')]
   .find((p) => /Topology/i.test(p.querySelector('.panel-head') ? p.querySelector('.panel-head').textContent : ''));
 
-test('the list is a screen of its own, reached from the rail', async (t) => {
+test('the list is a tab on the screen, with an address of its own', async (t) => {
   const { doc, window } = boot({ t, routes: SESSION() });
   await settle();
   assert.ok(topoPanel(doc).querySelector('svg'), 'the graph is not what /troubleshooting opens');
 
-  const entry = doc.querySelector('.tabs button[data-view="troubleshooting"][data-tab="list"]');
-  assert.ok(entry, 'no list entry in the rail');
+  const entry = doc.querySelector('#view .subtabs button[data-tab="list"]');
+  assert.ok(entry, 'no list tab on the screen');
   entry.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
   await settle();
 
@@ -151,7 +151,7 @@ test('/troubleshooting/list opens in the table, so the link and the reload hold'
   assert.ok([...panel.querySelectorAll('table.dt thead th')].length, 'the address drew no table');
 });
 
-test('Troubleshooting carries no lens switch — the rail carries the two entries', async (t) => {
+test('the lens lives on the page, not in the topbar and not twice in the rail', async (t) => {
   const { doc } = boot({ t, routes: SESSION() });
   await settle();
   const slot = doc.querySelector('#topbar-mode');
@@ -159,9 +159,11 @@ test('Troubleshooting carries no lens switch — the rail carries the two entrie
   assert.equal(slot.children.length, 0, 'Troubleshooting still fills the topbar mode slot');
   assert.equal(doc.querySelectorAll('#view .mode-switch').length, 0, 'the switch is in the page');
 
-  const rail = [...doc.querySelectorAll('.tabs button[data-view="troubleshooting"]')]
-    .map((b) => b.dataset.tab);
-  assert.deepEqual(rail, ['graph', 'list'], `the rail does not carry both: ${rail.join(', ')}`);
+  const rail = [...doc.querySelectorAll('.tabs button[data-view="troubleshooting"]')];
+  assert.equal(rail.length, 1, 'the rail names Troubleshooting more than once');
+
+  const tabs = [...doc.querySelectorAll('#view .subtabs button')].map((b) => b.dataset.tab);
+  assert.deepEqual(tabs, ['graph', 'list'], `the strip does not carry both: ${tabs.join(', ')}`);
 });
 
 test('the fault list is opt-in: nothing is fetched until the card is clicked', async (t) => {

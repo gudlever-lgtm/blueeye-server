@@ -295,7 +295,7 @@ test('the record marks itself in the rail and in the breadcrumb', async (t) => {
   const marked = doc.querySelector('.tabs button.active');
   assert.ok(marked, 'nothing in the sidebar says where the reader is');
   assert.equal(marked.dataset.view, 'events');
-  assert.match(doc.querySelector('#crumb').textContent, /Insights.*Events.*#11/);
+  assert.match(doc.querySelector('#crumb').textContent, /Incidents.*Events.*#11/);
 });
 
 // --- NIS2 draft from the case (migration 123) --------------------------------------

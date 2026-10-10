@@ -54,6 +54,7 @@
       // The deviations are their own zone rather than a tail on the root-cause
       // stack: the strip's fourth card points at them, and a card that scrolls
       // to "somewhere inside another panel" is not an answer.
+      var tabsHost = el('div', {});
       var anomHost = el('div', {});
       var faultsHost = el('div', {});
       var timelineHost = el('div', {});
@@ -111,7 +112,24 @@
       // of the window spent on two dots and a dotted line, while "9 root
       // causes" sat in a number tile nobody can act on. What is failing and why
       // is the reason somebody opened this tab; the map is how they confirm it.
-      }), toolbarHost, noteHost, stripHost, causeHost, anomHost, topoHost, faultsHost, timelineHost);
+      }), tabsHost, toolbarHost, noteHost, stripHost, causeHost, anomHost, topoHost, faultsHost, timelineHost);
+
+      // The lens is a tab strip here, not two entries in the rail: "Graph" and
+      // "List" are two readings of one screen, and a rail that says the screen
+      // twice makes the reader decode the navigation before they can use it.
+      // Each reading keeps its address (/troubleshooting, /troubleshooting/list).
+      function drawTabs() {
+        if (!deps.setMode) { tabsHost.replaceChildren(); return; }
+        tabsHost.replaceChildren(ui.tabs(
+          [['graph', t('tshoot.tab.graph')], ['list', t('tshoot.tab.list')]],
+          {
+            active: mode,
+            ariaLabel: t('tshoot.tabsLabel'),
+            onPick: function (key) { if (key !== mode) deps.setMode(key); },
+          }
+        ));
+      }
+      drawTabs();
 
       // ---- Toolbar -----------------------------------------------------------
       var refreshBtn = null;

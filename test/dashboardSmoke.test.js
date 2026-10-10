@@ -182,6 +182,17 @@ async function open(doc, target) {
 
 const viewText = (doc) => (doc.querySelector('#view') || {}).textContent || '';
 
+// Guides is one entry at the foot of the rail plus a track strip on the screen,
+// so opening the assurance walkthrough is two clicks — the same two a reader
+// makes.
+async function openGuideTrack(doc, track) {
+  doc.querySelector('.sidebar-foot button[data-view="guide"]').click();
+  await tick(250);
+  const tab = doc.querySelector(`#view .subtabs button[data-tab="${track}"]`);
+  assert.ok(tab, `no ${track} track in the Guides strip`);
+  if (!tab.classList.contains('active')) { tab.click(); await tick(250); }
+}
+
 // ---------------------------------------------------------------- pass 1
 test('every page in the nav renders on a fresh install with no data', async (t) => {
   const { doc, errors, calls } = await boot(t);
@@ -285,9 +296,7 @@ test('a guided action writes through the real router, and the module sees it', a
   const app = populatedApp();
   const { doc, token } = await boot(t, { app });
 
-  const guide = doc.querySelector('.tabs button[data-view="guide"][data-guide="assurance"]');
-  guide.click();
-  await tick(250);
+  await openGuideTrack(doc, 'assurance');
   const rail = [...doc.querySelectorAll('#view .guide-stepper-btn')];
   rail[2].click();                                    // → Register the application
   await tick(200);
@@ -315,8 +324,7 @@ test('a guided action writes through the real router, and the module sees it', a
 test('a guided action refused by the real validator shows the real reason', async (t) => {
   const app = populatedApp();
   const { doc } = await boot(t, { app });
-  doc.querySelector('.tabs button[data-view="guide"][data-guide="assurance"]').click();
-  await tick(250);
+  await openGuideTrack(doc, 'assurance');
   [...doc.querySelectorAll('#view .guide-stepper-btn')][2].click();
   await tick(200);
 
@@ -341,7 +349,7 @@ test('the guide creates a Service Assurance test the module can list and run', a
   // fake that says 201 to anything.
   const app = populatedApp();
   const { doc, token } = await boot(t, { app });
-  doc.querySelector('.tabs button[data-view="guide"][data-guide="assurance"]').click();
+  await openGuideTrack(doc, 'assurance');
   await until(() => doc.querySelectorAll('#view .guide-stepper-btn').length > 5, { what: 'the assurance guide stepper' });
   [...doc.querySelectorAll('#view .guide-stepper-btn')][5].click();   // → Tests
   // The card is appended before its fields are, so waiting for the card alone
@@ -386,7 +394,7 @@ test('the guide creates a Service Assurance test the module can list and run', a
 test('the optional assertion is optional — one step is still a test', async (t) => {
   const app = populatedApp();
   const { doc, token } = await boot(t, { app });
-  doc.querySelector('.tabs button[data-view="guide"][data-guide="assurance"]').click();
+  await openGuideTrack(doc, 'assurance');
   await until(() => doc.querySelectorAll('#view .guide-stepper-btn').length > 5, { what: 'the assurance guide stepper' });
   [...doc.querySelectorAll('#view .guide-stepper-btn')][5].click();
   const card = await until(

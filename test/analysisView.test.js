@@ -164,13 +164,15 @@ test('Analysis is a ListPage: PageHeader, StatStrip, Toolbar, DataTable, no bann
 
 const head = (doc) => [...doc.querySelectorAll('#view .panel-ui table.dt thead th')].map((th) => th.textContent.trim());
 
-test('Evidence is a screen of its own, reached from the rail', async (t) => {
+test('Evidence is a tab on the screen, with an address of its own', async (t) => {
   const { doc, window } = boot({ t, routes: SESSION() });
   await settle();
   assert.ok(head(doc).includes('Explanation'), `no explanation column: ${head(doc).join(', ')}`);
 
-  const entry = doc.querySelector('.tabs button[data-view="findings"][data-tab="evidence"]');
-  assert.ok(entry, 'no Evidence entry in the rail');
+  // The lens is a tab strip where the content starts, not a second rail entry
+  // for the same screen.
+  const entry = doc.querySelector('#view .subtabs button[data-tab="evidence"]');
+  assert.ok(entry, 'no Evidence tab on the screen');
   entry.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
   await settle();
 
@@ -351,18 +353,21 @@ test('Accept scopes to that host and the screen re-reads', async (t) => {
   assert.match(call.url, /hostId=7/);
 });
 
-test('Analysis carries no lens switch — the rail carries the two entries', async (t) => {
+test('the lens lives on the page, not in the topbar and not twice in the rail', async (t) => {
   const { doc } = boot({ t, routes: SESSION() });
   await settle();
-  // The switch redrew a list that sits under the stat strip, the toolbar and
-  // the AI panel: from the topbar it was a control whose effect was off-screen.
-  // Two rail entries and two addresses replace it.
+  // Two things this is NOT. A topbar switch redrew a list sitting under the
+  // stat strip, the toolbar and the AI panel — a control whose effect was
+  // off-screen. Two rail entries fixed that and said the same screen twice in
+  // the navigation.
   const slot = doc.querySelector('#topbar-mode');
   assert.ok(slot, 'the topbar lost its mode slot');
   assert.equal(slot.children.length, 0, 'Analysis still fills the topbar mode slot');
   assert.equal(doc.querySelectorAll('#view .mode-switch').length, 0, 'the switch is in the page');
 
-  const rail = [...doc.querySelectorAll('.tabs button[data-view="findings"]')]
-    .map((b) => b.dataset.tab);
-  assert.deepEqual(rail, ['explain', 'evidence'], `the rail does not carry both: ${rail.join(', ')}`);
+  const rail = [...doc.querySelectorAll('.tabs button[data-view="findings"]')];
+  assert.equal(rail.length, 1, 'the rail names Analysis more than once');
+
+  const tabs = [...doc.querySelectorAll('#view .subtabs button')].map((b) => b.dataset.tab);
+  assert.deepEqual(tabs, ['explain', 'evidence'], `the strip does not carry both: ${tabs.join(', ')}`);
 });

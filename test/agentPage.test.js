@@ -288,5 +288,5 @@ test('the record marks itself in the rail and in the breadcrumb', async (t) => {
   // The agent's own page marks Fleet: the list it came from is a column set
   // there now (docs/fleet-and-sites-consolidation.md).
   assert.equal(marked.dataset.view, 'fleet');
-  assert.match(doc.querySelector('#crumb').textContent, /Monitoring.*Fleet.*#7/);
+  assert.match(doc.querySelector('#crumb').textContent, /Infrastructure.*Fleet.*#7/);
 });

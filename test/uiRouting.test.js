@@ -194,9 +194,16 @@ test('boot: the first paint comes from the address, not from a default', async (
     assert.ok(active, `${url}: nothing marked active in the sidebar`);
     assert.equal(active.dataset.view, view, `${url}: sidebar marks ${active.dataset.view}`);
     assert.equal(active.textContent.trim(), navLabel, url);
-    // The group holding the active item is unfolded, or the marking is invisible.
-    assert.equal(active.closest('.nav-group').classList.contains('collapsed'), false,
-      `${url}: the active item is inside a collapsed group`);
+    // The group holding the active item is unfolded, or the marking is
+    // invisible. Overview and Service Assurance are solo entries above the
+    // groups — there is nothing to unfold, which is the point of them.
+    const group = active.closest('.nav-group');
+    if (group) {
+      assert.equal(group.classList.contains('collapsed'), false,
+        `${url}: the active item is inside a collapsed group`);
+    } else {
+      assert.ok(active.classList.contains('nav-solo'), `${url}: the active item is in no group and is not a solo entry`);
+    }
     assert.equal(window.location.pathname, Routes.pathFor(view, Routes.match(new URL(url).pathname).tab
       ? { tab: Routes.match(new URL(url).pathname).tab } : {}), `${url}: the address moved`);
   }
@@ -207,7 +214,7 @@ test('boot: the breadcrumb names the section and the page the route points at', 
   await settle();
   const crumb = doc.getElementById('crumb');
   assert.ok(crumb, 'no breadcrumb in the shell');
-  assert.match(crumb.textContent, /Diagnostics/, 'the section is missing');
+  assert.match(crumb.textContent, /Investigation/, 'the section is missing');
   assert.match(crumb.textContent, /Probes/, 'the page is missing');
   assert.match(crumb.textContent, /Connection test/, 'the sub-page is missing');
   assert.equal(crumb.querySelectorAll('.crumb-here').length, 1, 'exactly one crumb is the current page');

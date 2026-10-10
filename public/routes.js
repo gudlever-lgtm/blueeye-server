@@ -80,7 +80,11 @@
 
     guide: {
       path: '/guides',
-      tabs: ['monitoring', 'fleet', 'diagnostics', 'assurance', 'insights'],
+      // 'security' (Attack indication) had no address: it was reachable only
+      // from its own rail entry, so a reload landed on Monitoring and the step
+      // could not be linked to. The rail is one entry with a tab strip now, and
+      // every track needs a path of its own for that strip to work.
+      tabs: ['monitoring', 'fleet', 'diagnostics', 'assurance', 'insights', 'security'],
       tabKey: 'guideTrack',
     },
 

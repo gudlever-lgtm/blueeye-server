@@ -4191,6 +4191,9 @@ function getAnalysisView() {
     askHost: (question, hostId) => api('/api/assistant/explain', { method: 'POST', body: { question, hostId: hostId || undefined } }),
     state: findingsState,
     mode: () => analysisTab,
+    // The lens strip on the page picks the reading; the address follows, so
+    // /analysis/evidence is still a link somebody can send.
+    setMode: (k) => { analysisTab = k; gotoView('findings', k); },
     isAdmin: () => isAdmin(),
     // "I have seen this host's problems and I accept them." Scoped to the
     // filters the screen is showing, so it accepts what the row says and
@@ -8301,6 +8304,7 @@ function getTroubleshootingView() {
   troubleshootingView = window.TroubleshootingPage.create({
     el, t, ui, errText, openAgent, openCluster, gotoView,
     mode: () => troubleshootingTab,
+    setMode: (k) => { troubleshootingTab = k; gotoView('troubleshooting', k); },
     // A root cause from a single host's open event case opens that event.
     openEvent,
     onContext: writeContextParams,
@@ -13650,6 +13654,18 @@ let settingsTab = null;
 let serviceAssuranceTab = null;
 // Which guide the Guides nav group asked for (data-guide). Null opens the first.
 let guideTrack = null;
+// The walkthroughs, in rail order, with the licence key each needs. One entry
+// per track rather than six nav buttons pointing at the same view; the labels
+// are catalogue KEYS (never concatenated at the call site — the gate sweeps the
+// source for literal t() keys).
+const GUIDE_TRACKS = [
+  { key: 'monitoring', label: 'guide.track.monitoring' },
+  { key: 'fleet', label: 'guide.track.fleet' },
+  { key: 'diagnostics', label: 'guide.track.diagnostics' },
+  { key: 'assurance', label: 'guide.track.assurance', feature: 'service_tests' },
+  { key: 'insights', label: 'guide.track.insights' },
+  { key: 'security', label: 'guide.track.security', feature: 'analysis' },
+];
 // Settings are organised into labelled sections rather than one long row of tabs,
 // so related controls sit together and the page stays scannable as it grows. Each
 // tab is [key, label, adminOnly]; non-admins only ever see the personal section.
@@ -20511,6 +20527,14 @@ views.guide = async () => {
   const v = window.GuidesPage.create({
     el, t, ui,
     mount: mountGuides,
+    // The track strip on the page. Built here because which tracks EXIST is a
+    // licence question (Service Assurance and Attack indication are gated) and
+    // the labels live in the catalogue, not in the walkthrough module.
+    tracks: () => GUIDE_TRACKS
+      .filter((g) => !g.feature || featureEnabled(g.feature))
+      .map((g) => [g.key, t(g.label)]),
+    track: () => guideTrack || GUIDE_TRACKS[0].key,
+    setTrack: (k) => { guideTrack = k; gotoView('guide', k); },
     help: () => {
       const info = PAGE_INFO.guide || {};
       return { title: info.title || t('guide.title.monitoring'), body: info.body || (() => []) };

@@ -405,13 +405,25 @@ test('boot: switching the language relabels the static sidebar, and the nav-grou
 
   // data-category is the stable identity setupNavGroups remembers collapsed
   // state under. Translating the visible label must not move it.
-  // The "Fleet" group (Agents / Interfaces / NICs) is gone: those three are
-  // column sets and a drawer on the Fleet screen under Monitoring now
-  // (docs/fleet-and-sites-consolidation.md).
-  // "Service Assurance" is no longer a group either: the module draws its own
-  // tab strip, so the rail carries one solo entry instead of repeating it.
+  //
+  // The groups are named after what somebody is DOING, not after which module
+  // owns the screen. Three that are gone, and why:
+  //   * "Fleet" (Agents / Interfaces / NICs) — column sets and a drawer on the
+  //     Fleet screen (docs/fleet-and-sites-consolidation.md);
+  //   * "Service Assurance" — the module draws its own tab strip, so the rail
+  //     carries one solo entry instead of repeating it;
+  //   * "Guides" — six entries pointing at one view; one entry in the foot and
+  //     a track strip on the screen.
   const cats = [...doc.querySelectorAll('.tabs .nav-group')].map((g) => g.dataset.category);
-  assert.deepEqual(cats, ['Monitoring', 'Diagnostics', 'Insights', 'Guides', 'Administration']);
+  assert.deepEqual(cats, ['Incidents', 'Investigation', 'Network', 'Reports', 'Infrastructure', 'Administration']);
+
+  // No screen appears twice in the rail. A second entry for the same view is a
+  // reader decoding the navigation before they can use it — the three that did
+  // (Analysis/Evidence, Troubleshooting graph/list, the Guides tracks) are tab
+  // strips on their own screens now.
+  const views = [...doc.querySelectorAll('.tabs button[data-view], .sidebar-foot button[data-view]')]
+    .map((b) => b.dataset.view);
+  assert.deepEqual([...new Set(views)].length, views.length, `the rail names a screen twice: ${views.join(', ')}`);
 });
 
 test('boot: a 401 on an authenticated call tears the session down', async (t) => {

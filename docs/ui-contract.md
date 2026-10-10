@@ -207,6 +207,33 @@ behind every gated screen still refuse the same reader with a real 403.
 
 Identical on every screen.
 
+### What the rail is organised by
+
+**The task, not the module.** The groups are named after what somebody is doing
+— Incidents, Investigation, Network, Insights & reports, Infrastructure,
+Administration — because the reader does not know which part of the code owns a
+screen and should not have to. Overview (Mission Control) and Service Assurance
+sit above the groups as solo entries: both are opened daily, and under a
+collapsed group that is two clicks.
+
+**A screen appears once.** Three places used to name the same view twice, which
+made the reader decode the navigation before they could use it. Each is one
+entry now plus a `SubTabs` strip on the screen itself:
+
+| was | is |
+|---|---|
+| Analysis + Evidence | Analysis, with an Explanation / Evidence strip |
+| Troubleshooting + Troubleshooting list | Troubleshooting, with a Graph / List strip |
+| six Guides entries | Guides (in the foot), with a track strip |
+
+Every address survived the move, including `/guides/security`, which had no path
+at all before — it was reachable only from its own rail entry, so a reload
+landed on the Monitoring track. A rule in the UI gate suite fails the build if
+two rail entries name one view again.
+
+Guides and Documentation sit at the FOOT rather than in a group: "how does this
+work" is not a task.
+
 **Sidebar** — sections, collapsible, collapsed state remembered per browser. The
 active item is marked with an accent background **and** an accent left edge; the
 wash alone reads as a hover state on the darker themes. **The section containing

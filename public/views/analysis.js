@@ -69,6 +69,7 @@
       // Which lens, from the address (/analysis vs /analysis/evidence).
       var mode = currentMode();
       var root2 = ui.page();
+      var tabsHost = el('div', {});
       var stripHost = el('div', {});
       var toolbarHost = el('div', {});
       var overviewHost = el('div', {});
@@ -90,13 +91,33 @@
         lead: info.lead,
         help: { title: info.title, body: info.body },
         actions: deps.headerActions(),
-      }), stripHost, toolbarHost, aiHost, overviewHost, listHost, breakdownHost);
+      }), tabsHost, stripHost, toolbarHost, aiHost, overviewHost, listHost, breakdownHost);
 
-      // No lens switch in the topbar any more. It redrew a list that sits under
-      // the stat strip, the toolbar and the AI panel — pressing it from up
-      // there looked like nothing happened. Explanation and Evidence are two
-      // entries in the rail and two addresses, so the reader lands on the one
-      // they picked and can link to it.
+      // The lens is a TAB STRIP under the page header, not a switch in the
+      // topbar and not two entries in the rail.
+      //
+      // The topbar switch redrew a list that sits under the stat strip, the
+      // toolbar and the AI panel — pressing it from up there looked like
+      // nothing happened. Two rail entries fixed that and created a different
+      // problem: the same screen twice in the navigation, which is what a
+      // reader has to decode before they can use it. A strip where the content
+      // starts says "same screen, two readings" by its position, and each
+      // reading keeps its own address (/analysis, /analysis/evidence).
+      function drawTabs() {
+        if (!deps.setMode) { tabsHost.replaceChildren(); return; }
+        tabsHost.replaceChildren(ui.tabs(
+          [['explain', t('analysis.tab.explain')], ['evidence', t('analysis.tab.evidence')]],
+          {
+            active: currentMode(),
+            ariaLabel: t('analysis.tabsLabel'),
+            onPick: function (key) {
+              if (key === currentMode()) return;
+              deps.setMode(key);
+            },
+          }
+        ));
+      }
+      drawTabs();
 
       // ---- AI, where the picture is ------------------------------------------
       // The assistant used to be a raw <input> and a .small button bolted onto

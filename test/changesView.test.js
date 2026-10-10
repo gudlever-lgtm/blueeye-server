@@ -211,7 +211,7 @@ test('a viewer sees the screen; the sidebar marks it and the breadcrumb names it
   assert.ok(doc.querySelector('#view table.dt'), 'a viewer cannot read Changes');
   const active = doc.querySelector('.tabs button.active');
   assert.equal(active.dataset.view, 'changes');
-  assert.match(doc.getElementById('crumb').textContent, /Monitoring/);
+  assert.match(doc.getElementById('crumb').textContent, /Incidents/);
   assert.match(doc.getElementById('crumb').textContent, /Changes/);
 });
 

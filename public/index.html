@@ -103,73 +103,90 @@
              start collapsed here to match the default; setupNavGroups then applies
              the per-browser remembered state. -->
         <nav class="tabs">
-          <!-- Service Assurance sits at the TOP of the rail, above the folded
-               categories: it is the one entry people open daily, and under a
-               collapsed group it took two clicks to reach. One entry, not a
-               folder — the module draws its own tab strip (Applications /
-               Journeys / Tests / Runs / History / Health / Schedules /
-               Monitors), and the rail repeating those tabs was the same list
-               twice. The entry opens the module; the tabs do the rest. -->
+          <!-- TASK-ORIENTED, not module-oriented. The groups are named after
+               what somebody is doing — an incident, an investigation, the
+               network, the services — rather than after which part of the code
+               owns the screen, because the reader does not know the code.
+               Mission Control sits above the groups: it is where every shift
+               starts, and under a collapsed group that was two clicks.
+
+               Nothing was removed from the product here. Three places where the
+               rail said the SAME screen twice became one entry and a tab strip
+               on the screen itself (Analysis/Evidence, Troubleshooting
+               graph/list, the six Guides tracks) — the addresses all still
+               work, and routes.js keeps the old ones as aliases. -->
+          <button class="nav-solo" data-view="home" data-i18n="nav.view.home">Overview</button>
           <button class="nav-solo" data-view="serviceAssurance" data-min-role="operator" data-feature="service_tests" data-i18n="sa.title">Service Assurance</button>
-          <div class="nav-group collapsed" data-category="Monitoring">
-            <button type="button" class="nav-group-label" aria-expanded="false" data-i18n="nav.group.monitoring">Monitoring</button>
-            <button data-view="home" class="active" data-i18n="nav.view.home">Overview</button>
-            <button data-view="changes" data-i18n="nav.view.changes">Changes</button>
-            <button data-view="fleet" data-i18n="nav.view.fleet">Fleet</button>
-            <button data-view="overview" data-i18n="nav.view.overview">Traffic</button>
-            <button data-view="map" data-i18n="nav.view.map">Sites</button>
-            <button data-view="geo" data-feature="geo" data-i18n="nav.view.geo">Destinations</button>
-          </div>
-          <div class="nav-group collapsed" data-category="Diagnostics">
-            <button type="button" class="nav-group-label" aria-expanded="false" data-i18n="nav.group.diagnostics">Diagnostics</button>
-            <button data-view="probes" data-i18n="nav.view.probes">Probes &amp; Tests</button>
-            <button data-view="transactions" data-i18n="nav.view.transactions">Transaction tests</button>
-            <button data-view="flows" data-i18n="nav.view.flows">Flows</button>
-            <button data-view="topology" data-i18n="nav.view.topology">Topology</button>
-            <button data-view="pathLocation" data-i18n="nav.view.pathLocation">Path &amp; location</button>
-            <button data-view="delta" data-min-role="operator" data-i18n="nav.view.delta">Topology delta</button>
-            <button data-view="diagnose" data-i18n="nav.view.diagnose">Diagnose</button>
-            <button data-view="deviceLog" data-i18n="nav.view.deviceLog">Device log</button>
-            <button data-view="troubleshooting" data-tab="graph" data-i18n="nav.view.troubleshooting">Troubleshooting</button>
-            <button data-view="troubleshooting" data-tab="list" data-i18n="nav.view.troubleshootingList">Troubleshooting list</button>
-            <button data-view="investigation" data-min-role="operator" data-i18n="nav.view.investigation">Investigate</button>
-          </div>
-          <div class="nav-group collapsed" data-category="Insights">
-            <button type="button" class="nav-group-label" aria-expanded="false" data-i18n="nav.group.insights">Insights</button>
-            <button data-view="findings" data-tab="explain" data-feature="analysis" data-i18n="nav.view.findings">Analysis</button>
-            <button data-view="findings" data-tab="evidence" data-feature="analysis" data-i18n="nav.view.evidence">Evidence</button>
+
+          <!-- What is wrong right now, and what changed around it. Events are
+               the per-device cases, Situations the cross-agent clusters, and
+               Changes the feed that usually explains both. -->
+          <div class="nav-group collapsed" data-category="Incidents">
+            <button type="button" class="nav-group-label" aria-expanded="false" data-i18n="nav.group.incidents">Incidents</button>
             <button data-view="events" data-feature="analysis" data-i18n="nav.view.events">Events</button>
             <button data-view="clusters" data-feature="analysis" data-i18n="nav.view.clusters">Situations</button>
+            <button data-view="changes" data-i18n="nav.view.changes">Changes</button>
+          </div>
+
+          <!-- Working one fault: the automated run, the ad-hoc tests, and the
+               per-device history. Troubleshooting carries its own graph/list
+               strip; Probes, Transaction tests and Diagnose are the measuring. -->
+          <div class="nav-group collapsed" data-category="Investigation">
+            <button type="button" class="nav-group-label" aria-expanded="false" data-i18n="nav.group.investigation">Investigation</button>
+            <button data-view="troubleshooting" data-i18n="nav.view.troubleshooting">Troubleshooting</button>
+            <button data-view="investigation" data-min-role="operator" data-i18n="nav.view.investigation">Investigate</button>
+            <button data-view="diagnose" data-i18n="nav.view.diagnose">Diagnose</button>
+            <button data-view="probes" data-i18n="nav.view.probes">Probes &amp; Tests</button>
+            <button data-view="transactions" data-i18n="nav.view.transactions">Transaction tests</button>
+            <button data-view="deviceLog" data-i18n="nav.view.deviceLog">Device log</button>
+          </div>
+
+          <!-- The estate as a network: what is connected to what, what is
+               moving across it, and where it goes. -->
+          <div class="nav-group collapsed" data-category="Network">
+            <button type="button" class="nav-group-label" aria-expanded="false" data-i18n="nav.group.network">Network</button>
+            <button data-view="topology" data-i18n="nav.view.topology">Topology</button>
+            <button data-view="delta" data-min-role="operator" data-i18n="nav.view.delta">Topology delta</button>
+            <button data-view="overview" data-i18n="nav.view.overview">Traffic</button>
+            <button data-view="flows" data-i18n="nav.view.flows">Flows</button>
+            <button data-view="pathLocation" data-i18n="nav.view.pathLocation">Path &amp; location</button>
+            <button data-view="geo" data-feature="geo" data-i18n="nav.view.geo">Destinations</button>
+          </div>
+
+          <!-- What the analysis concluded, and the documents that come out of
+               it. Analysis carries its own Explanation/Evidence strip. -->
+          <div class="nav-group collapsed" data-category="Reports">
+            <button type="button" class="nav-group-label" aria-expanded="false" data-i18n="nav.group.reports">Insights &amp; reports</button>
+            <button data-view="findings" data-feature="analysis" data-i18n="nav.view.findings">Analysis</button>
             <button data-view="reporting" data-i18n="nav.view.reporting">Reporting</button>
           </div>
-          <!-- Guides: a next-next walkthrough per section of the product. Each
-               entry opens the same view with a different track — the workflow
-               AND the values to put in, for somebody meeting that section for
-               the first time. Viewer+: reading how a thing works is not the
-               same permission as doing it, and the guides say so where a step
-               needs a role the reader has not got. -->
-          <div class="nav-group collapsed" data-category="Guides">
-            <button type="button" class="nav-group-label" aria-expanded="false" data-i18n="nav.group.guides">Guides</button>
-            <button data-view="guide" data-guide="monitoring" data-i18n="nav.group.monitoring">Monitoring</button>
-            <button data-view="guide" data-guide="fleet" data-i18n="nav.group.fleet">Fleet</button>
-            <button data-view="guide" data-guide="diagnostics" data-i18n="nav.group.diagnostics">Diagnostics</button>
-            <button data-view="guide" data-guide="assurance" data-feature="service_tests" data-i18n="sa.title">Service Assurance</button>
-            <button data-view="guide" data-guide="insights" data-i18n="nav.group.insights">Insights</button>
-            <button data-view="guide" data-guide="security" data-feature="analysis" data-i18n="nav.guide.security">Attack indication</button>
-          </div>
-          <div class="nav-group collapsed" data-category="Administration">
-            <button type="button" class="nav-group-label" aria-expanded="false" data-i18n="nav.group.administration">Administration</button>
-            <button data-view="nicInventory" data-i18n="nav.view.nicInventory">NIC inventory</button>
-            <button data-view="enrollment" data-min-role="operator" data-i18n="nav.view.enrollment">Enrollment</button>
+
+          <!-- The things being monitored: the agents, the sites they sit in,
+               what has been found on the network and what is not covered. -->
+          <div class="nav-group collapsed" data-category="Infrastructure">
+            <button type="button" class="nav-group-label" aria-expanded="false" data-i18n="nav.group.infrastructure">Infrastructure</button>
+            <button data-view="fleet" data-i18n="nav.view.fleet">Fleet</button>
+            <button data-view="map" data-i18n="nav.view.map">Sites</button>
             <button data-view="discovery" data-min-role="admin" data-i18n="nav.view.discovery">Discovery</button>
             <button data-view="coverage" data-min-role="operator" data-i18n="nav.view.coverage">Coverage gaps</button>
+            <button data-view="nicInventory" data-i18n="nav.view.nicInventory">NIC inventory</button>
+            <button data-view="enrollment" data-min-role="operator" data-i18n="nav.view.enrollment">Enrollment</button>
+          </div>
+
+          <div class="nav-group collapsed" data-category="Administration">
+            <button type="button" class="nav-group-label" aria-expanded="false" data-i18n="nav.group.administration">Administration</button>
+            <button data-view="settings" data-i18n="nav.view.settings">Settings</button>
             <button data-view="logs" data-min-role="admin" data-i18n="nav.view.logs">System Logs</button>
             <button data-view="userLogs" data-min-role="admin" data-i18n="nav.view.userLogs">User Logs</button>
             <button data-view="auditLog" data-min-role="admin" data-feature="audit_log" data-i18n="nav.view.auditLog">Audit log integrity</button>
-            <button data-view="settings" data-i18n="nav.view.settings">Settings</button>
           </div>
         </nav>
         <div class="sidebar-foot" id="sidebar-foot">
+          <!-- Guides and Documentation are "how does this work", not a task, so
+               they sit with each other at the foot rather than in the task
+               groups. Guides was six rail entries pointing at one view; it is
+               one entry and a track strip on the screen now. -->
+          <button type="button" class="foot-docs" data-view="guide" data-i18n="nav.view.guides">Guides</button>
           <button type="button" class="foot-docs" data-view="docs" data-i18n-title="nav.docsTitle" title="Open the built-in documentation">
             <span class="foot-docs-icon" aria-hidden="true">📖</span> <span data-i18n="nav.docs">Documentation</span>
           </button>

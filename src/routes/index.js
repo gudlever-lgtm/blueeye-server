@@ -230,6 +230,12 @@ function createApiRouter({
   // The service behind it, for Settings → Agent key. Null on a deployment
   // without key management, same as releaseKeyService.
   commandKeyService = null,
+  // How many agent sockets are open right now, and what the background jobs
+  // last did. Both are the server's own state rather than a repository's, so
+  // they arrive as resolvers from src/server.js. Null/absent on a deployment
+  // that wires neither, and GET /system/self then says so.
+  liveAgentCount = null,
+  backgroundJobs = null,
   releaseKeyService,
   commandSigner = null,
   // Runs the host's configured update script from Settings → Updates (null =
@@ -388,6 +394,16 @@ function createApiRouter({
     // Whether the two keys the trust chain rests on are still the ones this
     // server was running with last time (src/license/keyIdentity.js).
     keyIdentityGuard, refreshKeyIdentity,
+    // --- GET /system/self: is BlueEyes itself all right? -------------------
+    // Everything here is already wired for some other screen; the self-health
+    // route composes it rather than measuring anything new. A dependency this
+    // deployment does not have reads as `unknown` with the reason, which is the
+    // whole design of that endpoint.
+    db, tsdb, commandKeyService, agentsRepo, resultsRepo,
+    commandQueueRepo: agentCommandQueue,
+    assuranceWorkersRepo: serviceTests && serviceTests.repositories
+      ? serviceTests.repositories.workers : null,
+    liveAgentCount, backgroundJobs,
   }));
   // Shared per-target timeline service (Phase 1 merge/fan-out) — powers both the
   // /api/targets timeline and the /api/findings/:id/context change-diff.

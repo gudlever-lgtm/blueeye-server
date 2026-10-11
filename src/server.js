@@ -1526,9 +1526,28 @@ function start() {
       };
     })(),
   ];
+  // What each job's START did, for GET /system/self. A job whose start() threw
+  // is not running, and until this was recorded the only trace was one error
+  // line in a log nobody reads after boot — while the feature it drives simply
+  // never happened.
+  //
+  // This records STARTING, not running: nothing in these jobs reports a tick
+  // outcome yet, so the self-health signal says "N started, none failed to
+  // start" and claims no more than that. Per-tick tracking is a change to every
+  // job and is noted in docs/self-health.md as the next step rather than
+  // half-done here.
+  const jobOutcomes = [];
   function startBackgroundJobs() {
+    jobOutcomes.length = 0;
     for (const job of backgroundJobs) {
-      try { job.start(); } catch (err) { logger.error(`background job start failed (${err && err.message})`); }
+      const name = (job && (job.name || (job.constructor && job.constructor.name))) || 'job';
+      try {
+        job.start();
+        jobOutcomes.push({ name, lastRunAt: new Date().toISOString(), lastError: null });
+      } catch (err) {
+        logger.error(`background job start failed (${err && err.message})`);
+        jobOutcomes.push({ name, lastRunAt: null, lastError: (err && err.message) || 'start failed' });
+      }
     }
   }
   function stopBackgroundJobs() {
@@ -1538,6 +1557,10 @@ function start() {
   }
 
   const app = createApp({
+    // GET /system/self reads both: how many agent sockets are open right now,
+    // and what each background job's start did.
+    liveAgentCount: () => (agentWs ? agentWs.connectionCount() : 0),
+    backgroundJobs: () => jobOutcomes.slice(),
     db,
     tsdb,
     resultsTsdbRepo,

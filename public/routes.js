@@ -96,6 +96,9 @@
     discovery: { path: '/discovery' },
     coverage: { path: '/coverage' },
     auditLog: { path: '/audit-log' },
+    // "Is BlueEyes itself all right?" — the screen about the monitoring system
+    // rather than about the network it monitors.
+    systemHealth: { path: '/system-health' },
     logs: { path: '/logs' },
     userLogs: { path: '/user-logs' },
     screening: { path: '/test-settings' },

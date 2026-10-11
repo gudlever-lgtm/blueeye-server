@@ -128,6 +128,8 @@ function createApp({
   releasePublicKey,
   commandPublicKey = '',
   commandKeyService = null,
+  liveAgentCount = null,
+  backgroundJobs = null,
   releaseKeyService,
   // Runs the host's update script from Settings → Updates (opt-in; null unless
   // SERVER_UPDATE_COMMAND is configured).
@@ -361,6 +363,8 @@ function createApp({
       releasePublicKey,
       commandPublicKey,
       commandKeyService,
+      liveAgentCount,
+      backgroundJobs,
       releaseKeyService,
       serverUpdateService,
       keyIdentityGuard,

@@ -5,6 +5,8 @@ const { asyncHandler } = require('../middleware/asyncHandler');
 const { requireAuth, requireRole } = require('../auth/middleware');
 const { ROLES } = require('../auth/roles');
 const { KINDS: TRUST_KEY_KINDS } = require('../license/keyIdentity');
+const { buildSelfHealth } = require('../system/selfHealth');
+const { numOrNull } = require('../lib/num');
 
 const isAdmin = (req) => Boolean(req.user && req.user.role === ROLES.ADMIN);
 
@@ -37,6 +39,22 @@ const { silentLogger } = require('../logger');
 // Server storage info (disk free/used + database size). Read-only, viewer+.
 function createSystemRouter({
   systemInfo, agentSourceStore, agentBinaryStore, releaseStore, releaseKeyService = null, publishRelease = null,
+  // --- the self-health probes (GET /system/self) ------------------------------
+  // Each is OPTIONAL to wire. A signal with no probe reads as `unknown` and says
+  // so, which is the honest answer on a deployment that does not have it — and
+  // a great deal better than a screen that shows green for a thing it never
+  // looked at.
+  db = null,
+  tsdb = null,
+  commandKeyService = null,
+  agentsRepo = null,
+  liveAgentCount = null,
+  commandQueueRepo = null,
+  assuranceWorkersRepo = null,
+  // Background jobs: { name, lastRunAt, lastError, everyMs } entries, as the
+  // scheduler records them. Absent on a deployment that runs none.
+  backgroundJobs = null,
+  resultsRepo = null,
   // Newest published versions, learned from the signed license proof (see
   // licenseManager.getAvailableReleases). null/absent = nothing known, which is
   // what a server talking to an older licens server sees.
@@ -416,6 +434,193 @@ function createSystemRouter({
         return res.status(503).json({ error: 'System info not available' });
       }
       res.json(storageForRole(await systemInfo.getStorage(), isAdmin(req)));
+    })
+  );
+
+  // GET /system/self — is BlueEyes itself all right?
+  //
+  // viewer+: "can the monitoring system see anything right now" is the first
+  // thing anybody reading a number on another screen needs to know, and hiding
+  // it from the people reading those numbers would be the wrong way round. The
+  // DETAIL lines are written to be safe for a viewer — counts and states, not
+  // hostnames, paths or connection strings; the storage signal reuses
+  // storageForRole for the same reason.
+  //
+  // Every probe is best-effort by construction: buildSelfHealth turns a
+  // rejection into `unknown`, so this route cannot 500 because a subsystem is
+  // down. That is the one thing it must never do — a health screen that fails
+  // when something is unhealthy is worse than no health screen.
+  router.get(
+    '/self',
+    requireAuth,
+    requireRole(ROLES.VIEWER, ROLES.OPERATOR, ROLES.ADMIN),
+    asyncHandler(async (req, res) => {
+      const admin = isAdmin(req);
+      const probes = {
+        database: db && typeof db.ping === 'function' ? async () => {
+          await db.ping();
+          return { state: 'ok', reason: 'reachable', detail: 'The database answered.' };
+        } : null,
+
+        // Off by default. Not enabled is not a fault, and `unknown` with that
+        // reason is what the screen renders in grey.
+        telemetry: tsdb && typeof tsdb.ping === 'function' ? async () => {
+          await tsdb.ping();
+          return { state: 'ok', reason: 'reachable', detail: 'The telemetry store answered.' };
+        } : null,
+
+        license: licenseManager && typeof licenseManager.getStatus === 'function' ? async () => {
+          const st = licenseManager.getStatus() || {};
+          if (st.status === 'valid') {
+            return { state: 'ok', reason: 'valid', detail: 'The licence is valid and the signer was reachable on the last check.' };
+          }
+          if (st.status === 'grace') {
+            return { state: 'failing', reason: 'grace', detail: 'The licence server could not be reached; running on cached proof inside the grace period.' };
+          }
+          return { state: 'failing', reason: String(st.status || 'unknown'), detail: st.reason || 'The licence is not valid.' };
+        } : null,
+
+        // The two keys the fleet's trust rests on. A key that is stored but
+        // cannot sign is the case worth naming: every privileged command is
+        // then REFUSED (fail closed), which looks like "nothing happens when I
+        // press Update" from the other end.
+        signing: releaseKeyService ? async () => {
+          const release = releaseKeyService.signBlockedReason ? releaseKeyService.signBlockedReason() : '';
+          const command = commandKeyService && commandKeyService.signBlockedReason
+            ? commandKeyService.signBlockedReason() : 'no-key';
+          if (release === 'undecryptable') {
+            return { state: 'failing', reason: 'release_undecryptable', detail: 'The release key is stored but cannot be decrypted, so releases go out unsigned and pinned agents refuse them.' };
+          }
+          if (command === 'undecryptable') {
+            return { state: 'failing', reason: 'command_undecryptable', detail: 'The command key is stored but cannot be decrypted, so every privileged command is refused rather than sent unsigned.' };
+          }
+          if (release === 'no-key') {
+            return { state: 'failing', reason: 'no_key', detail: 'No agent signing key is configured, so no agent can be onboarded or updated.' };
+          }
+          if (release === 'verify-only') {
+            return { state: 'unknown', reason: 'verify_only', detail: 'Only a public key is configured here, so this server cannot sign — updates go out unsigned.' };
+          }
+          return {
+            state: 'ok',
+            reason: command === 'no-key' ? 'signing_shared' : 'signing_split',
+            detail: command === 'no-key'
+              ? 'This server can sign. Commands are signed with the release key.'
+              : 'This server can sign, with separate release and command keys.',
+          };
+        } : null,
+
+        trustKeys: keyIdentityGuard ? async () => {
+          const st = keyIdentityGuard.status() || {};
+          if (st.unacknowledgedDrift) {
+            return { state: 'failing', reason: 'drift', detail: 'A key the whole trust chain rests on has changed and nobody has acknowledged it. Agents pinned to the old one refuse everything this server signs.' };
+          }
+          return { state: 'ok', reason: 'stable', detail: 'Both trust keys are the ones this server was running with last time.' };
+        } : null,
+
+        // The fleet, from this server's point of view. "No agents at all" is
+        // deliberately `unknown` rather than ok: a monitoring system with
+        // nothing reporting is not healthy, it is blind.
+        agents: agentsRepo && typeof agentsRepo.findAll === 'function' ? async () => {
+          const agents = await agentsRepo.findAll();
+          const total = agents.length;
+          const live = typeof liveAgentCount === 'function' ? liveAgentCount() : null;
+          const online = agents.filter((a) => a.status === 'online').length;
+          if (total === 0) {
+            return { state: 'unknown', reason: 'no_agents', detail: 'No agent is enrolled, so nothing is being measured.' };
+          }
+          const offline = total - online;
+          if (offline > 0) {
+            return {
+              state: 'failing',
+              reason: 'agents_offline',
+              detail: `${offline} of ${total} agents are not reporting. Everything they measure is unknown rather than healthy.`,
+              counts: { total, online, offline, liveSockets: live },
+            };
+          }
+          return {
+            state: 'ok',
+            reason: 'all_reporting',
+            detail: `All ${total} agents are reporting.`,
+            counts: { total, online, offline: 0, liveSockets: live },
+          };
+        } : null,
+
+        // Ingest: is measured data still arriving? The newest sample's age is
+        // the cheapest honest answer — a server whose newest sample is an hour
+        // old has a problem no per-agent view shows, because every per-agent
+        // view shows the last value it got and that value looks fine.
+        //
+        // Built on latestPerAgent(), which the fleet screen already calls: no
+        // new query, no new index, and the newest of those rows IS the newest
+        // sample this server holds.
+        ingest: resultsRepo && typeof resultsRepo.latestPerAgent === 'function' ? async () => {
+          const rows = await resultsRepo.latestPerAgent();
+          const newest = (rows || []).reduce((max, r) => {
+            const t = r && r.created_at ? new Date(r.created_at).getTime() : NaN;
+            return Number.isFinite(t) && t > max ? t : max;
+          }, 0);
+          if (!newest) return { state: 'unknown', reason: 'no_results', detail: 'No measurement has ever been stored, so there is nothing to date.' };
+          const ageMs = Date.now() - newest;
+          const minutes = Math.round(ageMs / 60000);
+          if (ageMs > 15 * 60 * 1000) {
+            return { state: 'failing', reason: 'stale', detail: `The newest measurement is ${minutes} minutes old. Data has stopped arriving.`, ageMs };
+          }
+          return { state: 'ok', reason: 'fresh', detail: `The newest measurement is ${minutes} minute(s) old.`, ageMs };
+        } : null,
+
+        commandQueue: commandQueueRepo && typeof commandQueueRepo.countsByAgent === 'function' ? async () => {
+          const rows = await commandQueueRepo.countsByAgent();
+          const waiting = rows.reduce((n, r) => n + (Number(r.waiting) || 0), 0);
+          if (waiting === 0) return { state: 'ok', reason: 'empty', detail: 'No command is waiting for an offline agent.' };
+          // A backlog is not a fault: a command waits by design until its agent
+          // dials in. It is worth SEEING, which is different.
+          return { state: 'ok', reason: 'waiting', detail: `${waiting} command(s) are queued for agents that are not connected.`, waiting };
+        } : null,
+
+        assuranceWorkers: assuranceWorkersRepo && typeof assuranceWorkersRepo.listAlive === 'function' ? async () => {
+          const alive = await assuranceWorkersRepo.listAlive(120000);
+          if (!alive.length) {
+            return { state: 'failing', reason: 'no_worker', detail: 'No Service Assurance worker has sent a heartbeat in the last two minutes, so no synthetic test is running.' };
+          }
+          return { state: 'ok', reason: 'alive', detail: `${alive.length} Service Assurance worker(s) are alive.`, workers: alive.length };
+        } : null,
+
+        backgroundJobs: Array.isArray(backgroundJobs) || typeof backgroundJobs === 'function' ? async () => {
+          const jobs = typeof backgroundJobs === 'function' ? backgroundJobs() : backgroundJobs;
+          const failed = (jobs || []).filter((j) => j && j.lastError);
+          if (failed.length) {
+            return {
+              state: 'failing',
+              reason: 'job_failed',
+              detail: `${failed.length} background job(s) last ended in an error: ${failed.map((j) => j.name).join(', ')}.`,
+            };
+          }
+          const never = (jobs || []).filter((j) => j && !j.lastRunAt);
+          if (never.length === (jobs || []).length && never.length > 0) {
+            return { state: 'unknown', reason: 'never_ran', detail: 'No background job has run yet on this boot.' };
+          }
+          return { state: 'ok', reason: 'running', detail: `${(jobs || []).length} background job(s), none in error.` };
+        } : null,
+
+        storage: systemInfo && typeof systemInfo.getStorage === 'function' ? async () => {
+          const raw = await systemInfo.getStorage();
+          const storage = storageForRole(raw, admin);
+          const disk = raw && raw.disk;
+          // numOrNull, not Number(): Number(null) is 0, and 0% full would read
+          // as the healthiest possible disk on the one screen whose job is to
+          // refuse to do that. (The validation gate catches this pattern; it
+          // caught it here.)
+          const pct = numOrNull(disk && disk.usedPercent);
+          if (pct == null) {
+            return { state: 'unknown', reason: 'unreadable', detail: 'The disk usage could not be read.', storage };
+          }
+          if (pct >= 95) return { state: 'failing', reason: 'disk_full', detail: `The data disk is ${pct}% full. Retention cannot keep up and writes will start failing.`, storage };
+          if (pct >= 85) return { state: 'failing', reason: 'disk_low', detail: `The data disk is ${pct}% full.`, storage };
+          return { state: 'ok', reason: 'ample', detail: `The data disk is ${pct}% full.`, storage };
+        } : null,
+      };
+
+      res.json(await buildSelfHealth({ probes }));
     })
   );
 

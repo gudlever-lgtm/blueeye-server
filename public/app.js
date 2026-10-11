@@ -10288,6 +10288,35 @@ function changesRowEl(event, nameFor, showIndication = true) {
   return row;
 }
 
+// ---- System health (MIGRATED — see public/views/systemHealth.js) -----------
+// The screen about the monitoring system rather than about the network. It owns
+// no data: GET /system/self composes what other screens already read, and every
+// signal that could not be read says so rather than being left out.
+PAGE_INFO.systemHealth = {
+  get hero() { return t('self.lead'); },
+  get title() { return t('self.info.title'); },
+  body: () => [
+    el('p', {}, t('self.info.p1')),
+    el('p', {}, t('self.info.p2')),
+    el('p', { class: 'muted' }, t('self.info.p3')),
+  ],
+};
+
+let systemHealthPage = null;
+views.systemHealth = async () => {
+  if (typeof window === 'undefined' || !window.SystemHealthPage || !ui) {
+    return el('div', { class: 'empty error' }, t('self.err.title'));
+  }
+  if (!systemHealthPage) {
+    systemHealthPage = window.SystemHealthPage.create({
+      el, t, ui, errText,
+      help: () => ({ title: PAGE_INFO.systemHealth.title, body: PAGE_INFO.systemHealth.body }),
+      fetch: () => api('/system/self'),
+    });
+  }
+  return systemHealthPage.view();
+};
+
 // ---- Overview / Mission Control (MIGRATED — see public/views/home.js) ------
 // The landing screen. It owns no data of its own: the five reads are ones Fleet,
 // Troubleshooting, Changes, Events and Situations already make, handed in here

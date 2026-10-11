@@ -94,6 +94,7 @@ const MIGRATED = [
   'views/coverage.js',
   'views/pathLocation.js',
   'views/auditLog.js',
+  'views/systemHealth.js',
 ];
 
 // Section bodies built from the contract's components that sit INSIDE a

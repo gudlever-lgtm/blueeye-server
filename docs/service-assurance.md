@@ -299,6 +299,35 @@ resolves to `169.254.169.254` is still refused.
 navigation time (every `open`), and request time via Playwright `page.route()`,
 which aborts every off-policy request the page itself makes, redirects included.
 
+### What the host policy cannot close, and what does
+
+`checkSync()` — the interceptor's filter — judges the literal and the allowlist
+but cannot await DNS per subresource without wrecking page-load timings. So for a
+HOSTNAME there is a window between the policy's resolution and Chromium's own:
+an allowlisted name whose answer changes between the two (DNS rebinding) passes
+the check and is then dialled at a different address. No application-level check
+closes that window; it is a property of resolving a name twice.
+
+**The worker's network closes it instead.** `docker-compose.yml` puts the
+Service Assurance worker on an `assurance` network carrying the worker and the
+**database only** — the server and the licens signer are on `default`. Whatever a
+name resolves to, there is no route from the worker to BlueEyes' own API, so the
+interesting target of a rebind is unreachable rather than merely refused. Loopback
+is already another container's loopback, and `169.254.169.254` is refused by the
+deny-list at both check points.
+
+The worker also runs with `cap_drop: ALL` (Chromium uses `--no-sandbox` in a
+container, so it needs none), `no-new-privileges`, a `pids_limit` and a
+`mem_limit` — a browser pointed at content this stack does not control is the one
+workload here that can be made to allocate without bound by the page it is
+showing. `test/containerHardening.test.js` parses the compose file and fails the
+build if the worker ever shares a network with the server again.
+
+What is left, stated plainly: a rebind can still reach a host on the customer's
+own network that their allowlist named, which is what the allowlist is for, and
+anything else on the worker's own network segment — the database, whose
+credentials the worker already holds. It cannot reach this server's API.
+
 ### Import / export
 
 Operators arrive with an existing list of hosts or segments, so typing them one at

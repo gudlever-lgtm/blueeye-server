@@ -18,6 +18,10 @@ name: blueeye
 services:
   db:
     image: mysql:8.4
+    # On BOTH networks: the default one, where the server and the licens signer
+    # talk to it, and the isolated one the Service Assurance worker lives on.
+    # The worker needs the database and nothing else of ours.
+    networks: [default, assurance]
     environment:
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?set MYSQL_ROOT_PASSWORD in .env (run scripts/dev-bootstrap.js)}
       MYSQL_USER: ${DB_USER:-blueeye}
@@ -215,6 +219,34 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile.service-test-worker
+    # ISOLATED. This is the one container that drives a browser at addresses a
+    # customer supplied, so it is the one container that must not be able to
+    # reach the rest of the stack.
+    #
+    # `assurance` carries the worker and the database, and nothing else — the
+    # server and the licens signer are only on `default`. The application-level
+    # host policy already refuses loopback, link-local and the cloud metadata
+    # address and allows only a per-application allowlist
+    # (src/serviceTests/security/hostPolicy.js), but that check happens before
+    # Chromium resolves the name a second time. This network is what makes the
+    # remaining DNS-rebinding window unable to reach BlueEyes' own API: there is
+    # no route to it from here, whatever a name resolves to.
+    #
+    # Outbound access to the internet still works — the network is a bridge with
+    # a gateway, which is the whole point of the worker.
+    networks: [assurance]
+    security_opt:
+      - no-new-privileges:true
+    # Chromium runs with --no-sandbox in a container (driver.js), so it needs no
+    # capabilities of its own. Dropping them all costs nothing and takes the
+    # browser's process tree out of every capability-based escape.
+    cap_drop:
+      - ALL
+    # A runaway page must not take the host down with it. A browser is the one
+    # workload here that can be made to allocate without limit by the SITE it is
+    # pointed at, which is content this stack does not control.
+    pids_limit: 512
+    mem_limit: ${BLUEEYE_ASSURANCE_MEM_LIMIT:-2g}
     depends_on:
       db:
         condition: service_healthy
@@ -243,6 +275,13 @@ services:
     # Chromium needs more than a container's default 64 MB of shared memory.
     shm_size: 512mb
     restart: unless-stopped
+
+networks:
+  # The default bridge compose would create anyway, named so the worker can be
+  # kept OFF it.
+  default:
+  # Worker + database only. See the note on the worker service.
+  assurance:
 
 volumes:
   service-assurance-artifacts:

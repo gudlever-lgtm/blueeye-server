@@ -98,6 +98,15 @@ function createCommandSigner({
     const issuedAt = now();
     const payload = {
       ...command,
+      // WHAT THIS SIGNATURE IS FOR. One key signs four different things on this
+      // chain — a release manifest, a privileged command, an evidence request
+      // and a NIS2 export — and nothing in a bare Ed25519 signature says
+      // which. The only reason a captured release signature could not be
+      // presented as an instruction to a host is that the payload SHAPES
+      // happen to differ, which is not a security property: it is one refactor
+      // away from not being true. So the purpose rides inside the signed bytes
+      // and the agent checks it (blueeye-agent src/release/verifyManifest.js).
+      purpose: 'command',
       agentId,
       commandId: newCommandId(),
       issuedAt: issuedAt.toISOString(),

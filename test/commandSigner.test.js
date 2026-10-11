@@ -116,6 +116,21 @@ test('BLUEEYE_REQUIRE_COMMAND_SIGNING refuses a privileged command a keyless ser
   });
 });
 
+test('a signed command says what the signature is FOR', () => {
+  // One key signs four things on this chain. Nothing in a bare Ed25519
+  // signature says which, so until the purpose was inside the signed bytes the
+  // only thing stopping a captured release signature from being offered to an
+  // agent as an instruction was that the payload shapes happen to differ —
+  // which is one refactor away from not being true.
+  const { publicPem, service } = makeKeyService();
+  const signer = createCommandSigner({ releaseKeyService: service });
+  const command = signer.sign(42, { name: 'delete' });
+  assert.equal(command.purpose, 'command');
+  // Inside the signature, so it cannot be relabelled in flight.
+  assert.equal(agentVerifies(command, publicPem), true);
+  assert.equal(agentVerifies({ ...command, purpose: 'release' }, publicPem), false);
+});
+
 test('each signed command carries a unique id and an explicit expiry', () => {
   const { publicPem, service } = makeKeyService();
   const issued = new Date('2026-01-01T12:00:00.000Z');

@@ -22,7 +22,13 @@ function publishSignedReleaseFromSource({ sourceStore, releaseStore, releaseKeyS
   }
 
   const sha256 = crypto.createHash('sha256').update(buffer).digest('hex');
-  const manifest = { version, sha256, size: buffer.length, created_at: new Date().toISOString() };
+  // `purpose` names what the signature is for, so a release signature cannot be
+  // offered to an agent as a command (or the other way round). Older manifests
+  // carry no purpose and stay installable — see the note in blueeye-agent
+  // src/release/verifyManifest.js for why that seam is one-way.
+  const manifest = {
+    purpose: 'release', version, sha256, size: buffer.length, created_at: new Date().toISOString(),
+  };
   let signature;
   try {
     signature = releaseKeyService.sign(manifest);

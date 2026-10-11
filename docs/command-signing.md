@@ -20,6 +20,7 @@ signer adds four fields before signing:
 
 | field | why |
 | --- | --- |
+| `purpose` | `"command"` — what the signature is FOR. See **One key, four purposes** below |
 | `agentId` | binds the signature to one agent — a captured command cannot be replayed across the fleet |
 | `commandId` | a UUID nonce — the agent remembers the ids it carried out and refuses a second delivery, so a captured command cannot be replayed at the **same** agent inside its window |
 | `issuedAt` | when it was made; the agent tolerates ±5 min of clock skew |
@@ -33,6 +34,41 @@ A signed command with no `commandId` is **refused** by the agent. A server old
 enough not to send one is old enough not to sign at all, and its unsigned
 commands still follow the lenient/strict policy below — accepting a signed one
 without a nonce would silently drop exactly the protection the nonce exists for.
+
+## One key, four purposes
+
+The managed release key signs four different things:
+
+| purpose | payload | verified by |
+| --- | --- | --- |
+| `release` | the agent release manifest (`enroll/publishSignedRelease.js`) | the agent, before it installs code |
+| `command` | a privileged command (`services/commandSigner.js`) | the agent, before it acts on one |
+| `evidence` | a read-only evidence request (`evidence/snapshotService.js`) | the agent, before it reads files |
+| `nis2-evidence` | a NIS2 export manifest (`routes/nis2/reports.js`, field `type`) | an auditor, with the published public key |
+
+Nothing in a bare Ed25519 signature says which of those it is. The only reason a
+captured release signature could not be offered to an agent as an instruction
+was that the four payload **shapes** happen to differ — and "happens to differ"
+is not a security property, it is one refactor away from not being true.
+
+So the purpose rides inside the signed bytes, and every verifier states which
+one it is checking (`blueeye-agent src/release/verifyManifest.js`,
+`purposeOk()`). The compatibility seam is one-way and differs per shape:
+
+- **commands** — required. The agent already refuses a signed command with no
+  `commandId`, so a server new enough to sign is new enough to stamp both.
+- **release manifests** — a manifest with no purpose stays installable. Releases
+  already published and cached were signed without it, and refusing them would
+  mean a fleet that cannot update to anything that already exists. A *wrong*
+  purpose is still refused.
+- **evidence** — same seam. The agent rebuilds the payload from the command's
+  own fields, so it carries the purpose exactly when the server sent one.
+
+This is domain separation, **not** key separation: one key still signs all four,
+so a compromise of that key still yields all four. Splitting the key is a
+licence-server change — the vendor proof authorises one
+`trust.server.release_key.fingerprint`, and the agent's authority comes from
+that proof, not from the on-prem server. See **Residual risk**.
 
 ## Fail closed
 
@@ -70,8 +106,8 @@ dropped the first time this server proves it can sign, and never returns.
 
 ## Residual risk
 
-Signing proves *this server* asked. It does not help against a server that is
-itself compromised — that server holds the signing key and can sign whatever it
+Signing proves *this server* asked, and the purpose proves what it asked FOR.
+Neither helps against a server that is itself compromised — that server holds the signing key and can sign whatever it
 likes. What it cannot do is re-anchor the fleet's trust: a `rekey` to a new key
 needs a **vendor-signed** licence proof (`docs/agent-trust.md` in
 blueeye-licens), and once an agent has accepted one, nothing but another vendor

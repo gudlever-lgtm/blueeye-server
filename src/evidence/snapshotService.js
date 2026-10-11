@@ -44,7 +44,10 @@ function createSnapshotService({
     if (!releaseKeyService || typeof releaseKeyService.sign !== 'function') return command;
     try {
       if (typeof releaseKeyService.canSign === 'function' && !releaseKeyService.canSign()) return command;
-      return { ...command, signature: releaseKeyService.sign(command) };
+      // Purpose-bound: this signature authorises an evidence READ on the host
+      // and must not satisfy the agent's release or command checks.
+      const payload = { ...command, purpose: 'evidence' };
+      return { ...payload, signature: releaseKeyService.sign(payload) };
     } catch (err) {
       logger.warn(`evidence: could not sign command (${err.message})`);
       return command;

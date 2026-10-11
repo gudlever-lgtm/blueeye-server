@@ -4375,6 +4375,13 @@ function makeApp(overrides = {}) {
   // way it is on the real server.
   const hopLocationsRepo = overrides.hopLocationsRepo === undefined ? makeHopLocationsRepo() : overrides.hopLocationsRepo;
   const releaseKeyService = overrides.releaseKeyService || makeReleaseKeyService();
+  // The command key, and the DEFAULT is not to have one — which is the state
+  // every server is in until an operator generates it and the vendor authorises
+  // the fingerprint. Commands are then signed with the release key, exactly as
+  // they were before the split, and that is the path the whole suite exercises.
+  const commandKeyService = overrides.commandKeyService === undefined
+    ? makeReleaseKeyService({ configured: false })
+    : overrides.commandKeyService;
   // Resolve the deps the plan/usage services build on, so the (real) services
   // can wrap them. Default plan resolution lands on the internal 'licensed'
   // plan → unlimited limits, so existing tests are unaffected; pass `plan:` to
@@ -4657,6 +4664,8 @@ function makeApp(overrides = {}) {
     // service says a key exists.
     releasePublicKey: overrides.releasePublicKey || (() => releaseKeyService.getPublicKey()),
     releaseKeyService,
+    commandKeyService,
+    commandPublicKey: () => (commandKeyService && commandKeyService.canSign() ? commandKeyService.getPublicKey() : ''),
     // The real server signs privileged commands with the release key whenever it
     // can, so the fake app does too — a test that asserts on what reaches the
     // agent should see the command the agent would actually receive.

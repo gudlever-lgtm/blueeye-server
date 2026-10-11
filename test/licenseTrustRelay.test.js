@@ -22,7 +22,7 @@ const VENDOR = crypto.generateKeyPairSync('ed25519');
 const SERVER_KEY = crypto.generateKeyPairSync('ed25519').publicKey.export({ type: 'spki', format: 'pem' }).toString();
 const VENDOR_PUB = VENDOR.publicKey.export({ type: 'spki', format: 'pem' }).toString();
 
-function signedProof({ nonce, fingerprint = publicKeyFingerprint(SERVER_KEY), sequence = 2 }) {
+function signedProof({ nonce, fingerprint = publicKeyFingerprint(SERVER_KEY), commandFingerprint = null, sequence = 2 }) {
   const payload = {
     valid: true,
     expiry: null,
@@ -37,23 +37,35 @@ function signedProof({ nonce, fingerprint = publicKeyFingerprint(SERVER_KEY), se
     valid_until: new Date(Date.now() + 36 * 3600 * 1000).toISOString(),
     trust: {
       license: { id: '7', customer_id: '42' },
-      server: { id: 'srv-1', release_key: { algorithm: 'Ed25519', fingerprint } },
+      server: {
+        id: 'srv-1',
+        release_key: { algorithm: 'Ed25519', fingerprint },
+        ...(commandFingerprint ? { command_key: { algorithm: 'Ed25519', fingerprint: commandFingerprint } } : {}),
+      },
       sequence,
     },
   };
   return { payload, signature: crypto.sign(null, Buffer.from(canonicalize(payload), 'utf8'), VENDOR.privateKey).toString('base64') };
 }
 
-function managerWith({ releaseKey = SERVER_KEY, onBody = () => {}, keyStatus = 'authorized' } = {}) {
+function managerWith({
+  releaseKey = SERVER_KEY, commandKey = '', onBody = () => {},
+  keyStatus = 'authorized', keyStatuses = undefined, proof = null,
+} = {}) {
   return createLicenseManager({
     config: { key: 'LIC', serverId: 'srv-1', serverUrl: 'https://licens.test', graceDays: 14 },
     publicKey: VENDOR_PUB,
     cache: createMemoryCache(),
     getReleasePublicKey: () => releaseKey,
+    getCommandPublicKey: () => commandKey,
     fetchImpl: async (url, opts) => {
       const body = JSON.parse(opts.body);
       onBody(body);
-      return { status: 200, json: async () => ({ ...signedProof({ nonce: body.nonce }), keyStatus }) };
+      const signed = proof ? proof({ nonce: body.nonce }) : signedProof({ nonce: body.nonce });
+      return {
+        status: 200,
+        json: async () => ({ ...signed, keyStatus, ...(keyStatuses ? { keyStatuses } : {}) }),
+      };
     },
   });
 }
@@ -151,5 +163,80 @@ test('a broken key resolver never breaks licence validation', async () => {
     },
   });
   const status = await mgr.validateOnce();
+  assert.equal(status.status, 'valid');
+});
+
+// ---- the SECOND key: commands ----------------------------------------------
+
+const COMMAND_KEY = crypto.generateKeyPairSync('ed25519').publicKey.export({ type: 'spki', format: 'pem' }).toString();
+
+test('a server with a command key presents both, each in its own field', async () => {
+  let body = null;
+  const mgr = managerWith({ commandKey: COMMAND_KEY, onBody: (b) => { body = b; } });
+  await mgr.validateOnce();
+  assert.equal(body.releaseKey, SERVER_KEY);
+  assert.equal(body.commandKey, COMMAND_KEY);
+  // Public halves only, in both fields.
+  assert.doesNotMatch(JSON.stringify(body), /PRIVATE KEY/);
+});
+
+test('a server without one omits the field, so the request is the one it always sent', async () => {
+  let body = null;
+  const mgr = managerWith({ onBody: (b) => { body = b; } });
+  await mgr.validateOnce();
+  assert.equal('commandKey' in body, false,
+    'an empty key field is a field somebody eventually treats as meaningful');
+});
+
+test('the per-purpose key status is reported, and falls back for an older signer', async () => {
+  const withBoth = managerWith({
+    commandKey: COMMAND_KEY,
+    keyStatus: 'authorized',
+    keyStatuses: { release: 'authorized', command: 'pending' },
+  });
+  await withBoth.validateOnce();
+  assert.deepEqual(withBoth.getKeyStatuses(), { release: 'authorized', command: 'pending' });
+  // The single field stays what it was: it is what this server has always read.
+  assert.equal(withBoth.getReleaseKeyStatus(), 'authorized');
+
+  // An older signer sends keyStatus only. The release purpose takes it, and the
+  // command purpose reads null — which is "nothing to say", not "rejected".
+  const older = managerWith({ commandKey: COMMAND_KEY, keyStatus: 'pending' });
+  await older.validateOnce();
+  assert.deepEqual(older.getKeyStatuses(), { release: 'pending', command: null });
+});
+
+test('the relayed proof carries whichever keys the vendor authorised', async () => {
+  const mgr = managerWith({
+    commandKey: COMMAND_KEY,
+    proof: ({ nonce }) => signedProof({ nonce, commandFingerprint: publicKeyFingerprint(COMMAND_KEY) }),
+  });
+  await mgr.validateOnce();
+  const relayed = mgr.getTrustProof();
+  assert.ok(relayed, 'the authorisation was not kept');
+  assert.equal(relayed.payload.trust.server.release_key.fingerprint, publicKeyFingerprint(SERVER_KEY));
+  assert.equal(relayed.payload.trust.server.command_key.fingerprint, publicKeyFingerprint(COMMAND_KEY));
+  // Byte-for-byte as received: this server is a courier, and an edit here would
+  // break the vendor signature the agents check.
+  assert.equal(
+    crypto.verify(null, Buffer.from(canonicalize(relayed.payload), 'utf8'), VENDOR_PUB, Buffer.from(relayed.signature, 'base64')),
+    true
+  );
+});
+
+test('a broken command-key resolver never breaks licence validation', async () => {
+  const mgr = createLicenseManager({
+    config: { key: 'LIC', serverId: 'srv-1', serverUrl: 'https://licens.test', graceDays: 14 },
+    publicKey: VENDOR_PUB,
+    cache: createMemoryCache(),
+    getReleasePublicKey: () => SERVER_KEY,
+    getCommandPublicKey: () => { throw new Error('key store is on fire'); },
+    fetchImpl: async (url, opts) => {
+      const body = JSON.parse(opts.body);
+      return { status: 200, json: async () => ({ ...signedProof({ nonce: body.nonce }), keyStatus: 'authorized' }) };
+    },
+  });
+  const status = await mgr.validateOnce();
+  // A server that cannot read its own second key is still a licensed server.
   assert.equal(status.status, 'valid');
 });

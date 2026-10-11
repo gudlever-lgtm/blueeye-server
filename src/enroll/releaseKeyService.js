@@ -15,7 +15,19 @@ const { resolveReleasePublicKey } = require('../license/releaseKey');
 // on-prem server; a multi-instance deploy would reload() on change.) When no managed
 // key is stored it falls back to the env/embedded key, so existing deployments that
 // set AGENT_RELEASE_PUBLIC_KEY keep working unchanged.
-function createReleaseKeyService({ repo, secretBox, env = process.env, logger = console, onKeyError = null } = {}) {
+// `purpose` picks which key this service manages: 'release' (the agent releases
+// a fleet installs) or 'command' (the privileged commands it obeys). Two
+// instances, one table, one implementation — see migration 148 and
+// docs/command-signing.md for why the keys are split at all.
+//
+// The env fallback (AGENT_RELEASE_PUBLIC_KEY) applies to the RELEASE purpose
+// only, deliberately. It exists so a deployment that pre-dates managed keys
+// keeps verifying updates; a command key only ever arrives with a vendor
+// authorisation, and an env var for it would be a way to introduce one without
+// going through the vendor — exactly the control the split exists to add.
+function createReleaseKeyService({ repo, secretBox, env = process.env, logger = console, onKeyError = null, purpose = 'release' } = {}) {
+  const isRelease = purpose !== 'command';
+  const envKey = () => (isRelease ? resolveReleasePublicKey(env) : '');
   let cache = null; // { publicPem, privateKey, fingerprint, createdAt, createdBy } | null
   // Why signing is unavailable, when it is. A key that is stored but cannot be
   // DECRYPTED (SECRET_ENCRYPTION_KEY / JWT_SECRET changed since it was written)
@@ -32,7 +44,7 @@ function createReleaseKeyService({ repo, secretBox, env = process.env, logger = 
     cache = null;
     keyError = null;
     if (!repo) return;
-    const row = await repo.getWithSecret();
+    const row = await repo.getWithSecret(purpose);
     if (!row) return;
     let privateKey = null;
     try {
@@ -40,7 +52,7 @@ function createReleaseKeyService({ repo, secretBox, env = process.env, logger = 
       privateKey = crypto.createPrivateKey({ key: pem, format: 'pem' });
     } catch (err) {
       keyError = `The stored private key cannot be decrypted (${err.message}). This happens when SECRET_ENCRYPTION_KEY / JWT_SECRET changed after the key was generated. Delete the key and generate a new one — agents pinned to the old key must then be re-pinned.`;
-      warn(`release key: could not decrypt the stored private key (${err.message}) — signing disabled until it is regenerated.`);
+      warn(`${purpose} key: could not decrypt the stored private key (${err.message}) — signing disabled until it is regenerated.`);
       // An error nobody can see is an error nobody fixes: hand it to the system
       // log as well, so it is on the record next to the failed updates it causes.
       if (typeof onKeyError === 'function') {
@@ -54,7 +66,7 @@ function createReleaseKeyService({ repo, secretBox, env = process.env, logger = 
   // env/embedded key (backward compatibility). '' when neither is configured.
   function getPublicKey() {
     if (cache && cache.publicPem) return cache.publicPem;
-    return resolveReleasePublicKey(env) || '';
+    return envKey() || '';
   }
 
   function isConfigured() { return !!getPublicKey(); }
@@ -72,7 +84,7 @@ function createReleaseKeyService({ repo, secretBox, env = process.env, logger = 
   function signBlockedReason() {
     if (canSign()) return '';
     if (cache && cache.publicPem) return 'undecryptable';
-    if (resolveReleasePublicKey(env)) return 'verify-only';
+    if (envKey()) return 'verify-only';
     return 'no-key';
   }
 
@@ -85,11 +97,11 @@ function createReleaseKeyService({ repo, secretBox, env = process.env, logger = 
         canSign: !!cache.privateKey, signBlocked: signBlockedReason(), keyError,
       };
     }
-    const envKey = resolveReleasePublicKey(env);
-    if (envKey) {
+    const fromEnv = envKey();
+    if (fromEnv) {
       return {
         configured: true, source: 'env', createdAt: null, createdBy: null,
-        fingerprint: crypto.createHash('sha256').update(envKey).digest('hex'),
+        fingerprint: crypto.createHash('sha256').update(fromEnv).digest('hex'),
         canSign: false, signBlocked: 'verify-only', keyError: null,
       };
     }
@@ -99,12 +111,12 @@ function createReleaseKeyService({ repo, secretBox, env = process.env, logger = 
   // Generate + persist a NEW Ed25519 key pair. Write-once: throws code 'EXISTS' when
   // a managed key already exists. Returns the safe status (no private material).
   async function generate({ userId = null } = {}) {
-    if (cache && cache.publicPem) { const e = new Error('A release signing key already exists'); e.code = 'EXISTS'; throw e; }
+    if (cache && cache.publicPem) { const e = new Error(`A ${purpose} signing key already exists`); e.code = 'EXISTS'; throw e; }
     const { publicKey, privateKey } = crypto.generateKeyPairSync('ed25519');
     const publicPem = publicKey.export({ type: 'spki', format: 'pem' }).toString();
     const privatePem = privateKey.export({ type: 'pkcs8', format: 'pem' }).toString();
     const fingerprint = crypto.createHash('sha256').update(publicPem).digest('hex');
-    await repo.create({ publicPem, privatePemEncrypted: secretBox.encrypt(privatePem), fingerprint, createdBy: userId });
+    await repo.create({ publicPem, privatePemEncrypted: secretBox.encrypt(privatePem), fingerprint, createdBy: userId, purpose });
     await load();
     return status();
   }
@@ -112,7 +124,7 @@ function createReleaseKeyService({ repo, secretBox, env = process.env, logger = 
   // Delete the managed key. After this the server can neither sign upgrades nor
   // (per the enrollment gate) onboard new agents — until a key is generated again.
   async function remove() {
-    if (repo) await repo.remove();
+    if (repo) await repo.remove(purpose);
     cache = null;
     keyError = null;
     return status();
@@ -122,11 +134,11 @@ function createReleaseKeyService({ repo, secretBox, env = process.env, logger = 
   // JSON bytes — the exact bytes the agent and the upload verifier check. Throws
   // (code 'NO_KEY') when no signing key is loaded.
   function sign(manifest) {
-    if (!cache || !cache.privateKey) { const e = new Error('No release signing key configured'); e.code = 'NO_KEY'; throw e; }
+    if (!cache || !cache.privateKey) { const e = new Error(`No ${purpose} signing key configured`); e.code = 'NO_KEY'; throw e; }
     return crypto.sign(null, Buffer.from(canonicalize(manifest)), cache.privateKey).toString('base64');
   }
 
-  return { load, getPublicKey, isConfigured, canSign, signBlockedReason, status, generate, remove, sign };
+  return { load, getPublicKey, isConfigured, canSign, signBlockedReason, status, generate, remove, sign, purpose };
 }
 
 module.exports = { createReleaseKeyService };

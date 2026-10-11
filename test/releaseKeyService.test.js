@@ -132,3 +132,79 @@ test('signBlockedReason separates "no key" from "public key only"', async () => 
   await signing.generate({});
   assert.equal(signing.signBlockedReason(), '');
 });
+
+// ---- two purposes, one implementation --------------------------------------
+//
+// The command key signs the instructions a fleet obeys; the release key signs
+// the code it installs. Same table, same service, its own row — and the parts
+// that must NOT be shared are the env fallback and the write-once guard.
+
+// A repo keyed by purpose, mirroring agentReleaseKeyRepository after migration
+// 148. NULL purpose reads as 'release', as it does in the real one.
+function fakeRepoByPurpose() {
+  const rows = new Map();
+  const key = (p) => (p === 'command' ? 'command' : 'release');
+  return {
+    async get(p = 'release') {
+      const row = rows.get(key(p));
+      return row ? { id: 1, purpose: key(p), public_pem: row.public_pem, fingerprint: row.fingerprint, created_by: row.created_by, created_at: row.created_at } : null;
+    },
+    async getWithSecret(p = 'release') {
+      const row = rows.get(key(p));
+      return row ? { id: 1, purpose: key(p), ...row } : null;
+    },
+    async create({ publicPem, privatePemEncrypted, fingerprint, createdBy = null, purpose = 'release' }) {
+      const k = key(purpose);
+      if (rows.has(k)) { const e = new Error('exists'); e.code = 'EXISTS'; throw e; }
+      rows.set(k, { public_pem: publicPem, private_pem_encrypted: privatePemEncrypted, fingerprint, created_by: createdBy, created_at: '2026-10-11T00:00:00.000Z' });
+      return rows.get(k);
+    },
+    async remove(p = 'release') { return rows.delete(key(p)) ? 1 : 0; },
+    _rows: rows,
+  };
+}
+
+test('the two purposes are independent keys in the same store', async () => {
+  const repo = fakeRepoByPurpose();
+  const release = createReleaseKeyService({ repo, secretBox: makeSecretBox(), env: {}, logger: { warn() {}, info() {} } });
+  const command = createReleaseKeyService({ repo, secretBox: makeSecretBox(), env: {}, logger: { warn() {}, info() {} }, purpose: 'command' });
+
+  await release.generate({ userId: 1 });
+  assert.equal(release.canSign(), true);
+  // Generating one does not give the other a key: that would make the split a
+  // rename.
+  assert.equal(command.canSign(), false);
+  assert.equal(command.status().configured, false);
+
+  await command.generate({ userId: 1 });
+  assert.equal(command.canSign(), true);
+  assert.notEqual(command.getPublicKey(), release.getPublicKey(), 'two keys that are one key is not key separation');
+
+  // Each is write-once in its own right.
+  await assert.rejects(() => command.generate({}), (e) => e.code === 'EXISTS');
+  await assert.rejects(() => release.generate({}), (e) => e.code === 'EXISTS');
+
+  // And deleting one leaves the other alone — the command key is the rollback
+  // half of the split, and taking it away must not disarm releases too.
+  await command.remove();
+  assert.equal(command.canSign(), false);
+  assert.equal(release.canSign(), true);
+});
+
+test('the env fallback is for the RELEASE purpose only', async () => {
+  // AGENT_RELEASE_PUBLIC_KEY exists so a deployment that pre-dates managed keys
+  // keeps verifying updates. A command key only ever arrives with a vendor
+  // authorisation, so an env var for it would be a way to introduce one without
+  // going through the vendor — which is the control the split exists to add.
+  const envPem = crypto.generateKeyPairSync('ed25519').publicKey.export({ type: 'spki', format: 'pem' }).toString();
+  const env = { AGENT_RELEASE_PUBLIC_KEY: envPem };
+  const repo = fakeRepoByPurpose();
+  const release = createReleaseKeyService({ repo, secretBox: makeSecretBox(), env, logger: { warn() {}, info() {} } });
+  const command = createReleaseKeyService({ repo, secretBox: makeSecretBox(), env, logger: { warn() {}, info() {} }, purpose: 'command' });
+
+  assert.equal(release.getPublicKey(), envPem);
+  assert.equal(release.status().source, 'env');
+  assert.equal(command.getPublicKey(), '', 'the release env key must not become a command anchor');
+  assert.equal(command.status().configured, false);
+  assert.equal(command.signBlockedReason(), 'no-key');
+});

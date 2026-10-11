@@ -21,12 +21,18 @@ const MIGRATE = path.join(__dirname, '..', 'src', 'migrate.js');
 
 // A fake mysql2/promise connection. `rows` answers the SELECTs by pattern; every
 // query is recorded.
-function fakeConn({ migrationRows = [], columns = ['id', 'filename', 'applied_at', 'checksum', 'state', 'error'], lock = 1, failOn = null } = {}) {
+function fakeConn({ migrationRows = [], columns = ['id', 'filename', 'applied_at', 'checksum', 'state', 'error'], lock = 1, failOn = null, failOnExact = null } = {}) {
   const queries = [];
   const conn = {
     queries,
     async query(sql, params = []) {
       queries.push({ sql: String(sql).replace(/\s+/g, ' ').trim(), params });
+      // Checked FIRST, by exact text. A migration file may itself mention
+      // information_schema or schema_migrations — several do, because that is
+      // how a guarded re-runnable migration is written — and matching those
+      // patterns before this one answered the migration's own SQL with a
+      // column list instead of failing it.
+      if (failOnExact && String(sql) === failOnExact) throw new Error('Duplicate column name "foo"');
       if (/GET_LOCK/.test(sql)) return [[{ got: lock }]];
       if (/RELEASE_LOCK/.test(sql)) return [[{}]];
       if (/information_schema\.COLUMNS/.test(sql)) return [columns.map((name) => ({ name }))];
@@ -87,7 +93,12 @@ test('a failed migration is recorded as failed, not left looking un-run', async 
   // Make the LAST real file pending by dropping its row; its own SQL then fails,
   // while the bookkeeping writes still work — that is the case that matters.
   const pending = rows.pop().filename;
-  const conn = fakeConn({ migrationRows: rows, failOn: /^(?!.*(schema_migrations|GET_LOCK|RELEASE_LOCK|information_schema|FROM users))/s });
+  // Fail on THAT file's own SQL, by its exact text. A pattern would quietly
+  // stop matching the day the last migration in the chain happens to mention
+  // something the pattern excluded — which is a test that passes for the wrong
+  // reason.
+  const pendingSql = fs.readFileSync(path.join(__dirname, '..', 'migrations', pending), 'utf8');
+  const conn = fakeConn({ migrationRows: rows, failOnExact: pendingSql });
   const { run } = loadMigrate(conn);
 
   await assert.rejects(run(), (err) => {

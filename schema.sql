@@ -548,13 +548,14 @@ CREATE TABLE IF NOT EXISTS `ldap_login_audit` (
 CREATE TABLE IF NOT EXISTS `agent_release_key` (
   `id` INT UNSIGNED NOT NULL AUTO_INCREMENT,
   `singleton` TINYINT UNSIGNED NOT NULL DEFAULT 1,
+  `purpose` VARCHAR(16) NULL DEFAULT NULL,
   `public_pem` TEXT NOT NULL,
   `private_pem_encrypted` TEXT NOT NULL,
   `fingerprint` CHAR(64) NOT NULL,
   `created_by` INT UNSIGNED NULL DEFAULT NULL,
   `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (id),
-  UNIQUE KEY uq_agent_release_key_singleton (singleton)
+  UNIQUE KEY uq_agent_release_key_purpose (singleton, purpose)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- Risk register. risk_score is stored (likelihood * impact, both 1..5) so the API

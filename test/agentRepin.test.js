@@ -185,7 +185,7 @@ test('a verify-only server still says re-pinning alone will not fix it', async (
 const { FAKE_RELEASE_KEYPAIR } = require('../test-support/fakes');
 const { publicKeyFingerprint } = require('../src/lib/fingerprint');
 
-function proofAuthorising(fingerprint, { sequence = 3 } = {}) {
+function proofAuthorising(fingerprint, { sequence = 3, commandFingerprint = null } = {}) {
   return {
     payload: {
       valid: true,
@@ -194,7 +194,11 @@ function proofAuthorising(fingerprint, { sequence = 3 } = {}) {
       valid_until: new Date(Date.now() + 36 * 3600 * 1000).toISOString(),
       trust: {
         license: { id: '7', customer_id: '42' },
-        server: { id: 'server-abc', release_key: { algorithm: 'Ed25519', fingerprint } },
+        server: {
+          id: 'server-abc',
+          release_key: { algorithm: 'Ed25519', fingerprint },
+          ...(commandFingerprint ? { command_key: { algorithm: 'Ed25519', fingerprint: commandFingerprint } } : {}),
+        },
         sequence,
       },
     },
@@ -204,7 +208,7 @@ function proofAuthorising(fingerprint, { sequence = 3 } = {}) {
   };
 }
 
-function rekeyAppWith({ trustProof = null, keyStatus = null } = {}) {
+function rekeyAppWith({ trustProof = null, keyStatus = null, commandKeyService = undefined } = {}) {
   const sent = [];
   const app = makeApp({
     agentsRepo: makeAgentsRepo({
@@ -218,6 +222,7 @@ function rekeyAppWith({ trustProof = null, keyStatus = null } = {}) {
       sendCommandAndWait: async (id, command) => { sent.push(command); return { delivered: 1, acked: true, reply: { accepted: true } }; },
     },
     releaseKeyService: makeReleaseKeyService(),
+    commandKeyService,
     licenseManager: {
       getTrustProof: () => trustProof,
       getReleaseKeyStatus: () => keyStatus,
@@ -298,4 +303,87 @@ test('an unauthorised rekey attempt is recorded in the system log', async () => 
   const row = (auditEventsRepo.rows || []).find((r) => r.action === 'agent.rekey-unauthorized');
   assert.ok(row, 'pushing a key the vendor has not authorised left no trace');
   assert.equal(row.detail.reason, 'vendor-authorizes-another-key');
+});
+
+// ---- re-keying the SECOND anchor -------------------------------------------
+//
+// `keyPurpose: 'command'` pins the key that authorises the INSTRUCTIONS an agent
+// obeys, as opposed to the code it installs. On a server without a separate
+// command key — which is every server until an operator generates one — there
+// is nothing to pin, and saying so is better than pinning an anchor nothing can
+// sign for.
+
+const COMMAND_PEM = require('node:crypto').generateKeyPairSync('ed25519')
+  .publicKey.export({ type: 'spki', format: 'pem' }).toString();
+
+test('a command rekey is 503 while this server signs commands with its release key', async () => {
+  const { app, sent } = rekeyAppWith({});
+  const res = await request(app).post(`/agents/${AGENT.id}/rekey`)
+    .set('Authorization', authHeader('admin'))
+    .send({ keyPurpose: 'command' });
+  assert.equal(res.status, 503);
+  assert.equal(res.body.code, 'NO_RELEASE_KEY');
+  assert.match(res.body.error, /no separate command key/);
+  assert.match(res.body.error, /what every agent already verifies them against/,
+    'the operator must be told this is the normal state, not a fault');
+  assert.equal(sent.length, 0);
+});
+
+test('a command rekey pins the COMMAND key and is authorised by command_key', async () => {
+  const commandKeyService = makeReleaseKeyService({ getPublicKey: () => COMMAND_PEM });
+  const releaseFp = publicKeyFingerprint(FAKE_RELEASE_KEYPAIR.pem);
+  const commandFp = publicKeyFingerprint(COMMAND_PEM);
+  const proof = proofAuthorising(releaseFp, { commandFingerprint: commandFp });
+  const { app, sent } = rekeyAppWith({ trustProof: proof, keyStatus: 'authorized', commandKeyService });
+
+  const res = await request(app).post(`/agents/${AGENT.id}/rekey`)
+    .set('Authorization', authHeader('admin'))
+    .send({ keyPurpose: 'command' });
+  assert.equal(res.status, 202, JSON.stringify(res.body));
+  assert.equal(res.body.keyPurpose, 'command');
+  assert.equal(res.body.fingerprint, commandFp);
+  assert.equal(res.body.vendorAuthorized, true, 'the command_key field authorises a command rekey');
+  assert.equal(sent[0].keyPurpose, 'command');
+  assert.equal(sent[0].publicKey, COMMAND_PEM);
+  assert.deepEqual(sent[0].vendorProof, proof);
+});
+
+test('a command rekey carries no proof when only the RELEASE key is authorised', async () => {
+  // Reading release_key for a command rekey would offer the agent a proof
+  // naming a different key, which it refuses — correctly, and after the fact.
+  const commandKeyService = makeReleaseKeyService({ getPublicKey: () => COMMAND_PEM });
+  const proof = proofAuthorising(publicKeyFingerprint(FAKE_RELEASE_KEYPAIR.pem));
+  const { app, sent } = rekeyAppWith({ trustProof: proof, keyStatus: 'authorized', commandKeyService });
+
+  const res = await request(app).post(`/agents/${AGENT.id}/rekey`)
+    .set('Authorization', authHeader('admin'))
+    .send({ keyPurpose: 'command' });
+  assert.equal(res.status, 202);
+  assert.equal(res.body.vendorAuthorized, false);
+  assert.equal(sent[0].vendorProof, undefined);
+});
+
+test('a release rekey is unchanged by any of this', async () => {
+  const commandKeyService = makeReleaseKeyService({ getPublicKey: () => COMMAND_PEM });
+  const releaseFp = publicKeyFingerprint(FAKE_RELEASE_KEYPAIR.pem);
+  const proof = proofAuthorising(releaseFp, { commandFingerprint: publicKeyFingerprint(COMMAND_PEM) });
+  const { app, sent } = rekeyAppWith({ trustProof: proof, keyStatus: 'authorized', commandKeyService });
+
+  // No body at all: the default is the release purpose, which is what every
+  // rekey meant before there were two.
+  const res = await request(app).post(`/agents/${AGENT.id}/rekey`).set('Authorization', authHeader('admin'));
+  assert.equal(res.status, 202);
+  assert.equal(res.body.keyPurpose, 'release');
+  assert.equal(res.body.fingerprint, releaseFp);
+  assert.equal(sent[0].publicKey, FAKE_RELEASE_KEYPAIR.pem);
+  assert.equal(sent[0].keyPurpose, 'release');
+});
+
+test('an unknown keyPurpose is a 400, not a silent release rekey', async () => {
+  const { app, sent } = rekeyAppWith({});
+  const res = await request(app).post(`/agents/${AGENT.id}/rekey`)
+    .set('Authorization', authHeader('admin'))
+    .send({ keyPurpose: 'releaze' });
+  assert.equal(res.status, 400);
+  assert.equal(sent.length, 0, 'a typo must not re-anchor the wrong key');
 });

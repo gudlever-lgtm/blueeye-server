@@ -224,6 +224,12 @@ function createApiRouter({
   agentBinaryStore,
   releaseStore,
   releasePublicKey,
+  // This server's separate COMMAND key, when it has one (migration 148). '' on
+  // every server that signs commands with its release key.
+  commandPublicKey = '',
+  // The service behind it, for Settings → Agent key. Null on a deployment
+  // without key management, same as releaseKeyService.
+  commandKeyService = null,
   releaseKeyService,
   commandSigner = null,
   // Runs the host's configured update script from Settings → Updates (null =
@@ -641,7 +647,7 @@ function createApiRouter({
   if (settingsService && typeof settingsService.getSecurity === 'function') {
     router.use('/api/settings/security', createAuthSecurityRouter({ settingsService, securityPolicy: secPolicy, auditLogger }));
   }
-  if (settingsService) router.use('/api/settings', createSettingsRouter({ settingsService, featureGate, dispatcher, analysisConfig, retentionConfig, releaseKeyService, geoipUpdater, publishRelease: () => publishSignedReleaseFromSource({ sourceStore: agentSourceStore, releaseStore, releaseKeyService }) }));
+  if (settingsService) router.use('/api/settings', createSettingsRouter({ settingsService, featureGate, dispatcher, analysisConfig, retentionConfig, releaseKeyService, commandKeyService, geoipUpdater, publishRelease: () => publishSignedReleaseFromSource({ sourceStore: agentSourceStore, releaseStore, releaseKeyService }) }));
   // Outbound API integrations (ITSM/IPAM connectors) — admin CRUD + test-fire.
   if (integrationsRepo && connectorRegistry && secretBox) {
     router.use('/api/integrations', createIntegrationsRouter({
@@ -847,7 +853,7 @@ function createApiRouter({
     logger,
   });
 
-  router.use('/agents', createAgentsRouter({ agentsRepo, locationsRepo, resultsRepo, agentCommander, agentSourceStore, testPackagesRepo, commandQueue: agentCommandQueue, updateService: agentUpdates, settingsService, releaseStore, releasePublicKey, releaseKeyService, licenseManager, publishRelease: () => publishSignedReleaseFromSource({ sourceStore: agentSourceStore, releaseStore, releaseKeyService }), auditRepo, auditEventsRepo, auditLogger, integrationTrigger: integrationsDispatcher, commandSigner, logger, reconnect: agentReconnect }));
+  router.use('/agents', createAgentsRouter({ agentsRepo, locationsRepo, resultsRepo, agentCommander, agentSourceStore, testPackagesRepo, commandQueue: agentCommandQueue, updateService: agentUpdates, settingsService, releaseStore, releasePublicKey, commandPublicKey, releaseKeyService, licenseManager, publishRelease: () => publishSignedReleaseFromSource({ sourceStore: agentSourceStore, releaseStore, releaseKeyService }), auditRepo, auditEventsRepo, auditLogger, integrationTrigger: integrationsDispatcher, commandSigner, logger, reconnect: agentReconnect }));
   router.use('/audit', createAuditRouter({ auditRepo }));
   // Unified, server-wide audit trail (Reporting → Audit) — admin only.
   if (auditEventsRepo) router.use('/api/audit', createAuditEventsRouter({ auditEventsRepo, auditLogRepo, featureGate, usersRepo }));

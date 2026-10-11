@@ -95,6 +95,14 @@ function createLicenseManager({
   // must not have to take this server's word for which key to trust. Public
   // material only: the private half never leaves this machine.
   getReleasePublicKey = () => '',
+  // The PUBLIC half of this server's COMMAND key, when it has a separate one.
+  // Presented the same way and for the same reason: only the vendor can
+  // authorise it into the proof, so a compromised server cannot make its own
+  // command key the one the fleet obeys. Resolves to '' on a server that signs
+  // commands with its release key, which is every server until an operator
+  // generates the second one — and the request then looks exactly like the one
+  // an older server sends.
+  getCommandPublicKey = () => '',
 }) {
   const graceMs = (config.graceDays ?? 14) * DAY_MS;
   // A freshly fetched proof is signed in direct response to THIS request, so its
@@ -178,19 +186,22 @@ function createLicenseManager({
     }
   }
 
-  // The release key to present, or '' when there is none to present. Never
-  // throws: a broken resolver must not stop licence validation.
-  function currentReleaseKey() {
+  // A key to present, or '' when there is none. Never throws: a broken resolver
+  // must not stop licence validation — a server that cannot read its own key is
+  // still a licensed server.
+  function currentKey(resolver) {
     try {
-      const key = typeof getReleasePublicKey === 'function' ? getReleasePublicKey() : getReleasePublicKey;
+      const key = typeof resolver === 'function' ? resolver() : resolver;
       const pem = String(key || '');
       return pem.includes('BEGIN PUBLIC KEY') ? pem : '';
     } catch {
       return '';
     }
   }
+  const currentReleaseKey = () => currentKey(getReleasePublicKey);
+  const currentCommandKey = () => currentKey(getCommandPublicKey);
 
-  async function fetchProof(agentCount, nonce, releaseKey) {
+  async function fetchProof(agentCount, nonce, releaseKey, commandKey) {
     const res = await fetchImpl(`${config.serverUrl}/validate`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -200,8 +211,12 @@ function createLicenseManager({
         agentCount,
         nonce,
         // Omitted entirely when this server has no key yet, so the signer sees
-        // the same request an older server sends.
+        // the same request an older server sends. The same for the command key,
+        // which most servers do not have: presenting '' would ask the vendor to
+        // authorise nothing, and a key field that is sometimes empty is a field
+        // somebody eventually treats as meaningful.
         ...(releaseKey ? { releaseKey } : {}),
+        ...(commandKey ? { commandKey } : {}),
       }),
     });
     if (res.status !== 200) {
@@ -221,7 +236,7 @@ function createLicenseManager({
 
     let body;
     try {
-      body = await fetchProof(agentCount, nonce, currentReleaseKey());
+      body = await fetchProof(agentCount, nonce, currentReleaseKey(), currentCommandKey());
     } catch (err) {
       // Offline / unexpected status / unsigned response -> rely on cache + grace.
       // Surface the underlying network cause AND the URL we tried, so an admin
@@ -300,6 +315,14 @@ function createLicenseManager({
     // null. It never enters a trust decision; it is how the dashboard can say
     // "waiting for vendor approval" instead of leaving an admin guessing.
     state.releaseKeyStatus = (body && typeof body.keyStatus === 'string') ? body.keyStatus : null;
+    // Per-purpose, when the signer is new enough to send it. Falls back to the
+    // single field so a server talking to an older signer reports the same
+    // thing it always did.
+    const perPurpose = body && body.keyStatuses;
+    state.keyStatuses = {
+      release: perPurpose && typeof perPurpose.release === 'string' ? perPurpose.release : state.releaseKeyStatus,
+      command: perPurpose && typeof perPurpose.command === 'string' ? perPurpose.command : null,
+    };
 
     // Trusted proof.
     if (payload.valid === true) {
@@ -387,6 +410,16 @@ function createLicenseManager({
     return state.releaseKeyStatus || null;
   }
 
+  // The same, per purpose: { release, command }. `command` is null on a server
+  // that has no separate command key — which is not a problem to report, it is
+  // the normal state.
+  function getKeyStatuses() {
+    return {
+      release: (state.keyStatuses && state.keyStatuses.release) || state.releaseKeyStatus || null,
+      command: (state.keyStatuses && state.keyStatuses.command) || null,
+    };
+  }
+
   function getAvailableReleases() {
     if (!state.releases) return null;
     return {
@@ -451,6 +484,7 @@ function createLicenseManager({
     getAvailableReleases,
     getTrustProof,
     getReleaseKeyStatus,
+    getKeyStatuses,
     canAcceptNewConnection,
     getStatus,
   };

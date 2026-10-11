@@ -379,6 +379,9 @@ function start() {
     // ever runs after boot (the resolver is guarded and returns '' if asked
     // early). Public material only — the private half never leaves this host.
     getReleasePublicKey: () => releaseKeyService.getPublicKey(),
+    // Presented only when this server actually has a separate command key, so
+    // the request a server without one sends is byte-identical to before.
+    getCommandPublicKey: () => (commandKeyService.canSign() ? commandKeyService.getPublicKey() : ''),
   });
 
   // Plan service: resolves the active package (Pilot/Starter/Professional) from
@@ -520,6 +523,18 @@ function start() {
   // env/embedded key, so deployments that set AGENT_RELEASE_PUBLIC_KEY keep working.
   const agentReleaseKeyRepo = createAgentReleaseKeyRepository(db);
   const releaseKeyService = createReleaseKeyService({ repo: agentReleaseKeyRepo, secretBox, logger });
+  // The SECOND key: the one that signs privileged COMMANDS. Same table, same
+  // implementation, its own row (migration 148).
+  //
+  // Most deployments will never have one, and that is a working state rather
+  // than a gap: with no command key stored, commandSigner falls back to the
+  // release key and the fleet behaves exactly as it does today. Generating one
+  // is a deliberate act, and it does nothing until the VENDOR authorises its
+  // fingerprint into the licence proof — the agents take their authority from
+  // that proof, never from this server.
+  const commandKeyService = createReleaseKeyService({
+    repo: agentReleaseKeyRepo, secretBox, logger, purpose: 'command',
+  });
 
   // Whether those two keys are the SAME ones this server was running with last
   // time. Nothing else checks that. Both keys are already used correctly, and a
@@ -585,8 +600,23 @@ function start() {
   // unsigned exactly as before — but a signing FAILURE refuses the command
   // instead of downgrading it, and lands in the audit trail, because a
   // privileged action nobody could authenticate is an incident, not a warning.
+  // Which key signs a privileged command: the command key when this server has
+  // one, the release key otherwise. The fallback is what makes the split
+  // deployable — a server with no command key signs commands exactly as it did
+  // before, and every agent in the field checks them against the release key it
+  // already pins.
+  //
+  // Resolved PER SIGNATURE, not once here. Both key services load their keys
+  // after wiring (further down), so deciding at construction time would have
+  // bound every command on a server that does have a command key to the release
+  // key instead, for the life of the process — and nothing would have said so,
+  // because both signatures verify against something.
+  const commandSigningKey = {
+    canSign: () => (commandKeyService.canSign() || releaseKeyService.canSign()),
+    sign: (payload) => (commandKeyService.canSign() ? commandKeyService : releaseKeyService).sign(payload),
+  };
   const commandSigner = createCommandSigner({
-    releaseKeyService,
+    releaseKeyService: commandSigningKey,
     logger,
     onFailure: ({ code, message, command }) => {
       if (typeof auditEventsRepo.recordRecurring !== 'function') return;
@@ -1618,6 +1648,11 @@ function start() {
     // A live resolver (not a static value): generating/deleting the key in Settings
     // takes effect without a restart.
     releasePublicKey: () => releaseKeyService.getPublicKey(),
+    // Only when it can actually SIGN with it: an unsigned-able command key
+    // would let a rekey pin an anchor nothing can produce a signature for,
+    // which is the deadlock the rekey command exists to get out of.
+    commandPublicKey: () => (commandKeyService.canSign() ? commandKeyService.getPublicKey() : ''),
+    commandKeyService,
     releaseKeyService,
     testPackagesRepo,
     reportSchedulesRepo,
@@ -1710,7 +1745,10 @@ function start() {
   // Load the managed signing key into memory, then publish a signed release from the
   // current agent source so upgrades are ready with no extra steps. Best-effort — a
   // missing key just means unsigned source installs until one is generated.
-  releaseKeyService.load()
+  // Both keys, in parallel: the command key is a separate row and a server that
+  // has one must have it in memory before the first privileged command, not
+  // after the first operator wonders why it went out signed with the other key.
+  Promise.all([releaseKeyService.load(), commandKeyService.load()])
     .then(() => publishSignedReleaseFromSource({ sourceStore: agentSourceStore, releaseStore: agentReleaseStore, releaseKeyService, logger }))
     .then(() => {
       // Say once, here, whether every stored release still matches the manifest

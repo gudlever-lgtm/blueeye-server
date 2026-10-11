@@ -126,6 +126,8 @@ function createApp({
   agentBinaryStore,
   releaseStore,
   releasePublicKey,
+  commandPublicKey = '',
+  commandKeyService = null,
   releaseKeyService,
   // Runs the host's update script from Settings → Updates (opt-in; null unless
   // SERVER_UPDATE_COMMAND is configured).
@@ -357,6 +359,8 @@ function createApp({
       agentBinaryStore,
       releaseStore,
       releasePublicKey,
+      commandPublicKey,
+      commandKeyService,
       releaseKeyService,
       serverUpdateService,
       keyIdentityGuard,

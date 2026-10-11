@@ -17,6 +17,11 @@ const { createAgentUpdateService } = require('../../services/agentUpdateService'
 function createAgentsContext({
   agentsRepo, locationsRepo, resultsRepo, agentCommander, agentSourceStore,
   releaseStore = null, releasePublicKey = '', releaseKeyService = null, publishRelease = null,
+  // The PUBLIC half of this server's separate COMMAND key, when it has one.
+  // Resolves to '' on every server that signs commands with its release key,
+  // which is the normal state — POST /agents/:id/rekey then answers 503 for a
+  // command rekey instead of pinning something that authorises nothing.
+  commandPublicKey = '',
   // The licence manager carries the vendor-signed authorisation a rekey relays:
   // this server may hold a key, but only the vendor can say the fleet should
   // accept it (see licenseManager.getTrustProof).
@@ -127,7 +132,7 @@ function createAgentsContext({
     agentsRepo, locationsRepo, resultsRepo, agentCommander, agentSourceStore,
     testPackagesRepo,
     commandQueue, updateService: updates, settingsService,
-    releaseStore, releasePublicKey, releaseKeyService, licenseManager, publishRelease,
+    releaseStore, releasePublicKey, commandPublicKey, releaseKeyService, licenseManager, publishRelease,
     auditRepo, auditEventsRepo, auditLogger, integrationTrigger, logger,
     // reconnect tuning (POST /:id/reconnect)
     reconnectWaitMs, reconnectPollMs,

@@ -10,7 +10,7 @@ const { ROLES } = require('../auth/roles');
 // (passwords, webhook secrets) are never included; the AI assistant's API key is
 // editable here but only ever reported as "set or not" + a masked hint, never
 // echoed back in full.
-function createSettingsRouter({ settingsService, featureGate, dispatcher, analysisConfig, retentionConfig, releaseKeyService = null, publishRelease = null, geoipUpdater = null }) {
+function createSettingsRouter({ settingsService, featureGate, dispatcher, analysisConfig, retentionConfig, releaseKeyService = null, commandKeyService = null, publishRelease = null, geoipUpdater = null }) {
   const router = express.Router();
   const admin = [requireAuth, requireRole(ROLES.ADMIN)];
   const reader = [requireAuth, requireRole(ROLES.VIEWER, ROLES.OPERATOR, ROLES.ADMIN)];
@@ -86,6 +86,47 @@ function createSettingsRouter({ settingsService, featureGate, dispatcher, analys
   router.delete('/agent-release-key', ...admin, asyncHandler(async (req, res) => {
     if (!releaseKeyService) return res.status(503).json({ error: 'Key management is not available on this server' });
     const status = await releaseKeyService.remove();
+    return res.json(status);
+  }));
+
+  // --- Agent COMMAND key (admin) ----------------------------------------------
+  // The second signing key: the one that signs the privileged commands a fleet
+  // obeys, as opposed to the code it installs. Optional, and its absence is the
+  // normal state — commands are then signed with the release key, which is what
+  // every agent already verifies them against.
+  //
+  // Generating it changes nothing on its own. The fleet obeys commands signed
+  // with it only after the VENDOR authorises its fingerprint into the licence
+  // proof and each agent has been re-keyed with `keyPurpose: 'command'`. That
+  // sequence is the point: the agents take their authority from the proof, not
+  // from this server.
+  router.get('/agent-command-key', ...admin, asyncHandler(async (req, res) => {
+    res.json(commandKeyService ? commandKeyService.status() : { configured: false, source: null });
+  }));
+
+  router.post('/agent-command-key', ...admin, asyncHandler(async (req, res) => {
+    if (!commandKeyService) return res.status(503).json({ error: 'Key management is not available on this server' });
+    try {
+      const userId = (req.user && (req.user.id || req.user.sub)) || null;
+      // No publishRelease here: a command key signs no release, so re-publishing
+      // one would be work with nothing to show for it.
+      const status = await commandKeyService.generate({ userId });
+      return res.status(201).json(status);
+    } catch (err) {
+      if (err.code === 'EXISTS') {
+        return res.status(409).json({ error: 'A command signing key already exists and cannot be changed. Delete it first if you must rotate it (the vendor must then authorise the new fingerprint, and every agent needs re-keying).', code: 'EXISTS' });
+      }
+      throw err;
+    }
+  }));
+
+  // DELETE — remove the command key. Commands then go out signed with the
+  // RELEASE key again. An agent that has already pinned the command key refuses
+  // them until it is re-keyed back, so this is not a quiet undo: it is the
+  // rollback half of the split, and the dashboard says so before it is pressed.
+  router.delete('/agent-command-key', ...admin, asyncHandler(async (req, res) => {
+    if (!commandKeyService) return res.status(503).json({ error: 'Key management is not available on this server' });
+    const status = await commandKeyService.remove();
     return res.json(status);
   }));
 

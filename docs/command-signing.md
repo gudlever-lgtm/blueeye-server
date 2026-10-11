@@ -64,11 +64,45 @@ one it is checking (`blueeye-agent src/release/verifyManifest.js`,
 - **evidence** — same seam. The agent rebuilds the payload from the command's
   own fields, so it carries the purpose exactly when the server sent one.
 
-This is domain separation, **not** key separation: one key still signs all four,
-so a compromise of that key still yields all four. Splitting the key is a
-licence-server change — the vendor proof authorises one
-`trust.server.release_key.fingerprint`, and the agent's authority comes from
-that proof, not from the on-prem server. See **Residual risk**.
+Domain separation is not key separation on its own. The keys are now **also**
+separable — see below.
+
+## Two keys
+
+The release key and the command key can be separate keys, and on a server where
+they are, a compromise of one is not a compromise of the other. The two also want
+different handling: a release key is used on a build step a few times a month and
+can live in an HSM or on an offline box, while a command key has to be online and
+decryptable here every time an operator presses Update.
+
+**The agent's authority comes from the vendor-signed licence proof, never from
+this server.** That is why the second key cannot simply be generated and used:
+
+1. **Generate** it — Settings → Agent key → *Generate a separate command key*
+   (migration 148 gives `agent_release_key` one row per purpose). Nothing
+   changes yet.
+2. The server **presents** it on every licence validation (`commandKey` beside
+   `releaseKey`), and `blueeye-licens` records it — automatically the first
+   time, as **pending** on a change, exactly like the release key.
+3. The **vendor approves** the fingerprint (`POST /licenses/:id/command-key/approve`).
+   The next proof carries `trust.server.command_key` and a higher
+   `trust_sequence`.
+4. **Re-key each agent** for it: `POST /agents/:id/rekey` with
+   `{"keyPurpose":"command"}`. The agent verifies the proof's `command_key`
+   field and pins the key to `command-key.pem`.
+
+Only after 4 does that agent check commands against the command key. Until then
+— and on every server that never does any of this — commands are signed with the
+release key and verified against it, which is what the whole field does today.
+
+| field | means |
+| --- | --- |
+| `keyPurpose` on a rekey | which anchor to replace: `release` (default) or `command`. **Not** `purpose`, which is already on a signed command and says what the SIGNATURE is for — always `command` on a rekey, since a rekey *is* a command |
+| `trust.server.command_key` | the vendor's authorisation for that key. A command rekey reads this field and no other: offering a proof that authorises the release key would be refused by the agent, correctly and after the fact |
+
+Rolling it back is not a quiet undo. Deleting the command key here sends commands
+signed with the release key again, and an agent already re-keyed for the command
+key **refuses** them until it is re-keyed back. The confirm dialog says so.
 
 ## Fail closed
 
@@ -113,3 +147,11 @@ needs a **vendor-signed** licence proof (`docs/agent-trust.md` in
 blueeye-licens), and once an agent has accepted one, nothing but another vendor
 authorisation is accepted again. So a compromised on-prem server can misuse the
 authority it already has, but cannot make itself a permanent new trust anchor.
+
+Splitting the keys narrows what "the authority it already has" means. On a server
+where they are separate, stealing the key that signs releases does not let the
+holder command the fleet, and stealing the key that signs commands does not let
+them ship code — but either one, on its own, is still enough to do its own job.
+There is no arrangement of keys that protects a fleet from a server that is
+wholly owned; what there is, is a smaller blast radius per key and a vendor who
+has to agree before any new key counts.

@@ -26,7 +26,7 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 function createAgentCommandsRouter(ctx) {
   const router = express.Router();
   const {
-    agentsRepo, agentCommander, agentSourceStore, releaseStore, releaseKeyService, releasePublicKey,
+    agentsRepo, agentCommander, agentSourceStore, releaseStore, releaseKeyService, releasePublicKey, commandPublicKey,
     licenseManager, publishRelease, auditRepo, auditEventsRepo, auditLogger, logger,
     reconnectWaitMs, reconnectPollMs,
     signCommand, canSignCommands, invalidId, notFound, validationError,
@@ -220,7 +220,17 @@ function createAgentCommandsRouter(ctx) {
       const agent = await agentsRepo.findById(id);
       if (!agent) return notFound(res);
 
-      const publicKey = (typeof releasePublicKey === 'function' ? releasePublicKey() : releasePublicKey) || '';
+      // WHICH anchor to replace. `release` (the default, and what every rekey
+      // meant before there were two) pins the key that authorises the code this
+      // agent installs; `command` pins the one that authorises the instructions
+      // it obeys. A body naming anything else is a typo, and a typo that
+      // silently re-anchored the wrong key is not a thing to be lenient about.
+      const keyPurpose = req.body && req.body.keyPurpose ? String(req.body.keyPurpose) : 'release';
+      if (keyPurpose !== 'release' && keyPurpose !== 'command') {
+        return validationError(res, { keyPurpose: "must be 'release' or 'command'" });
+      }
+      const resolveKey = keyPurpose === 'command' ? commandPublicKey : releasePublicKey;
+      const publicKey = (typeof resolveKey === 'function' ? resolveKey() : resolveKey) || '';
       if (!publicKey) {
         await recordSystemError(req, {
           action: 'agent.rekey-blocked',
@@ -230,7 +240,11 @@ function createAgentCommandsRouter(ctx) {
           detail: { reason: 'no-key' },
         });
         return res.status(503).json({
-          error: 'This server publishes no agent release key, so there is nothing to pin. Generate one under Settings → Agent key first.',
+          error: keyPurpose === 'command'
+            ? 'This server has no separate command key, so there is nothing to pin. Generate one under Settings → Agent key, '
+              + 'and have the vendor authorise its fingerprint, first. Until then commands are signed with the release key, '
+              + 'which is what every agent already verifies them against.'
+            : 'This server publishes no agent release key, so there is nothing to pin. Generate one under Settings → Agent key first.',
           code: 'NO_RELEASE_KEY',
         });
       }
@@ -250,12 +264,14 @@ function createAgentCommandsRouter(ctx) {
       // server that has been taken over from re-anchoring its own fleet.
       const trustProof = licenseManager && typeof licenseManager.getTrustProof === 'function'
         ? licenseManager.getTrustProof() : null;
-      const authorizedFingerprint = trustProof
-        && trustProof.payload
-        && trustProof.payload.trust
-        && trustProof.payload.trust.server
-        && trustProof.payload.trust.server.release_key
-        ? trustProof.payload.trust.server.release_key.fingerprint : null;
+      // The proof authorises a key PER PURPOSE. Reading the release_key field
+      // for a command rekey would offer the agent a proof that names a
+      // different key, which it refuses — correctly, and after the fact.
+      const trustServer = trustProof && trustProof.payload && trustProof.payload.trust
+        ? trustProof.payload.trust.server : null;
+      const authorizedKey = trustServer
+        ? trustServer[keyPurpose === 'command' ? 'command_key' : 'release_key'] : null;
+      const authorizedFingerprint = authorizedKey ? authorizedKey.fingerprint : null;
       // Sending a proof that authorises a DIFFERENT key would only produce a
       // refusal at the agent. Say so here instead, where the operator is.
       const vendorAuthorized = !!authorizedFingerprint && authorizedFingerprint === fingerprint;
@@ -270,7 +286,10 @@ function createAgentCommandsRouter(ctx) {
       }
 
       const auditId = await recordRequested('rekey', agent, req, fingerprint.slice(0, 32));
-      const command = { name: 'rekey', publicKey };
+      // `keyPurpose`, not `purpose`: `purpose` is already on a signed command and
+      // says what the SIGNATURE is for (always 'command' here — a rekey IS a
+      // command). The agent reads keyPurpose.
+      const command = { name: 'rekey', publicKey, keyPurpose };
       if (vendorAuthorized) command.vendorProof = trustProof;
       if (auditId) command.auditId = auditId;
       const out = await agentCommander.sendCommandAndWait(id, signCommand(id, command), { timeoutMs: 8000 });
@@ -285,6 +304,7 @@ function createAgentCommandsRouter(ctx) {
         acked: !!out.acked,
         accepted: !!reply.accepted,
         reason: reply.reason || null,
+        keyPurpose,
         fingerprint,
         // Whether the command itself was signed with the key being replaced. An
         // agent that requires signed commands accepts nothing else, so the

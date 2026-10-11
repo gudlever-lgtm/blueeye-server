@@ -14780,7 +14780,76 @@ async function settingsAgentKeyView() {
     } catch (err) { toast(errText(err), true); }
   }
 
+  // ---- the SECOND key: commands ------------------------------------------
+  //
+  // Optional, and NOT having one is the normal state — so the panel leads with
+  // what is true today (commands are signed with the release key, which every
+  // agent already verifies them against) rather than with a warning about a
+  // key that is missing. "Missing" would be wrong: nothing is broken.
+  //
+  // Generating it also changes nothing on its own, and the panel says so. The
+  // fleet obeys commands signed with it only after the vendor authorises the
+  // fingerprint into the licence proof and each agent has been re-keyed. That
+  // order is the security property, not a procedural inconvenience.
+  let cmd = null;
+  try { cmd = await api('/api/settings/agent-command-key'); } catch { cmd = null; }
+  if (cmd) root.append(commandKeyPanel(cmd, { onGenerate: genCommandKey, onRemove: removeCommandKey }));
+
+  async function genCommandKey() {
+    if (!confirm(t('cmdKey.generate.confirm'))) return;
+    try {
+      await api('/api/settings/agent-command-key', { method: 'POST' });
+      toast(t('cmdKey.generated'));
+      render();
+    } catch (err) { toast(errText(err), true); }
+  }
+
+  async function removeCommandKey() {
+    if (!confirm(t('cmdKey.delete.confirm'))) return;
+    try {
+      await api('/api/settings/agent-command-key', { method: 'DELETE' });
+      toast(t('cmdKey.deleted'));
+      render();
+    } catch (err) { toast(errText(err), true); }
+  }
+
   return root;
+}
+
+// The command-key panel. Three states, and only one of them is a problem:
+//   not configured  — the normal state. Commands are signed with the release
+//                     key. Offer to split them, and say what that involves.
+//   configured      — say what still has to happen before the fleet obeys it.
+//   undecryptable   — the one real fault: a key is stored that cannot sign, so
+//                     every privileged command is refused (fail closed).
+function commandKeyPanel(status, { onGenerate, onRemove }) {
+  const wrap = el('div', { class: 'trust-keys' });
+  const configured = !!(status && status.configured);
+  const blocked = (status && status.signBlocked) || '';
+  wrap.append(el('div', { class: 'section-head' },
+    el('h3', {}, t('cmdKey.title')),
+    el('span', { class: `badge ${configured && !blocked ? 'online' : (configured ? 'offline' : '')}` },
+      configured ? (blocked ? t('cmdKey.badge.broken') : t('cmdKey.badge.separate')) : t('cmdKey.badge.shared'))));
+  wrap.append(el('p', { class: 'muted' }, t('cmdKey.why')));
+
+  if (!configured) {
+    wrap.append(el('p', { class: 'muted small' }, t('cmdKey.shared.body')));
+    wrap.append(el('div', { class: 'form-actions' },
+      el('button', { onclick: () => onGenerate() }, t('cmdKey.generate'))));
+    return wrap;
+  }
+
+  wrap.append(el('div', { class: 'kv' },
+    el('div', {}, el('span', { class: 'muted' }, t('cmdKey.fingerprint')),
+      el('code', {}, String(status.fingerprint || '–')))));
+  if (blocked) {
+    wrap.append(el('div', { class: 'empty error' }, status.keyError || t('cmdKey.broken')));
+  } else {
+    wrap.append(el('p', { class: 'muted small' }, t('cmdKey.next')));
+  }
+  wrap.append(el('div', { class: 'form-actions' },
+    el('button', { class: 'danger', onclick: () => onRemove() }, t('cmdKey.delete'))));
+  return wrap;
 }
 
 // Settings → Appearance: pick a dashboard colour theme. The choice is saved to

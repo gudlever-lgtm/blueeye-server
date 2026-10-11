@@ -2548,7 +2548,15 @@ async function followAgentAction(a, auditId) {
       toast(`${name}: the update FAILED — ${detail}.`, true);
       // A refusal over the release key is the one failure with a known fix, so
       // hand it over instead of leaving the operator to read the audit trail.
-      if (isPinnedKeyRefusal(detail)) showRepinCommand(a, detail, { retryUpdate: true });
+      if (isPinnedKeyRefusal(detail)) { showRepinCommand(a, detail, { retryUpdate: true }); }
+      // A WINDOWS host whose push failed is the other one. The agent's own
+      // diagnosis is usually right and usually about the path — a checksum
+      // mismatch means something between the server and that machine altered
+      // the bytes — and the way through is the in-place one-liner, which
+      // downloads over a different route and verifies the same signature.
+      // Leaving the operator with a toast and no next step is how a correct
+      // diagnosis becomes a dead end.
+      else if (agentIsWindows(a)) { showWindowsUpdateCommand(a, row.target_version || null); }
     }
     render();
     return;

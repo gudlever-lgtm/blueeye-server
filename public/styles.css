@@ -1004,6 +1004,24 @@ pre { padding: 10px; overflow: auto; }
   position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
   background: var(--elev-surface-3); border: 1px solid var(--hairline); color: var(--text);
   padding: 10px 16px; border-radius: var(--radius-sm); box-shadow: var(--elev-3);
+  /* A toast had no width and no height bound, so a long message ran past the
+     viewport and the END of it — which is the part that says what to DO — was
+     simply unreachable. The one that made this obvious:
+
+       "the update FAILED — checksum mismatch (…) — the server sent the right
+        release, so the bytes were altered between it and this host; check any
+        proxy, CDN or TLS-terminating cache in the path"
+
+     read as "…check any proxy, CDN or T." on screen. The diagnosis was right
+     and the operator could not see it.
+
+     So: a readable measure, wrapping that breaks a 64-hex checksum rather than
+     forcing the box wider than the window, and a height cap that scrolls
+     instead of clipping. `overflow-wrap` alone is not enough — a sha256 is one
+     unbroken token, which is exactly what `anywhere` is for. */
+  width: max-content; max-width: min(720px, calc(100vw - 2 * var(--s-6)));
+  max-height: min(40vh, 320px); overflow-y: auto;
+  overflow-wrap: anywhere; text-align: left; line-height: 1.45;
 }
 .toast.bad { border-color: var(--bad); }
 .modal { position: fixed; inset: 0; z-index: var(--z-scrim); background: var(--scrim);

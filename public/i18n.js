@@ -1510,6 +1510,7 @@
       'pageInfo.investigation.body1': 'Choose an agent or a site and the time window to look at. The page pulls the probe results, interface counters, flows and topology changes for exactly that window, so a report can be reasoned about from evidence rather than from memory.',
       'pageInfo.investigation.body2': 'Operator/admin — investigations are read-only over recorded data and never push commands to an agent.',
       'agentUpdate.win.badgeTitle': 'A newer agent (v{version}) is published. Use Update to get the PowerShell command that updates this host in place.',
+      'agentUpdate.win.fallbackHint': 'Updates this host in place from a one-liner — the way through when the pushed update does not land (a download altered on the way, a release the host refuses, a scheduled task that will not restart).',
       'agentUpdate.win.button': 'Update',
       // Fleet rollout (Settings → Updates): one rollout instead of one click per
       // agent, paced a batch at a time.
@@ -7531,6 +7532,7 @@
       'pageInfo.investigation.body1': 'Vælg en agent eller et site og det tidsvindue der skal ses på. Siden henter probe-resultater, interfacetællere, flows og topologiændringer for præcis det vindue, så en fejlmelding kan vurderes ud fra beviser i stedet for hukommelse.',
       'pageInfo.investigation.body2': 'Operator/admin — undersøgelser læser kun optagede data og sender aldrig kommandoer til en agent.',
       'agentUpdate.win.badgeTitle': 'En nyere agent (v{version}) er udgivet. Brug Opdatér for at få PowerShell-kommandoen, der opdaterer denne maskine på stedet.',
+      'agentUpdate.win.fallbackHint': "Opdaterer værten på stedet via en enkelt kommando — vejen igennem, når den skubbede opdatering ikke lander (et download ændret undervejs, en udgivelse værten afviser, en planlagt opgave der ikke vil genstarte).",
       'agentUpdate.win.button': 'Opdatér',
       // Flådeopdatering (Indstillinger → Opdateringer).
       'fleetUpdate.heading': 'Opdatér flåden',

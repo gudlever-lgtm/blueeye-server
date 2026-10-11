@@ -377,6 +377,10 @@
           deps.canWrite() ? { label: t('ag.act.snmp'), onclick: function () { deps.editSnmp(adm); } } : null,
           deps.canWrite() && deps.editPosition ? { label: t('ag.act.position'), onclick: function () { deps.editPosition(adm); } } : null,
           deps.canDelete() ? updateEntry(adm, target, behind) : null,
+          // The manual one-liner beside the push, for a Windows host whose push
+          // did not land. updateEntry already returns it when there is no push
+          // to offer, so this is only the second entry.
+          deps.canDelete() && deps.selfUpdatable(adm) ? winEntry(adm, target, behind, true) : null,
           deps.canDelete() ? '-' : null,
           deps.canDelete() ? { label: t('ag.act.delete'), danger: true, onclick: function () { deps.remove(adm); } } : null,
         ].filter(Boolean);
@@ -384,17 +388,31 @@
 
       // A Windows agent is not stuck: it gets a one-liner that updates it in
       // place, rather than being told to reinstall.
+      //
+      // It is offered to EVERY Windows agent, not only the ones the server
+      // cannot push to. A Windows host registers a Scheduled Task, so it joined
+      // the self-updatable runtimes and the push became its only route — which
+      // was right up until the push does not land. A download altered by a
+      // proxy ("checksum mismatch — refusing to install"), a release this host
+      // refuses, a scheduled task that will not restart: the fix in every one
+      // of those cases is the in-place one-liner, and it was unreachable from
+      // the one screen the operator is already standing on.
+      //
+      // Both entries, then: the push as the primary, the one-liner beside it.
+      // Neither is a reinstall and neither enrols a second agent.
+      // `alongside` is true when the PUSH is also on offer. Both reading
+      // "Update" would be two buttons that look like the same button — the one
+      // thing worse than having no fallback is having one nobody can identify.
+      function winEntry(adm, target, behind, alongside) {
+        if (!deps.isWindows(adm)) return null;
+        return {
+          label: alongside || !behind ? t('ag.act.winReinstall') : t('agentUpdate.win.button'),
+          onclick: function () { deps.windowsUpdate(adm, target); },
+        };
+      }
+
       function updateEntry(adm, target, behind) {
-        if (!deps.selfUpdatable(adm) && deps.isWindows(adm)) {
-          // Offered whether or not the agent is behind: the one-liner reinstalls
-          // in place and keeps the enrollment, and an operator who wants to
-          // re-run it on a healthy host had no way to get at it from here.
-          return {
-            label: behind ? t('agentUpdate.win.button') : t('ag.act.winReinstall'),
-            onclick: function () { deps.windowsUpdate(adm, target); },
-          };
-        }
-        if (!deps.selfUpdatable(adm)) return null;
+        if (!deps.selfUpdatable(adm)) return winEntry(adm, target, behind);
         return {
           label: behind ? t('ag.act.update', { v: target }) : t('ag.act.upgrade'),
           onclick: function () { deps.update(adm, target); },
@@ -620,22 +638,31 @@
         var target = deps.updateTarget(adm, versions);
         var behind = deps.isBehind(adm, target);
         // A Windows agent gets its button either way — see updateEntry().
-        if (!behind && !(deps.isWindows(adm) && !deps.selfUpdatable(adm))) return null;
-        if (deps.selfUpdatable(adm)) {
-          return ui.button('secondary', t('ag.act.update', { v: target }), {
+        if (!behind && !deps.isWindows(adm)) return null;
+        var acts = [];
+        if (deps.selfUpdatable(adm) && behind) {
+          acts.push(ui.button('secondary', t('ag.act.update', { v: target }), {
             size: 'xs',
             onclick: function () { deps.update(adm, target); },
-          });
+          }));
         }
-        // A Windows agent is not stuck: it updates in place from a one-liner
-        // this dialog hands over.
+        // A Windows agent is not stuck, and it is not stuck EITHER when the
+        // push is available and does not work — a download a proxy altered, a
+        // release the host refuses, a scheduled task that will not restart. The
+        // one-liner updates it in place and is the fix in all three, so it sits
+        // beside the push rather than instead of it.
         if (deps.isWindows(adm)) {
-          return ui.button('secondary', behind ? t('agentUpdate.win.button') : t('ag.act.winReinstall'), {
+          // Same rule as the row menu: when the push is beside it, this one says
+          // what it IS rather than repeating the word on the button next to it.
+          var alongside = acts.length > 0;
+          acts.push(ui.button('secondary', alongside || !behind ? t('ag.act.winReinstall') : t('agentUpdate.win.button'), {
             size: 'xs',
+            title: t('agentUpdate.win.fallbackHint'),
             onclick: function () { deps.windowsUpdate(adm, target); },
-          });
+          }));
         }
-        return null;
+        if (!acts.length) return null;
+        return acts.length === 1 ? acts[0] : el('span', { class: 'dw-acts' }, acts);
       }
 
       function versionRow(a, adm) {

@@ -362,3 +362,119 @@ test('a healthy agent is not offered an acknowledgement', async (t) => {
     'the footer is not the one this test thinks it is');
   assert.equal([...drawer.querySelectorAll('.drawer-foot button')].filter((b) => /Acknowledge/.test(b.textContent)).length, 0);
 });
+
+// ---- a Windows host that the push cannot reach ------------------------------
+//
+// A Windows agent registers a Scheduled Task, so it joined the self-updatable
+// runtimes and the pushed update became its ONLY route. That is right until the
+// push does not land — a download a proxy altered ("checksum mismatch —
+// refusing to install"), a release the host refuses, a scheduled task that will
+// not restart. The fix in all three is the in-place one-liner, and it was
+// unreachable from the screen the operator is already standing on.
+//
+// Same host as the drift fixture, reported as 'scheduled-task': the server CAN
+// push to it, which is exactly the case that had no fallback.
+const winRoutes = (over = {}) => drawerRoutes(Object.assign({
+  'GET /agents': [{
+    ...DRIFT.agents[0],
+    capabilities: { ...DRIFT.agents[0].capabilities, managed: 'scheduled-task' },
+  }],
+}, over));
+
+const drawerButtons = (drawer) => {
+  const identity = [...drawer.querySelectorAll('.dsec')].find((sec) => /Identity/.test(sec.querySelector('h3').textContent));
+  return [...identity.querySelectorAll('button')];
+};
+const MANUAL_LABEL = /one-liner|in place|Update command|Reinstall|command/i;
+
+test('a pushable Windows agent is offered the one-liner as well as the push', async (t) => {
+  const { doc, window } = boot({ t, routes: winRoutes() });
+  await settle();
+  const drawer = await openDrawerOn(doc, window, 'oslo-edge-01');
+  const labels = drawerButtons(drawer).map((b) => b.textContent);
+
+  // The push stays the primary action…
+  assert.ok(labels.some((l) => /Update to v0\.44\.0/.test(l)), labels.join(' | '));
+  // …and the in-place one-liner sits beside it, because the push is exactly
+  // what has failed when somebody comes looking for this.
+  assert.ok(labels.filter((l) => MANUAL_LABEL.test(l)).length >= 1,
+    `no manual route beside the push: ${labels.join(' | ')}`);
+  assert.ok(labels.length >= 2, `only one action on a Windows host: ${labels.join(' | ')}`);
+});
+
+test('the one-liner opens the Windows update command, not a reinstall', async (t) => {
+  const { doc, window, log } = boot({
+    t,
+    routes: winRoutes({
+      'GET /api/enroll/update-command': {
+        version: '0.44.0',
+        oneLiner: 'powershell -c "irm https://server/enroll/update.ps1 | iex"',
+        manual: { downloadUrl: 'https://server/enroll/agent-release.tgz', checksum: 'a'.repeat(64) },
+        steps: [],
+        certFingerprint: null,
+      },
+    }),
+  });
+  await settle();
+  const drawer = await openDrawerOn(doc, window, 'oslo-edge-01');
+  const manual = drawerButtons(drawer).filter((b) => MANUAL_LABEL.test(b.textContent)).pop();
+  assert.ok(manual, 'no in-place action to press');
+  manual.dispatchEvent(new window.Event('click', { bubbles: true }));
+  await settle();
+
+  assert.ok(log.some((x) => x.key === 'GET /api/enroll/update-command'), 'it did not fetch the in-place command');
+  // It keeps the host's enrolment: this is an update, never a second agent.
+  assert.match(doc.querySelector('#modal-card').textContent, /update\.ps1/);
+});
+
+test('a Windows agent that is up to date keeps the one-liner, and gets no push', async (t) => {
+  const { doc, window } = boot({
+    t,
+    routes: winRoutes({ 'GET /system/version': { agent: '0.43.0', agentSource: '0.43.0' } }),
+  });
+  await settle();
+  const drawer = await openDrawerOn(doc, window, 'oslo-edge-01');
+  const labels = drawerButtons(drawer).map((b) => b.textContent);
+  // Nothing to update TO, so no push…
+  assert.ok(!labels.some((l) => /Update to v/.test(l)), labels.join(' | '));
+  // …but re-running the one-liner on a healthy host is a legitimate repair and
+  // stays reachable.
+  assert.ok(labels.some((l) => MANUAL_LABEL.test(l)), `a healthy Windows host lost its in-place route: ${labels.join(' | ')}`);
+});
+
+test('a failed push on a Windows host hands over the one-liner, not just a toast', async (t) => {
+  // The real one: "checksum mismatch — refusing to install — the bytes were
+  // altered between the server and this host". The agent's diagnosis is right
+  // and is about the path; the way through is the in-place one-liner, which
+  // fetches over a different route and verifies the same signature. A toast
+  // with no next step turns a correct diagnosis into a dead end.
+  const detail = 'checksum mismatch (manifest 8c5d834b…, got f6b1a128…) — refusing to install'
+    + ' — the server sent the right release, so the bytes were altered between it and this host;'
+    + ' check any proxy, CDN or TLS-terminating cache in the path';
+  const { doc, window, log } = boot({
+    t,
+    routes: winRoutes({
+      'POST /agents/7/update': { connected: true, acked: true, accepted: true, auditId: 31, signed: true },
+      'GET /agents/7/audit': [{ id: 31, state: 'failed', action: 'upgrade', target_version: '0.44.0', result_detail: detail }],
+      'GET /api/enroll/update-command': {
+        version: '0.44.0',
+        oneLiner: 'powershell -c "irm https://server/enroll/update.ps1 | iex"',
+        manual: { downloadUrl: 'https://server/enroll/agent-release.tgz', checksum: 'a'.repeat(64) },
+        steps: [],
+        certFingerprint: null,
+      },
+    }),
+  });
+  await settle();
+  const drawer = await openDrawerOn(doc, window, 'oslo-edge-01');
+  window.confirm = () => true; // the update asks first; this test is about what follows
+  const push = drawerButtons(drawer).find((b) => /Update to v0\.44\.0/.test(b.textContent));
+  push.dispatchEvent(new window.Event('click', { bubbles: true }));
+
+  // followAgentAction's first poll is 5 s; the audit row is already terminal.
+  await new Promise((r) => setTimeout(r, 5400));
+  assert.ok(log.some((x) => x.key === 'GET /agents/7/audit'), 'the outcome was never followed');
+  assert.ok(log.some((x) => x.key === 'GET /api/enroll/update-command'),
+    'a Windows host was left with the failure and no way forward');
+  assert.match(doc.querySelector('#modal-card').textContent, /update\.ps1/);
+});

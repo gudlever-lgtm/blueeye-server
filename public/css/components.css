@@ -346,6 +346,10 @@
    it sit on one baseline rather than the button dropping onto its own line. */
 .ui .kv-ui .dw-ver { display: inline-flex; align-items: center; gap: var(--s-2);
   flex-wrap: wrap; }
+/* A Windows host carries two: the push, and the in-place one-liner that is the
+   fix when the push does not land. Same baseline, same wrap. */
+.ui .kv-ui .dw-acts { display: inline-flex; align-items: center; gap: var(--s-2);
+  flex-wrap: wrap; }
 .ui-drawer .hist { list-style: none; margin: 0; padding: 0; font-size: var(--fs-sm); }
 .ui-drawer .hist li { display: flex; gap: var(--s-3); padding: var(--s-2) 0;
   border-bottom: 1px solid var(--hairline); }

@@ -440,3 +440,29 @@ step 1 — before, there was nothing to tell an operator that a new agent existe
   license server learns the versions, and how a vendor admin pins or holds one
   back.
 * `docs/licensing.md` — the licence check itself (signing, grace, caching).
+
+## When the push does not land
+
+A Windows host registers a Scheduled Task, which the agent reports as
+`scheduled-task` — a runtime the server CAN push to, so it gets the one-click
+update like a systemd host. That is right until the push does not land, and
+three ways it does not:
+
+| what the agent says | what happened | the way through |
+| --- | --- | --- |
+| `checksum mismatch … the bytes were altered between it and this host` | something in the path (a proxy, a CDN, a TLS-terminating cache) re-encoded the download. The server served the right release — `X-Content-SHA256` agrees with the signed manifest — and the bytes that arrived do not hash to it | the in-place one-liner: it fetches over a different route and verifies the same signature |
+| `release signature did not verify` | this host pins a different release key | re-pin it (Settings → Updates), then retry |
+| the task will not restart | a locked file, a task that will not end | the one-liner waits for the files to free up before replacing them |
+
+So **every** Windows agent carries the in-place action beside the push —
+"Update in place (installer)" in the row menu and in the drawer's version row —
+not only the ones the server cannot push to. It was offered only to agents
+reporting `unmanaged`, which stopped being any of them when `scheduled-task`
+joined the self-updatable runtimes: the fallback was still implemented, still
+served at `GET /enroll/update.ps1`, and unreachable from the screen the operator
+is standing on.
+
+A failed push on a Windows host now opens that command on its own, for the same
+reason a key refusal opens the re-pin: a correct diagnosis with no next step is
+a dead end. The one-liner carries no enrollment code, so it can only ever update
+the agent already on that machine — it never enrols a second one.

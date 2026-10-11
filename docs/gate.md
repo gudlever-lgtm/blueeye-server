@@ -24,6 +24,21 @@ lives in all three repos (`blueeye-server`, `blueeye-agent`, `blueeye-licens`):
 
 All three call the same script, so the rule is the same everywhere.
 
+### What the gate does NOT cover
+
+The gate has no database. It wires fakes, so a green gate says nothing about
+whether a statement is valid SQL, whether `schema.sql` still matches the
+migration chain, or whether a route 500s against real rows. Those are the three
+MySQL jobs — `verify-schema`, `verify-repositories`, `verify-routes` — and they
+run in a **separate** workflow, `.github/workflows/schema.yml`, against MySQL
+8.4. See [tests.md](tests.md).
+
+So **a green gate is half the answer.** The schema workflow once stayed red for
+five consecutive pushes to `main` while the gate passed every one of them: the
+self-health screen started serving the admin disk path and database name, which
+the route sweep correctly refuses, and nobody looked at the second check. Both
+workflows have to be green before a push is finished.
+
 The result is cached in `.git/blueeye-gate.stamp` keyed on `HEAD` plus a hash
 of the worktree state (status + diff), so a push right after a green run is
 instant and the git hook does not re-run what the Claude hook just ran.

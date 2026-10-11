@@ -108,6 +108,14 @@ The result is cached per `HEAD` + worktree state (`.git/blueeye-gate.stamp`), so
 push straight after a green run is instant. `scripts/gate.sh --force` re-runs;
 `BLUEEYE_SKIP_GATE=1` skips (emergency only, printed loudly).
 
+**A green gate is half the answer.** The gate has no database, so it cannot say
+whether a statement is valid SQL, whether `schema.sql` still matches the
+migration chain, or whether a route 500s or leaks against real rows. That is
+`.github/workflows/schema.yml` — `verify-schema`, `verify-repositories`,
+`verify-routes` against MySQL 8.4 — a **separate** workflow that has to be green
+too. It has been red for several pushes in a row while the gate passed every
+one. After a push, check both (see [docs/gate.md](docs/gate.md)).
+
 The gate suites sweep the whole surface rather than one feature at a time (every
 registered route, every validator, every `data-view`/`t()` key). **When you add a
 route, a validator, a nav view or an i18n key, the gate tells you what to extend**

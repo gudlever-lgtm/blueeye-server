@@ -54,6 +54,40 @@ function cachedTheme() {
   // Default to the dark enterprise palette; a user's saved/cached choice wins.
   try { return localStorage.getItem(THEME_KEY) || 'dark'; } catch { return 'dark'; }
 }
+
+// ---- Information density ---------------------------------------------------
+// `standard` leads with clarity; `compact` fits more rows on a screen for
+// somebody who reads this product all day. It changes row height and padding
+// and NOTHING else — both densities show the same controls and the same
+// columns, because a mode that hides capability is a mode nobody can be told to
+// switch on.
+//
+// One attribute on <html>, read by a block in components.css. No screen opts
+// in, which also means a screen written tomorrow is compact too.
+const DENSITIES = ['standard', 'compact'];
+const DENSITY_KEY = 'blueeye.server.density';
+function applyDensity(density) {
+  const d = DENSITIES.includes(density) ? density : 'standard';
+  // The attribute is only SET for compact: an absent attribute is the default,
+  // and a selector for the default is a selector that can disagree with itself.
+  if (d === 'compact') document.documentElement.dataset.density = 'compact';
+  else delete document.documentElement.dataset.density;
+}
+function cachedDensity() {
+  try { return localStorage.getItem(DENSITY_KEY) || 'standard'; } catch { return 'standard'; }
+}
+let densityUserChoice = false;
+function setDensity(density, { persist = true } = {}) {
+  const d = DENSITIES.includes(density) ? density : 'standard';
+  if (persist) densityUserChoice = true;
+  applyDensity(d);
+  try { localStorage.setItem(DENSITY_KEY, d); } catch { /* storage off */ }
+  if (persist && token) return api('/me/preferences', { method: 'PUT', body: { density: d } });
+  return Promise.resolve();
+}
+function currentDensity() {
+  return document.documentElement.dataset.density === 'compact' ? 'compact' : 'standard';
+}
 // Set once the user explicitly picks a theme (topbar toggle or Settings →
 // Appearance). It makes that choice win over loadProfile()'s one-time server
 // reconcile, which would otherwise override a fresh toggle with the previously
@@ -74,6 +108,9 @@ function setTheme(theme, { persist = true } = {}) {
 }
 function initTheme() {
   applyTheme(cachedTheme());
+  // Applied from the local cache for the same reason as the theme: a reconcile
+  // with the server a moment later must not be visible as a reflow.
+  applyDensity(cachedDensity());
   const btn = document.querySelector('#theme');
   if (btn) {
     // Light/dark toggle: flip to the same palette's opposite-brightness variant,
@@ -673,6 +710,18 @@ async function loadProfile() {
       // inheriting a theme another account cached in this browser's localStorage.
       applyTheme('dark');
       try { localStorage.removeItem(THEME_KEY); } catch { /* storage off */ }
+    }
+    // Density, the same way and for the same reason: it belongs to the account,
+    // and another account's cached choice must not be inherited in this browser.
+    if (!densityUserChoice) {
+      const density = me && me.preferences && me.preferences.density;
+      if (density && DENSITIES.includes(density)) {
+        applyDensity(density);
+        try { localStorage.setItem(DENSITY_KEY, density); } catch { /* storage off */ }
+      } else {
+        applyDensity('standard');
+        try { localStorage.removeItem(DENSITY_KEY); } catch { /* storage off */ }
+      }
     }
   } catch { /* keep the cached theme */ }
 }
@@ -4791,6 +4840,24 @@ function getEventPage() {
     // Drafts the NIS2 incident of this case (pre-filled + linked server-side,
     // POST /api/nis2/incidents/from-event-case/:id) and opens it in the NIS2
     // register. A case that already has one opens that one instead.
+    // The pre-close checklist's one action: write what was actually run into
+    // the WORK LOG, as an `action` entry. The log is what the next shift reads
+    // and what outlives the case being closed — a verification recorded
+    // anywhere else is a verification nobody finds.
+    //
+    // Prompt-prefilled rather than free-form: the operator edits a sentence
+    // that already names the metrics, which is the difference between a record
+    // that gets written and one that does not. An empty answer writes nothing
+    // (an empty verification note is worse than none).
+    recordVerification: async (id, prefill) => {
+      const text = window.prompt(t('ev.verify.prompt'), prefill || '');
+      if (!text || !text.trim()) return;
+      try {
+        await api(`/api/events/${id}/notes`, { method: 'POST', body: { kind: 'action', text: text.trim() } });
+        toast(t('ev.verify.recorded'));
+        render();
+      } catch (err) { toast(errText(err), true); }
+    },
     draftNis2: async (id) => {
       try {
         const r = await api(`/api/nis2/incidents/from-event-case/${id}`, { method: 'POST', body: {} });
@@ -14917,6 +14984,30 @@ function settingsAppearanceView() {
   }
   paint();
   root.append(grid);
+
+  // Information density. A personal setting like the theme, and stated the same
+  // way: what changes is how much fits on the screen, NOT what is on it. Saying
+  // that out loud matters — a reader who thinks compact hides things will not
+  // use it, and a reader who is told it hides things cannot be helped over the
+  // phone ("it's under the thing that isn't there in your view").
+  const densityRow = el('div', { class: 'lang-picker' });
+  const densitySelect = el('select', {
+    id: 'density-select',
+    onchange: async (e) => {
+      try { await setDensity(e.target.value); }
+      catch (err) { toast(errText(err) || 'Could not save density', true); }
+      render();
+    },
+  }, ...DENSITIES.map((d) => el('option', {
+    value: d,
+    ...(d === currentDensity() ? { selected: 'selected' } : {}),
+  }, t(d === 'compact' ? 'settings.density.compact' : 'settings.density.standard'))));
+  densityRow.append(
+    el('h3', {}, t('settings.density')),
+    el('label', { for: 'density-select', class: 'sr-only' }, t('settings.density')),
+    densitySelect,
+    el('p', { class: 'muted small' }, t('settings.densityHelp')));
+  root.append(densityRow);
 
   // Language picker. The catalogue in public/i18n.js only covers the newer
   // screens, so the help text says so rather than promising a fully localised

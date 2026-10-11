@@ -1057,3 +1057,30 @@
   font-size: var(--fs-xs);
 }
 .attack-chain-tactic { font-weight: 600; }
+
+/* ---- Information density -------------------------------------------------
+   `data-density="compact"` on <html>, from the signed-in user's preference.
+
+   It changes ROW HEIGHT and PADDING and nothing else. Both densities show
+   exactly the same things: a mode that hides a control or a column is a mode
+   nobody can be told to switch on, because the instruction "it's under the
+   thing that isn't there in your view" is not an instruction. BlueEyes is a
+   professional tool and minimalism must not cost an operator a number they
+   came for.
+
+   Keyed on the root attribute rather than a class per component, so a screen
+   does not have to opt in — and so a screen built tomorrow is compact too. The
+   per-table `.dense` class above stays: a single table that is dense whatever
+   the preference (a drawer's inner list, say) is a layout decision, not a
+   density one. */
+:root[data-density="compact"] .ui table.dt tbody tr { height: var(--row-h-compact); }
+:root[data-density="compact"] .ui table.dt thead th { height: var(--row-h-compact); }
+:root[data-density="compact"] .ui .skel-row { height: var(--row-h-compact); }
+:root[data-density="compact"] .ui .panel-head { padding: var(--s-3) var(--s-4); }
+:root[data-density="compact"] .ui .panel-body { padding: var(--s-3) var(--s-4); }
+:root[data-density="compact"] .ui .page-head { padding-bottom: var(--s-3); }
+:root[data-density="compact"] .ui .panel-grid { gap: var(--s-3); }
+:root[data-density="compact"] .ui .stat-card { padding: var(--s-3); }
+/* The page's own rhythm: the gap between panels is most of what a dense screen
+   buys back, and it is one variable here rather than a margin per screen. */
+:root[data-density="compact"] .ui.ui-page { gap: var(--s-3); }

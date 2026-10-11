@@ -247,6 +247,23 @@ can never disagree and a language switch relabels both.
 
 **Content** — padding `--s-6`, `max-width: --content-max`.
 
+### Information density
+
+`data-density="compact"` on `<html>`, from the signed-in user's preference
+(`density: 'standard' | 'compact'`, saved with the theme in Appearance).
+
+It changes **row height and padding and nothing else.** Both densities show the
+same controls and the same columns, because a mode that hides capability cannot
+be supported over the phone — "it's under the thing that isn't there in your
+view" is not an instruction. A test in `uiRouting` renders the same screen in
+both and asserts the control and header counts match.
+
+Keyed on the root attribute in `components.css`, not a class per component, so
+no screen opts in and a screen written tomorrow is compact too. Standard is the
+**absence** of the attribute: a selector for the default is a selector that can
+disagree with itself. The per-table `.dense` class stays for a table that is
+dense whatever the preference — that is a layout decision, not a density one.
+
 ---
 
 ## Page templates

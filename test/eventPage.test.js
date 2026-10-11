@@ -515,3 +515,58 @@ test('a viewer gets the checklist but no transitions', async (t) => {
   assert.ok(panelTitles(doc).includes('Before you close this'));
   assert.ok(!headBtns(doc).some((b) => /Verification failed|Mark closed/.test(b.textContent)));
 });
+
+test('the checklist writes the verification into the work log', async (t) => {
+  const { doc, window, log } = boot({
+    t,
+    routes: SESSION({
+      'GET /api/events/11': RESOLVED(),
+      'POST /api/events/11/notes': { id: 5, kind: 'action', text: 'x' },
+    }),
+  });
+  await settle();
+  const panel = [...doc.querySelectorAll('#view .panel-ui')]
+    .find((p) => /Before you close this/.test((p.querySelector('h2') || {}).textContent || ''));
+  const btn = [...panel.querySelectorAll('button')].find((b) => /Record the verification/.test(b.textContent));
+  assert.ok(btn, 'no way to record what was actually run');
+
+  // Prefilled with the metrics this case was built on: the operator edits a
+  // sentence rather than composing one, which is the difference between a
+  // record that gets written and one that does not.
+  let offered = null;
+  window.prompt = (_q, prefill) => { offered = prefill; return 'Verified after the fix: re-ran packet_loss — 0.1%, back to baseline'; };
+  btn.dispatchEvent(new window.Event('click', { bubbles: true }));
+  await settle();
+  assert.match(offered, /packet_loss/);
+  assert.match(offered, /rtt_ms/);
+
+  const post = log.find((x) => x.key === 'POST /api/events/11/notes');
+  assert.ok(post, 'nothing was written');
+  const body = JSON.parse(post.body);
+  // An `action` entry: something the operator DID, which is what a verification
+  // is — not an observation and not an exclusion.
+  assert.equal(body.kind, 'action');
+  assert.match(body.text, /back to baseline/);
+});
+
+test('an empty verification writes nothing', async (t) => {
+  const { doc, window, log } = boot({ t, routes: SESSION({ 'GET /api/events/11': RESOLVED() }) });
+  await settle();
+  window.prompt = () => '   ';
+  const panel = [...doc.querySelectorAll('#view .panel-ui')]
+    .find((p) => /Before you close this/.test((p.querySelector('h2') || {}).textContent || ''));
+  [...panel.querySelectorAll('button')].find((b) => /Record the verification/.test(b.textContent))
+    .dispatchEvent(new window.Event('click', { bubbles: true }));
+  await settle();
+  assert.equal(log.filter((x) => x.key === 'POST /api/events/11/notes').length, 0,
+    'an empty verification note is worse than none');
+});
+
+test('a viewer is not offered the record action', async (t) => {
+  const { doc } = boot({ t, routes: SESSION({ 'GET /api/events/11': RESOLVED() }), role: 'viewer' });
+  await settle();
+  const panel = [...doc.querySelectorAll('#view .panel-ui')]
+    .find((p) => /Before you close this/.test((p.querySelector('h2') || {}).textContent || ''));
+  assert.ok(panel, 'a viewer still sees what should be checked');
+  assert.equal([...panel.querySelectorAll('button')].filter((b) => /Record the verification/.test(b.textContent)).length, 0);
+});

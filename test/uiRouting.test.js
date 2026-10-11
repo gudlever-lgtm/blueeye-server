@@ -155,7 +155,7 @@ function bootAt(url, { role = 'admin', routes = {}, t } = {}) {
 }
 const settle = () => new Promise((r) => setTimeout(r, 90));
 
-const SESSION = (role) => ({
+const SESSION = (role, over = {}) => Object.assign({
   'GET /me': { id: 1, email: 'x@y.dk', role, preferences: {} },
   'GET /auth/sso': { methods: [] },
   'GET /license': { plan: 'professional', features: {} },
@@ -177,7 +177,7 @@ const SESSION = (role) => ({
       { id: 'rdns', type: 'dns', port: null, available: false, appliesTo: 'any', applies: false },
     ],
   },
-});
+}, over);
 
 test('boot: the first paint comes from the address, not from a default', async (t) => {
   for (const [url, view, navLabel] of [
@@ -355,4 +355,50 @@ test('boot: leaving a screen takes its body-level overlays with it', async (t) =
   await settle();
   assert.equal(doc.querySelector('.ui-drawer'), null, 'the Drawer followed us to Fleet');
   assert.equal(doc.querySelector('.ui-scrim'), null, 'the scrim followed us to Fleet');
+});
+
+// ---- information density ---------------------------------------------------
+//
+// Compact changes row height and padding and NOTHING else. The rule that makes
+// it safe to offer: both densities show the same controls and the same columns,
+// because a mode that hides capability cannot be supported over the phone.
+
+test('the density preference is applied from the account, and only as an attribute', async (t) => {
+  const { doc, window } = bootAt('http://server.test/fleet', {
+    t,
+    routes: SESSION('admin', { 'GET /me': { id: 1, email: 'x@y.dk', role: 'admin', preferences: { density: 'compact' } } }),
+  });
+  await settle();
+  assert.equal(doc.documentElement.dataset.density, 'compact');
+
+  // Standard is the ABSENCE of the attribute: a selector for the default is a
+  // selector that can disagree with itself.
+  window.localStorage.setItem('blueeye.server.density', 'compact');
+  const back = bootAt('http://server.test/fleet', {
+    t,
+    routes: SESSION('admin', { 'GET /me': { id: 1, email: 'x@y.dk', role: 'admin', preferences: {} } }),
+  });
+  await settle();
+  assert.equal(back.doc.documentElement.dataset.density, undefined,
+    'an account with no saved density must not inherit the one cached in this browser');
+  back.window.close();
+});
+
+test('compact hides no control: the same screen renders the same buttons', async (t) => {
+  const counts = {};
+  for (const density of ['standard', 'compact']) {
+    const { doc, window } = bootAt('http://server.test/fleet', {
+      t,
+      routes: SESSION('admin', { 'GET /me': { id: 1, email: 'x@y.dk', role: 'admin', preferences: { density } } }),
+    });
+    await settle();
+    counts[density] = {
+      buttons: doc.querySelectorAll('#view button').length,
+      headers: doc.querySelectorAll('#view table.dt thead th').length,
+      rails: doc.querySelectorAll('.tabs button[data-view]').length,
+    };
+    window.close();
+  }
+  assert.deepEqual(counts.compact, counts.standard,
+    'compact changed WHAT is on the screen, not just how much fits');
 });

@@ -183,8 +183,28 @@
           if (inc.clusterId != null) checks.push(t('ev.verify.check.situation', { id: inc.clusterId }));
           checks.push(t('ev.verify.check.log'));
 
+          // One action on the panel, and it writes to the WORK LOG rather than
+          // to a field of its own. The log is what the next shift reads and
+          // what survives the case being closed; a verification recorded
+          // anywhere else is a verification nobody finds. It is prefilled with
+          // what this case was built on, so the operator edits a sentence
+          // instead of composing one — which is the difference between a
+          // record that gets written and one that does not.
+          var actions = [];
+          if (deps.canWrite() && typeof deps.recordVerification === 'function') {
+            actions.push(ui.button('secondary', t('ev.verify.record'), {
+              size: 'xs',
+              onclick: function () {
+                deps.recordVerification(id, metrics.length
+                  ? t('ev.verify.template', { metrics: metrics.join(', ') })
+                  : t('ev.verify.templateBare'));
+              },
+            }));
+          }
+
           verifyPanel = ui.panel({
             title: t('ev.verify.title'),
+            actions: actions,
             children: [
               ui.inlineNote(t('ev.verify.lead'), 'warn'),
               el('div', { class: 'panel-body' },

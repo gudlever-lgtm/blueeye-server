@@ -28,6 +28,13 @@ const THEMES = [
 // adding a locale here is safe even before its catalogue is complete.
 const LOCALES = ['en', 'da'];
 
+// Information density. `standard` leads with clarity; `compact` fits more rows
+// and more technical detail on a screen for somebody who reads this product all
+// day. Both show exactly the SAME things — it is row height and padding, never
+// a feature that is present in one and absent in the other, because a mode that
+// hides capability is a mode nobody can be told to switch on.
+const DENSITIES = ['standard', 'compact'];
+
 // Validates a preferences patch. Unknown keys are ignored (forward-compatible),
 // but at least one recognised, valid key must be present. Returns
 // { value } on success or { errors } on failure (mirrors the other validators).
@@ -56,6 +63,14 @@ function validatePreferences(body) {
     }
   }
 
+  if (input.density !== undefined) {
+    if (typeof input.density !== 'string' || !DENSITIES.includes(input.density)) {
+      errors.density = `density must be one of: ${DENSITIES.join(', ')}`;
+    } else {
+      value.density = input.density;
+    }
+  }
+
   if (Object.keys(errors).length > 0) return { errors };
   if (Object.keys(value).length === 0) {
     return { errors: { preferences: 'no recognised preference keys to update' } };
@@ -63,4 +78,4 @@ function validatePreferences(body) {
   return { value };
 }
 
-module.exports = { validatePreferences, THEMES, LOCALES };
+module.exports = { validatePreferences, THEMES, LOCALES, DENSITIES };

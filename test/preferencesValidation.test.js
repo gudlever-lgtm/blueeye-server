@@ -26,9 +26,25 @@ test('rejects a non-string theme', () => {
 });
 
 test('ignores unknown keys but still validates known ones', () => {
-  const { value, errors } = validatePreferences({ theme: 'dark', density: 'cozy' });
+  // `density` used to be the unknown key in this test. It is a real preference
+  // now, so the example is one that is genuinely not a preference — otherwise
+  // this test stops testing what it says the moment a key is added.
+  const { value, errors } = validatePreferences({ theme: 'dark', sidebarWidth: 420 });
   assert.equal(errors, undefined);
   assert.deepEqual(value, { theme: 'dark' }); // unknown key dropped
+});
+
+test('density is a known preference, and an invented one is refused', () => {
+  assert.deepEqual(validatePreferences({ density: 'compact' }).value, { density: 'compact' });
+  assert.deepEqual(validatePreferences({ density: 'standard' }).value, { density: 'standard' });
+  // Refused rather than ignored: a patch that silently drops the one key it
+  // carried reports success and changes nothing, which is the worst answer.
+  assert.match(validatePreferences({ density: 'cozy' }).errors.density, /must be one of/);
+  assert.ok(validatePreferences({ density: 7 }).errors.density);
+
+  // It travels with the theme, since Appearance saves them from one screen.
+  const both = validatePreferences({ theme: 'nord', density: 'compact' });
+  assert.deepEqual(both.value, { theme: 'nord', density: 'compact' });
 });
 
 test('rejects an empty patch (nothing recognised to update)', () => {

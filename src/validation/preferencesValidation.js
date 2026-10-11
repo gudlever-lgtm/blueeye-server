@@ -35,6 +35,13 @@ const LOCALES = ['en', 'da'];
 // hides capability is a mode nobody can be told to switch on.
 const DENSITIES = ['standard', 'compact'];
 
+// Work focus. A presentation layer on top of RBAC, never an alternative
+// permission model: it de-emphasises the nav entries another role owns so the
+// screens you live in come first, and it removes nothing. What you may open is
+// decided by your role and the licence, exactly as before — a focus cannot
+// grant a screen you are not allowed, and `all` (the default) claims nothing.
+const FOCUSES = ['all', 'noc', 'engineer', 'manager'];
+
 // Validates a preferences patch. Unknown keys are ignored (forward-compatible),
 // but at least one recognised, valid key must be present. Returns
 // { value } on success or { errors } on failure (mirrors the other validators).
@@ -71,6 +78,14 @@ function validatePreferences(body) {
     }
   }
 
+  if (input.focus !== undefined) {
+    if (typeof input.focus !== 'string' || !FOCUSES.includes(input.focus)) {
+      errors.focus = `focus must be one of: ${FOCUSES.join(', ')}`;
+    } else {
+      value.focus = input.focus;
+    }
+  }
+
   if (Object.keys(errors).length > 0) return { errors };
   if (Object.keys(value).length === 0) {
     return { errors: { preferences: 'no recognised preference keys to update' } };
@@ -78,4 +93,4 @@ function validatePreferences(body) {
   return { value };
 }
 
-module.exports = { validatePreferences, THEMES, LOCALES, DENSITIES };
+module.exports = { validatePreferences, THEMES, LOCALES, DENSITIES, FOCUSES };

@@ -218,3 +218,34 @@ test('the page shows the switch\'s sysName and opens the device log narrowed to 
   assert.match(text, /Interface Fa0\/7, changed state to down/);
   assert.doesNotMatch(text, /unknown sender/, 'a switch-resolved sender is not "unknown"');
 });
+
+// DEL 5.2: the switch page hands the fault on. The polling agent and the
+// switch's own address travel with it, so neither is retyped on the next
+// screen. Device log is excluded — it already has a button in the header.
+test('the switch page offers the context hand-off, carrying the polling agent and the host', async (t) => {
+  const page = { ...DEVICE, device: { ...DEVICE.device, agentId: 3 } };
+  const { doc, errors } = boot({ t, routes: SESSION({ 'GET /api/snmp-devices/1': page }) });
+  await settle();
+  assert.deepEqual(errors, []);
+  const row = doc.querySelector('#view .ctx-actions');
+  assert.ok(row, 'the hand-off row rendered');
+  const labels = [...row.querySelectorAll('button')].map((b) => b.textContent.trim());
+  assert.ok(labels.includes('Run a probe'), `probe missing: ${labels.join('|')}`);
+  assert.ok(labels.some((l) => /Diagnose/i.test(l)), `diagnose missing: ${labels.join('|')}`);
+  assert.ok(!labels.some((l) => /Device log/i.test(l)), 'device log is in the header, not the hand-off row');
+
+  row.querySelector('button').click();
+  await settle();
+  assert.match(doc.location.search || doc.defaultView.location.search, /agent=3/);
+  assert.match(doc.defaultView.location.search, /target=10\.14\.0\.11/);
+});
+
+test('a switch nobody polls still offers the hand-offs that need only an address', async (t) => {
+  const { doc, errors } = boot({ t, routes: SESSION() });
+  await settle();
+  assert.deepEqual(errors, []);
+  const row = doc.querySelector('#view .ctx-actions');
+  assert.ok(row, 'the hand-off row rendered on a target alone');
+  const labels = [...row.querySelectorAll('button')].map((b) => b.textContent.trim());
+  assert.ok(!labels.includes('Run a probe'), 'a probe needs an agent to run it');
+});

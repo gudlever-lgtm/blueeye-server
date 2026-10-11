@@ -116,3 +116,32 @@ test('PUT /me/preferences returns 500 when the repository throws', async () => {
 
   assert.equal(res.status, 500);
 });
+
+// Work focus — a personal presentation setting, saved like the theme. Any role
+// may set any focus: it decides what reads loudest, never what may be opened.
+test('PUT /me/preferences saves a work focus (any role) and echoes it back', async () => {
+  let captured;
+  const usersRepo = makeUsersRepo({
+    updatePreferences: async (id, patch) => { captured = { id, patch }; return { ...patch }; },
+  });
+
+  const res = await request(makeApp({ usersRepo }))
+    .put('/me/preferences')
+    .set('Authorization', authHeader('viewer'))
+    .send({ focus: 'noc' });
+
+  assert.equal(res.status, 200);
+  assert.deepEqual(res.body.preferences, { focus: 'noc' });
+  assert.deepEqual(captured.patch, { focus: 'noc' });
+});
+
+test('PUT /me/preferences rejects an unknown work focus (400)', async () => {
+  const res = await request(makeApp())
+    .put('/me/preferences')
+    .set('Authorization', authHeader('admin'))
+    .send({ focus: 'admin' });
+
+  assert.equal(res.status, 400);
+  assert.equal(res.body.error, 'Validation failed');
+  assert.ok(res.body.details.focus);
+});

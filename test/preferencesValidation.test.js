@@ -3,7 +3,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 
-const { validatePreferences, THEMES, LOCALES } = require('../src/validation/preferencesValidation');
+const { validatePreferences, THEMES, LOCALES, FOCUSES } = require('../src/validation/preferencesValidation');
 const I18n = require('../public/i18n');
 
 test('accepts every theme in the catalogue', () => {
@@ -98,4 +98,25 @@ test('every colour palette has both a light and a dark variant', () => {
   ]) {
     assert.ok(THEMES.includes(k), `expected theme ${k}`);
   }
+});
+
+test('accepts every work focus, and nothing else', () => {
+  for (const focus of FOCUSES) {
+    const { value, errors } = validatePreferences({ focus });
+    assert.equal(errors, undefined, `focus ${focus} should be valid`);
+    assert.deepEqual(value, { focus });
+  }
+  assert.ok(validatePreferences({ focus: 'admin' }).errors.focus);
+  assert.ok(validatePreferences({ focus: 42 }).errors.focus);
+  assert.ok(validatePreferences({ focus: null }).errors.focus);
+});
+
+test('the server focus whitelist matches the dashboard', () => {
+  // Drift here would let somebody save a focus the dashboard cannot apply, or
+  // leave a focus in the picker that the server rejects on every change.
+  const app = require('fs').readFileSync(require('path').join(__dirname, '..', 'public', 'app.js'), 'utf8');
+  const m = app.match(/const FOCUSES = \[([^\]]+)\]/);
+  assert.ok(m, 'public/app.js must declare FOCUSES');
+  const ui = m[1].split(',').map((x) => x.trim().replace(/^'|'$/g, '')).filter(Boolean);
+  assert.deepEqual([...ui].sort(), [...FOCUSES].sort());
 });

@@ -138,6 +138,14 @@
           }) : null],
         }));
 
+        // The switch, opened on the screens that chase a fault further: the
+        // polling agent and the switch's own address carry over, so neither is
+        // retyped. Device log is already in the header above.
+        var ctx = deps.contextActions
+          ? deps.contextActions({ agentId: device.agentId, target: device.host }, { exclude: ['deviceLog'] })
+          : null;
+        if (ctx) body.append(ctx);
+
         // What the device ANSWERED, not what it was asked. A switch that cannot
         // serve the forwarding table shows "not supported" rather than an empty
         // column — the same rule the connection test follows.

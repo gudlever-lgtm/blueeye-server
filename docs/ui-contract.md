@@ -264,6 +264,29 @@ no screen opts in and a screen written tomorrow is compact too. Standard is the
 disagree with itself. The per-table `.dense` class stays for a table that is
 dense whatever the preference — that is a layout decision, not a density one.
 
+### Work focus
+
+`focus: 'all' | 'noc' | 'engineer' | 'manager'`, saved beside the theme and the
+density in Appearance. Three people use this dashboard for three jobs — the NOC
+operator works a queue of events, the network engineer reads topology, traffic
+and protocol detail, the operations manager reads service impact and trends —
+and the focus decides which nav entries read loudest for each.
+
+It is a **presentation layer on top of RBAC, never a second permission model.**
+`FOCUS_VIEWS` in `public/app.js` lists the views each job owns;
+`applyFocusVisibility()` puts `off-focus` on the nav entries claimed by a job
+that is not yours. The rule in `styles.css` is **opacity only** — no `display`,
+no size, no margin — so the entry stays in the rail, stays clickable and the
+rail does not shift under somebody who changes focus mid-call. Role and licence
+visibility (`role-hidden`, `hidden`) are untouched and still decide what may be
+opened: a viewer with the NOC focus still cannot open the operator-only screens
+that focus claims.
+
+A view no focus claims is never dimmed. That keeps a nav entry added tomorrow
+reading normally in every focus instead of quietly fading out of the one it
+belongs to — and it means no gate allowlist to extend. `test/workFocus.test.js`
+pins all of it, including that every view a focus claims is a real nav entry.
+
 ---
 
 ## Page templates

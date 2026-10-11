@@ -252,6 +252,14 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 /* When collapsed, hide the group's nav items (keep the label visible). */
 .nav-group.collapsed button[data-view] { display: none; }
 .tabs button.role-hidden { display: none; }
+/* Work focus: the nav entries another job owns read quieter, but stay in place
+   and stay clickable. Opacity only — nothing is hidden, nothing moves, so the
+   rail never shifts under somebody who changes focus mid-call. Hover and the
+   active page restore full weight. */
+.tabs button.off-focus { opacity: 0.55; }
+.tabs button.off-focus:hover,
+.tabs button.off-focus:focus-visible,
+.tabs button.off-focus.active { opacity: 1; }
 /* A section with no sub-items is one entry, not a folder with a single leaf:
    Service Assurance draws its own tab strip on the page, so the rail names the
    module once. It sits flush with the grouped items around it. */

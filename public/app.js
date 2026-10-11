@@ -88,6 +88,75 @@ function setDensity(density, { persist = true } = {}) {
 function currentDensity() {
   return document.documentElement.dataset.density === 'compact' ? 'compact' : 'standard';
 }
+// ---- Work focus -----------------------------------------------------------
+// Three people use this dashboard for three different jobs. The NOC operator
+// works a queue of events; the network engineer reads topology, traffic and
+// protocol detail; the operations manager reads service impact and trends.
+//
+// Focus is a PRESENTATION layer on top of RBAC, never a second permission
+// model. It de-emphasises the nav entries another job owns — dimmed, still
+// there, still clickable — so the screens you live in come first. It removes
+// nothing, so nobody is ever told "it's under the thing that isn't there in
+// your view". What you may open is still decided by your role and the licence.
+//
+// A view no set claims (and every view in `all`) is neutral: it is never
+// dimmed. That is deliberate — a nav entry added tomorrow reads normally in
+// every focus instead of quietly fading out of the one it belongs to.
+const FOCUSES = ['all', 'noc', 'engineer', 'manager'];
+const FOCUS_VIEWS = {
+  noc: ['home', 'serviceAssurance', 'events', 'clusters', 'troubleshooting',
+    'investigation', 'diagnose', 'probes', 'deviceLog', 'fleet'],
+  engineer: ['topology', 'delta', 'overview', 'flows', 'pathLocation', 'geo',
+    'findings', 'probes', 'transactions', 'diagnose', 'nicInventory', 'coverage',
+    'troubleshooting'],
+  manager: ['home', 'serviceAssurance', 'reporting', 'findings', 'clusters',
+    'map', 'coverage'],
+};
+// Every view any focus claims. A view outside this set belongs to no job in
+// particular, so no focus dims it.
+const FOCUS_CLAIMED = new Set(Object.values(FOCUS_VIEWS).flat());
+const FOCUS_KEY = 'blueeye.server.focus';
+let focus = 'all';
+let focusUserChoice = false;
+function currentFocus() { return focus; }
+function applyFocusVisibility() {
+  if (typeof document === 'undefined') return;
+  const mine = FOCUS_VIEWS[focus] || null;
+  for (const b of document.querySelectorAll('.tabs button[data-view]')) {
+    const v = b.dataset.view;
+    b.classList.toggle('off-focus', !!mine && FOCUS_CLAIMED.has(v) && !mine.includes(v));
+  }
+}
+function applyFocus(next) {
+  focus = FOCUSES.includes(next) ? next : 'all';
+  applyFocusVisibility();
+}
+function setFocus(next, { persist = true } = {}) {
+  const f = FOCUSES.includes(next) ? next : 'all';
+  if (persist) focusUserChoice = true;
+  applyFocus(f);
+  try { localStorage.setItem(FOCUS_KEY, f); } catch { /* storage off */ }
+  if (persist && token) return api('/me/preferences', { method: 'PUT', body: { focus: f } });
+  return Promise.resolve();
+}
+// The labels, with literal keys — the gate sweeps `t()` call sites and a
+// built-up key is a key it cannot see.
+function focusLabels() {
+  return {
+    all: t('settings.focus.all'),
+    noc: t('settings.focus.noc'),
+    engineer: t('settings.focus.engineer'),
+    manager: t('settings.focus.manager'),
+  };
+}
+// Re-applied on every render, after role and licence visibility have had their
+// say — the classes are independent, and re-reading the cache is idempotent.
+function applyCachedFocus() {
+  let cached = 'all';
+  try { cached = localStorage.getItem(FOCUS_KEY) || 'all'; } catch { /* storage off */ }
+  applyFocus(cached);
+}
+
 // Set once the user explicitly picks a theme (topbar toggle or Settings →
 // Appearance). It makes that choice win over loadProfile()'s one-time server
 // reconcile, which would otherwise override a fresh toggle with the previously
@@ -723,6 +792,18 @@ async function loadProfile() {
         try { localStorage.removeItem(DENSITY_KEY); } catch { /* storage off */ }
       }
     }
+    // Work focus, same precedence and the same per-account rule: another
+    // account's cached focus must not follow this one into the same browser.
+    if (!focusUserChoice) {
+      const saved = me && me.preferences && me.preferences.focus;
+      if (saved && FOCUSES.includes(saved)) {
+        applyFocus(saved);
+        try { localStorage.setItem(FOCUS_KEY, saved); } catch { /* storage off */ }
+      } else {
+        applyFocus('all');
+        try { localStorage.removeItem(FOCUS_KEY); } catch { /* storage off */ }
+      }
+    }
   } catch { /* keep the cached theme */ }
 }
 
@@ -751,6 +832,10 @@ function logout() {
   themeUserChoice = false;
   localStorage.removeItem(THEME_KEY);
   applyTheme('dark');
+  // The focus belongs to the account too — the next sign-in loads its own.
+  focusUserChoice = false;
+  localStorage.removeItem(FOCUS_KEY);
+  applyFocus('all');
   render();
 }
 
@@ -10057,6 +10142,7 @@ function getSnmpDeviceView() {
     fetchSeries: (id, interfaceId, minutes) =>
       api(`/api/snmp-devices/${id}/interfaces/${interfaceId}/series?minutes=${minutes}`),
     openDeviceLog: (id) => openDeviceLogForSwitch(id),
+    contextActions,
     copyable,
   });
   return snmpDeviceView;
@@ -15016,6 +15102,28 @@ function settingsAppearanceView() {
     densitySelect,
     el('p', { class: 'muted small' }, t('settings.densityHelp')));
   root.append(densityRow);
+
+  // Work focus. Stated the same way as density and for the same reason: it
+  // changes what comes FIRST, not what is there. Everything stays clickable,
+  // so a colleague on the phone can still say "open Flows" to anybody.
+  const focusRow = el('div', { class: 'lang-picker' });
+  const focusSelect = el('select', {
+    id: 'focus-select',
+    onchange: async (e) => {
+      try { await setFocus(e.target.value); }
+      catch (err) { toast(errText(err) || t('settings.focusError'), true); }
+      render();
+    },
+  }, ...FOCUSES.map((f) => el('option', {
+    value: f,
+    ...(f === currentFocus() ? { selected: 'selected' } : {}),
+  }, focusLabels()[f])));
+  focusRow.append(
+    el('h3', {}, t('settings.focus')),
+    el('label', { for: 'focus-select', class: 'sr-only' }, t('settings.focus')),
+    focusSelect,
+    el('p', { class: 'muted small' }, t('settings.focusHelp')));
+  root.append(focusRow);
 
   // Language picker. The catalogue in public/i18n.js only covers the newer
   // screens, so the help text says so rather than promising a fully localised
@@ -21881,6 +21989,7 @@ async function render({ silent = false } = {}) {
   applyFeatureVisibility(); // dim modules the licence excludes (tied to the active plan)
   warnIfLicenceUnreadable(); // ...and say so once if we could not read it at all
   applyRoleVisibility(); // hide nav items above the user's role + collapse empty groups
+  applyCachedFocus(); // de-emphasise the nav entries another job owns (presentation only)
   // Show who is logged in: email + role.
   $('#whoami').replaceChildren(
     el('span', { class: 'who-email' }, email || '—'),

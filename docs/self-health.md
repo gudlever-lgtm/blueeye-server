@@ -45,7 +45,7 @@ measures nothing new.
 | `ingest` | newest sample < 15 min old | newest sample older | nothing ever stored |
 | `commandQueue` | nothing waiting, or waiting by design | — | queue not wired |
 | `assuranceWorkers` | a heartbeat in the last 2 min | none | **Service Assurance not enabled** |
-| `backgroundJobs` | all started | one failed to start | none has run yet |
+| `backgroundJobs` | started, no failed run reported | one failed to **start**, or a **tick** failed | nothing started yet |
 | `storage` | disk below 85% | 85%+ / 95%+ | **disk usage unreadable** |
 
 Two of those deserve their reasoning spelled out:
@@ -64,13 +64,35 @@ Every probe runs, in parallel, every time, and a probe that throws becomes
 is down — which is the one thing a health endpoint must never do. A screen that
 breaks when something is unhealthy is worse than no screen.
 
+## How a failed tick is seen at all
+
+A singleton job runs on a timer inside its own closure, so nothing outside it
+sees a tick. Tracking that looked like it needed a change to every job — and it
+did not: every job already takes a `logger` and already reports a failed tick
+through it, with the same `runOnce().catch((err) => logger.error(…))` shape.
+
+`src/system/jobTracker.js` hands each job a logger of its own that forwards
+everything to the real one and remembers what went past. Twelve jobs, no change
+to any of them.
+
+A `warn` is forwarded but **not** counted: these jobs warn about a row they
+skipped, which is the job working, and counting it would make the screen cry
+wolf until nobody reads it.
+
+A job that failed to **start** outranks one whose **tick** failed. They need
+different answers — a job that never started is not running at all, whatever its
+ticks would have said.
+
 ## What it does not yet know
 
-`backgroundJobs` reports what each job's **start** did, not what its last tick
-did: nothing in those jobs records a tick outcome, so the signal says "N started,
-none failed to start" and claims no more. Per-tick tracking is a change to every
-job and belongs in its own commit rather than half-done here.
+**Success is silent.** A job ticking along quietly is not distinguishable from
+one whose timer died, because neither says anything. So the ok case reads
+"started, none has reported a failed run" and explicitly not "running" — the
+limit of what is known is on the screen, not only in the code. Making success
+visible means each job reporting a tick, which is the change to every job that
+the logger hook avoids. It is worth doing; it is not worth pretending to have
+done.
 
-There is also no history: the endpoint answers for *now*. "This has been
-unknown for six hours" is a more useful sentence than "this is unknown", and it
-needs somewhere to write the samples.
+There is also no history: the endpoint answers for *now*. "This has been unknown
+for six hours" is a more useful sentence than "this is unknown", and it needs
+somewhere to write the samples.

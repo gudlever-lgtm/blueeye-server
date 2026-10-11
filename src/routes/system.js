@@ -585,21 +585,44 @@ function createSystemRouter({
           return { state: 'ok', reason: 'alive', detail: `${alive.length} Service Assurance worker(s) are alive.`, workers: alive.length };
         } : null,
 
+        // Retention, the report scheduler, the baseline recomputes: each runs
+        // on a timer inside its own closure, so a tick that fails is invisible
+        // from here unless something catches it. The tracker does
+        // (src/system/jobTracker.js) by giving each job its own logger.
+        //
+        // What it can say is bounded, and the wording stays inside that bound:
+        // a failed tick is seen, a job that did not start is seen, and a job
+        // ticking quietly is NOT distinguishable from one whose timer died,
+        // because success is silent. So the ok case says "no errors", never
+        // "running".
         backgroundJobs: Array.isArray(backgroundJobs) || typeof backgroundJobs === 'function' ? async () => {
-          const jobs = typeof backgroundJobs === 'function' ? backgroundJobs() : backgroundJobs;
-          const failed = (jobs || []).filter((j) => j && j.lastError);
-          if (failed.length) {
+          const jobs = (typeof backgroundJobs === 'function' ? backgroundJobs() : backgroundJobs) || [];
+          if (!jobs.length) {
+            return { state: 'unknown', reason: 'not_started', detail: 'No background job has been started on this boot yet.' };
+          }
+          const neverStarted = jobs.filter((j) => j && j.startError);
+          if (neverStarted.length) {
             return {
               state: 'failing',
-              reason: 'job_failed',
-              detail: `${failed.length} background job(s) last ended in an error: ${failed.map((j) => j.name).join(', ')}.`,
+              reason: 'start_failed',
+              detail: `${neverStarted.length} background job(s) did not start, so what they drive is not happening at all: ${neverStarted.map((j) => j.name).join(', ')}.`,
+              jobs: neverStarted.map((j) => ({ name: j.name, error: j.startError })),
             };
           }
-          const never = (jobs || []).filter((j) => j && !j.lastRunAt);
-          if (never.length === (jobs || []).length && never.length > 0) {
-            return { state: 'unknown', reason: 'never_ran', detail: 'No background job has run yet on this boot.' };
+          const failing = jobs.filter((j) => j && j.lastError);
+          if (failing.length) {
+            return {
+              state: 'failing',
+              reason: 'tick_failed',
+              detail: `${failing.length} of ${jobs.length} background job(s) have reported a failed run: ${failing.map((j) => j.name).join(', ')}.`,
+              jobs: failing.map((j) => ({ name: j.name, error: j.lastError, at: j.lastErrorAt, count: j.errors })),
+            };
           }
-          return { state: 'ok', reason: 'running', detail: `${(jobs || []).length} background job(s), none in error.` };
+          return {
+            state: 'ok',
+            reason: 'no_errors',
+            detail: `${jobs.length} background job(s) started, none has reported a failed run. A job that is ticking quietly looks the same as one whose timer died — this says no errors, not "running".`,
+          };
         } : null,
 
         storage: systemInfo && typeof systemInfo.getStorage === 'function' ? async () => {

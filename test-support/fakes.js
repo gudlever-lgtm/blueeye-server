@@ -4666,6 +4666,12 @@ function makeApp(overrides = {}) {
     releaseKeyService,
     commandKeyService,
     commandPublicKey: () => (commandKeyService && commandKeyService.canSign() ? commandKeyService.getPublicKey() : ''),
+    // GET /system/self reads both. Absent by default, which is the honest
+    // answer for a fake app that runs no jobs and holds no sockets — that
+    // endpoint then reports those two signals as `unknown`, which is what it is
+    // for.
+    liveAgentCount: overrides.liveAgentCount,
+    backgroundJobs: overrides.backgroundJobs,
     // The real server signs privileged commands with the release key whenever it
     // can, so the fake app does too — a test that asserts on what reaches the
     // agent should see the command the agent would actually receive.

@@ -174,3 +174,61 @@ test('a full disk is a failure, and the viewer form carries no paths', async () 
   assert.equal(viewerStorage.storage.disk.path, null, 'but not where the disk is');
   assert.equal(viewerStorage.storage.database.name, null);
 });
+
+// --- background jobs: a failed TICK, not just a failed start ----------------
+
+const jobsApp = (jobs) => makeApp({
+  agentsRepo: makeAgentsRepo({ findAll: async () => [AGENTS[0]] }),
+  backgroundJobs: () => jobs,
+});
+const jobSignal = async (jobs) => {
+  const res = await request(jobsApp(jobs)).get('/system/self').set('Authorization', authHeader('admin'));
+  return res.body.signals.find((s) => s.id === 'backgroundJobs');
+};
+
+test('a job that did not start outranks one whose tick failed', async () => {
+  // They need different answers. A job that never started is not running at
+  // all; a job whose tick failed is running and failing. The first is worse.
+  const sig = await jobSignal([
+    { name: 'reports', startedAt: null, startError: 'cron expression is nonsense', lastError: null, errors: 0 },
+    { name: 'retention', startedAt: 'x', startError: null, lastError: 'table is locked', lastErrorAt: 'y', errors: 3 },
+  ]);
+  assert.equal(sig.state, 'failing');
+  assert.equal(sig.reason, 'start_failed');
+  assert.match(sig.detail, /not happening at all/);
+  assert.match(sig.detail, /reports/);
+});
+
+test('a failed tick is a failure, with the job named and the message kept', async () => {
+  const sig = await jobSignal([
+    { name: 'retention', startedAt: 'x', startError: null, lastError: 'table is locked', lastErrorAt: 'y', errors: 3 },
+    { name: 'verification', startedAt: 'x', startError: null, lastError: null, errors: 0 },
+  ]);
+  assert.equal(sig.state, 'failing');
+  assert.equal(sig.reason, 'tick_failed');
+  assert.match(sig.detail, /1 of 2/);
+  assert.equal(sig.jobs[0].name, 'retention');
+  assert.equal(sig.jobs[0].count, 3);
+  assert.match(sig.jobs[0].error, /table is locked/);
+});
+
+test('no errors is reported as no errors, never as "running"', async () => {
+  // Success is silent in these jobs, so a job ticking quietly looks exactly
+  // like one whose timer died. The wording has to stay inside what is known —
+  // this screen refuses to claim more than it measured.
+  const sig = await jobSignal([
+    { name: 'retention', startedAt: 'x', startError: null, lastError: null, errors: 0 },
+  ]);
+  assert.equal(sig.state, 'ok');
+  assert.equal(sig.reason, 'no_errors');
+  // It must not CLAIM they are running — only that nothing reported a failure.
+  assert.doesNotMatch(sig.detail, /(are|all|still) running/i);
+  assert.match(sig.detail, /none has reported a failed run/);
+  assert.match(sig.detail, /no errors, not "running"/, 'the limit of what is known has to be on the screen, not only in the code');
+});
+
+test('nothing started yet is unknown, not ok', async () => {
+  const sig = await jobSignal([]);
+  assert.equal(sig.state, 'unknown');
+  assert.equal(sig.reason, 'not_started');
+});

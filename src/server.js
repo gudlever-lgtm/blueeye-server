@@ -40,6 +40,7 @@ const { createProbeThresholdsRepository } = require('./repositories/probeThresho
 const { createProbeOutageService } = require('./probeOutages/probeOutageService');
 const { createInstallToolService } = require('./services/installToolService');
 const { createCommandSigner } = require('./services/commandSigner');
+const { createJobTracker } = require('./system/jobTracker');
 const { createArtifactStore } = require('./enroll/artifactStore');
 const { createAgentSourceStore } = require('./enroll/agentSourceStore');
 const { createAgentBinaryStore } = require('./enroll/agentBinaryStore');
@@ -214,6 +215,12 @@ function start() {
   // output is unchanged.
   const logRing = createLogRing({ capacity: Number(process.env.LOG_BUFFER_SIZE) || 1000 });
   const logger = createLogger({ onRecord: logRing.record });
+  // What the singleton background jobs are doing, for GET /system/self. Each
+  // job gets a logger of its own that forwards to this one and remembers a
+  // failed tick — see src/system/jobTracker.js for why that is the hook rather
+  // than a change to every job.
+  const jobTracker = createJobTracker({ logger });
+
 
   // Never run in production with a weak JWT secret: the built-in development
   // default, a known docker-compose example fallback, or anything too short.
@@ -416,7 +423,7 @@ function start() {
   // the items as run-probe/run-test commands.
   const testPackagesRepo = createTestPackagesRepository(db);
   const testPackageRunner = createTestPackageRunner({ agentsRepo, agentCommander, repo: testPackagesRepo, logger });
-  const testPackageScheduler = createTestPackageScheduler({ repo: testPackagesRepo, runner: testPackageRunner, logger });
+  const testPackageScheduler = createTestPackageScheduler({ repo: testPackagesRepo, runner: testPackageRunner, logger: jobTracker.loggerFor('test-packages') });
   // Active throughput ("speed test") results reported by agents.
   const speedtestResultsRepo = createSpeedtestResultsRepository(db);
   // "Somebody is on this" on a Fleet verdict (migration 138).
@@ -997,7 +1004,7 @@ function start() {
   // Interface transitions are recorded at the results-ingest seam — the one place
   // that sees every observation — not reconstructed by polling current state.
   const interfaceStateService = createInterfaceStateService({ interfaceStatesRepo, logger });
-  const serviceDependencyJob = createServiceDependencyJob({ serviceDependenciesRepo, flowsRepo, agentsRepo, hostConnectionsRepo, logger });
+  const serviceDependencyJob = createServiceDependencyJob({ serviceDependenciesRepo, flowsRepo, agentsRepo, hostConnectionsRepo, logger: jobTracker.loggerFor('service-dependencies') });
   // Blast-radius impact analysis over the unified topology graph (l2_link +
   // service_dep). Used by the event enrichment + the topology endpoint.
   const blastRadiusService = createBlastRadiusService({
@@ -1010,7 +1017,7 @@ function start() {
   // to per-(src,dst,port)). Leader-only hourly rollup + robust baseline + scoring
   // that emits deviations to the correlator as ordinary findings.
   const flowPairBaselinesRepo = createFlowPairBaselinesRepository(db);
-  const flowPairBaselineJob = createFlowPairBaselineJob({ flowPairBaselinesRepo, flowsRepo, agentsRepo, findingStore, logger });
+  const flowPairBaselineJob = createFlowPairBaselineJob({ flowPairBaselinesRepo, flowsRepo, agentsRepo, findingStore, logger: jobTracker.loggerFor('flow-pair-baselines') });
   // Port-scan / fan-out detection (src/analysis/scanDetector.js). The same
   // count the flow explorer has always shown on demand, run on a schedule
   // across the fleet, as a `net.scan` finding. This server's OWN sweep
@@ -1413,7 +1420,7 @@ function start() {
     rollup: createRollup({ repo: retentionRepo, config: retentionConfig, logger }),
     purge: createPurge({ repo: retentionRepo, config: retentionConfig }),
     config: retentionConfig,
-    logger,
+    logger: jobTracker.loggerFor('retention'),
   });
 
   // Singleton background jobs for this single-node install: retention
@@ -1426,9 +1433,9 @@ function start() {
     reportScheduler,
     // GeoIP exposes startSchedule/stopSchedule; adapt it to the uniform { start, stop }.
     { start: () => geoipUpdater.startSchedule(), stop: () => geoipUpdater.stopSchedule() },
-    createTransactionBaselineJob({ repo: transactionsRepo, logger }),
+    createTransactionBaselineJob({ repo: transactionsRepo, logger: jobTracker.loggerFor('transaction-baselines') }),
     // Holds a case open while its situation (cluster, migration 129) is live.
-    createEventAutoResolveJob({ eventCasesRepo, auditLogRepo, clustersRepo: eventClustersRepo, logger }),
+    createEventAutoResolveJob({ eventCasesRepo, auditLogRepo, clustersRepo: eventClustersRepo, logger: jobTracker.loggerFor('event-auto-resolve') }),
     // Agent offline: the periodic stale-status sweep (a missed WS close no
     // longer leaves a green badge on a dead agent) + ONE finding per offline
     // episode past the grace period, with a dead-agent vs network-down verdict,
@@ -1457,10 +1464,10 @@ function start() {
       graceMs: config.ws.offlineGraceMs,
       maxAgeMs: config.ws.offlineMaxAgeMs,
       intervalMs: config.ws.offlineSweepMs,
-      logger,
+      logger: jobTracker.loggerFor('agent-offline'),
     }),
-    createCrossAgentClusterJob({ service: crossAgentClusterService, logger }),
-    createVerificationJob({ service: verificationService, logger }),
+    createCrossAgentClusterJob({ service: crossAgentClusterService, logger: jobTracker.loggerFor('cross-agent-clusters') }),
+    createVerificationJob({ service: verificationService, logger: jobTracker.loggerFor('verification') }),
     // Service dependency graph recompute (rolling 24h TCP edges), off the ingest
     // hot path — same singleton pattern as the LLDP refresh.
     serviceDependencyJob,
@@ -1536,19 +1543,27 @@ function start() {
   // start" and claims no more than that. Per-tick tracking is a change to every
   // job and is noted in docs/self-health.md as the next step rather than
   // half-done here.
-  const jobOutcomes = [];
+  // The names are the tracker's keys, in the same order as the array, so a job
+  // that failed to start is reported under the name its ticks report under.
+  // Anything not separately named is tracked as a numbered job rather than
+  // silently merged with its neighbour.
+  const JOB_NAMES = [
+    'retention', 'test-packages', 'reports', 'geoip', 'transaction-baselines',
+    'event-auto-resolve', 'agent-offline', 'cross-agent-clusters', 'verification',
+    'service-dependencies', 'flow-pair-baselines',
+  ];
   function startBackgroundJobs() {
-    jobOutcomes.length = 0;
-    for (const job of backgroundJobs) {
-      const name = (job && (job.name || (job.constructor && job.constructor.name))) || 'job';
+    jobTracker.reset();
+    backgroundJobs.forEach((job, i) => {
+      const name = JOB_NAMES[i] || `job-${i + 1}`;
       try {
         job.start();
-        jobOutcomes.push({ name, lastRunAt: new Date().toISOString(), lastError: null });
+        jobTracker.markStarted(name);
       } catch (err) {
-        logger.error(`background job start failed (${err && err.message})`);
-        jobOutcomes.push({ name, lastRunAt: null, lastError: (err && err.message) || 'start failed' });
+        logger.error(`background job '${name}' start failed (${err && err.message})`);
+        jobTracker.markStarted(name, err);
       }
-    }
+    });
   }
   function stopBackgroundJobs() {
     for (const job of backgroundJobs) {
@@ -1560,7 +1575,7 @@ function start() {
     // GET /system/self reads both: how many agent sockets are open right now,
     // and what each background job's start did.
     liveAgentCount: () => (agentWs ? agentWs.connectionCount() : 0),
-    backgroundJobs: () => jobOutcomes.slice(),
+    backgroundJobs: () => jobTracker.snapshot(),
     db,
     tsdb,
     resultsTsdbRepo,

@@ -1,5 +1,65 @@
 # Changelog
 
+## 0.242.0 — a compact density, and a verification that lands somewhere
+
+- The pre-close checklist can **write the verification into the work log**,
+  prefilled with the metrics the case was actually built on. It writes an
+  `action` entry; an empty answer writes nothing.
+- **Information density** (`standard` / `compact`) is a per-account preference,
+  applied as one attribute on `<html>`. It changes row height and padding and
+  nothing else — a test renders the same screen in both densities and asserts
+  the control and header counts match, because a mode that hides capability
+  cannot be supported over the phone.
+
+## 0.241.0 — a screen that says whether BlueEyes itself can see anything
+
+`GET /system/self` + **Administration → System health**. It composes what other
+screens already read and measures nothing new.
+
+Three states, never two: `ok` (measured, fine), `failing` (measured, not fine),
+`unknown` (could not be measured). A two-state version has to file "could not
+read" under one of them, and either choice is a lie. `unknown` is never green,
+never counted as fine, and the overall state is the worst present with `unknown`
+**not** rounded down.
+
+Where that bites: no agents enrolled reads as `unknown`, not `ok` (a monitoring
+system with nothing reporting is blind, not fine); an unreadable disk reads as
+`unknown`, never 0% full. Every probe runs in parallel and one that throws
+becomes `unknown` with its message, so the route cannot 500 because a subsystem
+is down. See [docs/self-health.md](docs/self-health.md).
+
+## 0.240.1 — the browser worker cannot reach this server
+
+The Service Assurance host policy cannot close the window between its own DNS
+resolution and Chromium's — awaiting DNS per subresource would wreck page-load
+timings, and that is a property of resolving a name twice. The network closes it:
+the worker is on an `assurance` network carrying the worker and the database
+only. Plus `cap_drop: ALL` (Chromium runs `--no-sandbox` in a container),
+`no-new-privileges`, `pids_limit` and `mem_limit`. The hardening test parses the
+compose graph rather than grepping it.
+
+## 0.240.0 — the signing keys can be separate
+
+The release key signed both the code a fleet installs and the instructions it
+obeys. Migration 148 gives `agent_release_key` one row per purpose; the server
+presents the command key for vendor authorisation, signs commands with it when it
+has one, and re-keys agents for it with `keyPurpose: 'command'`.
+
+Nothing changes for a server that does none of this. Two bugs the work turned up:
+the choice of signing key is resolved **per signature**, because both key
+services load after wiring and deciding at construction time silently bound
+every command to the release key; and a command rekey reads
+`trust.server.command_key` and no other field. Needs blueeye-licens 0.15.0 and
+blueeye-agent 0.50.0.
+
+## 0.239.1 — a signature says what it is for
+
+One key signs four things: a release manifest, a privileged command, an evidence
+request and a NIS2 export. The only reason a captured release signature could not
+be offered to an agent as an instruction was that the payload *shapes* happen to
+differ, which is one refactor away from not being true. The purpose rides inside
+the signed bytes and every verifier states which one it is checking.
+
 ## 0.238.0 — A failed verification is a state
 
 `resolved` and `closed` were already two claims — the fix is in, and somebody

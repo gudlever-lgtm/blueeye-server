@@ -22,7 +22,7 @@ const { JSDOM, VirtualConsole } = require('jsdom');
 const PUBLIC = path.join(__dirname, '..', 'public');
 const html = fs.readFileSync(path.join(PUBLIC, 'index.html'), 'utf8');
 
-function boot({ t, routes = {}, role = 'admin' } = {}) {
+function boot({ t, routes = {}, role = 'admin', storage = {} } = {}) {
   const errors = [];
   const vc = new VirtualConsole();
   vc.on('jsdomError', (e) => errors.push(String((e && e.message) || e)));
@@ -42,6 +42,7 @@ function boot({ t, routes = {}, role = 'admin' } = {}) {
   if (t) t.after(() => window.close());
   window.localStorage.setItem('blueeye.server.token', 'T');
   window.localStorage.setItem('blueeye.server.role', role);
+  for (const [k, v] of Object.entries(storage)) window.localStorage.setItem(k, v);
   for (const s of [...window.document.querySelectorAll('script[src]')].map((x) => x.getAttribute('src')).filter((x) => x.startsWith('/') && !x.startsWith('/vendor/'))) {
     window.eval(fs.readFileSync(path.join(PUBLIC, s.split('?')[0]), 'utf8'));
   }
@@ -116,4 +117,34 @@ test('every view a focus claims is a real nav entry', async (t) => {
   const claimed = [...new Set(block[1].match(/'([a-zA-Z]+)'/g).map((x) => x.replace(/'/g, '')))];
   assert.ok(claimed.length > 10, `expected the focus sets to be populated, got ${claimed.length}`);
   for (const v of claimed) assert.ok(navBtn(doc, v), `focus claims "${v}" but there is no nav entry for it`);
+});
+
+// The dim is only half of it: a nav group starts folded, so the entries a
+// focus owns have to be UNFOLDED or the focus is invisible until you click.
+test('the focus decides which groups start unfolded', async (t) => {
+  const { doc } = boot({ t, routes: SESSION('engineer') });
+  await settle();
+  const groupOf = (view) => doc.querySelector(`.tabs button[data-view="${view}"]`).closest('.nav-group');
+  assert.ok(!groupOf('topology').classList.contains('collapsed'), 'Network is the engineer\'s group');
+  assert.ok(groupOf('events').classList.contains('collapsed'), 'Incidents is somebody else\'s');
+  // ...and the label agrees, so a screen reader is told the same thing.
+  assert.equal(groupOf('topology').querySelector('.nav-group-label').getAttribute('aria-expanded'), 'true');
+});
+
+test('a group the user folded themselves stays folded — the focus never overrides a choice', async (t) => {
+  // A STORED set means the user has toggled at least once. From then on the
+  // focus must not decide the fold, or somebody who deliberately closed a
+  // group finds it open again after a reload.
+  const { doc } = boot({
+    t,
+    routes: SESSION('noc'),
+    storage: { 'blueeye.server.navCollapsed': JSON.stringify(['Incidents', 'Investigation']) },
+  });
+  await settle();
+  const groupOf = (view) => doc.querySelector(`.tabs button[data-view="${view}"]`).closest('.nav-group');
+  assert.ok(groupOf('events').classList.contains('collapsed'), 'the user folded Incidents; NOC focus must not reopen it');
+  assert.ok(groupOf('troubleshooting').classList.contains('collapsed'), 'same for Investigation');
+  // And a group the user did NOT fold is open, because the stored set is the
+  // whole truth once it exists.
+  assert.ok(!groupOf('topology').classList.contains('collapsed'));
 });

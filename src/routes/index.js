@@ -404,6 +404,9 @@ function createApiRouter({
     assuranceWorkersRepo: serviceTests && serviceTests.repositories
       ? serviceTests.repositories.workers : null,
     liveAgentCount, backgroundJobs,
+    // Only getAlertingSafe() is called, for the "can a finding reach a human"
+    // signal — the redacted view, never the secrets.
+    settingsService,
   }));
   // Shared per-target timeline service (Phase 1 merge/fan-out) — powers both the
   // /api/targets timeline and the /api/findings/:id/context change-diff.

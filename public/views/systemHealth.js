@@ -45,6 +45,8 @@
       assuranceWorkers: 'self.sig.assuranceWorkers',
       backgroundJobs: 'self.sig.backgroundJobs',
       storage: 'self.sig.storage',
+      alerting: 'self.sig.alerting',
+      clock: 'self.sig.clock',
     };
 
     function signalLabel(id) {

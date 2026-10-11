@@ -155,3 +155,20 @@ them ship code — but either one, on its own, is still enough to do its own job
 There is no arrangement of keys that protects a fleet from a server that is
 wholly owned; what there is, is a smaller blast radius per key and a vendor who
 has to agree before any new key counts.
+
+## A correction about migration 148
+
+Migration 148's own comment says a `NOT NULL DEFAULT 'release'` could not be
+used because a quoted default inside the guard's SQL literal is more than
+`scripts/build-schema.js` can parse. **That is wrong.** The parser doubles
+quotes inside a literal exactly as MySQL does (migration 124 has shipped a
+guarded `DEFAULT ''lldp''` since long before this), and both the parser and
+MySQL were checked against the same statement afterwards.
+
+The comment is left in place rather than corrected, because 148 is applied: the
+migration runner checksums every applied file and refuses to boot on drift, so
+editing a comment would mean `node src/migrate.js --accept-checksum` on every
+deployed server for no change to the schema. The real reason the column is
+NULLable still holds and is the first one the comment gives: the row that
+already exists IS the release key, so NULL is the honest value for it rather
+than a backfill pretending it was always labelled.

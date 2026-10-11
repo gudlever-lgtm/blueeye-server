@@ -47,6 +47,8 @@ measures nothing new.
 | `assuranceWorkers` | a heartbeat in the last 2 min | none | **Service Assurance not enabled** |
 | `backgroundJobs` | started, no failed run reported | one failed to **start**, or a **tick** failed | nothing started yet |
 | `storage` | disk below 85% | 85%+ / 95%+ | **disk usage unreadable** |
+| `alerting` | a channel is configured and delivering | on, but no channel configured, or configured and not delivering | **switched off on purpose** |
+| `clock` | within 60s of the database's | 60s+ apart | the database did not answer with a time |
 
 Two of those deserve their reasoning spelled out:
 
@@ -96,3 +98,27 @@ done.
 There is also no history: the endpoint answers for *now*. "This has been unknown
 for six hours" is a more useful sentence than "this is unknown", and it needs
 somewhere to write the samples.
+
+## Alert delivery and the clock
+
+Two signals are about the paths out of this server rather than about this
+server.
+
+**`alerting`** is the failure nobody notices. Every other signal can be green
+while each alert falls on the floor, and nothing in the product looks wrong:
+the findings are all there, correctly recorded, and not one of them left the
+building. The signal reads `settingsService.getAlertingSafe()` — the redacted
+view, so no SMTP password or webhook secret can reach this response, and a test
+asserts that the safe reader is the one called. Switched off on purpose is
+`unknown`, not `ok`: it is a choice, not a fault, but it is not a working alert
+path either. And an `ok` here says the path is **configured**, not that the last
+alert arrived — nothing records delivery outcomes yet, so claiming more would be
+the exact dishonesty this screen exists to refuse.
+
+**`clock`** compares this server's time with the database's, which is the only
+other clock it can ask without leaving the deployment. It matters because every
+signature this server makes carries a timestamp the far end checks against a
+window: a drifting clock does not look like a clock problem from an agent, it
+looks like the fleet refusing everything. The round trip is subtracted the only
+honest way available — the database's answer was true at some point between the
+two local reads, so anything inside that span is not counted as drift.

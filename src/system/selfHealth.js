@@ -83,6 +83,14 @@ const SIGNALS = [
   { id: 'assuranceWorkers', optional: true },
   { id: 'backgroundJobs', optional: false },
   { id: 'storage', optional: false },
+  // Can a finding reach a human? A monitoring system that records everything
+  // and tells nobody is the failure nobody notices, because every screen in it
+  // looks right.
+  { id: 'alerting', optional: false },
+  // The server's own clock against the database's. Every signature this server
+  // makes carries a timestamp an agent checks against a window, so a drifting
+  // clock looks like "the fleet refuses everything" from the other end.
+  { id: 'clock', optional: false },
 ];
 
 // Builds the whole answer. `probes` is { [signalId]: () => Promise<{state, reason?, detail?, ...}> }.

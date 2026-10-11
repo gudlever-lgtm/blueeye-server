@@ -15,7 +15,7 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const request = require('supertest');
 
-const { buildSelfHealth, worst } = require('../src/system/selfHealth');
+const { buildSelfHealth, worst, SIGNALS } = require('../src/system/selfHealth');
 const { makeApp, authHeader, makeAgentsRepo } = require('../test-support/fakes');
 
 // ---- the rules, directly ---------------------------------------------------
@@ -54,7 +54,7 @@ test('a signal with no probe says it is not wired, and an optional one says it i
   assert.equal(tsdb.reason, 'not_enabled', 'a feature nobody switched on is not a fault');
   // Every signal is reported, always: a screen that drops the ones it cannot
   // read is a screen that gets shorter as things get worse.
-  assert.equal(out.signals.length, 11);
+  assert.equal(out.signals.length, SIGNALS.length);
 });
 
 test('every probe runs even when the first one fails', async () => {
@@ -68,7 +68,7 @@ test('every probe runs even when the first one fails', async () => {
   });
   assert.deepEqual(ran.sort(), ['database', 'license', 'storage']);
   assert.equal(out.state, 'failing');
-  assert.deepEqual(out.counts, { ok: 1, failing: 1, unknown: 9 });
+  assert.deepEqual(out.counts, { ok: 1, failing: 1, unknown: SIGNALS.length - 2 });
 });
 
 test('a probe that answers nonsense is unknown rather than trusted', async () => {
@@ -231,4 +231,95 @@ test('nothing started yet is unknown, not ok', async () => {
   const sig = await jobSignal([]);
   assert.equal(sig.state, 'unknown');
   assert.equal(sig.reason, 'not_started');
+});
+
+// --- alert delivery: can a finding reach a human? ---------------------------
+//
+// The failure nobody notices, because every other screen looks right: the
+// findings are all there, correctly recorded, and not one of them left the
+// building.
+
+const alertingApp = (alerting) => makeApp({
+  agentsRepo: makeAgentsRepo({ findAll: async () => [AGENTS[0]] }),
+  settingsService: { getAlertingSafe: async () => alerting },
+});
+const alertSignal = async (alerting) => {
+  const res = await request(alertingApp(alerting)).get('/system/self').set('Authorization', authHeader('admin'));
+  assert.equal(res.status, 200);
+  return res.body.signals.find((s) => s.id === 'alerting');
+};
+
+test('alerting that is on with no channel configured is a failure, not a detail', async () => {
+  const sig = await alertSignal({ enabled: false, enabledMode: 'auto', configuredChannels: [] });
+  assert.equal(sig.state, 'failing');
+  assert.equal(sig.reason, 'no_channel');
+  assert.match(sig.detail, /every alert is dropped/);
+});
+
+test('alerting switched off on purpose is unknown, never ok and never a page at 3am', async () => {
+  const sig = await alertSignal({ enabled: false, enabledMode: 'off', configuredChannels: ['email'] });
+  assert.equal(sig.state, 'unknown');
+  assert.equal(sig.reason, 'off');
+});
+
+test('a configured path is ok, and says what it does NOT prove', async () => {
+  const sig = await alertSignal({ enabled: true, enabledMode: 'on', configuredChannels: ['email', 'webhook'] });
+  assert.equal(sig.state, 'ok');
+  assert.match(sig.detail, /email, webhook/);
+  assert.match(sig.detail, /not that the last alert arrived/);
+});
+
+test('channels configured but not delivering is a failure that quotes the reason', async () => {
+  const sig = await alertSignal({ enabled: false, enabledMode: 'auto', enabledReason: 'no finding severity reaches any channel minimum', configuredChannels: ['email'] });
+  assert.equal(sig.state, 'failing');
+  assert.equal(sig.reason, 'not_effective');
+  assert.match(sig.detail, /severity reaches any channel minimum/);
+});
+
+test('the alerting signal never carries a secret', async () => {
+  // It reads getAlertingSafe(), the redacted view. If somebody swaps it for
+  // getAlerting() this fails, which is the point.
+  let called = null;
+  const app = makeApp({
+    agentsRepo: makeAgentsRepo({ findAll: async () => [AGENTS[0]] }),
+    settingsService: {
+      getAlerting: async () => { called = 'unsafe'; return {}; },
+      getAlertingSafe: async () => { called = 'safe'; return { enabled: true, enabledMode: 'on', configuredChannels: ['email'] }; },
+    },
+  });
+  const res = await request(app).get('/system/self').set('Authorization', authHeader('admin'));
+  assert.equal(called, 'safe');
+  assert.doesNotMatch(JSON.stringify(res.body), /smtp|password|secret|accessToken/i);
+});
+
+// --- clock ------------------------------------------------------------------
+
+const clockApp = (ms) => makeApp({
+  agentsRepo: makeAgentsRepo({ findAll: async () => [AGENTS[0]] }),
+  db: { ping: async () => {}, close: async () => {}, pool: {}, query: async () => [[{ ms: ms() }]] },
+});
+const clockSignal = async (ms) => {
+  const res = await request(clockApp(ms)).get('/system/self').set('Authorization', authHeader('admin'));
+  return res.body.signals.find((s) => s.id === 'clock');
+};
+
+test('a clock in step with the database is ok', async () => {
+  const sig = await clockSignal(() => Date.now());
+  assert.equal(sig.state, 'ok');
+  assert.equal(sig.reason, 'in_step');
+  assert.ok(Math.abs(sig.skewSeconds) <= 1);
+});
+
+test('a clock minutes away from the database is a failure, because signatures are time-windowed', async () => {
+  const sig = await clockSignal(() => Date.now() + 10 * 60 * 1000);
+  assert.equal(sig.state, 'failing');
+  assert.equal(sig.reason, 'drift');
+  assert.match(sig.detail, /refused/);
+  assert.ok(sig.skewSeconds >= 590, `expected ~600s, got ${sig.skewSeconds}`);
+});
+
+test('a database that will not say the time is unknown, not a clock that is fine', async () => {
+  const sig = await clockSignal(() => null);
+  assert.equal(sig.state, 'unknown');
+  assert.equal(sig.reason, 'unreadable');
 });

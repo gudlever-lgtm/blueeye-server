@@ -71,6 +71,9 @@ function createSystemRouter({
   // dashboard sees a key that was generated or deleted a moment ago without a
   // restart. Wired in src/server.js.
   refreshKeyIdentity = null,
+  // Read only for the self-health alerting signal, and only through
+  // getAlertingSafe() — the redacted view, so no secret can reach /system/self.
+  settingsService = null,
 } = {}) {
   const router = express.Router();
 
@@ -640,6 +643,51 @@ function createSystemRouter({
           if (pct >= 95) return { state: 'failing', reason: 'disk_full', detail: `The data disk is ${pct}% full. Retention cannot keep up and writes will start failing.`, storage };
           if (pct >= 85) return { state: 'failing', reason: 'disk_low', detail: `The data disk is ${pct}% full.`, storage };
           return { state: 'ok', reason: 'ample', detail: `The data disk is ${pct}% full.`, storage };
+        } : null,
+
+        // Can a finding reach a human? Everything else on this screen can be
+        // green while every alert falls on the floor, and nothing in the
+        // product says so — the findings are all there, correctly recorded.
+        //
+        // Only the redacted view is read, so no secret can reach this response.
+        alerting: settingsService && typeof settingsService.getAlertingSafe === 'function' ? async () => {
+          const cfg = await settingsService.getAlertingSafe() || {};
+          const channels = Array.isArray(cfg.configuredChannels) ? cfg.configuredChannels : [];
+          // Switched off on purpose is not a fault. It is also not health:
+          // `unknown` with the reason, the same answer telemetry gives.
+          if (cfg.enabledMode === 'off') {
+            return { state: 'unknown', reason: 'off', detail: 'Alerting is switched off, so findings are recorded and nobody is told. That is a choice, not a fault — but it is not a working alert path either.' };
+          }
+          if (!channels.length) {
+            return { state: 'failing', reason: 'no_channel', detail: 'Alerting is meant to be on, but no channel is configured, so every alert is dropped. Settings → Alerting.' };
+          }
+          if (!cfg.enabled) {
+            return { state: 'failing', reason: 'not_effective', detail: `Alerting is not delivering: ${cfg.enabledReason || 'no reason given'}. Configured channels: ${channels.join(', ')}.` };
+          }
+          return { state: 'ok', reason: 'deliverable', detail: `Alerts go out over ${channels.join(', ')}. This says the path is configured, not that the last alert arrived.` };
+        } : null,
+
+        // The server's clock against the database's, which is the one other
+        // clock it can ask without leaving the deployment. Every signature
+        // this server makes is checked against a time window at the far end,
+        // so drift here reads as "the fleet refuses everything" there.
+        clock: db && typeof db.query === 'function' ? async () => {
+          const before = Date.now();
+          const [rows] = await db.query('SELECT UNIX_TIMESTAMP(NOW(3)) * 1000 AS ms');
+          const after = Date.now();
+          const dbMs = numOrNull(rows && rows[0] && rows[0].ms);
+          if (dbMs == null) {
+            return { state: 'unknown', reason: 'unreadable', detail: 'The database did not answer with a time, so drift cannot be measured.' };
+          }
+          // The round trip is subtracted the only honest way available: the
+          // answer was true at SOME point between the two reads, so anything
+          // inside that span is not drift.
+          const skewMs = dbMs > after ? dbMs - after : (dbMs < before ? dbMs - before : 0);
+          const skew = Math.round(Math.abs(skewMs) / 1000);
+          if (skew >= 60) {
+            return { state: 'failing', reason: 'drift', detail: `This server's clock is ${skew}s away from the database's. Signed commands and licence proofs are checked against a time window, so drift of this size starts getting them refused.`, skewSeconds: Math.round(skewMs / 1000) };
+          }
+          return { state: 'ok', reason: 'in_step', detail: skew === 0 ? 'This server and the database agree on the time.' : `This server's clock is within ${skew}s of the database's.`, skewSeconds: Math.round(skewMs / 1000) };
         } : null,
       };
 

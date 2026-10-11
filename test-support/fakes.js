@@ -2870,6 +2870,9 @@ function makeDb(overrides = {}) {
     pool: overrides.pool || {},
     ping: overrides.ping || (async () => {}),
     close: overrides.close || (async () => {}),
+    // Only the self-health clock signal queries through here; the default
+    // answers "the same time this process has", which is the in-step case.
+    query: overrides.query || (async () => [[{ ms: Date.now() }]]),
   };
 }
 

@@ -128,8 +128,12 @@ function applyFocusVisibility() {
   }
 }
 function applyFocus(next) {
+  const was = focus;
   focus = FOCUSES.includes(next) ? next : 'all';
   applyFocusVisibility();
+  // The fold default follows the focus, but only for somebody who has never
+  // folded a group themselves (refoldForFocus checks that).
+  if (focus !== was) refoldForFocus();
 }
 function setFocus(next, { persist = true } = {}) {
   const f = FOCUSES.includes(next) ? next : 'all';
@@ -22320,14 +22324,48 @@ function loadCollapsedCategories() {
 function saveCollapsedCategories(set) {
   try { localStorage.setItem(NAV_COLLAPSE_KEY, JSON.stringify([...set])); } catch { /* storage off */ }
 }
+// The categories the current focus owns: a group that holds at least one of
+// its views. Derived from FOCUS_VIEWS rather than listed again, so the two
+// cannot disagree. Null when there is no focus.
+function focusCategories() {
+  const mine = FOCUS_VIEWS[focus];
+  if (!mine || typeof document === 'undefined') return null;
+  const own = new Set();
+  for (const g of document.querySelectorAll('.tabs .nav-group')) {
+    const cat = g.dataset.category || g.querySelector('.nav-group-label')?.textContent.trim();
+    if (!cat) continue;
+    const holdsOne = [...g.querySelectorAll('button[data-view]')]
+      .some((b) => mine.includes(b.dataset.view));
+    if (holdsOne) own.add(cat);
+  }
+  return own;
+}
+// Re-applies the FIRST-VISIT fold, which the focus changes: fold everything
+// except the groups this job owns. Only ever runs while the user has never
+// toggled a group themselves — their own choices are stored and always win,
+// which is why the focus cannot fold a group somebody deliberately opened.
+function refoldForFocus() {
+  if (loadCollapsedCategories() !== null) return;
+  const own = focusCategories();
+  for (const g of document.querySelectorAll('.tabs .nav-group')) {
+    const label = g.querySelector('.nav-group-label');
+    if (!label) continue;
+    const cat = g.dataset.category || label.textContent.trim();
+    const isCollapsed = !own || !own.has(cat);
+    g.classList.toggle('collapsed', isCollapsed);
+    label.setAttribute('aria-expanded', String(!isCollapsed));
+  }
+}
 function setupNavGroups() {
   const groups = [...document.querySelectorAll('.tabs .nav-group')];
   const catOf = (g) => g.dataset.category || g.querySelector('.nav-group-label')?.textContent.trim();
   let collapsed = loadCollapsedCategories();
   if (collapsed === null) {
-    // First visit: fold every category. Nothing is persisted until the user
-    // toggles a group, at which point the full set is saved.
-    collapsed = new Set(groups.map(catOf).filter(Boolean));
+    // First visit: fold every category except the ones this focus owns.
+    // Nothing is persisted until the user toggles a group, at which point the
+    // full set is saved and the focus stops deciding this.
+    const own = focusCategories();
+    collapsed = new Set(groups.map(catOf).filter(Boolean).filter((c) => !own || !own.has(c)));
   }
   for (const g of groups) {
     const label = g.querySelector('.nav-group-label');

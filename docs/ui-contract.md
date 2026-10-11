@@ -1939,3 +1939,64 @@ of this pass.
 phases 3.23–3.38 was also rendered at 1280 and 1440 and read for clipping,
 which is how the column widths on Agents, System Logs, User Logs, Discovery,
 Location, Users and Test Settings were found — none of them failed a test.
+
+## BlueEye Fluid Operations — the visual pass
+
+A redesign of the appearance only: no route, no handler, no workflow changed.
+The rules it added or changed, in one place.
+
+### Surfaces are not boxes
+
+A panel is a plane laid on the page. On the seven dark palettes it says so with
+the elevation surface step alone and `--panel-edge` is **transparent**: on a
+dark page a line on top of a raised surface draws the box a second time. The
+light palettes keep the hairline, because white on white has nowhere to go.
+
+Inside a panel there are no rules. The line under every panel title is gone —
+a second edge a centimetre inside the first divides a panel from its own
+contents, and a page of those reads as a page of boxes. The gap below the head
+separates now.
+
+A StatStrip card and a `.kpi` card are surfaces too, so they take the hairline
+and the elevation rather than `--border` (the *control* weight, where the edge
+is the affordance) and a 3px severity bar. Severity is a wash of the card in
+the same `--sev-*` colour the badges use, plus the figure's own colour. Six
+bordered cards with coloured bars in a row was the boxiest strip on any screen.
+
+### One measure does not fit every screen
+
+`--content-max` is now set per kind of screen, keyed on `data-view` which
+`render()` writes to `<html>`:
+
+| kind | measure | screens |
+| --- | --- | --- |
+| read | `--page-max-read` (1060px) | settings, users, licence, enrollment, docs, guides, screening |
+| page | `--page-max` (1440px) | everything else — the default |
+| wide | `--page-max-wide` (none) | topology, delta, map, destinations, path, flows, events, the log screens, investigation, troubleshooting, Service Assurance, traffic |
+
+A settings form at 1440px is a reading line nobody can track back; a topology
+canvas or a fourteen-column table capped at 1440px sits in a letterbox on a
+2560px monitor. A view with no rule keeps the default, so the list grows by
+choice rather than by omission.
+
+### Type
+
+Page title `--fs-2xl` 26px, section `--fs-xl` 18px, card `--fs-lg` 15px, body
+`--fs-md` 14px, secondary 12–13px. Before this the page title and a panel
+heading were both 20px, so the name of the screen and the name of a card on it
+carried the same voice, and the largest thing on the page was a stat figure.
+
+### Motion
+
+`--dur-1` 120ms (a state change you should barely notice), `--dur-2` 180ms (a
+surface changing weight), `--dur-3` 280ms (something entering or leaving), with
+`--ease` for a change in place and `--ease-out` for an arrival. `base.css`
+already honours `prefers-reduced-motion` for all of them. No JavaScript
+animation library, and nothing animates on a timer.
+
+### Radii
+
+Controls 8–10px, cards `--radius` 14px, large surfaces `--radius-lg` 18px,
+modals `--radius-xl` 22px. Not everything is equally round: the radius is
+judged against the size of the thing it is on, which is why a 1400px panel at
+12px read as square-cornered.

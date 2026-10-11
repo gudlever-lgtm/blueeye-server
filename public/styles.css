@@ -304,6 +304,31 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
    contract's name), and the contract's left padding. */
 main#view { width: 100%; max-width: var(--content-max); margin-inline: auto;
   padding: var(--s-5) var(--s-6) var(--s-6); box-sizing: border-box; }
+
+/* ---- Page width per KIND of screen ---------------------------------------
+   One measure for everything was the simple rule, and it was wrong at both
+   ends: a settings form stretched to 1440px is a reading line nobody can
+   track back, and a topology canvas or a fourteen-column table capped at
+   1440px sits in a letterbox with empty gutters on a 2560px monitor — the
+   screens that most need the glass were the ones being cropped.
+   `data-view` is set on <html> by render(). A view with no rule here keeps
+   the default, so this list grows by choice rather than by omission. */
+:root[data-view="settings"], :root[data-view="enrollment"], :root[data-view="users"],
+:root[data-view="license"], :root[data-view="about"], :root[data-view="docs"],
+:root[data-view="guide"], :root[data-view="screening"] {
+  --content-max: var(--page-max-read);
+}
+/* The canvases and the wide tables. A graph, a map and a flow table all get
+   better the more room they have; none of them has a reading measure to
+   protect. */
+:root[data-view="topology"], :root[data-view="delta"], :root[data-view="map"],
+:root[data-view="geo"], :root[data-view="pathLocation"], :root[data-view="flows"],
+:root[data-view="events"], :root[data-view="deviceLog"], :root[data-view="logs"],
+:root[data-view="userLogs"], :root[data-view="auditLog"], :root[data-view="nicInventory"],
+:root[data-view="investigation"], :root[data-view="troubleshooting"],
+:root[data-view="serviceAssurance"], :root[data-view="overview"] {
+  --content-max: var(--page-max-wide);
+}
 /* The base .card is 320px with 28px padding — sized for the centered login form
    (which lives in its own #login shell, not here). Inside a page, cards are
    content panels: they must fill the available width and share one padding scale
@@ -328,11 +353,16 @@ main#view .card { width: auto; padding: var(--s-5); box-shadow: var(--elev-1); }
    each — the one thing a KPI card exists to prevent. */
 @media (max-width: 1080px) { .kpi-grid { grid-template-columns: repeat(2, 1fr); } }
 @media (max-width: 560px) { .kpi-grid { grid-template-columns: 1fr; } }
-.kpi { background: var(--panel); border: 1px solid var(--border); border-left: 3px solid var(--accent); border-radius: var(--radius); padding: 12px; }
-.kpi.rx { border-left-color: var(--series-0); }
-.kpi.tx { border-left-color: var(--series-1); }
-.kpi.ag { border-left-color: var(--warn); }
-.kpi.loc { border-left-color: var(--accent); }
+/* A KPI card is a surface, like the contract's StatStrip card it predates, and
+   it takes the same treatment: hairline and elevation instead of a control
+   border, and the series colour on the FIGURE rather than as a bar beside it.
+   Six of these in a row with 3px bars was the single boxiest strip on any
+   screen. */
+.kpi { background: var(--elev-surface-1); border: 1px solid var(--panel-edge);
+  border-radius: var(--r-panel); padding: var(--s-4); box-shadow: var(--elev-1); }
+.kpi.rx .kpi-v { color: var(--series-0); }
+.kpi.tx .kpi-v { color: var(--series-1); }
+.kpi.ag .kpi-v { color: var(--warn); }
 .kpi .kpi-k { color: var(--muted); font-size: 12px; }
 .kpi .kpi-v { font-size: 24px; font-weight: 700; margin-top: 4px; }
 .kpi .kpi-sub { font-size: 12px; margin-top: 6px; }

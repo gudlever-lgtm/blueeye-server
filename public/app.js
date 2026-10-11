@@ -21994,6 +21994,12 @@ async function render({ silent = false } = {}) {
   warnIfLicenceUnreadable(); // ...and say so once if we could not read it at all
   applyRoleVisibility(); // hide nav items above the user's role + collapse empty groups
   applyCachedFocus(); // de-emphasise the nav entries another job owns (presentation only)
+  // The current screen, on the root element, so CSS can give a topology canvas
+  // or a 14-column table more room than a settings form needs. Presentation
+  // only: nothing reads it back, and a view with no rule gets the default
+  // width exactly as before. See "page width per kind of screen" in
+  // public/styles.css.
+  document.documentElement.dataset.view = currentView || '';
   // Show who is logged in: email + role.
   $('#whoami').replaceChildren(
     el('span', { class: 'who-email' }, email || '—'),

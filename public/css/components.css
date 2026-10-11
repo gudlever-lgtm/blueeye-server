@@ -32,7 +32,7 @@
    primary button; the info banner it replaces is gone. */
 .ui .page-head { display: flex; flex-direction: column; gap: var(--s-4); }
 .ui .page-head-row { display: flex; align-items: flex-start; gap: var(--s-4); }
-.ui .page-head h1 { margin: 0; font-size: var(--fs-xl); font-weight: 650;
+.ui .page-head h1 { margin: 0; font-size: var(--fs-2xl); font-weight: 680; letter-spacing: -0.02em;
   letter-spacing: -0.01em; display: flex; align-items: center; gap: var(--s-2); }
 .ui .page-head p { margin: var(--s-1) 0 0; color: var(--text-muted); font-size: var(--fs-sm); }
 .ui .page-head-actions { margin-left: auto; display: flex; gap: var(--s-2); flex: 0 0 auto; }
@@ -136,24 +136,40 @@
     overflow: visible; clip-path: none; }
 }
 
-/* ---- StatStrip — clickable filter cards ---------------------------------- */
+/* ---- StatStrip — clickable filter cards ----------------------------------
+   A stat card is a SURFACE that happens to be pressable, not a control. It
+   used to take `border: 1px solid var(--border)` — the control weight, where
+   the edge is the affordance — plus a 3px severity bar down its left side. Six
+   of them across a page is six cages in a row, read as a wireframe before
+   anything in them is read, which is the exact failure the line-weight rule in
+   tokens.css exists to prevent.
+   So: hairline and elevation, like every other surface. The severity is
+   carried by the figure's colour (already) and a wash of the same colour
+   across the card, which is louder than a 3px bar and does not draw a box. */
 .ui .statstrip { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: var(--s-3); }
 .ui .stat-card { display: flex; flex-direction: column; gap: var(--s-1); padding: var(--s-4);
   text-align: left; font: inherit; color: inherit; cursor: pointer;
-  background: var(--surface); border: 1px solid var(--border); border-left: 3px solid var(--border);
-  border-radius: var(--r-panel); }
-.ui .stat-card:hover { background: var(--surface-alt); }
+  background: var(--elev-surface-1); border: 1px solid var(--hairline);
+  border-radius: var(--r-panel); box-shadow: var(--elev-1);
+  transition: box-shadow var(--dur-2) var(--ease), background var(--dur-2) var(--ease); }
+.ui .stat-card:hover { background: var(--elev-surface-2); box-shadow: var(--elev-2); }
 /* A card with nothing behind it is a figure, not a control. */
 .ui .stat-card.is-static { cursor: default; opacity: 1; }
-.ui .stat-card.is-static:hover { background: var(--surface); }
+.ui .stat-card.is-static:hover { background: var(--elev-surface-1); box-shadow: var(--elev-1); }
 .ui .stat-card[aria-pressed="true"] { background: var(--accent-weak); border-color: var(--accent); }
 .ui .stat-n { font-size: var(--fs-stat); font-weight: 650; line-height: 1.1; font-variant-numeric: tabular-nums; }
 .ui .stat-l { font-size: var(--fs-xs); color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; }
-.ui .stat-card.crit { border-left-color: var(--sev-crit); }
+/* Severity as a wash of the card rather than a bar beside it. The weak tints
+   are the same ones every badge and row uses, so a critical card and a
+   critical badge are the same colour on every one of the fourteen palettes. */
+.ui .stat-card.crit { background: color-mix(in srgb, var(--sev-crit) 9%, var(--elev-surface-1)); }
+.ui .stat-card.crit:hover { background: color-mix(in srgb, var(--sev-crit) 14%, var(--elev-surface-1)); }
 .ui .stat-card.crit .stat-n { color: var(--sev-crit); }
-.ui .stat-card.warn { border-left-color: var(--sev-warn); }
+.ui .stat-card.warn { background: color-mix(in srgb, var(--sev-warn) 9%, var(--elev-surface-1)); }
+.ui .stat-card.warn:hover { background: color-mix(in srgb, var(--sev-warn) 14%, var(--elev-surface-1)); }
 .ui .stat-card.warn .stat-n { color: var(--sev-warn); }
-.ui .stat-card.info { border-left-color: var(--sev-info); }
+.ui .stat-card.info { background: color-mix(in srgb, var(--sev-info) 9%, var(--elev-surface-1)); }
+.ui .stat-card.info:hover { background: color-mix(in srgb, var(--sev-info) 14%, var(--elev-surface-1)); }
 .ui .stat-card.info .stat-n { color: var(--sev-info); }
 
 /* ---- Toolbar — filters left, secondary actions right --------------------- */
@@ -217,18 +233,27 @@
    background behind it, separated only by a 1px line. Level 1 is the whole
    difference between "a page with lines on it" and "a page with things on
    it". */
-.ui .panel-ui { background: var(--elev-surface-1); border: 1px solid var(--hairline);
+.ui .panel-ui { background: var(--elev-surface-1); border: 1px solid var(--panel-edge);
   border-radius: var(--r-panel); overflow: hidden; box-shadow: var(--elev-1); }
 /* A panel that is a link to somewhere lifts to level 2 under the pointer. */
 .ui .panel-ui.is-interactive { cursor: pointer;
-  transition: box-shadow 160ms var(--ease), border-color 160ms var(--ease); }
+  transition: box-shadow var(--dur-2) var(--ease), border-color var(--dur-2) var(--ease); }
 .ui .panel-ui.is-interactive:hover { box-shadow: var(--elev-2); border-color: var(--border-strong); }
+/* No rule under the title. A panel already has an edge; a second line inside
+   it, a centimetre from the first, divides the panel from its own contents and
+   is what turns a page of panels into a page of boxes. The gap below the head
+   does the separating now — whitespace instead of a border, per the UI
+   contract's "a surface laid on the page, not a box drawn on it". */
 .ui .panel-head { display: flex; align-items: center; gap: var(--s-2) var(--s-3); flex-wrap: wrap;
-  padding: var(--s-4) var(--s-5); border-bottom: 1px solid var(--hairline); }
-.ui .panel-head h2 { margin: 0; flex: 0 0 auto; font-size: var(--fs-md); font-weight: 650; }
+  padding: var(--s-5) var(--s-5) var(--s-2); }
+.ui .panel-head h2 { margin: 0; flex: 0 0 auto; font-size: var(--fs-lg); font-weight: 600;
+  letter-spacing: -0.01em; }
 .ui .panel-head .meta-xs { flex: 1 1 22ch; min-width: 0; }
 .ui .panel-actions { margin-left: auto; display: flex; gap: var(--s-2); }
 .ui .panel-body { padding: var(--s-5); }
+/* A body directly under a head: the head's own bottom padding already opened
+   the gap, so a second full step would read as a hole. */
+.ui .panel-head + .panel-body { padding-top: var(--s-3); }
 .ui .panel-foot { display: flex; align-items: center; gap: var(--s-3);
   padding: var(--s-3) var(--s-5); border-top: 1px solid var(--hairline);
   font-size: var(--fs-sm); color: var(--text-muted); }
@@ -791,10 +816,15 @@
    not a redder red. */
 .trust-banner {
   margin: 0 0 var(--s-4);
-  padding: var(--s-4);
-  border: 2px solid var(--bad);
-  border-radius: var(--radius);
-  background: var(--bad-weak);
+  padding: var(--s-5);
+  /* Loud by weight and space, as the note above says — but a 2px rule all the
+     way round is a cage, and a cage is what the rest of this redesign is
+     removing. The same alarm, carried by a filled surface that is lifted off
+     the page, with a hairline of its own colour rather than a frame. */
+  border: 1px solid color-mix(in srgb, var(--bad) 55%, transparent);
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--bad) 13%, var(--elev-surface-2));
+  box-shadow: var(--elev-2);
 }
 .trust-banner.hidden { display: none; }
 .trust-banner-title {

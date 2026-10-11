@@ -425,6 +425,13 @@ const DISCLOSURE_ALLOWED = {
   'GET /system/server-update': { roles: ['admin'], kinds: ['server working directory'], reason: 'the admin update panel tails the update log it names' },
   'GET /system/version': { roles: ['admin'], kinds: ['server working directory'], reason: 'Settings → Updates shows the admin where the update log is written' },
   'GET /system/storage': { roles: ['admin'], kinds: ['server working directory', 'internal database name / address'], reason: 'the storage counter names the disk path and the database it measures' },
+  // The self-health screen carries the SAME storage payload as /system/storage,
+  // through the same storageForRole() redaction — an admin is shown the disk
+  // path and the database because "the disk is 94% full" is not actionable
+  // without knowing which disk. A viewer gets the state and the percentage with
+  // both nulled, which test/selfHealth.test.js asserts on this exact route, so
+  // the admin row here is the whole of the exposure.
+  'GET /system/self': { roles: ['admin'], kinds: ['server working directory', 'internal database name / address'], reason: 'the storage signal carries the same admin-only disk path and database name as /system/storage' },
 };
 let LEAKS = null;
 let WORK_DIR_RE = null;

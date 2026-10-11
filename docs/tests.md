@@ -133,8 +133,17 @@ scratch database and asks two questions no fake can answer:
 DB_HOST=127.0.0.1 DB_PORT=3306 DB_USER=root DB_PASSWORD=secret npm run verify-routes
 ```
 
-It needs a MySQL it may create and drop databases on. Exit code 0 = green,
-1 = a failure was found, 2 = the run could not start. Knobs:
+It needs a **MySQL** it may create and drop databases on — MySQL, not MariaDB.
+MariaDB is close enough to start the run and will pass the schema and
+repository jobs, but it rejects `CAST(? AS JSON)`, which
+`agentCommandQueueRepository` uses when queueing a command. On MariaDB the
+sweep therefore ends with one SQL-syntax error from `agent-update` in the
+server log and a non-zero exit. That is the engine, not the product: the
+statement is valid MySQL 8, CI runs MySQL 8.4, and the SQL is deliberately not
+rewritten for a database BlueEyes does not support.
+
+Exit code 0 = green, 1 = a failure was found, 2 = the run could not start.
+Knobs:
 `VERIFY_ROUTES_KEEP=1` keeps the scratch database and working directory,
 `VERIFY_ROUTES_ONLY=<substring>` sweeps only matching route paths,
 `VERIFY_ROUTES_TRACE=<substring>` prints every matching call with its status,

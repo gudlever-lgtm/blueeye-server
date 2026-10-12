@@ -9874,7 +9874,7 @@ function saveRepeatPackage({ name, agentId, item, spec, runs }) {
 
 async function probeRunnerView() {
   const root = el('div', { class: 'probes' });
-  root.append(el('div', { class: 'muted', style: 'margin:2px 0 10px' }, 'Run one check now from a single agent · ping · TCP · DNS · traceroute · TCP traceroute · path MTU · cURL · page load · transaction'));
+  root.append(el('div', { class: 'muted', style: 'margin:2px 0 10px' }, t('probes.subLead')));
 
   const agents = await api('/agents').catch(() => []);
   if (!agents.length) { root.append(el('div', { class: 'empty' }, 'No agents yet — enrol an agent first.')); return root; }
@@ -9992,7 +9992,7 @@ async function probeRunnerView() {
   let detailOpen = false;
   const pauseNote = el('div', { class: 'muted small', hidden: true }, t('probe.row.paused'));
   root.append(el('details', { class: 'sec', open: true },
-    el('summary', {}, 'Latest results ', el('span', { class: 'muted' }, '· most recent per target')),
+    el('summary', {}, t('probes.latest') + ' ', el('span', { class: 'muted' }, t('probes.latestHint'))),
     el('div', { class: 'muted small' }, t('probe.row.rowHelp')), pauseNote, latestHost));
 
   // The form as a probe spec, or the reason it is not one yet. Read by Run and
@@ -21253,7 +21253,7 @@ async function txDetailView(id, host) {
           el('td', { class: r.status === 'ok' ? 'muted' : '' }, txDiagnose(r.detail, r.status)))))) : el('div', { class: 'empty' }, 'No results yet.'));
     } catch (e) { resHost.replaceChildren(el('div', { class: 'error' }, errText(e))); }
   }
-  root.append(el('h4', {}, 'Latest results'), resHost);
+  root.append(el('h4', {}, t('probes.latest')), resHost);
 
   // Captures. Summaries here; the packet list is one click and a separate
   // request, because it is by far the largest thing stored for a test.

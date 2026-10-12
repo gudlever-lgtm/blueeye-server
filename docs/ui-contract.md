@@ -2041,5 +2041,21 @@ a panel grid. `minmax(min(380px, 100%), 1fr)` lets the column fall back to the
 space that exists — which is what `auto-fit` was for. The same trap was in
 three other grids.
 
-Verified by rendering: 12 screens × 3 widths (1600 / 1024 / 390) × dark and
-light, asserting no horizontal page scroll and no page errors.
+**Three more, found only because the sweep was corrected.** The first pass
+visited VIEW NAMES (`serviceAssurance`, `investigation`) where the app routes on
+PATHS (`/service-assurance`, `/investigate`), so several "screens" were the 404
+page wearing a panel. With the real routes from `public/routes.js` and a check
+that fails a run whose page says "not found", 29 screens were swept, and two
+real faults surfaced that the first pass had hidden:
+
+* `.page-head-row` did not wrap, and `.page-head-actions` is `flex: 0 0 auto`,
+  so on a phone the header buttons kept going past the right edge and took the
+  whole page with them — `/users` scrolled 68px sideways, `/license` 43px,
+  chrome and all. They wrap under the title now.
+* `.tablewrap`, the legacy table frame, promised in its own comment that "the
+  table scrolls inside it" and never said `overflow`. The contract's
+  `.table-wrap-ui` has had it from the start; the legacy one has caught up.
+
+Verified by rendering: **29 screens × 3 widths (1600 / 1024 / 390) × dark and
+light**, asserting no horizontal page scroll, no page errors, and that no
+"screen" in the list is actually a 404.

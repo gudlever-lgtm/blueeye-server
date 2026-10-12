@@ -31,11 +31,17 @@
    Title, one line of description, help behind (?), actions right. At most one
    primary button; the info banner it replaces is gone. */
 .ui .page-head { display: flex; flex-direction: column; gap: var(--s-4); }
-.ui .page-head-row { display: flex; align-items: flex-start; gap: var(--s-4); }
+/* The header row wraps. It did not, and `.page-head-actions` is flex: 0 0 auto
+   — so on a narrow screen the action buttons simply kept going past the right
+   edge and took the whole page with them (/users scrolled 68px sideways on a
+   phone, /license 43px, chrome and all). Wrapping puts them on their own line
+   under the title instead, which is where they belong at that width. */
+.ui .page-head-row { display: flex; align-items: flex-start; gap: var(--s-4); flex-wrap: wrap; }
 .ui .page-head h1 { margin: 0; font-size: var(--fs-2xl); font-weight: 680; letter-spacing: -0.02em;
   letter-spacing: -0.01em; display: flex; align-items: center; gap: var(--s-2); }
 .ui .page-head p { margin: var(--s-1) 0 0; color: var(--text-muted); font-size: var(--fs-sm); }
-.ui .page-head-actions { margin-left: auto; display: flex; gap: var(--s-2); flex: 0 0 auto; }
+.ui .page-head-actions { margin-left: auto; display: flex; gap: var(--s-2); flex: 0 0 auto;
+  flex-wrap: wrap; }
 
 .ui .help-btn { width: 20px; height: 20px; padding: 0; line-height: 1; flex: 0 0 auto;
   border: 1px solid var(--border); border-radius: var(--radius-pill); background: var(--surface);

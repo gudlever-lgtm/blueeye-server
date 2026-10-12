@@ -838,9 +838,14 @@ main#view .data-card { padding: 0; overflow: hidden; }
 .data-card > .empty { padding: 8px 18px 24px; }
 
 /* A horizontally scrolling table carries the frame on the wrapper instead, so
-   the panel edge stays put while the table scrolls inside it. */
-.tablewrap { background: var(--panel); border: 1px solid var(--hairline);
-  border-radius: var(--radius); box-shadow: var(--elev-1); }
+   the panel edge stays put while the table scrolls inside it.
+   ...which it could not do, because nothing here ever said `overflow`. The
+   wrapper drew the frame and the table pushed straight through it: on a phone
+   /users scrolled the whole PAGE 68px sideways and /license 43px, chrome and
+   all. The contract's own .table-wrap-ui has had `overflow: auto` from the
+   start; this is the legacy wrapper catching up with its own comment. */
+.tablewrap { background: var(--elev-surface-1); border: 1px solid var(--panel-edge);
+  border-radius: var(--r-panel); box-shadow: var(--elev-1); overflow-x: auto; }
 .tablewrap > table { border: 0; border-radius: 0; box-shadow: none; }
 .card .tablewrap, .settings-card .tablewrap, .inv-card .tablewrap {
   background: transparent; border: 0; box-shadow: none; }

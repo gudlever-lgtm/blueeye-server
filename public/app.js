@@ -13899,12 +13899,16 @@ const GUIDE_TRACKS = [
 // Settings are organised into labelled sections rather than one long row of tabs,
 // so related controls sit together and the page stays scannable as it grows. Each
 // tab is [key, label, adminOnly]; non-admins only ever see the personal section.
+// Every label is a function, so it resolves at render time and a language
+// switch relabels the whole page. They used to be plain strings built once at
+// module load, which is why the section names and most of the tabs stayed
+// English on a Danish dashboard while the title above them was translated.
 const SETTINGS_GROUPS = [
-  ['Access & security', [['users', 'Users', true], ['auth', 'Authentication', true], ['apitokens', 'API tokens', true], ['agentkey', 'Agent key', true]]],
-  ['Detection & alerts', [['analyse', 'Analysis', true], ['alerting', 'Alerting', true], ['severity', 'Severity rules', true], ['patterns', () => t('pat.tab'), true], ['thresholds', () => t('thr.tab'), true], ['runbooks', 'Runbooks', true], ['events', () => t('set.tab.events'), true], ['attack', () => t('set.tab.attack'), true], ['integrations', 'ITSM', true], ['cmdb', 'CMDB', true], ['ai', 'AI', true], ['maintenance', 'Maintenance', true]]],
-  ['Data', [['database', 'Database', true], ['retention', 'Retention', true], ['types', 'Traffic types', true], ['map', 'Map', true]]],
-  ['System', [['setup', 'Setup', true], ['updates', 'Updates', true], ['agents', 'Agents', true], ['snmp', 'SNMP devices', true], ['snmpcommunities', 'SNMP communities', true], ['screening', 'Test Settings', true], ['assurance', 'Service Assurance', true], ['ladder', () => t('set.tab.ladder'), true]]],
-  ['Personal', [['appearance', 'Appearance', false], ['license', 'License', false]]],
+  [() => t('set.group.access'), [['users', () => t('set.tab.users'), true], ['auth', () => t('set.tab.auth'), true], ['apitokens', () => t('set.tab.apiTokens'), true], ['agentkey', () => t('set.tab.agentKey'), true]]],
+  [() => t('set.group.detect'), [['analyse', () => t('set.tab.analysis'), true], ['alerting', () => t('set.tab.alerting'), true], ['severity', () => t('set.tab.severity'), true], ['patterns', () => t('pat.tab'), true], ['thresholds', () => t('thr.tab'), true], ['runbooks', () => t('set.tab.runbooks'), true], ['events', () => t('set.tab.events'), true], ['attack', () => t('set.tab.attack'), true], ['integrations', () => t('set.tab.itsm'), true], ['cmdb', () => t('set.tab.cmdb'), true], ['ai', () => t('set.tab.ai'), true], ['maintenance', () => t('set.tab.maintenance'), true]]],
+  [() => t('set.group.data'), [['database', () => t('set.tab.database'), true], ['retention', () => t('set.tab.retention'), true], ['types', () => t('set.tab.types'), true], ['map', () => t('set.tab.map'), true]]],
+  [() => t('set.group.system'), [['setup', () => t('set.tab.setup'), true], ['updates', () => t('set.tab.updates'), true], ['agents', () => t('set.tab.agents'), true], ['snmp', () => t('set.tab.snmp'), true], ['snmpcommunities', () => t('set.tab.snmpCommunities'), true], ['screening', () => t('set.tab.screening'), true], ['assurance', () => t('set.tab.assurance'), true], ['ladder', () => t('set.tab.ladder'), true]]],
+  [() => t('set.group.personal'), [['appearance', () => t('set.tab.appearance'), false], ['license', () => t('set.tab.license'), false]]],
 ];
 // ---- Logs (admin-only operational + client-error view) ----------------------
 // The in-memory server operational stream (agent connect/disconnect, WS/DB
@@ -14712,7 +14716,7 @@ const settingsLabelText = (label) => (typeof label === 'function' ? label() : la
 function settingsGroups() {
   // Drop admin-only sections for non-admins, then drop any group left empty.
   return SETTINGS_GROUPS
-    .map(([label, tabs]) => [label, tabs.filter(([, , adminOnly]) => isAdmin() || !adminOnly)
+    .map(([label, tabs]) => [settingsLabelText(label), tabs.filter(([, , adminOnly]) => isAdmin() || !adminOnly)
       .map(([k, l, a]) => [k, settingsLabelText(l), a])])
     .filter(([, tabs]) => tabs.length > 0);
 }
@@ -14766,15 +14770,20 @@ function licenseBadge(license, feature) {
 // entitles them and red when it doesn't (via featureEntitled, which ORs the
 // legacy module map with the packaged-plan feature map). Keys mirror
 // SETTINGS_GROUPS.
+// The label is a FUNCTION so it resolves at render time: `set.lic.on` is
+// "{label}: i din licens" on a Danish dashboard, and interpolating an English
+// feature name into it produced "Role-based access: i din licens" — half a
+// sentence in each language.
 const SETTINGS_FEATURE = {
-  users: { feature: 'rbac', label: 'Role-based access' },
-  apitokens: { feature: 'api_access', label: 'API access' },
-  analyse: { feature: 'analysis', label: 'Analysis' },
-  alerting: { feature: 'alerting', label: 'Alerting' },
-  ai: { feature: 'assistant', label: 'AI assistant' },
-  map: { feature: 'geo', label: 'Destinations / geo' },
-  assurance: { feature: 'service_tests', label: 'Service Assurance' },
+  users: { feature: 'rbac', label: () => t('set.feat.rbac') },
+  apitokens: { feature: 'api_access', label: () => t('set.feat.apiAccess') },
+  analyse: { feature: 'analysis', label: () => t('set.feat.analysis') },
+  alerting: { feature: 'alerting', label: () => t('set.feat.alerting') },
+  ai: { feature: 'assistant', label: () => t('set.feat.assistant') },
+  map: { feature: 'geo', label: () => t('set.feat.geo') },
+  assurance: { feature: 'service_tests', label: () => t('set.feat.serviceTests') },
 };
+
 
 // Settings → Service Assurance. These are SYSTEM-WIDE limits — discovery
 // budgets, the allowed-hosts caps, runner timeouts, screenshot retention — so
@@ -14802,8 +14811,8 @@ function settingsLicence(tabKey) {
   const ok = featureEntitled(info.feature);
   return {
     ok,
-    text: ok ? t('set.lic.on', { label: info.label }) : t('set.lic.off', { label: info.label }),
-    title: ok ? t('set.lic.onHint', { label: info.label }) : lockedHint(info.label, info.feature),
+    text: ok ? t('set.lic.on', { label: settingsLabelText(info.label) }) : t('set.lic.off', { label: settingsLabelText(info.label) }),
+    title: ok ? t('set.lic.onHint', { label: settingsLabelText(info.label) }) : lockedHint(settingsLabelText(info.label), info.feature),
   };
 }
 

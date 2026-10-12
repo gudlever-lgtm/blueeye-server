@@ -40,11 +40,26 @@ a { color: var(--accent); }
 
 /* Focus ring. One shape for every focusable thing: the accent halo rather than
    the browser's outline, which disappears against a dark panel. Keyboard only
-   (:focus-visible), so a mouse click does not leave a ring behind. */
+   (:focus-visible), so a mouse click does not leave a ring behind.
+   `tabindex="-1"` is excluded, and that is the point: in this app it marks a
+   CONTAINER that only script focuses — #view, so a screen reader lands in the
+   content after navigation, and #modal-card, so a dialog takes focus when it
+   opens. Both were being ringed. Closing any modal returned focus to #view and
+   drew a 3px accent frame around the entire page, which reads as a border
+   around the screen and means nothing to the person looking at it.
+   Nothing the user operates loses its ring: the roving-tabindex widgets
+   (the nav lens, the Service Assurance steps) put 0 on the item that is
+   actually focused and -1 on the rest, and the search field is -1 only while
+   it is closed. */
 button:focus-visible, .chip:focus-visible, summary:focus-visible,
-a:focus-visible, [tabindex]:focus-visible {
+a:focus-visible, [tabindex]:not([tabindex="-1"]):focus-visible {
   outline: none; box-shadow: var(--ring); border-radius: var(--radius-sm);
 }
+/* ...and a script-focused container shows NOTHING. Dropping it out of the rule
+   above only took away the custom ring: the browser's own focus outline was
+   underneath it all along, and removing `outline: none` let a white-and-black
+   UA ring draw the same frame around the whole page. Both have to go. */
+[tabindex="-1"]:focus, [tabindex="-1"]:focus-visible { outline: none; box-shadow: none; }
 
 @media (prefers-reduced-motion: reduce) {
   /* A transition somebody asked not to see. Kept to the two properties the

@@ -193,7 +193,7 @@
               { key: 'time', label: t('delta.col.time'), width: '180px', sortable: true, time: true },
               { key: 'type', label: t('delta.col.type'), width: '180px', sortable: true },
               { key: 'host', label: t('delta.col.host'), width: '200px', sortable: true },
-              { key: 'sev', label: t('delta.col.sev'), width: '110px', sortable: true },
+              { key: 'sev', label: t('delta.col.sev'), width: '150px', sortable: true },
               { key: 'what', label: t('delta.col.what') },
             ],
             rows: rows.map(function (e) {

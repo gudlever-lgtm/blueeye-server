@@ -2059,3 +2059,23 @@ real faults surfaced that the first pass had hidden:
 Verified by rendering: **29 screens × 3 widths (1600 / 1024 / 390) × dark and
 light**, asserting no horizontal page scroll, no page errors, and that no
 "screen" in the list is actually a 404.
+
+### A column has to hold its own header, in every language
+
+`table.dt` is `table-layout: fixed`, so a column is exactly as wide as its
+share says. `td` has carried `overflow: hidden; text-overflow: ellipsis` from
+the start; `th` had only `white-space: nowrap`, so a header longer than its
+column was cut mid-word at the table's edge with nothing to say it had been cut
+— "SENESTE RAPPORT" read as "SENESTE RAPPOR". The header takes the same
+treatment now, which is the safety net.
+
+The widths themselves were the real fault, and they were a **translation**
+fault: every one of them fits its English label and not its Danish one.
+`Last report` fits 140px, `Seneste rapport` does not. Six columns across five
+screens were wrong this way — Overview, Fleet (×2), NIC inventory (×2),
+Topology delta and Changes (×2).
+
+So: **a fixed column width must fit the longest translation of its own label**,
+not the one you happen to be reading. A `th` whose `scrollWidth` exceeds its
+`clientWidth` is clipped, and that is a one-line check worth running against a
+dashboard in each locale after any column is added or renamed.

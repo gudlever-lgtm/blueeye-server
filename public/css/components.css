@@ -276,10 +276,17 @@
    part of the surface it sits on, and a hairline instead of a full border: the
    panel no longer draws a rule under its title, which made this the heaviest
    line on the screen. */
+/* The header gets the same overflow treatment as the cells under it. table.dt
+   is table-layout: fixed, so a column is as wide as its share says and no
+   wider; `td` has had `overflow: hidden; text-overflow: ellipsis` from the
+   start, but `th` had only `white-space: nowrap` — so a header longer than its
+   column was cut mid-word at the table's edge with nothing to say it had been
+   cut. "SENESTE RAPPORT" read as "SENESTE RAPPOR". */
 .ui table.dt thead th { position: sticky; top: 0; z-index: var(--z-sticky); background: var(--elev-surface-1);
   height: 36px; padding: 0 var(--s-4); text-align: left; white-space: nowrap; cursor: pointer;
   user-select: none; border-bottom: 1px solid var(--hairline); font-size: var(--fs-xs);
-  font-weight: 650; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; }
+  font-weight: 650; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em;
+  overflow: hidden; text-overflow: ellipsis; }
 .ui table.dt thead th.col-num { text-align: right; }
 .ui table.dt thead th:hover { color: var(--text); }
 .ui table.dt thead th .sort { opacity: 0.35; margin-left: var(--s-1); }

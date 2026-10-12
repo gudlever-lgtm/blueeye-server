@@ -152,7 +152,7 @@
                   { key: 'model', label: t('nic.col.model') },
                   { key: 'firmware', label: t('nic.col.firmware'), width: '180px' },
                   { key: 'state', label: t('nic.col.state'), width: '116px' },
-                  { key: 'units', label: t('nic.col.units'), width: '84px', num: true },
+                  { key: 'units', label: t('nic.col.units'), width: '100px', num: true },
                   { key: 'agents', label: t('nic.col.agents'), width: '300px' },
                 ],
                 rows: rows,
@@ -188,7 +188,7 @@
             ? ui.dataTable({
               columns: [
                 { key: 'model', label: t('nic.col.model') },
-                { key: 'units', label: t('nic.col.units'), width: '84px', num: true },
+                { key: 'units', label: t('nic.col.units'), width: '100px', num: true },
                 { key: 'firmwares', label: t('nic.col.firmwares'), width: '340px' },
                 { key: 'state', label: t('nic.col.state'), width: '104px' },
               ],

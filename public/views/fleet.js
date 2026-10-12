@@ -481,10 +481,10 @@
         health: function () {
           return [
             { key: 'loss', label: t('fleet.col.loss'), width: '84px', sortable: true, num: true },
-            { key: 'latency', label: t('fleet.col.latency'), width: '104px', sortable: true, num: true },
+            { key: 'latency', label: t('fleet.col.latency'), width: '120px', sortable: true, num: true },
             { key: 'jitter', label: t('fleet.col.jitter'), width: '92px', sortable: true, num: true },
             { key: 'targets', label: t('fleet.col.targets'), width: '92px', num: true },
-            { key: 'speed', label: t('fleet.col.speed'), width: '104px', num: true },
+            { key: 'speed', label: t('fleet.col.speed'), width: '120px', num: true },
           ];
         },
         drift: function () {

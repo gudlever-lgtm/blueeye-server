@@ -417,7 +417,12 @@
                 { key: 'data', label: t('home.col.data'), width: '130px' },
                 { key: 'health', label: t('home.col.health'), width: '120px' },
                 { key: 'site', label: t('home.col.site'), width: '22%' },
-                { key: 'seen', label: t('home.col.seen'), width: '140px' },
+                // 180px, not 140: the column has to hold its own HEADER in
+                // every language the dashboard speaks, and "SENESTE RAPPORT"
+                // uppercased at 12px with letter-spacing plus the cell padding
+                // and the sort arrow does not fit in 140. English ("Last
+                // report") did, which is how it shipped.
+                { key: 'seen', label: t('home.col.seen'), width: '180px' },
               ],
               rows: blind.slice(0, ROWS).map(function (a) {
                 return {

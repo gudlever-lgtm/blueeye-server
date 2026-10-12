@@ -20816,7 +20816,13 @@ function getServiceAssurancePage() {
     setTab: (tab) => { serviceAssuranceTab = tab; syncAddress(); },
     help: () => {
       const info = PAGE_INFO.serviceAssurance || {};
-      return { lead: info.hero || '', title: info.title || t('sa.title'), body: info.body || (() => []) };
+      // The lead goes through the translation layer. PAGE_INFO.hero is a plain
+      // string built at module load, so it was English on a Danish dashboard
+      // while the tabs and the content around it were translated —
+      // `sa.tagline` is the same sentence and has been in both catalogues all
+      // along. `t()` here re-resolves on every render, so a language switch
+      // relabels it like everything else.
+      return { lead: t('sa.tagline'), title: info.title || t('sa.title'), body: info.body || (() => []) };
     },
   });
   return serviceAssurancePage;

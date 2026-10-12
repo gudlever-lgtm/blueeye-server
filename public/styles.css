@@ -97,18 +97,32 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   display: grid; place-items: center; background: var(--accent-weak); color: var(--accent); font-size: var(--fs-lg); }
 .brand-name { font-weight: 700; font-size: var(--fs-md); letter-spacing: -.01em; }
 .sidebar-foot { margin-top: auto; padding: var(--s-3) var(--s-4); border-top: 1px solid var(--hairline);
-  display: flex; flex-direction: column; align-items: flex-start; gap: var(--s-2); }
+  display: flex; flex-direction: column; align-items: stretch; gap: var(--s-2); }
 .foot-version { font-size: var(--fs-xs); letter-spacing: .02em; color: var(--muted); padding: 0 var(--s-1); }
-/* Documentation pill — reads as a clickable action (not muted text), tucked in
-   the sidebar footer beside the version line instead of taking a nav slot. */
-.foot-docs { display: inline-flex; align-items: center; gap: var(--s-2);
-  padding: var(--s-2) var(--s-3); border-radius: var(--radius-pill);
+/* The two footer actions — Guides and Documentation. They read as clickable
+   actions (not muted text), tucked under the rail instead of taking a nav slot.
+   They are also the two buttons a reader sees side by side for the longest, so
+   they have to look like one pair:
+     * the column stretches them, so both are the full width of the footer
+       rather than each shrinking to its own label — "Guides" and
+       "Documentation" are very different lengths, and two ragged pills stacked
+       on top of each other was the result;
+     * --r-btn, not --radius-pill. tokens.css reserves the pill for status,
+       tags and filters; these are buttons, and at a pill radius the width
+       difference was the loudest thing in the footer;
+     * one height, from the same --control-h-sm every other small control uses.
+   The book emoji went with it: the icon vocabulary elsewhere in this file is
+   stroked SVG precisely because a font glyph renders at a different size and
+   weight on every platform, and one button with a glyph beside one without is
+   the asymmetry you cannot unsee. */
+.foot-docs { display: flex; align-items: center; justify-content: flex-start; gap: var(--s-2);
+  width: 100%; min-height: var(--control-h-sm);
+  padding: var(--s-2) var(--s-3); border-radius: var(--r-btn);
   border: 1px solid var(--border); background: var(--panel-2);
   color: var(--text); font-size: var(--fs-xs); font-weight: 600; line-height: 1;
   transition: border-color var(--dur-1) var(--ease), background var(--dur-1) var(--ease), color var(--dur-1) var(--ease); }
 .foot-docs:hover { border-color: var(--accent); color: var(--accent); background: var(--accent-weak); }
 .foot-docs.active { border-color: var(--accent); color: var(--accent); background: var(--accent-weak); }
-.foot-docs-icon { font-size: var(--fs-sm); line-height: 1; }
 
 .shell { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; }
 

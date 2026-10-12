@@ -8395,7 +8395,7 @@
       'sa.title': 'Service Assurance',
       'sa.err.load': 'Service Assurance kunne ikke indlæses',
       'sa.err.loadHint': 'Modulet blev ikke indlæst. Genindlæs siden; sker det igen, så se browserens konsol.',
-      'sa.tagline': 'Know when your digital services stop working — before your users do.',
+      'sa.tagline': "Opdag at jeres digitale services er gået ned — før jeres brugere gør.",
       'sa.tab.applications': 'Applikationer',
       'sa.tab.discovery': 'Kortlægning',
       'sa.tab.suggestions': 'Foreslåede tests',

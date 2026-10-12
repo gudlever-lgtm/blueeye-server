@@ -1518,7 +1518,7 @@ const PAGE_INFO = {
     ],
   },
   serviceAssurance: {
-    hero: 'Know when your digital services stop working — before your users do.',
+    get hero() { return t('sa.tagline'); },
     title: 'Service Assurance — synthetic monitoring of your web services',
     body: () => [
       el('p', {}, 'Register the web application you depend on, let ', el('strong', {}, 'Discovery'), ' look around it, and accept the tests it suggests. A test is a journey a real user takes — sign in, look up a customer, place an order — run on a schedule from a real browser.'),
@@ -1529,7 +1529,7 @@ const PAGE_INFO = {
     ],
   },
   changes: {
-    hero: 'What happened since you last looked — agent and link transitions, new anomalies and events, playbook runs and configuration changes, newest first.',
+    get hero() { return t('changes.info.hero'); },
     title: 'Changes — since you last looked',
     body: () => [
       el('p', {}, 'This is the landing page because a dashboard full of green answers a question nobody asked. The shift starts with ', el('strong', {}, 'what happened while I was away'), ' — so this page shows change, not status.'),
@@ -1539,7 +1539,7 @@ const PAGE_INFO = {
     ],
   },
   docs: {
-    hero: 'Documentation & how-to guides — step-by-step troubleshooting walkthroughs with worked examples, plus (for admins) setup guides for integrations like ServiceNow, including what a working connection and a failure look like.',
+    get hero() { return t('docs.info.hero'); },
     title: 'Documentation — guides & how-tos',
     body: () => [
       el('p', {}, 'A built-in handbook. The ', el('strong', {}, 'Getting started'), ' and ', el('strong', {}, 'Troubleshooting how-tos'), ' sections are available to everyone and walk through real tasks — diagnosing an offline agent, chasing latency to a destination, reading a finding — using the pages you already have.'),
@@ -1548,7 +1548,7 @@ const PAGE_INFO = {
     ],
   },
   troubleshooting: {
-    hero: 'One screen for an outage: what is failing, what it affects, and when it started — correlated root causes, the L2/L3 topology coloured by state, baseline deviations and a change timeline, all from a single read.',
+    get hero() { return t('troubleshooting.info.hero'); },
     title: 'Troubleshooting — the consolidated fault view',
     body: () => [
       el('p', {}, 'Aggregates five existing capabilities into one screen so you do not have to switch views mid-outage: topology rediscovery (LLDP), service-dependency mapping, blast radius, per-flow-pair baselining and active discovery. It owns no data of its own — every number here is the same one the underlying page would show.'),
@@ -1561,7 +1561,7 @@ const PAGE_INFO = {
     ],
   },
   topology: {
-    hero: 'Dependency map — who talks to whom, built from the 5-tuple flows your agents already report (NetFlow/sFlow). Filter by site to scope the graph to one location.',
+    get hero() { return t('topology.info.hero'); },
     title: 'Topology — flow-derived dependencies',
     body: () => [
       el('p', {}, 'Aggregates observed src→dst conversations into a directed, byte-weighted graph: each edge is a dependency, each node a host or external peer. Complements ', viewLink('flows', 'Flows'), ' (raw conversations) and the per-target path map — this is the service/host dependency view. Metadata only: addresses, ports, ASNs and byte/flow counts, never payload.'),
@@ -1572,7 +1572,7 @@ const PAGE_INFO = {
     ],
   },
   screening: {
-    hero: 'Test Settings — one place to verify every outbound integration: send a test email, reach your ITSM/IPAM receivers, check SSO and the other services BlueEye talks to — each with a security check.',
+    get hero() { return t('screening.info.hero'); },
     title: 'Test Settings — connectivity & security screening',
     body: () => [
       el('p', {}, 'A consolidated, admin-only screening of everything BlueEye reaches OUTWARD to. Each target gets two verdicts: a live connectivity test and a security-posture check (HTTPS vs plaintext, TLS, signed webhooks, authentication, certificate/secret presence, licence state).'),
@@ -1596,7 +1596,7 @@ const PAGE_INFO = {
     ],
   },
   tests: {
-    hero: 'Reusable test packages — run the same checks on a schedule across many agents. (For a quick one-off check from a single agent, use Probes instead.)',
+    get hero() { return t('tests.info.hero'); },
     title: 'Tests — packages pushed to agents',
     body: () => [
       el('div', { class: 'callout' },
@@ -1616,7 +1616,7 @@ const PAGE_INFO = {
     ],
   },
   fleet: {
-    hero: 'All agents in one view — with a health assessment based on active reachability, packet loss, latency and jitter.',
+    get hero() { return t('fleet.lead'); },
     title: 'Overview — fleet health',
     body: () => [
       el('p', {}, 'The landing page collects all agents with a single health stamp, so you immediately see where something is wrong. Rows are sorted worst-first and refresh continuously. Click an agent to drill into its measurements.'),
@@ -1656,7 +1656,7 @@ const PAGE_INFO = {
     ],
   },
   location: {
-    hero: 'Everything for one site in one place: its agents with health verdicts, a scoped health summary, and the site\'s data flows on a map — click any flow to inspect it in Flows.',
+    get hero() { return t('location.info.hero'); },
     title: 'Location — site drill-down',
     body: () => [
       el('p', {}, 'The combined page for one location. Reached by clicking a location on the ', viewLink('map', 'Sites', 'list'), ' register, the site name on an agent page, or a site pin on a traffic map.'),
@@ -1668,7 +1668,7 @@ const PAGE_INFO = {
     ],
   },
   agent: {
-    hero: 'Everything for one agent in one place: health summary, probes (latency/loss/jitter), interface health and traffic.',
+    get hero() { return t('agent.info.hero'); },
     title: 'Agent — details',
     body: () => [
       el('p', {}, 'The combined troubleshooting page for one agent. At the top a health summary with the numbers driving the assessment; below you can expand the individual data sources.'),
@@ -1685,7 +1685,7 @@ const PAGE_INFO = {
     ],
   },
   overview: {
-    hero: 'Aggregated live traffic picture for all agents — select series, inspect a time window and review consumption.',
+    get hero() { return t('overview.info.hero'); },
     title: 'Traffic — overview',
     body: () => [
       el('p', {}, 'A wide live chart of traffic across all agents. It updates every 3 seconds and shows the last ~3 minutes with timestamps (HH:MM:SS) along the x-axis.'),
@@ -1705,7 +1705,7 @@ const PAGE_INFO = {
     ],
   },
   map: {
-    hero: 'Your sites on a map — each marker coloured by the worst agent health at that site.',
+    get hero() { return t('map.info.hero'); },
     title: 'Sites',
     body: () => [
       el('p', {}, 'Each location with coordinates is a marker, coloured by the worst health verdict among its agents (green = healthy, amber = warning, red = critical, grey = unknown/offline) — the same verdict as ', viewLink('fleet', 'Overview'), '. The page refreshes itself so the colours stay live.'),
@@ -1716,7 +1716,7 @@ const PAGE_INFO = {
     ],
   },
   probes: {
-    hero: 'Run a single active check from one agent, right now: ping, TCP-connect, DNS, traceroute, TCP traceroute, path MTU, cURL content check or page load — with RTT, loss, path and history.',
+    get hero() { return t('probes.info.hero'); },
     title: 'Probes',
     body: () => [
       el('div', { class: 'callout' },
@@ -1766,7 +1766,7 @@ const PAGE_INFO = {
     ],
   },
   flows: {
-    hero: 'Inspect conversations: who talks to whom, on which ports, and who is scanning. Bidirectional mode splits ingress/egress; Map mode draws the traffic as colored directional arrows on a world map.',
+    get hero() { return t('flows.info.hero'); },
     title: 'Flows — conversations, bidirectional inspector & traffic map',
     body: () => [
       el('p', {}, 'While ', viewLink('overview', 'Traffic'), ' shows volumes and the ', viewLink('geo', 'Destinations'), ' map shows where it goes, Flows lets you drill into individual conversations (5-tuple metadata from NetFlow/sFlow) for one agent.'),
@@ -1790,7 +1790,7 @@ const PAGE_INFO = {
     ],
   },
   geo: {
-    hero: 'Where your traffic goes: internal sites and external destinations (country/ASN) on a map.',
+    get hero() { return t('geo.info.hero'); },
     title: 'Destinations',
     body: () => [
       el('p', {}, 'Internal hosts are shown based on their site coordinates (set per location) — never via GeoIP. External destinations are aggregated per country/ASN from GeoIP-enriched flows; private/RFC1918 addresses are never shown as geo points.'),
@@ -1814,7 +1814,7 @@ const PAGE_INFO = {
     ],
   },
   findings: {
-    hero: 'Locally computed errors & anomalies — with explanation, documentation and root-cause hints.',
+    get hero() { return t('findings.info.hero'); },
     title: 'Analysis — errors & anomalies',
     body: () => [
       el('p', {}, 'The server analyses agent measurements locally (no cloud, no ML library) and raises a finding when a metric deviates significantly from its own baseline, flatlines (sensor/agent stop) or correlates with other errors.'),
@@ -1834,7 +1834,7 @@ const PAGE_INFO = {
     ],
   },
   enrollment: {
-    hero: 'Add an agent with a single command — the code, server address and checksum are already set.',
+    get hero() { return t('enrollment.info.hero'); },
     title: 'Enrollment',
     body: () => [
       el('p', {}, '”Add agent” generates a code and a ready-to-run install command. Run the one-liner on the machine — it downloads the agent binary from this server, verifies the SHA-256, exchanges the code for a permanent token and starts a service. You never need to enter the server address yourself.'),
@@ -1860,7 +1860,7 @@ const PAGE_INFO = {
     ],
   },
   users: {
-    hero: 'Manage staff users and their roles (admin only).',
+    get hero() { return t('users.info.hero'); },
     title: 'Users',
     body: () => [
       el('h4', {}, 'Roles'),
@@ -1875,7 +1875,7 @@ const PAGE_INFO = {
     ],
   },
   license: {
-    hero: 'View this server\'s licence status, validated against the central licence server.',
+    get hero() { return t('license.info.hero'); },
     title: 'License',
     body: () => [
       el('p', {}, 'The server fetches a signed proof from the licence server and verifies it offline using an embedded key.'),
@@ -1886,7 +1886,7 @@ const PAGE_INFO = {
     ],
   },
   settings: {
-    hero: 'Configuration and administration — one tab per topic.',
+    get hero() { return t('settings.info.hero'); },
     title: 'Settings',
     body: () => [
       el('p', {}, 'Each tab covers one topic. Most settings can be edited here and take effect immediately without a restart; a few are read-only and controlled via the server\'s .env because they contain secrets.'),
@@ -4451,7 +4451,7 @@ function incCondition(i) {
 }
 
 PAGE_INFO.events = {
-  hero: 'Events group related anomalies on the same device into one thing you can track from open to closed — with a timeline, the config change that may have triggered it, similar past events, and an opt-in AI assistant. A connected ITSM opens its own event from an event.',
+  get hero() { return t('events.info.hero'); },
   title: 'Events — grouped anomalies, tracked end-to-end',
   body: () => [
     el('p', {}, 'Each event wraps the analysis findings (anomalies) that fired close together on one device. Status moves open → investigating → resolved → closed, and an open event can go straight to resolved when there is nothing to investigate; a closed event can be reopened with a comment (recorded in the audit trail).'),
@@ -5240,7 +5240,7 @@ const clusterStatusBadge = (s) => el('span', { class: `badge inc-status-${s}` },
 const clusterConfBadge = (c) => el('span', { class: `badge conf-${c}` }, `${CLUSTER_CONF_LABEL[c] || c}`);
 
 PAGE_INFO.clusters = {
-  hero: 'Situations group findings that fired on SEVERAL agents at once into one cross-agent event — with the change that came just before, a plain-language evidence breakdown, and one merged timeline.',
+  get hero() { return t('clusters.info.hero'); },
   title: 'Situations — cross-agent events, one common picture',
   body: () => [
     el('p', {}, 'When a fault hits many agents at the same time, BlueEye clusters their findings into one situation instead of N look-alike alerts. Each situation carries a confidence tier (how independent the grouping signals were) and a suspected common cause.'),
@@ -7685,7 +7685,7 @@ views.topology = async () => {
 // (the same fleetFilter the Overview uses) — not a separate filter state.
 // Operator+ (changes are evidence records; the endpoint is operator+).
 PAGE_INFO.delta = {
-  hero: 'Topology changes — neighbour add/remove, link-state changes, port moves and flaps, newest first.',
+  get hero() { return t('delta.info.hero'); },
   title: 'Changes — the topology delta feed',
   body: () => [
     el('p', {}, 'Each LLDP poll is compared against the previous snapshot and every difference is recorded as an immutable change (also written to the hash-chained audit log). A change that reverts within the flap window collapses into a single “flapping” record.'),
@@ -7757,7 +7757,7 @@ views.delta = async () => {
 // The section is hidden from non-admins in the nav (data-min-role="admin") and
 // every /api/discovery endpoint is admin-only server-side.
 PAGE_INFO.discovery = {
-  hero: 'Active discovery finds devices passive collection misses — a rate-limited native scan of the CIDR scope you configure. Nothing is ever auto-enrolled.',
+  get hero() { return t('discovery.info.hero'); },
   title: 'Discovery — find what passive monitoring misses',
   body: () => [
     el('p', {}, 'A scheduled, rate-limited sweep probes the CIDR ranges you configure (TCP-connect on a port list + reverse DNS). Live hosts become candidates you review — promotion to a monitored device is always a manual, admin action.'),
@@ -11016,10 +11016,7 @@ function getFleetView() {
     syncUrl: () => syncFleetUrl(),
     help: () => {
       const info = PAGE_INFO.fleet || {};
-      // Through the catalogue, like Service Assurance's: PAGE_INFO.hero is a
-      // plain string built at module load, so the lead stayed English under a
-      // Danish title and a Danish rail entry.
-      return { lead: t('fleet.lead'), title: info.title || t('fleet.title'), body: info.body || (() => []) };
+      return { lead: info.hero || '', title: info.title || t('fleet.title'), body: info.body || (() => []) };
     },
     // Filtering is client-side on the dataset the page already holds. Only for a
     // large fleet (>500 agents) is the severity filter offloaded to the server
@@ -20649,7 +20646,7 @@ function renderRgData(report) {
 }
 
 PAGE_INFO.reporting = {
-  hero: 'Reporting — findings over time, the NIS2 readiness module, and a Report Generator for building your own reports.',
+  get hero() { return t('reporting.info.hero'); },
   title: 'Reporting',
   body: () => [
     el('p', {}, 'Three ways to report:'),
@@ -20676,7 +20673,7 @@ PAGE_INFO.reporting = {
 };
 
 PAGE_INFO.logs = {
-  hero: 'System Logs — the live server diagnostic stream (agent connects, WebSocket/DB errors, HTTP failures) merged with the dashboard errors you were shown. In-memory: cleared when the server restarts.',
+  get hero() { return t('logs.info.hero'); },
   title: 'System Logs — operational diagnostics',
   body: () => [
     el('p', {}, 'This is the operational/diagnostic stream — the same lines the server writes to its console (', el('code', {}, 'docker compose logs'), ') — kept in an in-memory ring buffer (the most recent ~1000 records) so you can read them here without shell access. It is merged with client-side failures: any error a dashboard action showed you (e.g. “Agent not connected”) is captured here too, so a toast that flashed past can still be found.'),
@@ -20691,7 +20688,7 @@ PAGE_INFO.logs = {
 };
 
 PAGE_INFO.userLogs = {
-  hero: 'User Logs — the audit log: every action a person performed on this server, which account, when, and a flag on anything that looks wrong.',
+  get hero() { return t('userLogs.info.hero'); },
   title: 'User Logs — the audit log: who did what',
   body: () => [
     el('p', {}, 'The durable record of human activity on this server \u2014 this is the audit log. One row per action, with the account behind it (', el('strong', {}, 'user id'), ', name and e-mail), the ', el('strong', {}, 'time'), ' it happened, and the ', el('strong', {}, 'action'), ' in plain language with the raw action key and the request underneath it.'),
@@ -20715,7 +20712,7 @@ PAGE_INFO.userLogs = {
 };
 
 PAGE_INFO.transactions = {
-  hero: 'Transaction tests — http/tcp/dns/icmp run from assigned agents on an interval, with latency, baseline deviation, and failure diagnosis per step.',
+  get hero() { return t('transactions.info.hero'); },
   title: 'Transaction tests',
   body: () => [
     el('p', {}, 'A transaction test runs from selected agents on its own interval. HTTP tests are a sequence of steps (method, URL, headers, body) that can validate the status code and a keyword, and extract values (regex/JSON-path/cookie) for subsequent steps. Secrets are referenced as ', el('span', { class: 'mono' }, '{{secret:name}}'), ' — they are write-only and never shown again.'),
@@ -20836,13 +20833,7 @@ function getServiceAssurancePage() {
     setTab: (tab) => { serviceAssuranceTab = tab; syncAddress(); },
     help: () => {
       const info = PAGE_INFO.serviceAssurance || {};
-      // The lead goes through the translation layer. PAGE_INFO.hero is a plain
-      // string built at module load, so it was English on a Danish dashboard
-      // while the tabs and the content around it were translated —
-      // `sa.tagline` is the same sentence and has been in both catalogues all
-      // along. `t()` here re-resolves on every render, so a language switch
-      // relabels it like everything else.
-      return { lead: t('sa.tagline'), title: info.title || t('sa.title'), body: info.body || (() => []) };
+      return { lead: info.hero || '', title: info.title || t('sa.title'), body: info.body || (() => []) };
     },
   });
   return serviceAssurancePage;

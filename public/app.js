@@ -327,12 +327,20 @@ function pageLoadBar() { return typeof LoadingBar !== 'undefined' ? LoadingBar :
 // switching the line off while three are still out. And finally, not a trailing
 // call: a 500 or a dropped connection has to take the line down too, or it
 // creeps at 90% for the rest of the session.
+// A write in flight holds the auto-refresh off. A bulk resolve of forty
+// situations is one request that runs for several seconds, and a silent
+// re-render in the middle of it threw the screen away and rebuilt it from
+// half-applied rows — it looked like the page reloading once per situation.
+let writesInFlight = 0;
 async function api(path, { method = 'GET', body } = {}) {
   const bar = pageLoadBar();
   if (bar) bar.start();
+  const write = method !== 'GET';
+  if (write) writesInFlight += 1;
   try {
     return await apiRequest(path, { method, body });
   } finally {
+    if (write) writesInFlight -= 1;
     if (bar) bar.stop();
   }
 }
@@ -22154,6 +22162,7 @@ const NO_AUTOREFRESH_VIEWS = new Set([
   'reporting', 'discovery', 'users', 'kitchenSink',
 ]);
 function autoRefreshShouldWait() {
+  if (writesInFlight > 0) return true;
   if (NO_AUTOREFRESH_VIEWS.has(currentView)) return true;
   if (ui && typeof ui.overlayOpen === 'function' && ui.overlayOpen()) return true;
   if (drawerEls) return true; // the help drawer

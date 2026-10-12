@@ -48,6 +48,11 @@ full HTTP route table, the data model, the dashboard structure, and a
 - DB: numbered `migrations/NNN_*.sql` (tracked in `schema_migrations`), run `npm run migrate`.
   After adding a migration run `npm run build-schema` — `schema.sql` is generated from
   the migration chain and `npm test` fails when it is stale. Never hand-edit it.
+  **Never edit a migration that has shipped — not even a comment.** `src/migrate.js`
+  records a sha256 per file and refuses to boot on a mismatch, and the container runs
+  `migrate && server`, so an edited comment takes every deployed install down until
+  someone runs `node src/migrate.js --accept-checksum <file>` on it. A repo-wide
+  search-and-replace must exclude `migrations/`.
   `npm test` only checks the snapshot against the MODEL in `scripts/build-schema.js`;
   whether that model agrees with MySQL is a different question, and `npm run
   verify-schema` is what answers it (`DB_HOST`/`DB_PORT`/`DB_USER`/`DB_PASSWORD`,

@@ -508,7 +508,7 @@ CREATE TABLE IF NOT EXISTS `ldap_config` (
   PRIMARY KEY (id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
--- Maps an LDAP/AD group DN to a BlueEye role. On login the user's groups are
+-- Maps an LDAP/AD group DN to a BlueEyes role. On login the user's groups are
 -- looked up and the HIGHEST matching role wins (admin > operator > viewer). NO
 -- match means access is DENIED — there is deliberately no default role.
 CREATE TABLE IF NOT EXISTS `ldap_role_map` (
@@ -807,7 +807,7 @@ CREATE TABLE IF NOT EXISTS `audit_events` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- Maps an OIDC claim value (a group/role name from the id-token `groups` claim,
--- configurable via OIDC_ROLE_CLAIM) to a BlueEye role. On login the user's claim
+-- configurable via OIDC_ROLE_CLAIM) to a BlueEyes role. On login the user's claim
 -- values are looked up and the HIGHEST matching role wins (admin > operator >
 -- viewer). NO match means access is DENIED — there is deliberately no default role.
 CREATE TABLE IF NOT EXISTS `oidc_role_map` (
@@ -839,7 +839,7 @@ CREATE TABLE IF NOT EXISTS `sso_login_audit` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- Maps a SAML attribute value (a group/role name from the configured role
--- attribute, default `groups`) to a BlueEye role. On login the user's attribute
+-- attribute, default `groups`) to a BlueEyes role. On login the user's attribute
 -- values are looked up and the HIGHEST matching role wins (admin > operator >
 -- viewer). NO match means access is DENIED — there is deliberately no default
 -- role. The column is named `claim_value` to share the generic role-map surface
@@ -942,7 +942,7 @@ CREATE TABLE IF NOT EXISTS `transaction_baselines` (
   PRIMARY KEY (test_id, agent_id, step)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
--- 049 — raw device-config snapshots (Fase 3). BlueEye does not capture device
+-- 049 — raw device-config snapshots (Fase 3). BlueEyes does not capture device
 -- running-config today, so this is genuinely new storage. One row per captured
 -- config for a device (a device = an agent). Diff-generation between consecutive
 -- rows and correlation to incidents build on top of this table.
@@ -972,7 +972,7 @@ CREATE TABLE IF NOT EXISTS `config_snapshots` (
 --                     — never plaintext, never returned by the API. verified_at is
 --                     stamped when POST /api/settings/cmdb/test reaches the upstream.
 --
---   agent_cmdb_links  links a BlueEye agent to one CMDB asset (searchable dropdown
+--   agent_cmdb_links  links a BlueEyes agent to one CMDB asset (searchable dropdown
 --                     in the agent detail page). One row per agent (agent_id PK); the
 --                     FK cascades on agent delete so a removed agent takes its link.
 --
@@ -1165,7 +1165,7 @@ CREATE TABLE IF NOT EXISTS `lldp_neighbors` (
 
 -- 065 — automated evidence snapshots on cluster open (Fase 6).
 --
--- When a cross-agent cluster opens, BlueEye captures a READ-ONLY diagnostic
+-- When a cross-agent cluster opens, BlueEyes captures a READ-ONLY diagnostic
 -- snapshot from each affected target via the existing (authenticated, audited)
 -- agent-command path — interface counters, ARP/MAC extract, allowlisted SNMP
 -- reads, agent-local state. The result is EVIDENCE, not time series: one
@@ -1614,7 +1614,7 @@ CREATE TABLE IF NOT EXISTS `event_notes` (
 --   time proximity alone .................. low
 --   time + shared site (topology) ......... medium
 --   time + shared site + same finding-type  high
--- (Topology = a shared site / location_id — the only cross-agent adjacency BlueEye
+-- (Topology = a shared site / location_id — the only cross-agent adjacency BlueEyes
 --  has today; subnet/VLAN/LLDP are not reported by agents. See docs/cross-agent-correlation.md.)
 --
 -- member_finding_ids is a JSON array of `findings.id` values (UUID strings). It is
@@ -2267,7 +2267,7 @@ CREATE TABLE IF NOT EXISTS `service_test_journey_steps` (
 --     Original:   #login-button
 --     Suggested:  button "Log ind"
 --
--- When a step's target no longer resolves, BlueEye proposes the element it
+-- When a step's target no longer resolves, BlueEyes proposes the element it
 -- thinks the operator meant. It does NOT repoint the test: the spec says
 -- "testen må ikke ændres automatisk uden brugerens accept", and this table is
 -- how that rule is kept honest — a proposal is a row somebody has to act on,
@@ -2303,7 +2303,7 @@ CREATE TABLE IF NOT EXISTS `service_test_healing` (
 
 -- Severity rules — "this kind of event is a warning for us, not a critical".
 --
--- BlueEye decides severity at detection time: the analysis detector from a MAD
+-- BlueEyes decides severity at detection time: the analysis detector from a MAD
 -- z-score, Service Assurance from the kind of failure. Both are reasonable
 -- defaults and neither knows your business. A packet-loss anomaly that pages one
 -- customer at 3am is background noise to another.
@@ -2584,7 +2584,7 @@ CREATE TABLE IF NOT EXISTS `service_monitor_results` (
 
 -- 097 — symptom-first diagnosis sessions (docs/diagnose.md).
 --
--- A technician writes what is wrong in their own words, BlueEye returns a plan
+-- A technician writes what is wrong in their own words, BlueEyes returns a plan
 -- — likely causes, the tests to run with their parameters filled in, the views
 -- to open and what to look for — and once the tests have run it evaluates the
 -- playbook's reading rules and marks each cause confirmed, ruled out or still
@@ -2850,7 +2850,7 @@ CREATE TABLE IF NOT EXISTS `snmp_devices` (
 -- 105 — fdb_entries: which switch port a MAC address is on.
 --
 -- THE QUESTION THIS ANSWERS. "The printer on the second floor is offline" ends,
--- eventually, at a physical port on a physical switch. Until now BlueEye could
+-- eventually, at a physical port on a physical switch. Until now BlueEyes could
 -- get as far as IP↔MAC (arp_entries, migration 073) and stop: an agent's
 -- neighbour cache knows that 192.168.20.84 is 00:1b:44:11:3a:b7, and nothing
 -- knew that 00:1b:44:11:3a:b7 is on sw-acc-2 Gi0/14. That last hop is the one
@@ -3844,7 +3844,7 @@ CREATE TABLE IF NOT EXISTS `hop_locations` (
 
 -- 146 — event_patterns + alert_routes: one named match, used by every policy.
 --
--- THE PROBLEM. BlueEye already has a matcher: event_severity_rules (086) pins
+-- THE PROBLEM. BlueEyes already has a matcher: event_severity_rules (086) pins
 -- down source/metric/kind/agent/application, blank means "any", and the most
 -- specific rule wins. It is a good matcher and it is welded to exactly one
 -- decision — what severity to store. So an operator who wants

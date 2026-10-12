@@ -10,7 +10,7 @@
 --   time proximity alone .................. low
 --   time + shared site (topology) ......... medium
 --   time + shared site + same finding-type  high
--- (Topology = a shared site / location_id — the only cross-agent adjacency BlueEye
+-- (Topology = a shared site / location_id — the only cross-agent adjacency BlueEyes
 --  has today; subnet/VLAN/LLDP are not reported by agents. See docs/cross-agent-correlation.md.)
 --
 -- member_finding_ids is a JSON array of `findings.id` values (UUID strings). It is

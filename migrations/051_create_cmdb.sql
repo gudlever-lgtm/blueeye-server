@@ -6,7 +6,7 @@
 --                     — never plaintext, never returned by the API. verified_at is
 --                     stamped when POST /api/settings/cmdb/test reaches the upstream.
 --
---   agent_cmdb_links  links a BlueEye agent to one CMDB asset (searchable dropdown
+--   agent_cmdb_links  links a BlueEyes agent to one CMDB asset (searchable dropdown
 --                     in the agent detail page). One row per agent (agent_id PK); the
 --                     FK cascades on agent delete so a removed agent takes its link.
 --

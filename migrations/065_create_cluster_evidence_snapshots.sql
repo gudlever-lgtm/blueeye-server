@@ -1,6 +1,6 @@
 -- 065 — automated evidence snapshots on cluster open (Fase 6).
 --
--- When a cross-agent cluster opens, BlueEye captures a READ-ONLY diagnostic
+-- When a cross-agent cluster opens, BlueEyes captures a READ-ONLY diagnostic
 -- snapshot from each affected target via the existing (authenticated, audited)
 -- agent-command path — interface counters, ARP/MAC extract, allowlisted SNMP
 -- reads, agent-local state. The result is EVIDENCE, not time series: one

@@ -1,6 +1,6 @@
 -- 097 — symptom-first diagnosis sessions (docs/diagnose.md).
 --
--- A technician writes what is wrong in their own words, BlueEye returns a plan
+-- A technician writes what is wrong in their own words, BlueEyes returns a plan
 -- — likely causes, the tests to run with their parameters filled in, the views
 -- to open and what to look for — and once the tests have run it evaluates the
 -- playbook's reading rules and marks each cause confirmed, ruled out or still

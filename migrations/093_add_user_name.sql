@@ -1,6 +1,6 @@
 -- 093 — a name on the user account.
 --
--- BlueEye has always keyed users by email, and every screen that had to show a
+-- BlueEyes has always keyed users by email, and every screen that had to show a
 -- person showed the address. That is fine as an identity and poor as a label:
 -- "who did this" in the user activity log reads as `drift-ops-2@example.dk`,
 -- which nobody recognises at a glance during an incident review.

@@ -1,7 +1,7 @@
 -- 105 — fdb_entries: which switch port a MAC address is on.
 --
 -- THE QUESTION THIS ANSWERS. "The printer on the second floor is offline" ends,
--- eventually, at a physical port on a physical switch. Until now BlueEye could
+-- eventually, at a physical port on a physical switch. Until now BlueEyes could
 -- get as far as IP↔MAC (arp_entries, migration 073) and stop: an agent's
 -- neighbour cache knows that 192.168.20.84 is 00:1b:44:11:3a:b7, and nothing
 -- knew that 00:1b:44:11:3a:b7 is on sw-acc-2 Gi0/14. That last hop is the one

@@ -175,6 +175,14 @@ test('a button that repaints its background states its text colour too', async (
       if (selector.startsWith('@') || selector.startsWith(':root')) continue;
       // A state rule inherits the base rule's colour on purpose.
       if (/:(hover|focus|active|disabled|focus-visible)/.test(selector)) continue;
+      // A ::before/::after on a button paints a DECORATION — a marker, a caret,
+      // a rule — and carries no label of its own, so there is no text for a
+      // background to swallow. The sweep still covers the button itself, which
+      // is where a label actually lives: deleting the colour from
+      // `.tabs button.active` is still caught, and so is a pseudo-element that
+      // renders text (it would need `content` with something in it, and the
+      // rules below still require a colour for those).
+      if (/::(before|after)\b/.test(selector) && !/content\s*:\s*(['"])(?!\1)/.test(body)) continue;
       if (!/(^|[;\s])background(-color)?\s*:/.test(body)) continue;
       if (/background(-color)?\s*:\s*(none|transparent|inherit|unset)/.test(body)) continue;
       if (/(^|[;\s])color\s*:/.test(body)) continue;

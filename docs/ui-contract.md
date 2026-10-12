@@ -2000,3 +2000,46 @@ Controls 8–10px, cards `--radius` 14px, large surfaces `--radius-lg` 18px,
 modals `--radius-xl` 22px. Not everything is equally round: the radius is
 judged against the size of the thing it is on, which is why a 1400px panel at
 12px read as square-cornered.
+
+### Phases 2–5
+
+**The shell.** The rail and the topbar sit at the page's own colour, not
+`--panel`: they used to be the same plane as every card, so rail, bar and cards
+were all the same height off the page and the chrome read as one more box
+rather than as the surface the work sits on. The active nav item was an accent
+wash plus a 3px accent border — a bright coloured background and a heavy rule,
+the loudest thing a rail can do. It is a quiet raised surface now, with the
+label in the accent and a short rounded marker drawn inside the radius by
+`::before`, so the corner stays round and the label never shifts.
+
+**Overlays.** A modal arrives rather than appears: opacity and eight pixels of
+rise over `--dur-2`, no zoom, which on a 560px card reads as the dialog lunging
+at the reader. The 3px backdrop blur is gone — it was barely visible and cost a
+compositor layer across the whole viewport on every open. A drawer slides from
+the edge it is attached to, and has no rule under its head.
+
+**Tables.** The sticky header keeps a background (rows scrolling under a
+transparent header is worse than a band) but takes the panel's own colour
+rather than `--surface-alt`, with a hairline under it instead of a full border
+— with the panel's title rule gone, that had become the heaviest line on the
+screen. The last row drops its divider: it has nothing below it to be divided
+from, and its rule sat a few pixels above the panel's own edge, two lines
+saying one thing.
+
+**Service Assurance** hard-coded `border-radius: 6px` in a dozen places,
+written before the scale existed, so the module read as a different product
+from every other screen. Those are tokens now — controls `--r-btn`, surfaces
+`--r-panel`, pills `--radius-pill`. Its severity bars stay: a left bar on a list
+ROW is how severity reads in a log, which is a different thing from a bar on a
+card.
+
+**One rigid grid, found by rendering.** `.panel-grid` used
+`minmax(380px, 1fr)`. A bare minmax floor is a FIXED width once the container is
+narrower than the floor, so on a 390px phone the column stayed 380px inside a
+362px content box and pushed the page four pixels sideways on every screen with
+a panel grid. `minmax(min(380px, 100%), 1fr)` lets the column fall back to the
+space that exists — which is what `auto-fit` was for. The same trap was in
+three other grids.
+
+Verified by rendering: 12 screens × 3 widths (1600 / 1024 / 390) × dark and
+light, asserting no horizontal page scroll and no page errors.

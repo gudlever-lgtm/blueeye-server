@@ -146,7 +146,7 @@
    So: hairline and elevation, like every other surface. The severity is
    carried by the figure's colour (already) and a wash of the same colour
    across the card, which is louder than a 3px bar and does not draw a box. */
-.ui .statstrip { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: var(--s-3); }
+.ui .statstrip { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(170px, 100%), 1fr)); gap: var(--s-3); }
 .ui .stat-card { display: flex; flex-direction: column; gap: var(--s-1); padding: var(--s-4);
   text-align: left; font: inherit; color: inherit; cursor: pointer;
   background: var(--elev-surface-1); border: 1px solid var(--hairline);
@@ -193,7 +193,9 @@
 .ui .btn { display: inline-flex; align-items: center; justify-content: center; gap: var(--s-2);
   height: var(--control-h); padding: 0 var(--s-4); border: 1px solid transparent;
   border-radius: var(--r-btn); font: inherit; font-size: var(--fs-sm); font-weight: 600;
-  cursor: pointer; white-space: nowrap; }
+  cursor: pointer; white-space: nowrap;
+  transition: background var(--dur-1) var(--ease), border-color var(--dur-1) var(--ease),
+    color var(--dur-1) var(--ease), filter var(--dur-1) var(--ease); }
 .ui .btn-primary { background: var(--accent); color: var(--btn-fg); }
 .ui .btn-primary:hover:not(:disabled) { filter: brightness(1.08); }
 .ui .btn-secondary { background: var(--surface); color: var(--text); border-color: var(--border); }
@@ -262,15 +264,25 @@
 /* ---- DataTable ----------------------------------------------------------- */
 .ui .table-wrap-ui { max-height: 60vh; overflow: auto; }
 .ui table.dt { width: 100%; border-collapse: collapse; font-size: var(--fs-sm); table-layout: fixed; }
-.ui table.dt thead th { position: sticky; top: 0; z-index: var(--z-sticky); background: var(--surface-alt);
+/* The header stays sticky and therefore still needs a background of its own —
+   rows scrolling under a transparent header is the one thing worse than a
+   band. It takes the PANEL's colour rather than --surface-alt, so it reads as
+   part of the surface it sits on, and a hairline instead of a full border: the
+   panel no longer draws a rule under its title, which made this the heaviest
+   line on the screen. */
+.ui table.dt thead th { position: sticky; top: 0; z-index: var(--z-sticky); background: var(--elev-surface-1);
   height: 36px; padding: 0 var(--s-4); text-align: left; white-space: nowrap; cursor: pointer;
-  user-select: none; border-bottom: 1px solid var(--border); font-size: var(--fs-xs);
+  user-select: none; border-bottom: 1px solid var(--hairline); font-size: var(--fs-xs);
   font-weight: 650; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; }
 .ui table.dt thead th.col-num { text-align: right; }
 .ui table.dt thead th:hover { color: var(--text); }
 .ui table.dt thead th .sort { opacity: 0.35; margin-left: var(--s-1); }
 .ui table.dt thead th[aria-sort] .sort { opacity: 1; color: var(--accent); }
-.ui table.dt tbody tr { height: var(--row-h); border-bottom: 1px solid var(--hairline); cursor: pointer; }
+.ui table.dt tbody tr { height: var(--row-h); border-bottom: 1px solid var(--hairline); cursor: pointer;
+  transition: background var(--dur-1) var(--ease); }
+/* The last row has nothing under it to be divided from, and its rule sat a few
+   pixels above the panel's own bottom edge — two lines saying one thing. */
+.ui table.dt tbody tr:last-child { border-bottom: 0; }
 .ui table.dt tbody tr:hover { background: var(--hover); }
 .ui table.dt tbody tr[aria-selected="true"] { background: var(--accent-weak); }
 .ui table.dt td { padding: 0 var(--s-4); overflow: hidden; text-overflow: ellipsis;
@@ -343,9 +355,12 @@
 .ui-scrim { position: fixed; inset: 0; z-index: var(--z-scrim); background: var(--scrim); }
 .ui-drawer { position: fixed; top: 0; right: 0; bottom: 0; z-index: var(--z-modal); width: 480px; max-width: 100%;
   display: flex; flex-direction: column; background: var(--elev-surface-3);
-  border-left: 1px solid var(--hairline); box-shadow: var(--elev-3); }
+  border-left: 1px solid var(--hairline); box-shadow: var(--elev-3);
+  animation: drawer-in var(--dur-3) var(--ease-out); }
+/* It comes from the edge it is attached to. */
+@keyframes drawer-in { from { transform: translateX(16px); opacity: 0; } }
 .ui-drawer .drawer-head { display: flex; align-items: flex-start; gap: var(--s-3);
-  padding: var(--s-5); border-bottom: 1px solid var(--hairline); }
+  padding: var(--s-5) var(--s-5) var(--s-3); }
 .ui-drawer .drawer-head h2 { margin: 0 0 var(--s-2); font-size: var(--fs-lg);
   font-weight: 650; line-height: 1.3; }
 .ui-drawer .drawer-meta { display: flex; gap: var(--s-2); align-items: center; flex-wrap: wrap; }
@@ -432,7 +447,12 @@
 /* ---- Panel grid (template B) ---------------------------------------------
    A DashboardPage lays its charts and cards out on this. Columns are content
    driven: a panel asks for the width it needs by carrying `wide`. */
-.ui .panel-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(380px, 1fr)); gap: var(--s-4); }
+/* min(380px, 100%), not 380px. A bare minmax floor is a FIXED width once the
+   container is narrower than the floor: on a 390px phone the column stayed
+   380px inside a 362px content box and pushed the page four pixels sideways on
+   every screen with a panel grid. min() lets the column fall back to the space
+   that exists, which is what auto-fit was for. */
+.ui .panel-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(380px, 100%), 1fr)); gap: var(--s-4); }
 .ui .panel-grid > .wide { grid-column: 1 / -1; }
 
 /* A single-column FormSection, for a field whose value is long (a URL, a query). */
@@ -481,7 +501,7 @@
 .ui .ks-demo { margin-top: var(--s-3); }
 .ui .ks-shelf { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s-3); }
 
-.ui .ks-swatches { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: var(--s-3); }
+.ui .ks-swatches { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(190px, 100%), 1fr)); gap: var(--s-3); }
 .ui .ks-swatch { display: flex; align-items: center; gap: var(--s-2); font-size: var(--fs-xs); }
 .ui .ks-chipcolor { width: 26px; height: 26px; flex: 0 0 auto;
   border: 1px solid var(--border); border-radius: var(--r-badge); }
@@ -708,7 +728,7 @@
    one per figure the strip put a fraction on. */
 /* Same track sizing as the StatStrip above it, so each bar sits under the
    figure it is a percentage of instead of spanning two of them. */
-.ui .lic-bars { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+.ui .lic-bars { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(170px, 100%), 1fr));
   gap: var(--s-3); margin-top: calc(var(--s-5) * -1 + var(--s-2)); }
 
 /* ---- DataTable row selection ---- */

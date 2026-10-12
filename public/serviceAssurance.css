@@ -63,8 +63,8 @@
 .sa-field-inline input[type="checkbox"] { width: auto; margin: 0; }
 .sa-field input[type="text"], .sa-field input[type="url"], .sa-field input[type="number"],
 .sa-field input[type="password"], .sa-field select, .sa-field textarea {
-  padding: 7px 9px; border: 1px solid var(--hairline);
-  border-radius: 6px; font: inherit; background: var(--bg); color: var(--text);
+  padding: 7px 9px; border: 1px solid var(--border);
+  border-radius: var(--r-btn); font: inherit; background: var(--bg); color: var(--text);
   width: 100%; box-sizing: border-box;
 }
 .sa-form-errors { margin-top: 8px; }
@@ -93,7 +93,7 @@
 
 /* ---- status ---- */
 .sa-status {
-  display: inline-block; padding: 2px 8px; border-radius: 999px;
+  display: inline-block; padding: 2px 8px; border-radius: var(--radius-pill);
   font-size: 0.72rem; font-weight: 700; letter-spacing: 0.03em;
 }
 .sa-status-pass { background: var(--ok-weak); color: var(--sev-ok); }
@@ -123,7 +123,7 @@
 
 /* ---- incident severity + days remaining ---- */
 .sa-sev {
-  display: inline-block; padding: 2px 8px; border-radius: 999px;
+  display: inline-block; padding: 2px 8px; border-radius: var(--radius-pill);
   font-size: 0.72rem; font-weight: 700; letter-spacing: 0.03em;
 }
 .sa-sev-crit { background: var(--crit-weak); color: var(--sev-crit); }
@@ -151,8 +151,8 @@
 .sa-steps { display: flex; flex-direction: column; gap: 6px; }
 .sa-step {
   display: flex; align-items: flex-start; gap: 10px;
-  padding: 10px 12px; border: 1px solid var(--hairline);
-  border-radius: 6px; background: var(--panel);
+  padding: 10px 12px; border: 1px solid var(--panel-edge);
+  border-radius: var(--r-panel); background: var(--elev-surface-1);
 }
 .sa-step[draggable="true"] { cursor: grab; }
 .sa-step.sa-dragging { opacity: 0.4; }
@@ -181,14 +181,14 @@
 .sa-failure {
   border-left: 3px solid var(--sev-crit);
   padding: 12px 14px; margin: 12px 0;
-  background: var(--panel); border-radius: 0 6px 6px 0;
+  background: var(--elev-surface-1); border-radius: 0 var(--r-panel) var(--r-panel) 0;
 }
 .sa-failure h4 { margin: 0 0 6px; }
 .sa-failure-summary { font-weight: 600; margin: 0 0 6px; }
 .sa-failure p { margin: 4px 0; }
-.sa-screenshot { max-width: 100%; border: 1px solid var(--hairline); border-radius: 6px; margin-top: 8px; }
+.sa-screenshot { max-width: 100%; border: 1px solid var(--hairline); border-radius: var(--r-panel); margin-top: 8px; }
 .sa-pre {
-  background: var(--surface-alt); padding: 10px; border-radius: 6px;
+  background: var(--surface-alt); padding: 10px; border-radius: var(--radius-sm);
   overflow-x: auto; font-size: 0.8rem; margin-top: 8px;
   /* WRAP, do not run off the card. A <pre> defaults to white-space: pre, so a
      long line does not break — and inside a table cell that cell simply grows
@@ -204,13 +204,13 @@
 .sa-warn { color: var(--warn); font-size: 0.85rem; }
 .sa-warn-banner {
   background: var(--warn-weak); color: var(--sev-warn); padding: 10px 14px;
-  border-radius: 6px; margin-bottom: 12px; font-size: 0.9rem;
+  border-radius: var(--r-panel); margin-bottom: 12px; font-size: 0.9rem;
 }
 .sa-error { padding: 18px; text-align: center; }
 
 /* ---- suggestions ---- */
 .sa-suggestions { display: flex; flex-direction: column; gap: 12px; }
-.sa-suggestion { padding: 10px 12px; border: 1px solid var(--hairline); border-radius: 6px; }
+.sa-suggestion { padding: 10px 12px; border: 1px solid var(--hairline); border-radius: var(--r-panel); }
 .sa-suggestion label { display: flex; align-items: center; gap: 8px; }
 .sa-suggestion-meta { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 6px; font-size: 0.85rem; }
 .chip-high { background: var(--ok-weak); color: var(--sev-ok); }
@@ -224,7 +224,7 @@
   display: flex; align-items: center; justify-content: center; z-index: var(--z-scrim); padding: 16px;
 }
 .sa-modal {
-  background: var(--panel); border-radius: 10px;
+  background: var(--elev-surface-4); border-radius: var(--radius-xl);
   max-width: 640px; width: 100%; max-height: 85vh;
   display: flex; flex-direction: column; box-shadow: var(--shadow-lg);
 }
@@ -261,7 +261,7 @@
 .sa-actions a.sa-btn {
   display: inline-flex; align-items: center;
   padding: 5px 11px; border: 1px solid var(--hairline);
-  border-radius: 6px; font-size: 0.85rem; line-height: 1.4;
+  border-radius: var(--radius-sm); font-size: 0.85rem; line-height: 1.4;
   color: var(--text); text-decoration: none; background: var(--panel);
 }
 .sa-actions a.sa-btn:hover { border-color: var(--accent); color: var(--accent); }
@@ -347,7 +347,7 @@
 .sa-pending { border-left: 3px solid var(--warn); }
 .sa-chart-jump { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); }
 .sa-date-input, .sa-select {
-  padding: 5px 8px; border: 1px solid var(--hairline); border-radius: 6px;
+  padding: 5px 8px; border: 1px solid var(--hairline); border-radius: var(--radius-sm);
   font: inherit; font-size: 13px; background: var(--bg); color: var(--text);
 }
 
@@ -394,7 +394,7 @@
 .sa-layer-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .sa-layer {
   display: inline-flex; align-items: center; gap: 6px;
-  padding: 3px 10px; border-radius: 999px; font-size: 0.8rem; font-weight: 600;
+  padding: 3px 10px; border-radius: var(--radius-pill); font-size: 0.8rem; font-weight: 600;
 }
 .sa-layer.ok { background: var(--ok-weak); color: var(--sev-ok); }
 .sa-layer.bad { background: var(--crit-weak); color: var(--sev-crit); }
@@ -454,7 +454,7 @@
 .sa-picker-chips { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 .sa-chip {
   display: inline-flex; align-items: center; gap: 6px;
-  padding: 2px 4px 2px 10px; border-radius: 999px; font-size: 0.8rem;
+  padding: 2px 4px 2px 10px; border-radius: var(--radius-pill); font-size: 0.8rem;
   background: var(--panel-2); border: 1px solid var(--hairline);
 }
 .sa-chip-x { background: none; border: none; cursor: pointer; font: inherit; line-height: 1; padding: 0 4px; color: var(--muted); }
@@ -478,7 +478,7 @@
 .sa-a11y-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
 .sa-a11y-counts { display: inline-flex; gap: 6px; flex-wrap: wrap; }
 .sa-a11y-chip {
-  display: inline-block; padding: 2px 8px; border-radius: 999px;
+  display: inline-block; padding: 2px 8px; border-radius: var(--radius-pill);
   font-size: 0.72rem; font-weight: 600; letter-spacing: 0.02em;
 }
 /* Impact, not severity: three weights of the same neutral, so the ordering is
@@ -559,7 +559,7 @@
    the same kind of claim. */
 .sa-cause-basis {
   font-size: 0.78em; text-transform: uppercase; letter-spacing: 0.04em;
-  padding: 1px 7px; border-radius: 999px; border: 1px solid var(--hairline); color: var(--muted);
+  padding: 1px 7px; border-radius: var(--radius-pill); border: 1px solid var(--hairline); color: var(--muted);
 }
 .sa-basis-observed { color: var(--ok); border-color: currentColor; }
 .sa-basis-inferred { color: var(--muted); }
@@ -714,7 +714,7 @@
 .guide-status { display: flex; align-items: baseline; gap: 8px; margin: 8px 0; }
 .guide-status-text { color: var(--muted); }
 .guide-pill {
-  display: inline-block; padding: 1px 8px; border-radius: 999px;
+  display: inline-block; padding: 1px 8px; border-radius: var(--radius-pill);
   font-size: 0.75rem; font-weight: 600; white-space: nowrap;
 }
 .guide-pill-done { background: var(--ok-weak); color: var(--sev-ok); }
@@ -727,7 +727,7 @@
    never a button that would land them somewhere else. */
 .guide-unavailable {
   display: inline-block; padding: 3px 8px; border: 1px dashed var(--hairline);
-  border-radius: 6px; color: var(--muted); font-size: 0.85rem;
+  border-radius: var(--radius-sm); color: var(--muted); font-size: 0.85rem;
 }
 .guide-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .guide-count { color: var(--muted); font-variant-numeric: tabular-nums; }
@@ -737,7 +737,7 @@
 @media (max-width: 860px) {
   .guide-layout { grid-template-columns: 1fr; }
   .guide-stepper { flex-direction: row; flex-wrap: wrap; gap: 4px; }
-  .guide-stepper-btn { width: auto; border-left: 0; border-bottom: 2px solid transparent; border-radius: 6px; }
+  .guide-stepper-btn { width: auto; border-left: 0; border-bottom: 2px solid transparent; border-radius: var(--radius-sm); }
   .guide-stepper-btn.active { border-left-color: transparent; border-bottom-color: var(--accent); }
   .guide-stepper-label { display: none; }
   .guide-stepper-n { min-width: 0; }
@@ -758,7 +758,7 @@
 .guide-action-field { display: flex; flex-direction: column; gap: 4px; flex: 1 1 220px; min-width: 0; }
 .guide-action-label { font-size: 0.85rem; font-weight: 600; }
 .guide-action-input {
-  padding: 6px 8px; border: 1px solid var(--hairline); border-radius: 6px;
+  padding: 6px 8px; border: 1px solid var(--hairline); border-radius: var(--radius-sm);
   background: var(--panel); color: var(--text); font: inherit; min-width: 0;
 }
 .guide-action-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
@@ -811,7 +811,7 @@
 .sa-phase-legend { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
 .sa-phase-key {
   display: inline-flex; align-items: center; gap: 5px; padding: 3px 9px;
-  border: 1px solid var(--hairline); border-radius: 999px;
+  border: 1px solid var(--hairline); border-radius: var(--radius-pill);
   /* The base `button` rule paints white on the accent colour. A legend that
      inherits it is a row of dots with invisible names next to them. */
   background: var(--panel); color: var(--text);

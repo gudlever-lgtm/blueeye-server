@@ -80,12 +80,17 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
    toggled by the topbar ☰ button. */
 #app { display: flex; align-items: stretch; min-height: 100vh; }
 
+/* The chrome — this rail and the topbar — sits ON the page, at the page's own
+   colour, and the content panels float above it. It used to be --panel, the
+   same plane as every card, so the rail, the bar and the cards were all the
+   same height off the page and the shell read as one more box rather than as
+   the surface the work sits on. */
 .sidebar {
   flex: 0 0 var(--sidebar-w); width: var(--sidebar-w);
   position: sticky; top: 0; height: 100vh; z-index: var(--z-sidebar);
   display: flex; flex-direction: column;
-  background: var(--panel); border-right: 1px solid var(--hairline);
-  transition: transform .2s var(--ease);
+  background: var(--bg); border-right: 1px solid var(--hairline);
+  transition: transform var(--dur-3) var(--ease);
 }
 .brand { display: flex; align-items: center; gap: var(--s-3); padding: var(--s-4) var(--s-4) var(--s-3); }
 .brand-mark { width: 28px; height: 28px; flex: 0 0 28px; border-radius: var(--radius-sm);
@@ -100,7 +105,7 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   padding: var(--s-2) var(--s-3); border-radius: var(--radius-pill);
   border: 1px solid var(--border); background: var(--panel-2);
   color: var(--text); font-size: var(--fs-xs); font-weight: 600; line-height: 1;
-  transition: border-color .15s ease, background .15s ease, color .15s ease; }
+  transition: border-color var(--dur-1) var(--ease), background var(--dur-1) var(--ease), color var(--dur-1) var(--ease); }
 .foot-docs:hover { border-color: var(--accent); color: var(--accent); background: var(--accent-weak); }
 .foot-docs.active { border-color: var(--accent); color: var(--accent); background: var(--accent-weak); }
 .foot-docs-icon { font-size: var(--fs-sm); line-height: 1; }
@@ -119,7 +124,7 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
      past, and on the dark palettes a chart scrolling under it tinted the bar.
      A hairline and a flat surface say "chrome" without any of that, and it is
      one less compositor layer repainted on every scroll. */
-  background: var(--panel);
+  background: var(--bg);
   border-bottom: 1px solid var(--hairline);
   position: sticky; top: 0; z-index: var(--z-topbar);
 }
@@ -243,11 +248,11 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
    down when the group is expanded and right when collapsed (see .collapsed). */
 .nav-group-label { display: flex; align-items: center; width: 100%;
   padding: 4px 12px 7px; font-size: 10px; font-weight: 700;
-  letter-spacing: .09em; text-transform: uppercase; color: var(--muted); opacity: .7;
+  letter-spacing: .09em; text-transform: uppercase; color: var(--muted); opacity: .8;
   background: transparent; border: 0; text-align: left; cursor: pointer; }
 .nav-group-label:hover { opacity: 1; color: var(--text); }
 .nav-group-label::after { content: '⌄'; margin-left: auto; font-size: 12px; line-height: 1;
-  transition: transform .15s ease; transform: translateY(-1px); }
+  transition: transform var(--dur-1) var(--ease); transform: translateY(-1px); }
 .nav-group.collapsed .nav-group-label::after { transform: rotate(-90deg); }
 /* When collapsed, hide the group's nav items (keep the label visible). */
 .nav-group.collapsed button[data-view] { display: none; }
@@ -268,14 +273,21 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   min-height: var(--control-h-sm); position: relative; text-align: left;
   padding: var(--s-2) var(--s-3); border-radius: var(--radius-sm);
   background: transparent; color: var(--muted); font-size: var(--fs-sm); font-weight: 500;
-  transition: background .13s var(--ease), color .13s var(--ease); }
+  transition: background var(--dur-1) var(--ease), color var(--dur-1) var(--ease); }
 .tabs button:hover { background: var(--hover); color: var(--text); }
-/* Active nav item: accent wash AND an accent left edge. The wash alone reads as
-   a hover state on the darker themes; the edge is what makes "you are here"
-   survive a glance. The 3px is taken out of the padding so the label does not
-   shift when the marker appears. */
-.tabs button.active { background: var(--accent-weak); color: var(--text-accent); font-weight: 600;
-  border-left: 3px solid var(--accent); padding-left: 9px; }
+/* Active nav item. It was an accent WASH plus a 3px accent border down the
+   edge — a bright coloured background and a heavy rule, which is the loudest
+   thing a rail can do and reads as a selected cell in a spreadsheet.
+   "You are here" needs to survive a glance, not shout: a quiet raised surface
+   (the same step a panel takes, so the item reads as lifted rather than
+   coloured in), the label in the accent, and a short rounded accent marker
+   drawn INSIDE the radius with ::before, so the corner stays round and the
+   label never shifts when a row becomes active. */
+.tabs button.active { background: var(--elev-surface-2); color: var(--text-accent); font-weight: 600; }
+.tabs button.active::before {
+  content: ''; position: absolute; left: 4px; top: 50%; transform: translateY(-50%);
+  width: 3px; height: 16px; border-radius: var(--radius-pill); background: var(--accent);
+}
 /* Licence-excluded modules: shown but dimmed with a badge naming the package
    that unlocks them (data-lock-badge, set from /license/plan — e.g. "Professional";
    a lock glyph when the tier is unknown). Reflects the licence setup, not a
@@ -338,7 +350,9 @@ main#view .card { width: auto; padding: var(--s-5); box-shadow: var(--elev-1); }
 .section-head { display: flex; align-items: center; gap: var(--s-3); margin: 0 0 var(--s-5); }
 
 /* Traffic overview: the big live chart (history view reuses .overview-chart). */
-.overview-chart { background: var(--panel); border: 1px solid var(--hairline); border-radius: var(--radius);
+/* A chart standing on its own page is a surface; a chart inside a panel is the
+   panel's content and draws nothing of its own (the `.ui` rule below). */
+.overview-chart { background: var(--elev-surface-1); border: 1px solid var(--panel-edge); border-radius: var(--r-panel);
   padding: var(--s-4); box-shadow: var(--elev-1); }
 /* Inside a contract Panel the chart is the panel's content, not a second card:
    Traffic mounts multiChart() into ui.panel() while the plotter is unmigrated. */
@@ -1062,10 +1076,19 @@ pre { padding: 10px; overflow: auto; }
   overflow-wrap: anywhere; text-align: left; line-height: 1.45;
 }
 .toast.bad { border-color: var(--bad); }
+/* The scrim carries the separation; the 3px blur behind it was doing almost
+   nothing visible and cost a compositor layer over the whole viewport every
+   time a dialog opened. */
 .modal { position: fixed; inset: 0; z-index: var(--z-scrim); background: var(--scrim);
-  backdrop-filter: blur(3px); display: grid; place-items: center; }
-.modal-card { background: var(--elev-surface-4); border: 1px solid var(--hairline); border-radius: var(--radius-lg);
-  box-shadow: var(--elev-4); padding: 20px; width: min(520px, 92vw); max-height: 86vh; overflow: auto; }
+  display: grid; place-items: center; animation: modal-in var(--dur-2) var(--ease-out); }
+.modal-card { background: var(--elev-surface-4); border: 1px solid var(--panel-edge);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--elev-4); padding: var(--s-5); width: min(560px, 92vw); max-height: 86vh; overflow: auto;
+  animation: modal-card-in var(--dur-2) var(--ease-out); }
+/* Arriving, not appearing. Opacity and a few pixels of rise — no zoom, which
+   on a 560px card reads as the dialog lunging at the reader. */
+@keyframes modal-in { from { opacity: 0; } }
+@keyframes modal-card-in { from { opacity: 0; transform: translateY(8px); } }
 .modal-card h3 { margin-top: 0; }
 .form-grid { display: flex; flex-direction: column; gap: 12px; }
 .form-actions { display: flex; gap: 8px; align-items: center; justify-content: flex-end; margin-top: 8px; }
@@ -1194,10 +1217,18 @@ button.active-btn { outline: 2px solid var(--accent); }
 /* KPI cards reuse the .kpi chrome; the status modifier recolours the rail and
    the value, always from the shared status tokens (ok/warn/bad/accent). */
 .noc-kpis .kpi { box-shadow: var(--shadow); }
-.kpi.st-ok { border-left-color: var(--ok); }
-.kpi.st-warn { border-left-color: var(--warn); }
-.kpi.st-bad { border-left-color: var(--bad); }
-.kpi.st-accent { border-left-color: var(--accent); }
+/* Status on a KPI card, the same way the StatStrip says it: a wash of the card
+   and the figure in the colour. These used to set border-left-color, which
+   after the card lost its 3px bar left a single coloured pixel down one side —
+   a line with no weight behind it, saying something important. */
+.kpi.st-ok { background: color-mix(in srgb, var(--ok) 9%, var(--elev-surface-1)); }
+.kpi.st-ok .kpi-v { color: var(--ok); }
+.kpi.st-warn { background: color-mix(in srgb, var(--warn) 9%, var(--elev-surface-1)); }
+.kpi.st-warn .kpi-v { color: var(--warn); }
+.kpi.st-bad { background: color-mix(in srgb, var(--bad) 9%, var(--elev-surface-1)); }
+.kpi.st-bad .kpi-v { color: var(--bad); }
+.kpi.st-accent { background: color-mix(in srgb, var(--accent) 9%, var(--elev-surface-1)); }
+.kpi.st-accent .kpi-v { color: var(--accent); }
 .kpi .kpi-v.v-ok { color: var(--ok); }
 .kpi .kpi-v.v-warn { color: var(--warn); }
 .kpi .kpi-v.v-bad { color: var(--bad); }

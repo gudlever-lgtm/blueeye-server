@@ -209,6 +209,35 @@ test('only a chip that IS a button looks pressable', () => {
   }
 });
 
+test('no key is declared twice inside one catalogue', () => {
+  // A JS object literal keeps the LAST declaration and discards the earlier
+  // ones silently. A key written twice therefore has a copy that renders and a
+  // copy that does nothing — and whoever edits the dead one gets no effect and
+  // no error. 41 of these had accumulated, 35 with different text in the two
+  // copies, including a whole English block pasted into the Danish catalogue
+  // and then translated underneath it.
+  const src = fs.readFileSync(path.join(PUBLIC, 'i18n.js'), 'utf8').split('\n');
+  const bounds = [];
+  src.forEach((line, i) => { if (/^\s{4}(en|da):\s*\{\s*$/.test(line)) bounds.push([RegExp.$1, i]); });
+  assert.equal(bounds.length, 2, 'expected exactly two catalogues in i18n.js');
+
+  const dupes = [];
+  for (let c = 0; c < bounds.length; c += 1) {
+    const [locale, start] = bounds[c];
+    const end = c + 1 < bounds.length ? bounds[c + 1][1] : src.length;
+    const seen = new Map();
+    for (let i = start + 1; i < end; i += 1) {
+      const m = /^\s*'([^']+)':\s*.*,\s*$/.exec(src[i]);
+      if (!m) continue;
+      if (seen.has(m[1])) dupes.push(`${locale}: '${m[1]}' at lines ${seen.get(m[1]) + 1} and ${i + 1}`);
+      else seen.set(m[1], i);
+    }
+  }
+  assert.deepEqual(dupes, [],
+    'these keys are declared more than once in the same catalogue, so the earlier '
+    + `copy is dead and editing it does nothing:\n  ${dupes.join('\n  ')}`);
+});
+
 test('every t() key used by the dashboard exists in BOTH locales, and the catalogues are in parity', () => {
   const missing = [];
   for (const f of jsFiles) {

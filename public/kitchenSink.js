@@ -284,8 +284,12 @@
         meta: '12/09/2026, 14:02:33',
         row: tr,
         sections: [
-          ui.drawerSection(t('ks.drawer.what'), el('p', {}, t('ks.drawer.what'))),
-          ui.drawerSection(t('ks.drawer.why'), el('p', {}, t('ks.drawer.why'))),
+          // Heading and body are two strings, not one used twice. They were on
+          // a single key, declared twice in each catalogue — so English showed
+          // the heading in both slots and Danish showed the sample sentence in
+          // both.
+          ui.drawerSection(t('ks.drawer.what'), el('p', {}, t('ks.drawer.whatBody'))),
+          ui.drawerSection(t('ks.drawer.why'), el('p', {}, t('ks.drawer.whyBody'))),
           ui.drawerSection(t('ks.drawer.detail'), ui.keyValues([
             ['Baseline', '18.2 ms'], ['MAD', '6.7 ms'], ['Measured', '61.3 ms'],
             ['z-score', '6.4'], ['Rule', 'latency.median · crit ≥ 5.0'],

@@ -188,6 +188,13 @@
   border-radius: var(--r-btn); background: var(--surface); color: var(--text);
   font: inherit; font-size: var(--fs-sm); }
 .ui input::placeholder, .ui textarea::placeholder { color: var(--text-muted); }
+/* A free-text filter (a question, a resolution note) is typed a sentence at a
+   time, so it takes the room the toolbar has instead of the browser's ~20
+   character default. Selects and number boxes keep their natural width. */
+.ui .field-inline:has(> input[type="text"]), .ui .field-inline:has(> input[type="search"]) {
+  flex: 1 1 24rem; min-width: 0; }
+.ui .field-inline > input[type="text"], .ui .field-inline > input[type="search"] {
+  flex: 1 1 auto; min-width: 12rem; }
 /* A textarea is a control that grows, so it takes the control's border and
    radius but not its height. */
 .ui textarea { width: 100%; box-sizing: border-box; padding: var(--s-2) var(--s-3);

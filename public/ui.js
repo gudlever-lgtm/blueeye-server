@@ -821,6 +821,10 @@
         body.append(tr);
       });
       table.append(body);
+      // Nothing on screen can be ticked (every row already handled, or the
+      // whole page is dimmed): the select-all is a dead control, so say so
+      // rather than letting it be clicked to no effect.
+      if (headBox) headBox.disabled = boxes.length === 0;
       if (selectCfg) announce(); // the header box starts in the right state
       var wrap = el('div', { class: 'table-wrap-ui' }, table);
       if (opts.dense) wrap.classList.add('dense');

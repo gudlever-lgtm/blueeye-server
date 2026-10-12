@@ -2281,6 +2281,7 @@
       'tshoot.faults.colCause': 'Root cause',
       'tshoot.faults.purged': 'purged by retention',
       'tshoot.faults.acked': 'acknowledged',
+      'tshoot.faults.allSeen': 'Every alarm on this page is already marked seen. They clear when their situation is resolved.',
       // ---- Troubleshooting, migrated onto the UI contract --------------------
       'tshoot.title': 'Troubleshooting',
       'tshoot.openTopology': 'Open Topology',
@@ -8368,6 +8369,7 @@
       'tshoot.faults.colCause': 'Årsag',
       'tshoot.faults.purged': 'slettet af opbevaringspolitik',
       'tshoot.faults.acked': 'kvitteret',
+      'tshoot.faults.allSeen': 'Alle alarmer på denne side er allerede markeret som set. De forsvinder, når deres situation er løst.',
       // ---- Troubleshooting, migreret til UI-kontrakten ----------------------
       'tshoot.title': 'Fejlsøgning',
       'tshoot.openTopology': 'Åbn Topologi',

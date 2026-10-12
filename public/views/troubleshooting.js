@@ -550,6 +550,12 @@
             ? ui.loadingState(5)
             : ui.emptyState({ kind: 'ok', title: t('tshoot.faults.empty'), body: t('tshoot.faults.emptyHint') }));
         } else {
+          // Every row already seen (or purged): say why nothing can be ticked,
+          // instead of a table of checkboxes that are all missing.
+          if (deps.canWrite && deps.canWrite() && !faults.rows.some(function (f) {
+            var m = TV.faultRowModel(f, labels);
+            return !m.missing && !m.acked && m.findingId != null;
+          })) children.push(ui.inlineNote(t('tshoot.faults.allSeen'), 'info'));
           children.push(ui.dataTable({
             dense: true,
             // Operator+ only: a viewer cannot accept an alarm, so they get no

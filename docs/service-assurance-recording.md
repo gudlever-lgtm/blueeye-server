@@ -2,9 +2,9 @@
 
 > **New to Service Assurance?** Read [the guide](service-assurance-guide.md) first — it is written to be read front to back. This document is a design of record.
 
-BlueEyes can write a test by watching you perform the journey. You open the real
+BlueEye can write a test by watching you perform the journey. You open the real
 application in your own browser, sign in as yourself, click through what you want
-monitored — and BlueEyes turns that into a test you can review, edit and schedule
+monitored — and BlueEye turns that into a test you can review, edit and schedule
 like any other.
 
 ## How it works, from the operator's side
@@ -12,7 +12,7 @@ like any other.
 1. **Service Assurance → Tests → Record a journey.** Pick the application, name
    the journey the way you would describe it to a colleague ("Customer login",
    "Create case"), and start.
-2. **Drag the BlueEyes Recorder button to your bookmarks bar.** It appears once,
+2. **Drag the BlueEye Recorder button to your bookmarks bar.** It appears once,
    on the screen that starts the recording. It carries a key that works for that
    one recording and expires — usually within 30 minutes — so there is nothing to
    keep and nothing to reuse.
@@ -20,7 +20,7 @@ like any other.
    appears in the corner of the page and counts what it sees.
 4. **Perform the journey.** The recorder never clicks, types or submits anything
    itself: it only watches.
-5. **Click the badge to stop**, or go back to BlueEyes and press Review.
+5. **Click the badge to stop**, or go back to BlueEye and press Review.
 6. **Review and save.** You get the steps as the designer's own step list. Edit,
    reorder, delete, add assertions — then save. From that moment it is an
    ordinary test: nothing about it stays "a recording".
@@ -36,7 +36,7 @@ database to leak.
 A field counts as a password by its type *or* by what it is called — its label,
 its placeholder, its name, its id, its autocomplete hint. "Adgangskode",
 "Kodeord", "Password", "PIN-kode" all count, in any of those places. The rule is
-deliberately generous: if BlueEyes mistakes an ordinary field for a password you
+deliberately generous: if BlueEye mistakes an ordinary field for a password you
 fix one step in the designer, which is much cheaper than the other mistake.
 
 The same goes for the username beside it: it becomes `{{credential.username}}`,
@@ -65,7 +65,7 @@ element to find it again.
 
 ## When it does not work: check this first
 
-**Is BlueEyes served over HTTPS?** If BlueEyes is on plain `http://` and the
+**Is BlueEye served over HTTPS?** If BlueEye is on plain `http://` and the
 application you are recording is on `https://`, the browser refuses the
 recorder's call as **mixed active content** — before it is even attempted, and
 before CSP enters into it. Almost every application worth monitoring is HTTPS,
@@ -74,9 +74,9 @@ so this stops recording everywhere.
 The start dialog says so rather than handing you a bookmarklet that cannot work.
 The fix is one of:
 
-- serve BlueEyes over HTTPS;
+- serve BlueEye over HTTPS;
 - if a reverse proxy already terminates TLS in front of it, set
-  `BLUEEYE_PUBLIC_URL` to the `https://` address people actually use. BlueEyes
+  `BLUEEYE_PUBLIC_URL` to the `https://` address people actually use. BlueEye
   otherwise derives its own address from the incoming request, which arrives over
   plain HTTP from the proxy and so looks insecure from the outside. Setting
   `TRUST_PROXY=1` also lets it read the forwarded scheme.
@@ -113,12 +113,12 @@ carries the whole recorder in itself, and a bookmarklet's code counts as *you
 acting*, not as the page loading something. Browsers exempt it deliberately.
 
 **`connect-src` — the real wall.** This is the one that says which addresses the
-page may send data to. The recorder has to post what it saw back to BlueEyes, and
+page may send data to. The recorder has to post what it saw back to BlueEye, and
 a site whose policy allows connections only to itself will block that. No
 bookmarklet can talk its way past it; that is exactly what the policy is for.
 
 **The badge tells you first.** If the recorder cannot send what it sees back to
-BlueEyes, the badge turns amber and says so rather than counting up into a void.
+BlueEye, the badge turns amber and says so rather than counting up into a void.
 Two failed attempts, not one — a single dropped packet is not worth alarming you
 about. It distinguishes two cases: *never reached* (it was never going to work
 from this page) and *connection lost* (it was working and stopped).
@@ -137,7 +137,7 @@ because it violates the following Content Security Policy directive:
 1. **Record on a test or staging environment** that does not set the header, then
    point the saved test at production. The test is stored as paths, not absolute
    addresses, so the same test runs against either.
-2. **Ask whoever runs the application to add your BlueEyes address** to
+2. **Ask whoever runs the application to add your BlueEye address** to
    `connect-src`. One entry, and only for the recording — the test itself runs
    from the worker's browser and needs nothing added.
 3. **Build the test in the designer.** Discovery's suggestions are usually a good
@@ -174,10 +174,10 @@ key in front of it. The same code is served at `/recorder.js`, so you can read
 exactly what it does before trusting it. The recorder posts what it observed to
 `/api/service-capture/events`. That path is the one Service Assurance endpoint
 without a login, because its caller is a script on your application's page, which
-has no BlueEyes session. It is bounded accordingly: the key is stored only as a
+has no BlueEye session. It is bounded accordingly: the key is stored only as a
 hash, it works only while the recording is live and unexpired, it can only append
 to the one recording it names, and everything it sends is size-limited and
-stripped of anything BlueEyes does not recognise. Passwords are stripped again on
+stripped of anything BlueEye does not recognise. Passwords are stripped again on
 arrival, on the server, so the rule holds even if the browser-side script is
 replaced.
 

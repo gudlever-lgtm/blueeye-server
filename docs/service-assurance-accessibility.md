@@ -4,7 +4,7 @@
 
 *Spec: `docs/service-assurance-v2.md` §9.*
 
-BlueEyes already drives a real browser through a real journey. While it is there,
+BlueEye already drives a real browser through a real journey. While it is there,
 it can answer a second question at almost no cost: **can everybody use this?**
 
 ## The one rule everything else follows from

@@ -9,7 +9,7 @@
 // ticket — sat unused. This lists what is attached to one record, attaches
 // another, and removes one.
 //
-// Privacy / scope: BlueEyes stores the REFERENCE — a title, a link or an
+// Privacy / scope: BlueEye stores the REFERENCE — a title, a link or an
 // absolute path, a note — never the artefact. The server refuses anything that
 // is not an http(s) URL or an absolute path, and its message is shown under the
 // field it is about.

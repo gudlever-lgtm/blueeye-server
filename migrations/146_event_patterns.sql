@@ -1,6 +1,6 @@
 -- 146 — event_patterns + alert_routes: one named match, used by every policy.
 --
--- THE PROBLEM. BlueEyes already has a matcher: event_severity_rules (086) pins
+-- THE PROBLEM. BlueEye already has a matcher: event_severity_rules (086) pins
 -- down source/metric/kind/agent/application, blank means "any", and the most
 -- specific rule wins. It is a good matcher and it is welded to exactly one
 -- decision — what severity to store. So an operator who wants

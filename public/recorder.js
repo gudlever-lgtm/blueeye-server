@@ -1,7 +1,7 @@
-/* BlueEyes Service Assurance — the recorder.
+/* BlueEye Service Assurance — the recorder.
  *
  * Injected into the operator's own browser, on the application they want to
- * test, by the bookmarklet BlueEyes hands them. It watches what they do and
+ * test, by the bookmarklet BlueEye hands them. It watches what they do and
  * posts a description of it back; the server turns that into a test.
  *
  * THE ONE RULE THIS FILE EXISTS TO KEEP: it OBSERVES. It never clicks, never
@@ -260,7 +260,7 @@
     fetch(ENDPOINT + path, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      // No cookies, to BlueEyes or to anyone: the capture token is the only
+      // No cookies, to BlueEye or to anyone: the capture token is the only
       // authority this request carries, and the server allows no credentials.
       credentials: 'omit',
       mode: 'cors',
@@ -268,7 +268,7 @@
       keepalive: path === '/stop',
     }).then(function (res) {
       flushing = false;
-      // A response at all — any status — means we REACHED BlueEyes. A 429 is the
+      // A response at all — any status — means we REACHED BlueEye. A 429 is the
       // server talking to us, not an unreachable server, and must not read on
       // the badge as "cannot connect".
       failures = 0;
@@ -329,7 +329,7 @@
   var dot = document.createElement('span');
   dot.setAttribute('style', 'width:9px;height:9px;border-radius:50%;background:#d03b3b;display:inline-block');
   var label = document.createElement('span');
-  label.textContent = 'BlueEyes optager · 0';
+  label.textContent = 'BlueEye optager · 0';
   badge.appendChild(dot);
   badge.appendChild(label);
   badge.title = 'Klik for at stoppe optagelsen. Efter et sideskift: klik bogmærket igen.';
@@ -353,14 +353,14 @@
     if (failures >= 2) {
       dot.style.background = '#fab219';
       label.textContent = delivered
-        ? 'BlueEyes: forbindelsen er afbrudt · ' + counted
-        : 'BlueEyes når ikke frem — se konsollen (F12)';
-      badge.title = 'Optageren kan ikke sende data til BlueEyes. Tryk F12 og se Console:'
+        ? 'BlueEye: forbindelsen er afbrudt · ' + counted
+        : 'BlueEye når ikke frem — se konsollen (F12)';
+      badge.title = 'Optageren kan ikke sende data til BlueEye. Tryk F12 og se Console:'
         + ' nævner den connect-src, blokerer sitets Content-Security-Policy forbindelsen.';
       return;
     }
     dot.style.background = '#d03b3b';
-    label.textContent = 'BlueEyes optager · ' + counted;
+    label.textContent = 'BlueEye optager · ' + counted;
   }
 
   // ---------------------------------------------------------------- lifecycle
@@ -380,8 +380,8 @@
     window.removeEventListener('pagehide', onUnload);
     dot.style.background = '#898781';
     label.textContent = reason === 'expired'
-      ? 'BlueEyes: optagelsen er udløbet'
-      : 'BlueEyes: optagelse stoppet · ' + counted;
+      ? 'BlueEye: optagelsen er udløbet'
+      : 'BlueEye: optagelse stoppet · ' + counted;
     setTimeout(function () { if (badge.parentNode) badge.parentNode.removeChild(badge); }, 4000);
     delete window.__blueeyeRecorder;
   }

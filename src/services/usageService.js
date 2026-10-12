@@ -41,7 +41,7 @@ function createUsageService({
     if (planService && typeof planService.getCurrentPlan === 'function') {
       return planService.getCurrentPlan().plan_name;
     }
-    return 'BlueEyes';
+    return 'BlueEye';
   }
 
   // The plan limit for a resource. `null` means an explicitly resolved
@@ -106,7 +106,7 @@ function createUsageService({
         limit,
         used,
         message:
-          `Your current BlueEyes ${planName()} licence allows up to ${limit} ${noun}. ` +
+          `Your current BlueEye ${planName()} licence allows up to ${limit} ${noun}. ` +
           'Contact your administrator or upgrade the licence to add more.',
       },
     };

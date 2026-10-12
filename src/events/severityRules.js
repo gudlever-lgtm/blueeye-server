@@ -2,7 +2,7 @@
 
 // Severity rules — "this kind of event is a warning for us, not a critical".
 //
-// BlueEyes decides severity at detection: the analysis detector from a MAD
+// BlueEye decides severity at detection: the analysis detector from a MAD
 // z-score, Service Assurance from the kind of failure. Both are reasonable
 // defaults and neither knows your business. A packet-loss anomaly that pages one
 // customer at 3am is background noise to another.

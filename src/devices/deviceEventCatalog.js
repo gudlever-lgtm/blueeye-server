@@ -134,7 +134,7 @@ const KNOWN_EVENT_TYPES = Object.freeze([...LABELS.keys()].sort());
 
 // Maps a syslog severity onto the WARN/CRIT/INFO band the rest of the server
 // already speaks (findings, event cases, the timeline). Syslog has eight levels
-// and BlueEyes has three, so this is a narrowing and it is done in exactly one
+// and BlueEye has three, so this is a narrowing and it is done in exactly one
 // place. err(3) and worse is CRIT; warning(4) is WARN; the rest is INFO.
 function severityBand(severity) {
   if (!Number.isInteger(severity)) return 'INFO';

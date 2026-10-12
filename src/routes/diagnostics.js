@@ -115,7 +115,7 @@ function createDiagnosticsRouter({
       add(`integration:${row.id}`, 'itsm', true, true, screening.screenIntegration(row));
     }
     // CMDB (single source of truth) — its OWN group, not ITSM: this is the asset
-    // inventory BlueEyes links agents to (ServiceNow CMDB / Nautobot / NetBox / …),
+    // inventory BlueEye links agents to (ServiceNow CMDB / Nautobot / NetBox / …),
     // distinct from ticketing. Runnable only once a source is configured with a base
     // URL and the connector supports a live test.
     if (g.cmdb && g.cmdb.base_url) {

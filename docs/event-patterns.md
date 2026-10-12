@@ -1,6 +1,6 @@
 # Event patterns
 
-BlueEyes has had a matcher since migration 086. A severity rule pins down
+BlueEye has had a matcher since migration 086. A severity rule pins down
 `source` / `metric` / `kind` / agent / application, a blank field means "any",
 and the most specific rule wins. It is a good matcher, and it was welded to
 exactly one decision: what severity to store.

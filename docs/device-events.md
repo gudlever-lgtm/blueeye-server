@@ -1,6 +1,6 @@
 # Device events — what the network equipment itself says
 
-> Until this, BlueEyes could tell you that something broke. The switch had been
+> Until this, BlueEye could tell you that something broke. The switch had been
 > saying **why** the whole time, and nothing was listening.
 
 **Nav:** Diagnostics → Device log · **API:** `/api/device-events`

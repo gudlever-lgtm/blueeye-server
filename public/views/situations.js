@@ -205,7 +205,7 @@
               { key: 'severity', label: t('sit.col.severity'), width: '100px', sortable: true },
               { key: 'confidence', label: t('sit.col.confidence'), width: '130px', sortable: true },
               { key: 'status', label: t('sit.col.status'), width: '140px', sortable: true },
-              { key: 'members', label: t('sit.col.members'), width: '110px', sortable: true, num: true },
+              { key: 'members', label: t('sit.col.members'), width: '140px', sortable: true, num: true },
               { key: 'cause', label: t('sit.col.cause'), sortable: true },
               { key: 'first', label: t('sit.col.first'), sortable: true, time: true },
               { key: 'last', label: t('sit.col.last'), sortable: true, time: true },

@@ -5,7 +5,7 @@ const path = require('path');
 const { compile, ExprError } = require('./expr');
 const { isKnownFactPath } = require('./facts');
 
-// The playbook catalogue — the whole of what BlueEyes knows about network faults
+// The playbook catalogue — the whole of what BlueEye knows about network faults
 // that a person can add to without writing code.
 //
 // One JSON file per playbook in ./playbooks, read and VALIDATED at startup. That
@@ -233,7 +233,7 @@ function parsePlaybook(file, raw) {
     // there being permanently inconclusive with nothing anywhere saying why.
     for (const fp of compiled.paths) {
       if (!isKnownFactPath(fp)) {
-        throw new CatalogError(file, `rules[${i}] (${r.id}) reads "${fp}", which is not a fact BlueEyes measures — see FACT_SCHEMA in src/diagnose/facts.js`);
+        throw new CatalogError(file, `rules[${i}] (${r.id}) reads "${fp}", which is not a fact BlueEye measures — see FACT_SCHEMA in src/diagnose/facts.js`);
       }
       readablePaths.add(fp);
     }
@@ -250,7 +250,7 @@ function parsePlaybook(file, raw) {
   for (const fix of fixes.flatMap((f) => LOCALES.map((l) => f[l]))) {
     for (const m of fix.matchAll(PLACEHOLDER_RE)) {
       if (!isKnownFactPath(m[1])) {
-        throw new CatalogError(file, `fix references {${m[1]}}, which is not a fact BlueEyes measures — see FACT_SCHEMA in src/diagnose/facts.js`);
+        throw new CatalogError(file, `fix references {${m[1]}}, which is not a fact BlueEye measures — see FACT_SCHEMA in src/diagnose/facts.js`);
       }
     }
   }

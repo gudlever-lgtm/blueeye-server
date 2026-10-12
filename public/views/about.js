@@ -45,7 +45,7 @@
     // the history, which is the point of the page.
     function buildLead() {
       return el('span', { class: 'about-build' },
-        el('strong', {}, 'BlueEyes Network Resilience System'),
+        el('strong', {}, 'BlueEye Network Resilience System'),
         ui.meta(' · ' + (deps.version ? 'v' + deps.version : '—')),
         ui.meta(' · ' + (deps.releaseDate
           ? t('about.build.released', { date: deps.releaseDate })

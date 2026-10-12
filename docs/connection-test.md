@@ -483,7 +483,7 @@ that has never reported one leaves the far end nothing to aim at, and is told so
 rather than probing a blank.
 
 **What it does not claim.** A round trip cannot be split into two one-way
-latencies without synchronised clocks, which BlueEyes does not have and will not
+latencies without synchronised clocks, which BlueEye does not have and will not
 invent. The latency rung compares two **round** trips — A→B→A against B→A→B — and
 says so: a difference means the two round trips are not the same path, which is a
 real finding and a different one from "the outbound leg is slow".

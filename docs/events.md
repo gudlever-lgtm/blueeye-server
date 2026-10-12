@@ -1,6 +1,6 @@
 # Events — and why they are not incidents
 
-BlueEyes produces **events**. It does not produce incidents.
+BlueEye produces **events**. It does not produce incidents.
 
 An **event** is a correlated technical observation about one device: "latency to
 this probe target has been far above baseline on `core-sw` since 07:15, seven
@@ -12,7 +12,7 @@ priority set by someone, and a customer waiting on it. It lives in the ITSM —
 ServiceNow, TOPdesk, a custom connector — and an event is what **opens** one.
 
 Calling our own row an "incident" made those two indistinguishable, and the
-confusion had a cost: the dashboard implied BlueEyes was doing incident
+confusion had a cost: the dashboard implied BlueEye was doing incident
 management, which it deliberately is not. It detects, correlates and explains;
 your service desk does the rest. So the noun in this product is **event**, and
 "incident" is reserved for the thing an ITSM owns.
@@ -30,7 +30,7 @@ keep it — in the table, in the code, and in the report text a regulator reads.
 | **Situation** | `event_clusters` | One condition seen across **several devices**, with a suspected common cause. |
 | **Probe outage** | `probe_outages` | An active-probe threshold breach (migration 025). A different, older concept — not an event. |
 | **NIS2 incident** | `blueeye_nis2_incidents` | A regulator-facing report. Keeps the directive's word. |
-| **Incident** | — | Lives in your ITSM. BlueEyes writes to it, never stores it. |
+| **Incident** | — | Lives in your ITSM. BlueEye writes to it, never stores it. |
 
 The storage layer matches the vocabulary as of **migration 077**. Two different
 things had both been called "incident" and they split there:
@@ -53,7 +53,7 @@ they are what already ran on customer databases.
 `src/integrations/` is the outbound path. A connector subscribes to event types
 and posts to the target's own incident table:
 
-    event (BlueEyes)  ──dispatcher──▶  ServiceNow  ──▶  incident INC0012345
+    event (BlueEye)  ──dispatcher──▶  ServiceNow  ──▶  incident INC0012345
                                        TOPdesk     ──▶  incident
                                        custom ITSM ──▶  whatever it maps to
 

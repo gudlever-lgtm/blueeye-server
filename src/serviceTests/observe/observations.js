@@ -28,7 +28,7 @@ const LAYERS = ['browser', 'page', 'api', 'application', 'server', 'network', 'i
 const OUTCOMES = ['ok', 'bad', 'unknown'];
 
 // The fact types this module produces. Open-ended in the database on purpose —
-// detectors must be able to ship without a migration — but the set BlueEyes
+// detectors must be able to ship without a migration — but the set BlueEye
 // itself emits is named here so the gate can sweep it and so a reader has one
 // place to learn what exists.
 const KIND = {

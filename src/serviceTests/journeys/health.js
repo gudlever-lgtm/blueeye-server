@@ -3,7 +3,7 @@
 // What a journey's state IS, computed from the tests under it (V2 §8).
 //
 // The product principle this file exists to serve, in the spec's own words:
-// BlueEyes must not say "the website is up". It must say "the service works" —
+// BlueEye must not say "the website is up". It must say "the service works" —
 // and when it does not, which part failed.
 //
 // So a journey is never just a colour. It is a verdict plus the evidence that

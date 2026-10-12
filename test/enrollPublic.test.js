@@ -254,7 +254,7 @@ test('GET /enroll/:code/install.ps1 returns a PowerShell script for an active co
 // own comments/hints used to spell out `powershell -NoProfile … -Command "irm … |
 // iex"`. That string is what an IPS matches on ("ET ATTACK_RESPONSE PowerShell
 // NoProfile Command Received In Powershell Stagers"), so a customer downloading
-// the installer saw an intrusion alert naming their own BlueEyes server. Keep the
+// the installer saw an intrusion alert naming their own BlueEye server. Keep the
 // stager shape out of the bodies as well as out of the command we hand out.
 test('the generated PowerShell scripts carry no stager pattern in their own text', async () => {
   const app = makeApp({ agentSourceStore: makeSourceStore({ sha256: 's'.repeat(64) }), enrollmentCodesRepo: activeCode() });

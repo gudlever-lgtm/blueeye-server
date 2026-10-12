@@ -5,7 +5,7 @@ const { numOrNull } = require('../lib/num');
 // Data-access for `event_severity_rules` (migration 086), plus the small cache
 // that makes it usable from the write path.
 //
-// Every finding BlueEyes stores goes through the rule set, so a query per
+// Every finding BlueEye stores goes through the rule set, so a query per
 // finding would put a round trip in front of every anomaly the analyser
 // produces. The rules are a handful of rows that change when a person edits
 // them, so they are cached with a short TTL — the same shape the Service Tests

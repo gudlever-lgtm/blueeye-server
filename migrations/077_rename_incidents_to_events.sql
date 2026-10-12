@@ -1,6 +1,6 @@
 -- 077 — rename the incident_* entities to their real names.
 --
--- BlueEyes produces EVENTS. An "incident" is what a connected ITSM opens from
+-- BlueEye produces EVENTS. An "incident" is what a connected ITSM opens from
 -- one, and it lives there with its own number, SLA and owner. Migration 047
 -- named our own grouped-anomaly entity `incident_cases`, which made the two
 -- indistinguishable in every query and log line. This renames the storage layer

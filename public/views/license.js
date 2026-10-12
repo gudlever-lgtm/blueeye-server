@@ -128,7 +128,7 @@
           title: t('lic.details'),
           children: [ui.keyValues([
             [t('lic.kv.licensed'), s.licensed ? t('lic.yes') : t('lic.no')],
-            plan ? [t('lic.kv.plan'), 'BlueEyes ' + plan.plan_name + (plan.is_trial ? ' (' + t('lic.trial') + ')' : '')] : null,
+            plan ? [t('lic.kv.plan'), 'BlueEye ' + plan.plan_name + (plan.is_trial ? ' (' + t('lic.trial') + ')' : '')] : null,
             plan ? [t('lic.kv.support'), plan.support_level] : null,
             plan ? [t('lic.kv.maxAgents'), limit(plan.limits.max_agents)] : [t('lic.kv.maxAgents'), String(s.maxAgents)],
             plan ? [t('lic.kv.maxPaths'), limit(plan.limits.max_test_paths)] : null,

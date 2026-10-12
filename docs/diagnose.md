@@ -1,6 +1,6 @@
 # Symptom-first diagnosis
 
-> A technician writes what is wrong in their own words. BlueEyes answers with a
+> A technician writes what is wrong in their own words. BlueEye answers with a
 > plan — the likely causes, the tests to run with their parameters filled in,
 > the screens to open and what to look for in each, and what each answer would
 > mean. Run the tests, and every cause comes back **confirmed**, **ruled out**
@@ -15,7 +15,7 @@
 
 Four decisions, and the rest follows from them.
 
-**The catalogue comes first; the LLM is a helper.** Everything BlueEyes knows
+**The catalogue comes first; the LLM is a helper.** Everything BlueEye knows
 about network faults — causes, the tests that tell them apart, the rules for
 reading the results, the fixes — is data in `src/diagnose/playbooks/*.json`. The
 module works completely with AI switched off: a local keyword and symptom

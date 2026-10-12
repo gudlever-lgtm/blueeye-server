@@ -39,7 +39,7 @@ ALTER TABLE service_test_incidents
   ADD COLUMN affected_journeys JSON DEFAULT NULL AFTER impact_reason,
   -- Deliberately NOT a user count. The spec says: if the number of affected
   -- users is not known, say Unknown — never invent it. There is no column here
-  -- to hold a number BlueEyes cannot observe.
+  -- to hold a number BlueEye cannot observe.
 
   -- Set when somebody takes it, so "who is on this" is answerable without a
   -- separate tool. No foreign key to `users`, matching every other user

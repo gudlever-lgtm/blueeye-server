@@ -7,7 +7,7 @@ const { parseId } = require('../../validation/locationValidation');
 const { validateEvidenceInput } = require('../../validation/nis2Validation');
 
 // Evidence REFERENCES — what proves a control, and where that proof lives.
-// BlueEyes stores the pointer and its metadata, never the artefact itself.
+// BlueEye stores the pointer and its metadata, never the artefact itself.
 function createEvidenceRouter(ctx) {
   const router = express.Router();
   const { reader, writer, audit, fail, qstr, nis2EvidenceRepo } = ctx;

@@ -59,7 +59,7 @@ function createReportScheduler({
         `Period: ${built.subtitle} (last ${schedule.window_days} day(s))`,
         `Rows: ${built.rowCount}`,
         '',
-        `Sent by the BlueEyes schedule "${schedule.name}".`,
+        `Sent by the BlueEye schedule "${schedule.name}".`,
       ].join('\n'),
       filename: built.filename,
       contentType: built.contentType,

@@ -3,7 +3,7 @@
 --     Original:   #login-button
 --     Suggested:  button "Log ind"
 --
--- When a step's target no longer resolves, BlueEyes proposes the element it
+-- When a step's target no longer resolves, BlueEye proposes the element it
 -- thinks the operator meant. It does NOT repoint the test: the spec says
 -- "testen må ikke ændres automatisk uden brugerens accept", and this table is
 -- how that rule is kept honest — a proposal is a row somebody has to act on,
@@ -31,7 +31,7 @@ CREATE TABLE service_test_healing (
   -- was made against.
   step_path      VARCHAR(40)   NOT NULL,
   step_type      VARCHAR(40)       DEFAULT NULL,
-  -- The hint bags: what the test said, and what BlueEyes found.
+  -- The hint bags: what the test said, and what BlueEye found.
   original_target JSON         NOT NULL,
   proposed_target JSON         NOT NULL,
   confidence     ENUM('high','medium','low') NOT NULL DEFAULT 'low',

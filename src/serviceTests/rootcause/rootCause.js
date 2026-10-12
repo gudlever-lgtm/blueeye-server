@@ -55,12 +55,12 @@ const CAUSE = {
 
 // How a cause can be known.
 //
-//   observed     — BlueEyes saw the thing itself. A TLS handshake that failed is
+//   observed     — BlueEye saw the thing itself. A TLS handshake that failed is
 //                  a TLS failure; there is nothing to deduce.
 //   inferred     — deduced from something else. An HTTP 502 says a gateway
 //                  answered for an upstream that did not; no load balancer was
 //                  ever inspected.
-//   unobservable — BlueEyes cannot see this from a browser, ever. It can only be
+//   unobservable — BlueEye cannot see this from a browser, ever. It can only be
 //                  proposed as a thing to go and look at.
 const BASIS = { OBSERVED: 'observed', INFERRED: 'inferred', UNOBSERVABLE: 'unobservable' };
 
@@ -96,7 +96,7 @@ const CATALOGUE = [
     cause: CAUSE.CONFIGURATION,
     layer: 'assurance',
     basis: BASIS.OBSERVED,
-    label: 'BlueEyes’ own configuration',
+    label: 'BlueEye’ own configuration',
     next_step: 'Check the application’s allowed hosts and its stored login — this is a setting here, not a fault in the service.',
   },
   {
@@ -174,7 +174,7 @@ const CATALOGUE = [
     layer: 'application',
     basis: BASIS.UNOBSERVABLE,
     label: 'The database behind the application',
-    next_step: 'BlueEyes cannot see a database from a browser — this is a place to look, not a finding. Check connections, locks and slow queries around this time.',
+    next_step: 'BlueEye cannot see a database from a browser — this is a place to look, not a finding. Check connections, locks and slow queries around this time.',
   },
   {
     cause: CAUSE.TIMEOUT,
@@ -305,13 +305,13 @@ function signatures(c) {
   const add = (cause, points, why) => { if (points > 0 && why) out.push({ cause, points, why }); };
   const saw = (re) => re.test(c.errorText);
 
-  // --- BlueEyes' own configuration ------------------------------------------
+  // --- BlueEye' own configuration ------------------------------------------
   // Separated from "a firewall" deliberately, and ranked first in the
   // catalogue. `network.blocked` means THIS server refused the address because
   // it is not on the allowlist. Reporting that as a customer firewall sends
   // somebody to the wrong building.
   if (c.list.some((o) => o.kind === 'network.blocked')) {
-    add(CAUSE.CONFIGURATION, 60, 'BlueEyes refused the address itself — it is not on this application\u2019s allowed hosts');
+    add(CAUSE.CONFIGURATION, 60, 'BlueEye refused the address itself — it is not on this application\u2019s allowed hosts');
   }
   if (c.failureKind === 'blocked_by_policy') {
     add(CAUSE.CONFIGURATION, 55, 'the run was stopped by the host allowlist, not by anything at the other end');
@@ -345,7 +345,7 @@ function signatures(c) {
   }
 
   // --- firewall / closed port ------------------------------------------------
-  // Inferred, never observed: BlueEyes sees a connection that did not open. It
+  // Inferred, never observed: BlueEye sees a connection that did not open. It
   // cannot see a firewall, and a service that is simply not running looks
   // identical from here.
   if (c.failureKind === 'connection_refused') {
@@ -412,7 +412,7 @@ function signatures(c) {
   // hypothesis, and even then it is capped and labelled as a place to look.
   if (c.hasStatus((s) => s === 500)) {
     if (saw(/deadlock|too many connections|connection pool|sqlstate|query/)) {
-      add(CAUSE.DATABASE, 35, 'the error text names a database condition, though BlueEyes did not see the database');
+      add(CAUSE.DATABASE, 35, 'the error text names a database condition, though BlueEye did not see the database');
     } else if (c.failureKind === 'timeout' || saw(/timeout|timed out/)) {
       add(CAUSE.DATABASE, 25, 'a 500 alongside a timeout is often a slow query, but nothing here observed one');
     }
@@ -514,7 +514,7 @@ function analyseRootCause(rawInput = {}) {
     gap,
     decisive,
     summary: summarise(top, runnerUp, decisive, c),
-    // The causes on this list BlueEyes cannot see from where it stands. Named
+    // The causes on this list BlueEye cannot see from where it stands. Named
     // separately so a screen can mark them without re-deriving the rule.
     supposed: candidates.filter((x) => x.basis === BASIS.UNOBSERVABLE).map((x) => x.cause),
     // The holes in the evidence, carried through from correlation. A ranking
@@ -553,7 +553,7 @@ function summarise(top, runnerUp, decisive, c) {
     ? ` ${c.notChecked.join(', ')} ${c.notChecked.length === 1 ? 'was' : 'were'} not checked.`
     : '';
   const supposition = top.basis === BASIS.UNOBSERVABLE
-    ? ' BlueEyes cannot see this from a browser — it is a place to look, not a finding.'
+    ? ' BlueEye cannot see this from a browser — it is a place to look, not a finding.'
     : '';
   if (!decisive && runnerUp) {
     return `Most likely ${top.label.toLowerCase()} (${top.likelihood}%), but ${runnerUp.label.toLowerCase()} `

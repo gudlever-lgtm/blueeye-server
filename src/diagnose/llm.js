@@ -37,7 +37,7 @@ const MAX_RESPONSE_CHARS = 8000;
 // validator that enforces the shape it asks for, and src/analysis/assistant.js
 // sends exactly this string — there used to be a second, slightly different
 // copy in each file, and only the assistant's ever reached the model.
-const SYSTEM_PROMPT = 'You are a network-fault classifier for BlueEyes. You are given a catalogue of troubleshooting '
+const SYSTEM_PROMPT = 'You are a network-fault classifier for BlueEye. You are given a catalogue of troubleshooting '
   + 'playbooks and a description of a problem written by a technician. Choose the playbooks from the '
   + 'catalogue that best match it, at most 3, best first. You may ONLY return ids that appear in the '
   + 'catalogue you were given — never invent an id, a cause, a test or a fix. Also extract the entities '

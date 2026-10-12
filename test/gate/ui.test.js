@@ -73,7 +73,7 @@ test('every public/*.js parses as a classic script and every *.css is balanced',
 test('index.html: every script and stylesheet is served from this server, exists on disk, and no inline scripts', async () => {
   const doc = dom0.window.document;
   assert.ok(doc.querySelector('meta[name="viewport"]'));
-  assert.ok(doc.title.includes('BlueEyes'));
+  assert.ok(doc.title.includes('BlueEye'));
   const refs = [
     ...[...doc.querySelectorAll('script[src]')].map((s) => s.getAttribute('src')),
     ...[...doc.querySelectorAll('link[rel="stylesheet"]')].map((l) => l.getAttribute('href')),

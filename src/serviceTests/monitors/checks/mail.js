@@ -70,7 +70,7 @@ function createMailCheck({ smtp = null, imap = null, sleep = sleeper, now = () =
       return misconfigured({ summary: 'The monitor is missing the mail server, the sender or the recipient.' });
     }
     const token = crypto.randomBytes(4).toString('hex');
-    const subject = `${cfg.subject_prefix || 'BlueEyes assurance probe'} [${token}]`;
+    const subject = `${cfg.subject_prefix || 'BlueEye assurance probe'} [${token}]`;
     const sentAt = now();
 
     let sent;

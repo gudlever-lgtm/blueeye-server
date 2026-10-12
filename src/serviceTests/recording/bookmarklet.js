@@ -28,7 +28,7 @@ const CAPTURE_MOUNT = '/api/service-capture';
 // Same rule, same reason, as the enrollment installer's server URL.
 const SAFE_HOST_RE = /^[a-zA-Z0-9.\-:[\]]+$/;
 
-// The address the CUSTOMER'S BROWSER must use to reach BlueEyes — which is not
+// The address the CUSTOMER'S BROWSER must use to reach BlueEye — which is not
 // the address this process is listening on, and the difference is what makes
 // recording work or not.
 //
@@ -83,7 +83,7 @@ function buildBookmarklet({ req, token, recorderSource = '', publicUrl = null })
       `s.src=${jsString(src)};`,
       `s.dataset.endpoint=${jsString(captureUrl)};`,
       `s.dataset.token=${jsString(token)};`,
-      's.onerror=function(){alert("BlueEyes: the page blocked the recorder (Content-Security-Policy). Build the test in the designer instead.");};',
+      's.onerror=function(){alert("BlueEye: the page blocked the recorder (Content-Security-Policy). Build the test in the designer instead.");};',
       '(document.body||document.documentElement).appendChild(s);',
       '})();',
     ].join('');

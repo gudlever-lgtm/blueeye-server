@@ -48,7 +48,7 @@ const TRANSITIONS = {
   [STATUS.CLOSED]: [],
 };
 
-// Timeline event kinds BlueEyes itself writes. Open-ended in the database so
+// Timeline event kinds BlueEye itself writes. Open-ended in the database so
 // detectors can ship without a migration; named here so a reader has one place
 // to learn what exists.
 const EVENT = {
@@ -145,7 +145,7 @@ function assessImpact(rawInput = {}) {
       ? `${names[0]} is unavailable, and it is a ${String(worst.criticality || 'normal').toLowerCase()} journey.`
       : `${names.length} journeys are affected, the most important being ${worst.name}.`,
     affected: names,
-    // BlueEyes watches journeys, not people. It has no way to know how many
+    // BlueEye watches journeys, not people. It has no way to know how many
     // users a broken journey cost, and a made-up number would be the least
     // trustworthy thing on the page.
     affected_users: 'unknown',

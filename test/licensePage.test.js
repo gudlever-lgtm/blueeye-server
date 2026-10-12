@@ -136,7 +136,7 @@ test('the rest is one reference block, not three loose h3s', async (t) => {
   await settle();
   const pairs = kv(doc);
   assert.equal(pairs.Licensed, 'Yes');
-  assert.equal(pairs.Plan, 'BlueEyes Professional');
+  assert.equal(pairs.Plan, 'BlueEye Professional');
   assert.equal(pairs['Support level'], 'Business hours');
   assert.equal(pairs['Server ID'], 'srv-7f2a');
   assert.equal(pairs['Max. agents'], '50');

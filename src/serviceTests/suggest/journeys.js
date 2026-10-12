@@ -29,7 +29,7 @@ const { CONFIDENCE } = require('./rules');
 // What the product must not do, stated once so the rules below can point at it:
 // "Availability" is not a journey. Opening the front page and getting HTTP 200
 // is the definition of "the website is up", and the whole point of journeys is
-// that BlueEyes stops saying that. It stays a useful test; it never becomes a
+// that BlueEye stops saying that. It stays a useful test; it never becomes a
 // user journey.
 const NOT_A_JOURNEY = new Set(['Availability']);
 

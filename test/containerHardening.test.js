@@ -53,7 +53,7 @@ test('the server container cannot gain new privileges', () => {
 // address and allows only a per-application allowlist — but that check runs
 // before Chromium resolves the name a second time, and nothing in an
 // application can close that window entirely. The network is what makes the
-// remainder unreachable: there is no route from here to BlueEyes' own API,
+// remainder unreachable: there is no route from here to BlueEye' own API,
 // whatever a name resolves to.
 //
 // Parsed rather than regex-matched, because "is the worker on a network the

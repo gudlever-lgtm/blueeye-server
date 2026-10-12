@@ -338,7 +338,7 @@ test('PUT link without a location -> 200 and stores null (location is optional)'
   assert.equal(res.body.cmdb_asset_location, null);
 });
 
-test('PUT link with a location syncs agent location_id to the matching BlueEyes site', async () => {
+test('PUT link with a location syncs agent location_id to the matching BlueEye site', async () => {
   const setCalls = [];
   const agentsRepo = makeAgentsRepo({
     findById: async (id) => ({ id, hostname: 'web01' }),
@@ -358,7 +358,7 @@ test('PUT link with a location syncs agent location_id to the matching BlueEyes 
   assert.equal(createCalls.length, 0); // matched an existing site — no new one created
 });
 
-test('PUT link with a location creates a new BlueEyes site when none matches', async () => {
+test('PUT link with a location creates a new BlueEye site when none matches', async () => {
   const setCalls = [];
   const agentsRepo = makeAgentsRepo({
     findById: async (id) => ({ id, hostname: 'web01' }),

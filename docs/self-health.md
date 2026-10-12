@@ -1,4 +1,4 @@
-# System health — is BlueEyes itself all right?
+# System health — is BlueEye itself all right?
 
 `GET /system/self` (viewer+), `src/system/selfHealth.js`, and the screen at
 **Administration → System health** (`public/views/systemHealth.js`).

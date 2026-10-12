@@ -8,7 +8,7 @@ const { validateAttack } = require('./attack');
 
 // Event patterns — one named match, used by every policy that needs it.
 //
-// BlueEyes has had a matcher since migration 086: a severity rule pins down
+// BlueEye has had a matcher since migration 086: a severity rule pins down
 // source/metric/kind/agent/application, blank means "any", and the most
 // specific match wins. What it did not have is a way to write that match ONCE
 // and hang more than one decision off it. So "packet loss on the warehouse

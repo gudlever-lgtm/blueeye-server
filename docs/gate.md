@@ -1,6 +1,6 @@
 # Pre-build gate — security / UI / validation tests
 
-Every branch build of BlueEyes passes a gate before it exists. The same gate
+Every branch build of BlueEye passes a gate before it exists. The same gate
 lives in all three repos (`blueeye-server`, `blueeye-agent`, `blueeye-licens`):
 `scripts/gate.sh` runs three sweep suites in `test/gate/` and then the full
 `npm test`, and exits non-zero if anything fails.

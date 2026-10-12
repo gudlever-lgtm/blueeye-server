@@ -88,8 +88,8 @@
       "view": "interfaces",
       "params": {},
       "look_for": {
-        "en": "Late collisions above zero is the specific signature, and BlueEyes now reads it over SNMP. Beside it, errors climbing WITH utilisation and a negotiated speed below what the port should do. For the agent's own NIC the Link column shows the negotiated duplex, and a half-duplex link whose collisions or frame errors are moving is flagged “duplex mismatch suspected”.",
-        "da": "Late collisions over nul er den præcise signatur, og BlueEyes læser den nu over SNMP. Ved siden af den: fejl der stiger MED forbruget, og en forhandlet hastighed under hvad porten burde kunne. For agentens eget netkort viser Link-kolonnen den forhandlede duplex, og et halv-duplex-link hvis kollisioner eller frame-fejl stiger, markeres “duplex mismatch mistænkt”."
+        "en": "Late collisions above zero is the specific signature, and BlueEye now reads it over SNMP. Beside it, errors climbing WITH utilisation and a negotiated speed below what the port should do. For the agent's own NIC the Link column shows the negotiated duplex, and a half-duplex link whose collisions or frame errors are moving is flagged “duplex mismatch suspected”.",
+        "da": "Late collisions over nul er den præcise signatur, og BlueEye læser den nu over SNMP. Ved siden af den: fejl der stiger MED forbruget, og en forhandlet hastighed under hvad porten burde kunne. For agentens eget netkort viser Link-kolonnen den forhandlede duplex, og et halv-duplex-link hvis kollisioner eller frame-fejl stiger, markeres “duplex mismatch mistænkt”."
       }
     },
     {

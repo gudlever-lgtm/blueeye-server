@@ -60,7 +60,7 @@ const probeOutageRow = (r) => ({
 const REPORTS = {
   availability: {
     id: 'availability',
-    title: 'BlueEyes — Availability / SLA report',
+    title: 'BlueEye — Availability / SLA report',
     filename: 'blueeye-availability',
     columns: AVAIL_COLUMNS,
     row: availRow,
@@ -69,7 +69,7 @@ const REPORTS = {
   },
   probe_outages: {
     id: 'probe_outages',
-    title: 'BlueEyes — Probe outages',
+    title: 'BlueEye — Probe outages',
     filename: 'blueeye-probe-outages',
     columns: PROBE_OUTAGE_COLUMNS,
     row: probeOutageRow,

@@ -1,4 +1,4 @@
-# BlueEyes stack. Run from this directory with the repos cloned as siblings.
+# BlueEye stack. Run from this directory with the repos cloned as siblings.
 #
 #   node scripts/dev-bootstrap.js                  # once: generates .env (keys + demo defaults)
 #
@@ -229,7 +229,7 @@ services:
     # address and allows only a per-application allowlist
     # (src/serviceTests/security/hostPolicy.js), but that check happens before
     # Chromium resolves the name a second time. This network is what makes the
-    # remaining DNS-rebinding window unable to reach BlueEyes' own API: there is
+    # remaining DNS-rebinding window unable to reach BlueEye' own API: there is
     # no route to it from here, whatever a name resolves to.
     #
     # Outbound access to the internet still works — the network is a bridge with

@@ -129,8 +129,8 @@ test('email: the subject names the agent and the body opens with the link', asyn
   const sent = [];
   const ch = createEmailChannel({ config: { from: 'a@b', to: 'ops@b' }, transport: { sendMail: async (m) => { sent.push(m); } } });
   await ch.send(ENRICHED, null);
-  assert.equal(sent[0].subject, '[BlueEyes CRIT] probe.loss on core-sw-1 (#12)');
-  assert.match(sent[0].text, /Open in BlueEyes: https:\/\/be\.example\/events\/9/);
+  assert.equal(sent[0].subject, '[BlueEye CRIT] probe.loss on core-sw-1 (#12)');
+  assert.match(sent[0].text, /Open in BlueEye: https:\/\/be\.example\/events\/9/);
 });
 
 test('email without a name keeps the old "host N" wording', async () => {
@@ -138,7 +138,7 @@ test('email without a name keeps the old "host N" wording', async () => {
   const ch = createEmailChannel({ config: { from: 'a@b', to: 'ops@b' }, transport: { sendMail: async (m) => { sent.push(m); } } });
   await ch.send({ hostId: '12', metric: 'cpu', severity: 'WARN' }, null);
   assert.match(sent[0].subject, /cpu on host 12$/);
-  assert.doesNotMatch(sent[0].text, /Open in BlueEyes/);
+  assert.doesNotMatch(sent[0].text, /Open in BlueEye/);
 });
 
 test('webhook: link and hostName ride at the top level', async () => {
@@ -160,8 +160,8 @@ test('syslog: the line names the agent and carries the link', async () => {
 test('matrix: the headline names the agent, the formatted body links', () => {
   const { body, formatted } = renderMessage(ENRICHED, null);
   assert.match(body, /probe\.loss on core-sw-1 \(#12\)/);
-  assert.match(body, /Open in BlueEyes: https:\/\/be\.example\/events\/9/);
-  assert.match(formatted, /<a href="https:\/\/be\.example\/events\/9">Open in BlueEyes<\/a>/);
+  assert.match(body, /Open in BlueEye: https:\/\/be\.example\/events\/9/);
+  assert.match(formatted, /<a href="https:\/\/be\.example\/events\/9">Open in BlueEye<\/a>/);
 });
 
 test('matrix: a link that is not http(s) is not rendered', () => {

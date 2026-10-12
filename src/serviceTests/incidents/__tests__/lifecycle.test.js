@@ -5,7 +5,7 @@
 // The assertions that matter most are about honesty under uncertainty: an
 // unknown impact is reported as unknown, an unknown timestamp is admitted rather
 // than replaced with "now", and the number of affected users is never invented
-// because BlueEyes watches journeys, not people.
+// because BlueEye watches journeys, not people.
 
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
@@ -91,7 +91,7 @@ test('an unknown impact is reported as unknown, never as low', () => {
 });
 
 test('the number of affected users is always "unknown"', () => {
-  // BlueEyes watches journeys, not people. It has no way to know how many users
+  // BlueEye watches journeys, not people. It has no way to know how many users
   // a broken journey cost, and a made-up number would be the least trustworthy
   // thing on the page.
   for (const input of [{ journeys: [{ name: 'Search', criticality: 'critical' }] }, { journeys: [] }]) {

@@ -47,6 +47,16 @@
      end" — it is a base colour, not a derived one. */
   --loading: #0047ab;
 
+  /* The brand mark's blue, and the one colour in the file that NEVER re-themes.
+     The mark used to take --accent, which is the theme's accent and is
+     deliberately not blue in several palettes — yellow in `contrast`, where the
+     product called BlueEye had a yellow eye. A logo is identity, not an
+     accent: it means the same thing on every palette, the way --loading is one
+     colour everywhere because it is system feedback rather than brand.
+     It is the dark palette's blue, so the default theme is unchanged. */
+  --brand: #38bdf8;
+  --brand-weak: color-mix(in srgb, var(--brand) 16%, transparent);
+
   /* ---- Derived & layout tokens -------------------------------------------
      The six semantic colours the UI needs — warning(--warn), danger(--bad),
      success(--ok), muted(--muted), border(--border) and panel

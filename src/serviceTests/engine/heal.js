@@ -8,7 +8,7 @@ const { TARGET_STRATEGIES } = require('./dsl');
 //     Original:   #login-button
 //     Suggested:  button "Log ind"
 //
-// When a step's target no longer resolves, BlueEyes looks at what IS on the page
+// When a step's target no longer resolves, BlueEye looks at what IS on the page
 // and proposes the element it thinks the operator meant. It does NOT repoint the
 // test. The spec is explicit and so is this file: *testen må ikke ændres
 // automatisk uden brugerens accept*.
@@ -50,7 +50,7 @@ const NAME_WEIGHT = 4;
 const MIN_SCORE = 5;
 
 // The gap the best candidate must have over the runner-up. Two elements that
-// score the same are two elements BlueEyes cannot tell apart, and guessing
+// score the same are two elements BlueEye cannot tell apart, and guessing
 // between them is exactly the wrong-heal case.
 const MIN_MARGIN = 2;
 
@@ -146,7 +146,7 @@ function reasonFor(key, value, match, lang) {
 }
 
 // The heal a step's target should be repointed at — or null, which is the
-// answer far more often than not and is the right one whenever BlueEyes cannot
+// answer far more often than not and is the right one whenever BlueEye cannot
 // be sure.
 //
 //   proposeHealing(originalTarget, candidates) -> {
@@ -173,7 +173,7 @@ function proposeHealing(target, candidates, { lang = 'en', minScore = MIN_SCORE,
   // Not good enough on its own merits.
   if (best.score < minScore) return null;
   // Or good, but not distinguishably better than the next one. Two elements
-  // BlueEyes cannot tell apart is precisely when a wrong heal happens.
+  // BlueEye cannot tell apart is precisely when a wrong heal happens.
   if (runnerUp && best.score - runnerUp.score < minMargin) return null;
 
   const proposed = normalizeTarget(best.candidate);

@@ -81,14 +81,14 @@ redactor first.
 The browser will only open the application's own address and the hosts you have
 explicitly allowed. Entries are a `host`, an `ip`, or a `cidr`. If your
 application pulls its API from a second host, that host needs an entry or every
-one of those calls is refused — and refused by BlueEyes, not by a firewall,
+one of those calls is refused — and refused by BlueEye, not by a firewall,
 which is a distinction the analysis is careful to make later.
 
 Four ranges can never be allowed at any permission level:
 
 | Range | Why |
 | --- | --- |
-| `127.0.0.0/8` | loopback — a test browser could reach BlueEyes' own API from the server's own network position |
+| `127.0.0.0/8` | loopback — a test browser could reach BlueEye' own API from the server's own network position |
 | `169.254.0.0/16` | link-local, including the `169.254.169.254` cloud metadata endpoint — the classic pivot |
 | `0.0.0.0/8` | unspecified |
 | broadcast | — |
@@ -149,7 +149,7 @@ driven by that login rather than pinned to one person's account.
 ## 5. Journeys — what makes a set of tests mean something
 
 **Journeys → New.** A journey is a complete thing a user does — sign in, look up
-a customer, open the case — and the tests under it are how BlueEyes proves it
+a customer, open the case — and the tests under it are how BlueEye proves it
 still works.
 
 Each step is **required** or **optional**, and each journey has a criticality:
@@ -213,11 +213,11 @@ timeout, configuration, browser/client.
 
 | Basis | Means |
 | --- | --- |
-| **seen** | BlueEyes observed it. A TLS handshake that failed is a TLS failure. |
+| **seen** | BlueEye observed it. A TLS handshake that failed is a TLS failure. |
 | **deduced** | Inferred from something else. A 502 means a gateway answered for an upstream that did not — no proxy was inspected. |
-| **not visible to BlueEyes** | It cannot see this from a browser at all. A place to go and look, never a finding. |
+| **not visible to BlueEye** | It cannot see this from a browser at all. A place to go and look, never a finding. |
 
-A database is always the third kind. BlueEyes observes DNS, TLS, HTTP status and
+A database is always the third kind. BlueEye observes DNS, TLS, HTTP status and
 timing; it never observes a database, and "the database is slow" from an HTTP 500
 is a hypothesis. A supposed cause can never outrank a watched one, however much
 evidence piles up behind it.
@@ -227,7 +227,7 @@ points clear is an artefact of the arithmetic, not a conclusion.
 
 Two distinctions worth knowing, because they decide which building you walk to:
 
-- **"BlueEyes' own configuration"** means the allowlist refused the address.
+- **"BlueEye' own configuration"** means the allowlist refused the address.
   Nothing at the other end was ever contacted. That is a setting here, not a
   fault in the service.
 - **"One API endpoint"** rather than "the application" means its neighbours
@@ -288,14 +288,14 @@ around 09:00" — that names a batch job somebody can go and look at. That claim
 needs 4 occurrences and a weekday that holds for every one of them; below
 that it says what it would have needed rather than guessing.
 
-**Affected users is always Unknown.** BlueEyes does not know, and it will not
+**Affected users is always Unknown.** BlueEye does not know, and it will not
 invent a number.
 
 ---
 
 ## 10. Alerts
 
-Alerts go out through the same channels as every other BlueEyes finding — email,
+Alerts go out through the same channels as every other BlueEye finding — email,
 webhook, syslog — configured once in **Settings → Alerting**. Severity floors,
 cooldowns and maintenance windows apply to a certificate expiry exactly as they
 do to a throughput anomaly.
@@ -338,7 +338,7 @@ just another box with more lines going in. This is the reading of it.
 
 Reach is weighted by criticality, not counted: three low-criticality journeys are
 not worth more than one critical one. An address you do not control is marked as
-such — but only when BlueEyes was told your own address, because guessing that
+such — but only when BlueEye was told your own address, because guessing that
 an unfamiliar host is third-party is how a service gets blamed on its CDN.
 
 **Journeys that have never run are named.** Their dependencies are unknown, not
@@ -361,7 +361,7 @@ which is the opposite of true.
 
 With a provider configured, **Explain this incident** asks it to put the
 rule-based conclusion into plain language and say what to check next. It is asked
-to explain what BlueEyes already concluded, not to reach its own conclusion.
+to explain what BlueEye already concluded, not to reach its own conclusion.
 
 **What it is allowed to see is an allowlist**, and that is worth understanding
 before you turn it on. Every field is chosen by name. It never sees: a
@@ -412,7 +412,7 @@ an administrator set here.
 | What you see | What it means |
 | --- | --- |
 | Tests queue and never run | No worker. `npm run service-test-worker`. The Runs screen says so at the top. |
-| Discovery found one page | The allowlist. Every off-application address was refused — by BlueEyes, not by a firewall. |
+| Discovery found one page | The allowlist. Every off-application address was refused — by BlueEye, not by a firewall. |
 | "Could not sign in, so this is the public site only" | Exactly that. The counts beside it are the public site. |
 | "No login form has been found on this application yet" | Run one discovery without signing in first. It will find the form; the next one can fill it in. |
 | A test fails on an element that moved | Look for a **healing proposal** on the run. The engine found something it thinks you meant — it is a proposal, and nothing changes until you accept it. |

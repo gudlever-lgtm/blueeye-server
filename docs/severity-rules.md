@@ -1,6 +1,6 @@
 # Severity rules
 
-BlueEyes decides severity at detection. The analyser judges a finding from a
+BlueEye decides severity at detection. The analyser judges a finding from a
 median + MAD z-score; Service Assurance judges an incident from the kind of
 failure. Both are reasonable defaults, and neither knows your business.
 

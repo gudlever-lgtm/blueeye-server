@@ -27,7 +27,7 @@ const CASE_SEVERITY = { CRIT: 'high', WARN: 'medium', INFO: 'low' };
 //                is a legal judgement no event case can make.
 function draftFromEventCase(ec) {
   const where = [ec.agentName || ec.agentHostname || ec.hostId, ec.locationName].filter(Boolean).join(' · ');
-  const summary = `From BlueEyes event case #${ec.id} (${ec.severity}, ${ec.status})${where ? ` on ${where}` : ''}: `
+  const summary = `From BlueEye event case #${ec.id} (${ec.severity}, ${ec.status})${where ? ` on ${where}` : ''}: `
     + `first event ${ec.firstEventAt || 'unknown'}, last event ${ec.lastEventAt || 'unknown'}`
     + `${ec.resolvedAt ? `, resolved ${ec.resolvedAt}` : ''}.`;
   return {

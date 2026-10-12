@@ -28,7 +28,7 @@ const { serviceForPort } = require('../flows/services');
 // shape, which is why the explanation states the counts and the window and
 // names the ignore list instead of claiming an attack.
 //
-// THE PRODUCT'S OWN SCANNER IS THE FIRST FALSE POSITIVE. BlueEyes ships an
+// THE PRODUCT'S OWN SCANNER IS THE FIRST FALSE POSITIVE. BlueEye ships an
 // active-discovery sweep (src/discovery/scanner.js) that probes every address
 // in an admin-configured scope on a schedule. It is, by construction, the
 // loudest port-scan on the network, and a detector that paged on it would be

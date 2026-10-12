@@ -5,7 +5,7 @@
 // WHAT ATT&CK IS NOT. It is not an indicator feed. There are no addresses, no
 // hashes and no domains in it — it is a taxonomy of adversary BEHAVIOUR
 // (tactics and techniques). So there is nothing here to match against: the
-// matching is the one BlueEyes already does (src/events/severityRules.js), and
+// matching is the one BlueEye already does (src/events/severityRules.js), and
 // ATT&CK only gives the match a name that other tools recognise.
 //
 // WHO IS SPEAKING. docs/attack-indication.md says the detectors do not name a
@@ -186,7 +186,7 @@ function tacticsOf(patterns, counts = new Map()) {
 // opened during an incident shades the techniques that are live. A mapped
 // technique with nothing open stays at 0 and still appears — that is the
 // coverage half of the question.
-function navigatorLayer(patterns, counts = new Map(), { name = 'BlueEyes', description = null } = {}) {
+function navigatorLayer(patterns, counts = new Map(), { name = 'BlueEye', description = null } = {}) {
   const byTechnique = new Map();
   for (const p of (Array.isArray(patterns) ? patterns : [])) {
     if (!p || !p.attack_technique || !p.attack_tactic) continue;
@@ -219,7 +219,7 @@ function navigatorLayer(patterns, counts = new Map(), { name = 'BlueEyes', descr
     versions: { layer: '4.5', navigator: '4.9.0' },
     domain: 'enterprise-attack',
     description: description
-      || 'Techniques BlueEyes has been told it covers. The score is how many open events each one covers right now.',
+      || 'Techniques BlueEye has been told it covers. The score is how many open events each one covers right now.',
     techniques,
     gradient: {
       // Grey where nothing is open, through to red where a lot is: the same

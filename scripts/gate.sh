@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# BlueEyes pre-build test gate.
+# BlueEye pre-build test gate.
 #
 # Runs before a branch build is produced (git pre-push, Claude Code's git-push
 # hook, and the CI workflow all call this same script) and refuses the build

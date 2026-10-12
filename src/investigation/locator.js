@@ -265,7 +265,7 @@ function createLocator({ agentsRepo, findingStore, locationsRepo = null, flowsRe
         relatedFindingIds: [],
         workaroundHints: [
           'Investigate the agent or site that owns this subnet/interface instead.',
-          'Register a BlueEyes agent inside the subnet so its address can be matched.',
+          'Register a BlueEye agent inside the subnet so its address can be matched.',
         ],
       };
     }
@@ -282,7 +282,7 @@ function createLocator({ agentsRepo, findingStore, locationsRepo = null, flowsRe
         suspectedSegment: null,
         relatedFindingIds: [],
         workaroundHints: [
-          `Register a BlueEyes agent on ${locationRef.type}="${locationRef.value}" to enable topology diagnosis.`,
+          `Register a BlueEye agent on ${locationRef.type}="${locationRef.value}" to enable topology diagnosis.`,
           'Verify that the agent is online and reporting to the server.',
         ],
       };

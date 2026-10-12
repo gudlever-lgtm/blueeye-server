@@ -1,4 +1,4 @@
-// public/views/systemHealth.js — "Is BlueEyes itself all right?"
+// public/views/systemHealth.js — "Is BlueEye itself all right?"
 //
 // The one screen about the monitoring system rather than about the network it
 // monitors. Every other screen answers with data this server collected; this one

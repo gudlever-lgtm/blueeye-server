@@ -10,7 +10,7 @@ const silentLogger = { info() {}, warn() {}, error() {} };
 // with the same correlation_id and PATCHes it instead, so a recurring condition
 // updates one ticket rather than spawning duplicates.
 //
-// BlueEyes severity -> ServiceNow impact/urgency (1=High .. 3=Low):
+// BlueEye severity -> ServiceNow impact/urgency (1=High .. 3=Low):
 //   CRIT -> 1/1, WARN -> 2/2, INFO/other -> 3/3.
 function createServiceNowConnector({ fetchImpl = globalThis.fetch, logger = silentLogger, timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
   const type = 'servicenow';
@@ -25,7 +25,7 @@ function createServiceNowConnector({ fetchImpl = globalThis.fetch, logger = sile
   }
 
   // Type-specific config_json. table defaults to 'incident'; events is an optional
-  // override of which BlueEyes events this integration reacts to.
+  // override of which BlueEye events this integration reacts to.
   function validateConfig(config) {
     const c = config && typeof config === 'object' ? config : {};
     const value = {};
@@ -51,7 +51,7 @@ function createServiceNowConnector({ fetchImpl = globalThis.fetch, logger = sile
     const f = event.finding || {};
     const { impact, urgency } = impactUrgency(f.severity || event.severity);
     const lines = [
-      f.explanation || event.summary || 'BlueEyes detected an anomaly.',
+      f.explanation || event.summary || 'BlueEye detected an anomaly.',
       '',
       `Host: ${f.hostId ?? 'n/a'}`,
       `Metric: ${f.metric ?? 'n/a'}`,
@@ -61,12 +61,12 @@ function createServiceNowConnector({ fetchImpl = globalThis.fetch, logger = sile
       f.baseline != null ? `Baseline: ${f.baseline}` : null,
     ].filter((x) => x != null);
     return {
-      short_description: `[BlueEyes ${f.severity || event.severity || 'INFO'}] ${f.metric || 'finding'} on host ${f.hostId ?? 'n/a'}`,
+      short_description: `[BlueEye ${f.severity || event.severity || 'INFO'}] ${f.metric || 'finding'} on host ${f.hostId ?? 'n/a'}`,
       description: lines.join('\n'),
       impact,
       urgency,
       correlation_id: event.correlationId,
-      // A stable source tag so ServiceNow admins can filter BlueEyes-raised tickets.
+      // A stable source tag so ServiceNow admins can filter BlueEye-raised tickets.
       u_source: 'BlueEye',
     };
   }
@@ -219,7 +219,7 @@ function createServiceNowConnector({ fetchImpl = globalThis.fetch, logger = sile
   }
 
   // One term against the three things a technician knows about a ticket: its
-  // NUMBER (INC0012345), words from its SHORT DESCRIPTION, and the BlueEyes
+  // NUMBER (INC0012345), words from its SHORT DESCRIPTION, and the BlueEye
   // correlation id (a host id / metric ends up in there, so "fw-aarhus" finds the
   // tickets this server raised for that host). Same separator stripping as
   // assetQuery — the term must not be able to open a fifth condition.

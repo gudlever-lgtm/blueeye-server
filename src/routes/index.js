@@ -154,7 +154,7 @@ function createApiRouter({
   systemInfo,
   findingStore,
   // The operator's own severity rules (migration 086). Absent = every event
-  // keeps the severity it was detected with, which is what BlueEyes did before.
+  // keeps the severity it was detected with, which is what BlueEye did before.
   severityRulesRepo = null,
   eventPatternsRepo = null,
   analysisPipeline,
@@ -394,7 +394,7 @@ function createApiRouter({
     // Whether the two keys the trust chain rests on are still the ones this
     // server was running with last time (src/license/keyIdentity.js).
     keyIdentityGuard, refreshKeyIdentity,
-    // --- GET /system/self: is BlueEyes itself all right? -------------------
+    // --- GET /system/self: is BlueEye itself all right? -------------------
     // Everything here is already wired for some other screen; the self-health
     // route composes it rather than measuring anything new. A dependency this
     // deployment does not have reads as `unknown` with the reason, which is the

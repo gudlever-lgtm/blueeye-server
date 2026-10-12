@@ -139,10 +139,10 @@ test('renderUninstallPs1 is a real Windows uninstaller, not a Linux one', () => 
   assert.ok(!/systemctl|launchctl/.test(script));
 });
 
-test('renderUninstallPs1 frees in-use files: kills any BlueEyes node, waits, retries removal', () => {
+test('renderUninstallPs1 frees in-use files: kills any BlueEye node, waits, retries removal', () => {
   const script = renderUninstallPs1();
   // Kill matches any agent node (service or a foreground doctor run), not just index.js.
-  assert.match(script, /CommandLine -like '\*BlueEyes\*'/);
+  assert.match(script, /CommandLine -like '\*BlueEye\*'/);
   assert.match(script, /Start-Sleep/);
   assert.match(script, /for \(\$i = 0; \(\$i -lt 3\)/); // retry loop
   assert.match(script, /could not fully remove/); // clear message if something is still locked
@@ -216,7 +216,7 @@ test('renderUpdatePs1 carries no enrollment code and never enrolls', () => {
 test('renderUpdatePs1 refuses to run where there is no installed, enrolled agent', () => {
   const script = renderUpdatePs1({ serverUrl: 'http://x', sourceSha: SHA });
   // No install dir -> stop (this script cannot install one).
-  assert.match(script, /no BlueEyes agent install was found/);
+  assert.match(script, /no BlueEye agent install was found/);
   assert.match(script, /only UPDATES an existing agent/);
   // Install dir but no token -> also stop: updating an unenrolled copy would
   // leave a host that never connects.

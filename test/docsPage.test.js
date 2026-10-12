@@ -95,7 +95,7 @@ test('the three sections and the articles of one are two tab strips', async (t) 
   assert.equal(tabsOf(strips(doc)[0])[0].getAttribute('aria-selected'), 'true');
   // The first article of the first section is what /docs opens.
   assert.equal(tabsOf(strips(doc)[1])[0].getAttribute('aria-selected'), 'true');
-  assert.match(doc.querySelector('#view .panel-head h2').textContent, /What BlueEyes does/);
+  assert.match(doc.querySelector('#view .panel-head h2').textContent, /What BlueEye does/);
   assert.ok(doc.querySelector('#view .docs-article'), 'the article body is not drawn');
 });
 
@@ -135,7 +135,7 @@ test('moving section opens that section’s first article, never an empty strip'
 test('a bare /docs still opens the first article, so old links keep working', async (t) => {
   const { doc } = boot({ t, url: 'http://server.test/docs' });
   await settle();
-  assert.match(doc.querySelector('#view .panel-head h2').textContent, /What BlueEyes does/);
+  assert.match(doc.querySelector('#view .panel-head h2').textContent, /What BlueEye does/);
 });
 
 test('a non-admin is not offered the admin-only section', async (t) => {
@@ -151,7 +151,7 @@ test('an admin-only article addressed by a viewer falls back, it does not blank 
   await settle();
   assert.deepEqual(errors, []);
   assert.ok(doc.querySelector('#view .panel-head h2'), 'the page went blank');
-  assert.match(doc.querySelector('#view .panel-head h2').textContent, /What BlueEyes does/);
+  assert.match(doc.querySelector('#view .panel-head h2').textContent, /What BlueEye does/);
   assert.equal(doc.querySelectorAll('#view .subtabs').length, 2);
 });
 

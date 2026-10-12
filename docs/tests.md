@@ -88,9 +88,9 @@ like "Download 12 Mbps (below 50)."
 ## Privacy
 
 Metadata only: probe targets and timings, traffic byte/packet counts, speed-test
-byte counts and rates — never payload, consistent with the rest of BlueEyes.
+byte counts and rates — never payload, consistent with the rest of BlueEye.
 Predefined templates use neutral targets (e.g. Quad9 `9.9.9.9`, `example.com`);
-the speed test talks only to the BlueEyes server itself.
+the speed test talks only to the BlueEye server itself.
 
 ## Automated test suite: realistic fixtures
 
@@ -140,7 +140,7 @@ repository jobs, but it rejects `CAST(? AS JSON)`, which
 sweep therefore ends with one SQL-syntax error from `agent-update` in the
 server log and a non-zero exit. That is the engine, not the product: the
 statement is valid MySQL 8, CI runs MySQL 8.4, and the SQL is deliberately not
-rewritten for a database BlueEyes does not support.
+rewritten for a database BlueEye does not support.
 
 Exit code 0 = green, 1 = a failure was found, 2 = the run could not start.
 Knobs:

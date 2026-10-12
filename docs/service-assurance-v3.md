@@ -7,7 +7,7 @@ Everything here builds on them; nothing here replaces them.*
 
 ## The product principle
 
-V3 moves BlueEyes from **synthetic testing** to **service assurance
+V3 moves BlueEye from **synthetic testing** to **service assurance
 intelligence**. The difference is what it says when something breaks.
 
 Not:
@@ -56,7 +56,7 @@ reversible. No rewriting what already works.
 
 ## What V3 deliberately does NOT do
 
-Stated here so it stays stated. BlueEyes is service assurance; it is not trying
+Stated here so it stays stated. BlueEye is service assurance; it is not trying
 to become everything.
 
 - No autonomous remediation, and no automatic production changes
@@ -195,7 +195,7 @@ It must always be able to show the evidence its analysis rests on.
 ### The abstraction
 
 ```
-AI Provider → AI Service Interface → BlueEyes Analysis
+AI Provider → AI Service Interface → BlueEye Analysis
 ```
 
 No hardcoded provider in Service Assurance core. Mistral, OpenAI, a local LLM or
@@ -230,7 +230,7 @@ tenant → service → journey → run → evidence → incident → AI analysis
 No cross-tenant data, anywhere.
 
 > **As built, this is a statement of intent and not of fact, and it is written
-> down here so nobody reads it as fact.** BlueEyes is single-tenant on-prem —
+> down here so nobody reads it as fact.** BlueEye is single-tenant on-prem —
 > `README.md` and `docs/service-assurance.md` both say so. Fourteen tables carry
 > a nullable `tenant_id` for forward compatibility and **no query anywhere
 > filters on it**; the V3 tables (`service_observations`,
@@ -281,7 +281,7 @@ testing · regression testing · API documentation · migration verification
 
 ## Definition of done
 
-V3 is finished when BlueEyes can monitor user journeys, collect technical
+V3 is finished when BlueEye can monitor user journeys, collect technical
 observations, correlate browser/API/network/infrastructure evidence, identify
 related failures, create incidents, assess service health, assess impact, rank
 likely root causes, show the evidence behind the conclusion, recognise recurring

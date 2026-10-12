@@ -235,7 +235,7 @@ on an operator's screen. The suite asserts this on both methods.
   that is gone, an address that is listed — these do not become more true by
   being checked twice.
 * **Our own misconfiguration is a WARN and stays one.** A monitor whose password
-  is wrong is not an outage, and paging somebody because BlueEyes mistyped a
+  is wrong is not an outage, and paging somebody because BlueEye mistyped a
   credential is how alerting loses its audience.
 * **Silently lost mail is a CRIT.** Nothing else will ever report it.
 
@@ -336,7 +336,7 @@ Three controls, each deliberate:
    so loopback, link-local and the cloud metadata address are refused — the same
    rule `security/hostPolicy.js` applies to a browser test. Private LAN addresses
    are allowed: the directory, the relay and the database live there, and that is
-   the point of on-prem software. (A mail server on the BlueEyes host itself is
+   the point of on-prem software. (A mail server on the BlueEye host itself is
    therefore monitored by its LAN address, not by `127.0.0.1`.)
 2. **A mail monitor may only send to an allowlisted domain** when
    `monitors.mailRecipientDomains` is set (Settings → Service Assurance,

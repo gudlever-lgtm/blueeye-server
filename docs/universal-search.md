@@ -71,7 +71,7 @@ prefix of a name-shaped field, and IP/MAC match exactly by design.
 ### Federated sources (events, tickets, IPAM)
 
 The three families added on top of Fase 1 are what make the field *federated*:
-one query, answered by BlueEyes' own tables and by the customer's ITSM and IPAM
+one query, answered by BlueEye' own tables and by the customer's ITSM and IPAM
 at the same time, merged into one ranked list.
 
 - **Events** (`type: event`) — an event case by id or title, an open case by the
@@ -80,7 +80,7 @@ at the same time, merged into one ranked list.
 - **Tickets** (`type: ticket`) — the cheap local answer first: the ITSM
   reference a situation was raised as (`event_clusters.itsm_ticket_ref`), which
   lands on the situation. Then the customer's ServiceNow, searched live over
-  number, short description and the `correlation_id` BlueEyes stamps on tickets
+  number, short description and the `correlation_id` BlueEye stamps on tickets
   it raises (so a host id finds the tickets opened for that host). Every enabled
   ServiceNow integration is asked; each hit names which one answered.
 - **IPAM** (`type: ipam`) — Nautobot prefixes and IP addresses. A partial IP or

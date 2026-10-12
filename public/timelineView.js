@@ -22,7 +22,7 @@
   // a miss falls through to the raw key, and a row labelled `event_case`
   // is the dashboard leaking a table name at the reader.
   //
-  // TERMINOLOGY: BlueEyes emits **events**. An event is a correlated condition on
+  // TERMINOLOGY: BlueEye emits **events**. An event is a correlated condition on
   // a device (the `event_cases` table, historically named) — it is what an
   // ITSM *event* would be opened FROM, not the event itself. `probe` is the
   // active-probe outage record (the `events` table, migration 025), and

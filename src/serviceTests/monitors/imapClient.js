@@ -12,7 +12,7 @@ const tls = require('tls');
 // It speaks LOGIN, SELECT, UID SEARCH, UID FETCH INTERNALDATE, UID STORE and
 // EXPUNGE. No IDLE, no partial fetch, no body parsing — a delivery probe never
 // reads a message, it only establishes that one is there. That is also a privacy
-// decision: BlueEyes connects to a mailbox and must not be able to read mail out
+// decision: BlueEye connects to a mailbox and must not be able to read mail out
 // of it by accident.
 
 const CRLF = '\r\n';

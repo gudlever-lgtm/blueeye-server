@@ -1,6 +1,6 @@
 # CMDB integration (single source of truth)
 
-BlueEyes links agents to assets in **one** external CMDB — **ServiceNow**,
+BlueEye links agents to assets in **one** external CMDB — **ServiceNow**,
 **Nautobot**, or a **Custom** HTTP/JSON CMDB you describe yourself. An admin
 configures the single source; operators link an agent to an asset via a searchable
 lookup. Linking also **syncs the agent's site** from the asset's CMDB location.
@@ -100,7 +100,7 @@ Agent link — read **viewer+**, write **operator+** (`createAgentCmdbLinkRouter
 
 ### Location sync
 
-When a linked asset carries a location, the PUT reconciles the agent's BlueEyes
+When a linked asset carries a location, the PUT reconciles the agent's BlueEye
 site with it, matching a `locations` row **by name (case‑insensitive)**:
 
 - **Agent has no site** → auto‑sync: match the location (or **create** it, name

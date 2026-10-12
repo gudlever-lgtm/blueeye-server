@@ -2,7 +2,7 @@
 
 > The agent reports once a minute and the baselines are hourly. A five-second
 > loss event never reaches the data at all, which means the fault a technician
-> is standing in front of, on the phone, right now, does not exist in BlueEyes.
+> is standing in front of, on the phone, right now, does not exist in BlueEye.
 > Burst mode is the tool for that moment: not a new metric, a temporary
 > resolution.
 

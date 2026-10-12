@@ -3,7 +3,7 @@
 Five detectors that answer a question the rest of the analysis module cannot:
 **is something on this network behaving like an attack?**
 
-They are deliberately modest. BlueEyes is a fault and availability analyser —
+They are deliberately modest. BlueEye is a fault and availability analyser —
 local, explainable, robust statistics, no ML, no cloud, metadata only — and
 nothing here changes that. None of these detectors classifies traffic as
 malicious, scores a threat or names a technique. Each one states a fact with
@@ -139,7 +139,7 @@ fifteen-minute one.
 
 ### The product's own scanner is the first false positive
 
-BlueEyes ships an active-discovery sweep (`src/discovery/scanner.js`) that
+BlueEye ships an active-discovery sweep (`src/discovery/scanner.js`) that
 probes every address in an admin-configured scope on a schedule. It is, by
 construction, the loudest port-scan on the network, and a detector that paged
 on it would be uninstalled the same week.

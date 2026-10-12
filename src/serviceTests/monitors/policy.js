@@ -40,7 +40,7 @@ const OUTAGE = new Set([
 
 // Advisory: real, worth fixing, never worth waking someone for. A monitor whose
 // own credentials are wrong is in here on purpose — that is our configuration,
-// and paging an operator because BlueEyes mistyped a password is how alerting
+// and paging an operator because BlueEye mistyped a password is how alerting
 // loses its audience.
 const ADVISORY = new Set([
   KIND.MAIL_AUTH_FAILED,

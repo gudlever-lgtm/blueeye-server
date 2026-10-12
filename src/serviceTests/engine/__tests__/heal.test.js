@@ -2,7 +2,7 @@
 
 // Self-healing selectors (V2 §5).
 //
-// These rules decide when BlueEyes offers to repoint a test at a different
+// These rules decide when BlueEye offers to repoint a test at a different
 // element. Most of the specs are about when it must NOT: a wrong heal turns the
 // test green while the service stays broken, and nobody looks again. A missed
 // heal costs somebody five minutes in the designer.

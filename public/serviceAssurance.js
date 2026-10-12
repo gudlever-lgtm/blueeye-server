@@ -1779,7 +1779,7 @@
 
     // ------------------------------------------------------- self-healing
     //
-    // The element a step points at is gone, and BlueEyes found one it thinks was
+    // The element a step points at is gone, and BlueEye found one it thinks was
     // meant. It PROPOSES. Nothing on this screen has already happened — that is
     // the feature, not a formality: a heal applied without being read would turn
     // a test green while the service stayed broken.

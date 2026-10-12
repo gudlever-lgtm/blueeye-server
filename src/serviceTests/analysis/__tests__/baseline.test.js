@@ -2,7 +2,7 @@
 
 // Performance baselines (V2 §9).
 //
-// The thing under test is what BlueEyes calls "normal". Get that wrong in one
+// The thing under test is what BlueEye calls "normal". Get that wrong in one
 // direction and it cries wolf until people mute it; wrong in the other and it
 // never notices a service that has doubled in latency.
 

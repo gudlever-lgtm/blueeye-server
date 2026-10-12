@@ -7,7 +7,7 @@ swaps a `<a>` for a `<button>`. The test that was watching it stops working —
 and the failure looks exactly like the service being broken, which is the one
 thing it must not be confused with.
 
-BlueEyes looks at what *is* on the page and tells you what it thinks the step
+BlueEye looks at what *is* on the page and tells you what it thinks the step
 meant:
 
 ```
@@ -26,7 +26,7 @@ Step 1 (click)                                      confidence: high
 
 ## Nothing changes until you say so
 
-**BlueEyes never repoints a test on its own.** Not when it is confident, not
+**BlueEye never repoints a test on its own.** Not when it is confident, not
 when the evidence is overwhelming, not ever.
 
 That is not caution for its own sake. A wrong heal is the worst thing this
@@ -69,7 +69,7 @@ links into buttons, so it is not disqualifying — but it is not free either.
 - **High** — strong evidence, and nothing else on the page came close. You can
   accept without opening the application.
 - **Medium** — a good match, but worth a look. Usually the words changed.
-- **Low** — shown so you know it exists, not because BlueEyes believes it.
+- **Low** — shown so you know it exists, not because BlueEye believes it.
 
 ## Accept, reject, or neither
 
@@ -80,7 +80,7 @@ links into buttons, so it is not disqualifying — but it is not free either.
 - **Neither** — edit the step yourself in the designer below. The proposal stays
   until you decide, and accepting after a manual edit is refused (see below).
 
-You can also accept a *modified* version: if BlueEyes found the right element but
+You can also accept a *modified* version: if BlueEye found the right element but
 you would rather point at it a different way, the API takes your target instead
 of its own.
 

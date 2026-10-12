@@ -8,7 +8,7 @@
 // TCP handshake while the backend is gone; it terminates TLS with its own
 // certificate. Every layer below it reports green and the service is down.
 //
-// BlueEyes could only ever GUESS at one before this module: src/serviceTests/
+// BlueEye could only ever GUESS at one before this module: src/serviceTests/
 // rootcause/rootCause.js infers "a load balancer or reverse proxy" from an HTTP
 // 502, and marks that inference `basis: inferred` precisely because nothing was
 // ever looked at. This looks.

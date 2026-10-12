@@ -1,6 +1,6 @@
 # Cross-agent pattern correlation (event clusters)
 
-BlueEyes' per-target correlator (`src/analysis/correlator.js`) links findings
+BlueEye' per-target correlator (`src/analysis/correlator.js`) links findings
 **within one agent** to hint a root cause. The cross-agent correlator groups
 findings across **different agents** that fire in the same time window into a
 single **event cluster** with a suspected common cause and a confidence tier —
@@ -235,7 +235,7 @@ filled the dashboard's Logs view.
 
 ## Automated read-only evidence snapshot on cluster open (Fase 6)
 
-When a cluster opens, BlueEyes captures a **point-in-time, READ-ONLY** diagnostic
+When a cluster opens, BlueEye captures a **point-in-time, READ-ONLY** diagnostic
 snapshot from each affected target — so an operator opening the event sees "what
 the network looked like when it fired" without SSHing anywhere. It reuses the
 **existing** authenticated, cert-pinned, audited agent-command path

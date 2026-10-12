@@ -355,13 +355,13 @@
             // squeezed to nothing. Only the three that must not move are
             // pinned; the browser lays the rest out.
             columns: [
-              { key: 'severity', label: t('events.colSeverity'), width: '108px', sortable: true },
+              { key: 'severity', label: t('events.colSeverity'), width: '150px', sortable: true },
               { key: 'status', label: t('events.colStatus'), width: '124px', sortable: true },
               { key: 'condition', label: t('events.colCondition'), sortable: true },
               { key: 'device', label: t('events.colDevice'), sortable: true },
               { key: 'location', label: t('events.colLocation'), sortable: true },
               { key: 'first', label: t('events.colFirst'), sortable: true, time: true },
-              { key: 'last', label: t('events.colLast'), sortable: true, time: true },
+              { key: 'last', label: t('events.colLast'), width: '200px', sortable: true, time: true },
               deps.canWrite() ? { key: 'act', label: '', width: '104px' } : null,
             ].filter(Boolean),
             // Selection is operator+, because the action behind it is.

@@ -1,4 +1,4 @@
-# BlueEyes server — on-prem API + agent WebSocket.
+# BlueEye server — on-prem API + agent WebSocket.
 FROM node:22-alpine
 
 # GNU tar. The image ships busybox tar, which cannot build a REPRODUCIBLE

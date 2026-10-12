@@ -251,7 +251,7 @@ function createAssistant({
 
     const findings = await buildContext(hostId);
     const system =
-      'You are a helpful network and operations assistant for BlueEyes. Answer briefly and ' +
+      'You are a helpful network and operations assistant for BlueEye. Answer briefly and ' +
       'concretely in English. Use ONLY the provided context (findings) — do not guess, and ' +
       'if the context is insufficient, say so.';
     const user = JSON.stringify({ question: question.trim(), hostId: hostId ?? null, findings });
@@ -274,7 +274,7 @@ function createAssistant({
 
     const { context, location, agentCount, findingCount } = await buildLocationContext(locationId);
     const system =
-      'You are a network operations assistant for BlueEyes. In 2-4 sentences, give a brief, ' +
+      'You are a network operations assistant for BlueEye. In 2-4 sentences, give a brief, ' +
       'concrete status of THIS location: what looks healthy, what is wrong, and the most likely ' +
       'cause. Use ONLY the provided context (per-agent status, probe-health verdicts and recent ' +
       'findings, each already explained in plain language). If there are no agents or no findings, ' +
@@ -369,7 +369,7 @@ function createAssistant({
     };
 
     const system =
-      'You are a network operations assistant for BlueEyes. In 2-4 sentences, say what the '
+      'You are a network operations assistant for BlueEye. In 2-4 sentences, say what the '
       + 'current picture is: which places are worst, what kind of problem they have, and what to '
       + 'look at first. Use ONLY the provided context — it is an aggregate (counts per host and '
       + 'per metric), not raw measurements, so do not invent specific values, timings or causes '
@@ -418,7 +418,7 @@ function createAssistant({
     const findings = hostId != null ? await buildContext(hostId) : [];
     const probeHealth = hostId != null ? await probeVerdict(hostId) : null;
     const system =
-      'You are a network operations assistant for BlueEyes. In 2-4 sentences, explain what this ' +
+      'You are a network operations assistant for BlueEye. In 2-4 sentences, explain what this ' +
       "agent's flow-pipeline diagnostic means — the most likely reason flows are or are not " +
       'arriving — then the single most useful next step. The collector receives sFlow/NetFlow ' +
       'datagrams and decodes flow records: 0 datagrams means no exporter is sending to it; ' +
@@ -456,7 +456,7 @@ function createAssistant({
       workaroundHints: Array.isArray(result.workaroundHints) ? result.workaroundHints : [],
     };
     const system =
-      'You are a network operations assistant for BlueEyes. Write a short, clear summary in ENGLISH ' +
+      'You are a network operations assistant for BlueEye. Write a short, clear summary in ENGLISH ' +
       '(3-5 sentences) of this network troubleshooting analysis: what was found, what is the ' +
       'likely cause, and what is the next step. Use ONLY the provided context. ' +
       'Avoid technical jargon that does not appear in the context.';
@@ -559,7 +559,7 @@ function createAssistant({
   async function diagnoseTransaction(facts) {
     if (!currentEnabled()) throw new FeatureDisabledError();
     const system =
-      'You are a network and operations assistant for BlueEyes. Formulate a SHORT, ' +
+      'You are a network and operations assistant for BlueEye. Formulate a SHORT, ' +
       'concrete diagnosis in English (at most 2 sentences) of a failed or deviating ' +
       'transaction test based on the given facts (failure phase, step, cross-check between ' +
       'agents, latency deviation). Do not guess beyond the facts.';
@@ -582,7 +582,7 @@ function createAssistant({
       throw e;
     }
     const system =
-      'You are a network operations assistant for BlueEyes, answering a question about ONE specific ' +
+      'You are a network operations assistant for BlueEye, answering a question about ONE specific ' +
       'event. Answer briefly and concretely in the language of the question. Use ONLY the provided ' +
       'context (event, timeline, config changes, similar events). NEVER invent facts, causes, ' +
       'hostnames or addresses that are not present in the context. If the context does not contain ' +
@@ -603,7 +603,7 @@ function createAssistant({
   async function suggestRemediation(context) {
     if (!currentEnabled()) throw new FeatureDisabledError();
     const system =
-      'You are a network operations assistant for BlueEyes, proposing a remediation for ONE specific ' +
+      'You are a network operations assistant for BlueEye, proposing a remediation for ONE specific ' +
       'event. Use ONLY the provided masked context (event, timeline, config changes, similar ' +
       'events). Propose at most a few concrete, actionable steps, in the language of the event ' +
       'title. This is a SUGGESTION, never verified fact. NEVER invent facts, causes, hostnames, ' +
@@ -643,7 +643,7 @@ function createAssistant({
       findings,
     };
     const system =
-      'You are a network operations assistant for BlueEyes, analyzing ONE event that spans MULTIPLE ' +
+      'You are a network operations assistant for BlueEye, analyzing ONE event that spans MULTIPLE ' +
       'agents (a cross-agent cluster). Propose the single most likely COMMON root cause and a few ' +
       'concrete troubleshooting steps, in the language of the findings. Focus on what the agents share ' +
       '(same site, same anomaly type, same time). This is a SUGGESTION, never verified fact. Use ONLY ' +
@@ -668,16 +668,16 @@ function createAssistant({
   async function analyseServiceAssurance(task, context) {
     if (!currentEnabled()) throw new FeatureDisabledError();
     const system = task === 'suggest_tests'
-      ? 'You are a service-monitoring assistant for BlueEyes. Propose a few user journeys worth '
+      ? 'You are a service-monitoring assistant for BlueEye. Propose a few user journeys worth '
         + 'monitoring for this service, based ONLY on the provided context (existing journeys, '
         + 'discovered pages, failing endpoints). Do not propose what already exists. These are '
         + 'SUGGESTIONS for a person to approve — never state that anything has been created. '
         + 'NEVER invent pages, endpoints or features that are not in the context.'
-      : 'You are a service-monitoring assistant for BlueEyes, explaining ONE incident to an '
-        + 'operator. Use ONLY the provided context. BlueEyes has already reached a rule-based '
+      : 'You are a service-monitoring assistant for BlueEye, explaining ONE incident to an '
+        + 'operator. Use ONLY the provided context. BlueEye has already reached a rule-based '
         + 'conclusion: your job is to explain it in plain language and say what to check next, '
         + 'NOT to reach a different one. Each candidate cause carries a "basis": "observed" means '
-        + 'BlueEyes saw it, "inferred" means it was deduced, and "unobservable" means BlueEyes '
+        + 'BlueEye saw it, "inferred" means it was deduced, and "unobservable" means BlueEye '
         + 'cannot see it at all and it is only a place to look — never present an unobservable '
         + 'cause as a finding. Mention what was NOT checked when the context says so. NEVER invent '
         + 'causes, hosts, addresses or evidence that are not in the context.';
@@ -700,7 +700,7 @@ function createAssistant({
   //     catalogue, so the worst a bad answer can do is cost a fallback.
   //   summarize — write the RCA paragraph AFTER the rules have decided. The
   //     verdicts arrive already settled and it is told so: its job is to say
-  //     what BlueEyes concluded in plain language, not to reach a conclusion of
+  //     what BlueEye concluded in plain language, not to reach a conclusion of
   //     its own. Every verdict in this product is reached by code that a person
   //     can read.
   //
@@ -712,8 +712,8 @@ function createAssistant({
     // that enforces the JSON shape it asks for — one copy, not two.
     const system = task === 'match_playbooks'
       ? MATCH_PLAYBOOKS_PROMPT
-      :'You are a network-troubleshooting assistant for BlueEyes, summarising ONE diagnosis for an operator. '
-        + 'BlueEyes has ALREADY reached its verdicts by evaluating rules against measurements: your job is to '
+      :'You are a network-troubleshooting assistant for BlueEye, summarising ONE diagnosis for an operator. '
+        + 'BlueEye has ALREADY reached its verdicts by evaluating rules against measurements: your job is to '
         + 'explain them in plain language and say what to do next, NOT to reach different ones. A cause marked '
         + 'confirmed is confirmed; one marked ruled_out is ruled out; one marked inconclusive is open, and say '
         + 'which test would settle it when the context names the missing measurements. Use ONLY the provided '

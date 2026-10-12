@@ -145,7 +145,7 @@ const STRING_FIELDS = {
     publicUrl: {
       default: '',
       max: 512,
-      // http is ACCEPTED, not silently corrected: a BlueEyes genuinely served
+      // http is ACCEPTED, not silently corrected: a BlueEye genuinely served
       // over plain HTTP on an internal network is a real deployment, and the
       // recording dialog already warns that HTTPS applications will refuse it.
       // Refusing to store the truth would be worse than reporting it.

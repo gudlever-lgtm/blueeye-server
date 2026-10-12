@@ -183,7 +183,7 @@ const stuff = (body) => String(body).replace(/\r?\n/g, CRLF).replace(/^\./gm, '.
 function buildMessage({ from, to, subject, token, date = new Date(), body = null, messageId = null }) {
   const id = messageId || `<${token}.${date.getTime()}@blueeyes.invalid>`;
   const text = body || [
-    'This is an automated Service Assurance delivery probe from BlueEyes.',
+    'This is an automated Service Assurance delivery probe from BlueEye.',
     '',
     `Token: ${token}`,
     `Sent: ${date.toISOString()}`,
@@ -232,7 +232,7 @@ function createSmtpClient({ connect = null, secureConnect = null, upgrade = null
     password = null,
     from,
     to,
-    subject = 'BlueEyes assurance probe',
+    subject = 'BlueEye assurance probe',
     token = crypto.randomBytes(4).toString('hex'),
     body = null,
     timeoutMs = 20000,

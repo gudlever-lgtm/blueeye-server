@@ -116,7 +116,7 @@ untouched:
 
 - **`hostName`** — the agent's display name (or hostname), looked up and cached
   for a minute. A situation is named by up to five of its agents. The email
-  subject reads `[BlueEyes CRIT] probe.loss on core-sw-1 (#12)`; without a name
+  subject reads `[BlueEye CRIT] probe.loss on core-sw-1 (#12)`; without a name
   it keeps the old `on host 12`.
 - **`link`** — an absolute URL into the dashboard for the most specific record:
   `/situations/:id` for a situation, `/events/:id` when the finding already

@@ -71,7 +71,7 @@ test('a failure nothing recognises says so instead of inventing a ranking', () =
 
 // ------------------------------------------------------ observed vs supposed
 test('a database is never ranked as though it had been seen', () => {
-  // The rule this module exists for. BlueEyes observes DNS, TLS, status and
+  // The rule this module exists for. BlueEye observes DNS, TLS, status and
   // timing from a browser. It never observes a database, and ranking one beside
   // a directly observed failure as if both were sightings is the most
   // misleading thing it could do.
@@ -121,7 +121,7 @@ test('the ceilings are ordered, so the basis can never be worked around', () => 
 });
 
 // --------------------------------------------------- telling causes apart
-test('BlueEyes refusing an address is its OWN configuration, not a customer firewall', () => {
+test('BlueEye refusing an address is its OWN configuration, not a customer firewall', () => {
   // The distinction that decides which building somebody walks to. A blocked
   // request here means the allowlist refused it, and nothing at the other end
   // was ever contacted.

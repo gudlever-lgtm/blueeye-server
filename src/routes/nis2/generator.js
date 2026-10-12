@@ -8,7 +8,7 @@ const { computeDashboard } = require('../../nis2/dashboard');
 const { renderRegisterHtml } = require('../../nis2/report');
 const { SOURCE_KEYS, sourcesFor, buildCustomReport, customReportToCsv } = require('../../nis2/reportBuilder');
 
-// The Report Generator: the operator picks sections, BlueEyes assembles them.
+// The Report Generator: the operator picks sections, BlueEye assembles them.
 // Preview is viewer+ and stores nothing; export is licence-gated like the rest
 // of the compliance pack.
 function createGeneratorRouter(ctx) {

@@ -1,7 +1,7 @@
 # SNMP topology — which port is this MAC on?
 
 > "The printer on the second floor is offline" ends, eventually, at a physical
-> port on a physical switch. BlueEyes could get as far as IP ↔ MAC and stop.
+> port on a physical switch. BlueEye could get as far as IP ↔ MAC and stop.
 
 **Nav:** Settings → SNMP devices · **API:** `/api/snmp-devices`
 **Agent:** `blueeye-agent/src/snmpTopology.js` + `snmpPoller.js`

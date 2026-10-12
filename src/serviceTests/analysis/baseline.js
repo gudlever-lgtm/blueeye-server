@@ -13,7 +13,7 @@ const { numOrNull } = require('../storage/shape');
 // file only says what those numbers mean by comparing them with the same test's
 // own history.
 //
-// Median + MAD, like every other statistic in BlueEyes (CLAUDE.md: robust
+// Median + MAD, like every other statistic in BlueEye (CLAUDE.md: robust
 // statistics, no ML, everything explainable). A mean and a standard deviation
 // would let one 30-second timeout drag the "normal" band up until nothing ever
 // looks slow again — which is the failure mode of every naive latency alarm.

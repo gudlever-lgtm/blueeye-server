@@ -3,9 +3,9 @@
 -- WHY. A forwarding loop's signature is a MAC address that keeps appearing on
 -- two different ports of the same switch, over and over, within seconds. It is
 -- the classic one — Cisco's own %SW_MATM-4-MACFLAP_NOTIF says exactly this —
--- and it is visible in data BlueEyes already collects.
+-- and it is visible in data BlueEye already collects.
 --
--- It was not visible in what BlueEyes already STORED. `fdb_entries.upsertMany`
+-- It was not visible in what BlueEye already STORED. `fdb_entries.upsertMany`
 -- rewrites `bridge_port` in place: a MAC that moved leaves no trace that it
 -- ever sat anywhere else, so consecutive sweeps of a switch in a loop look
 -- exactly like consecutive sweeps of a quiet switch. The information was

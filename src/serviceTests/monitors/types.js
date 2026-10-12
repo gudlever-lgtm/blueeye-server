@@ -113,7 +113,7 @@ const TYPES = {
       smtp_password: { type: 'secret', max: 512 },
       from_address: { type: 'email', required: true, max: 255 },
       to_address: { type: 'email', required: true, max: 255 },
-      subject_prefix: { type: 'text', max: 120, default: 'BlueEyes assurance probe' },
+      subject_prefix: { type: 'text', max: 120, default: 'BlueEye assurance probe' },
       // Round-trip half. Without it the monitor measures ACCEPTANCE only, which
       // is a real but weaker answer: a queue that silently drops mail accepts it
       // first. With it, the check reads the mailbox back and measures delivery.

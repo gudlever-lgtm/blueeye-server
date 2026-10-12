@@ -1,6 +1,6 @@
 'use strict';
 
-// "Is BlueEyes itself all right?" — the one screen that is about the monitoring
+// "Is BlueEye itself all right?" — the one screen that is about the monitoring
 // system rather than about the network it monitors.
 //
 // THE RULE THIS FILE EXISTS FOR: three states, never two.

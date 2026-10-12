@@ -1,7 +1,7 @@
 # Coverage gaps
 
 "Which parts of the network do I **not** see?" Every other screen answers a
-question about what BlueEyes can see. This one lists where it is blind — a site
+question about what BlueEye can see. This one lists where it is blind — a site
 with no agent, a switch nothing polls, an unmanaged switch in the path, a /24
 the ARP tables keep mentioning that no agent sits in — with the evidence for
 each and a suggested next step.
@@ -124,7 +124,7 @@ forever.
 ### What "known" means
 
 The switch-port and neighbour checks decide whether a MAC or a neighbour is
-something BlueEyes monitors the same way the topology map does
+something BlueEye monitors the same way the topology map does
 (`src/topology/graph.js`):
 
 - a port MAC read off a polled switch (`device_interfaces.phys_address`);

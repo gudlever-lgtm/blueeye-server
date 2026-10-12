@@ -80,12 +80,12 @@ function createEmailChannel({ config = {}, transport = null, createTransport = n
     // a mail rule, a ticket title and a phone preview all read the subject, and
     // "T1110" is what a security team greps for.
     const tag = finding.attackTechnique ? `${finding.attackTechnique} ` : '';
-    const subject = `[BlueEyes ${finding.severity || 'INFO'}] ${tag}${finding.metric || 'finding'} on ${hostLabel(finding)}`;
+    const subject = `[BlueEye ${finding.severity || 'INFO'}] ${tag}${finding.metric || 'finding'} on ${hostLabel(finding)}`;
     const text = [
       finding.explanation || '',
       // The link first after the sentence: on a phone it is the one line that
       // matters, and a mail client may fold the rest.
-      finding.link ? `\nOpen in BlueEyes: ${finding.link}` : null,
+      finding.link ? `\nOpen in BlueEye: ${finding.link}` : null,
       '',
       `Host: ${hostLabel(finding)}`,
       `Metric: ${finding.metric}`,

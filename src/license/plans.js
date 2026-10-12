@@ -1,6 +1,6 @@
 'use strict';
 
-// Central plan / pricing / feature catalogue for BlueEyes.
+// Central plan / pricing / feature catalogue for BlueEye.
 //
 // This is the single source of truth for what each commercial package
 // (Pilot / Starter / Professional) grants: limits, history retention, the
@@ -15,7 +15,7 @@
 
 // The complete set of license-gateable feature keys, each with a UI label and
 // the LOWEST plan that grants it. `minPlan` powers the upgrade hints
-// ("This feature requires BlueEyes Professional"). The four legacy module keys
+// ("This feature requires BlueEye Professional"). The four legacy module keys
 // (analysis/assistant/alerting/geo) are intentionally NOT here — those stay
 // governed by the signed proof's own `features` map for backward compatibility.
 //
@@ -60,7 +60,7 @@ const ALL_FEATURE_KEYS = Object.keys(FEATURE_CATALOG);
 // unlock a module with no signed proof — a licence bypass). Entitlement keeps
 // flowing solely from the signed proof's own `features` map. This map exists ONLY
 // so the UI can label a locked module with the package it is sold under
-// ("Requires BlueEyes Professional"). Adjust the tier here — it has no enforcement
+// ("Requires BlueEye Professional"). Adjust the tier here — it has no enforcement
 // effect.
 const MODULE_PLAN_TIER = {
   analysis: 'professional',
@@ -223,11 +223,11 @@ function getPlan(planKey) {
   return PLANS[planKey] || FALLBACK_PLANS[planKey] || null;
 }
 
-// The human BlueEyes name for a plan key ("BlueEyes Professional"), used in
+// The human BlueEye name for a plan key ("BlueEye Professional"), used in
 // upgrade hints. Falls back to a generic label for unknown keys.
 function planDisplayName(planKey) {
   const p = getPlan(planKey);
-  return p ? `BlueEyes ${p.plan_name}` : 'a higher BlueEyes plan';
+  return p ? `BlueEye ${p.plan_name}` : 'a higher BlueEye plan';
 }
 
 module.exports = {

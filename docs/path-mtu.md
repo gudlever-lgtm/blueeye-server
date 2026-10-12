@@ -16,7 +16,7 @@ Path MTU Discovery works by the sender emitting a full-size packet with the
 Drop that ICMP and the sender is never told: it retransmits a packet that can
 never arrive, forever.
 
-Every other probe in BlueEyes uses small packets. That is exactly why they all
+Every other probe in BlueEye uses small packets. That is exactly why they all
 come back clean. This one measures by **size**, which is the only way to see it.
 
 ## The four verdicts

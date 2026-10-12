@@ -5,7 +5,7 @@
 // The API specs cover the routes and the pure specs cover the reasoning. This is
 // the third thing neither can claim: that a person looking at a failed run is
 // actually shown why, and — more importantly — is shown the difference between
-// what BlueEyes SAW and what it is only supposing.
+// what BlueEye SAW and what it is only supposing.
 //
 // That distinction is the whole feature. A watched TLS failure and a supposed
 // database sit at the same percentage and are not the same kind of claim. If the
@@ -124,7 +124,7 @@ const ANALYSIS = {
         cause: 'database', label: 'The database behind the application', layer: 'application',
         basis: 'unobservable', likelihood: 25, capped: false,
         why: ['a 500 alongside a timeout is often a slow query, but nothing here observed one'],
-        next_step: 'BlueEyes cannot see a database from a browser — this is a place to look, not a finding.',
+        next_step: 'BlueEye cannot see a database from a browser — this is a place to look, not a finding.',
       },
     ],
     top: null, runner_up: null, gap: 23, decisive: true,
@@ -184,7 +184,7 @@ test('a supposed cause is marked differently from one that was seen', async (t) 
   assert.equal(causes.length, 2);
   assert.ok(causes[0].querySelector('.sa-basis-observed'), 'the seen cause is not marked as seen');
   assert.ok(causes[1].querySelector('.sa-basis-unobservable'), 'the supposed cause is not marked as supposed');
-  assert.match(causes[1].textContent, /not visible to BlueEyes/);
+  assert.match(causes[1].textContent, /not visible to BlueEye/);
   assert.match(causes[1].textContent, /a place to look, not a finding/);
   assert.deepEqual(errors, []);
 });

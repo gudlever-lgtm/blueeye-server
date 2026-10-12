@@ -440,7 +440,7 @@ function createSystemRouter({
     })
   );
 
-  // GET /system/self — is BlueEyes itself all right?
+  // GET /system/self — is BlueEye itself all right?
   //
   // viewer+: "can the monitoring system see anything right now" is the first
   // thing anybody reading a number on another screen needs to know, and hiding

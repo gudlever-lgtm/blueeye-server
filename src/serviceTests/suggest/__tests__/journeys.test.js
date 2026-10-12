@@ -2,7 +2,7 @@
 
 // Discovery → journey suggestions (V2 §3).
 //
-// These rules decide what BlueEyes PROPOSES, so the specs are mostly about what
+// These rules decide what BlueEye PROPOSES, so the specs are mostly about what
 // it must NOT propose: a journey nobody asked for is worse than none, because
 // the operator has to read and reject it every time Discovery runs.
 
@@ -45,7 +45,7 @@ test('"Sign in" is dropped when the bigger journey that contains it applies', ()
 
 test('"Availability" never becomes a journey', () => {
   // Opening the front page and getting HTTP 200 is the definition of "the
-  // website is up" — the exact sentence journeys exist so BlueEyes stops saying.
+  // website is up" — the exact sentence journeys exist so BlueEye stops saying.
   assert.ok(NOT_A_JOURNEY.has('Availability'));
   assert.deepEqual(suggestJourneys([s('Availability', 'high')]), []);
 

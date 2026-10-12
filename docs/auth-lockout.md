@@ -1,6 +1,6 @@
 # Directory outages and the fail-closed SSO guard
 
-**Short answer: a directory outage cannot lock an administrator out of BlueEyes.**
+**Short answer: a directory outage cannot lock an administrator out of BlueEye.**
 Sign-in does not consult the guard that fails closed, and the guard only ever sits
 on endpoints that already require a signed-in admin. This page shows why that
 holds, what an operator actually sees when the directory breaks, and the ways back

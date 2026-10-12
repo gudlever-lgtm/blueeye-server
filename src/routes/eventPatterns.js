@@ -120,7 +120,7 @@ function createEventPatternsRouter({
       const n = await countMatches(p).catch(() => null);
       counts.set(p.id, { count: n == null ? 0 : n, worst: null });
     }
-    const layer = navigatorLayer(patterns, counts, { name: 'BlueEyes coverage' });
+    const layer = navigatorLayer(patterns, counts, { name: 'BlueEye coverage' });
     res.setHeader('Content-Disposition', 'attachment; filename="blueeye-attack-layer.json"');
     return res.json(layer);
   }));

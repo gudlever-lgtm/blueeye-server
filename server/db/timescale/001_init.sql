@@ -1,5 +1,5 @@
 -- =====================================================================
--- BlueEyes telemetry — TimescaleDB schema (migration 001)
+-- BlueEye telemetry — TimescaleDB schema (migration 001)
 --
 -- Target:   PostgreSQL 16 + TimescaleDB (on-prem, EU-sovereign).
 -- Scope:    the TELEMETRY tables from docs/storage-split-audit.md that move

@@ -65,7 +65,7 @@ test('send-only measures acceptance and says so', async () => {
   assert.equal(result.detail.queue_id, '4bXk2Z');
   assert.match(result.summary, /Accepted by smtp\.example\.com/);
   // The token went into the subject, where an IMAP SEARCH can find it.
-  assert.match(smtp.sent[0].subject, /BlueEyes assurance probe \[[0-9a-f]{8}\]/);
+  assert.match(smtp.sent[0].subject, /BlueEye assurance probe \[[0-9a-f]{8}\]/);
   assert.equal(smtp.sent[0].password, 'hunter2');
 });
 

@@ -181,8 +181,8 @@ tooling treats the pattern as hostile:
   combination in an HTTP response body — *ET ATTACK_RESPONSE PowerShell NoProfile
   Command Received In Powershell Stagers*. It fires on the command text itself, so
   it went off on the **dashboard page** that showed an operator the install
-  command, not just on the installer. A customer running BlueEyes over plain HTTP
-  saw an IPS alert accusing their own BlueEyes server of delivering a stager.
+  command, not just on the installer. A customer running BlueEye over plain HTTP
+  saw an IPS alert accusing their own BlueEye server of delivering a stager.
 - **On the host.** Endpoint AV/EDR blocks or quarantines the same pattern, so the
   install dies half-way through with no useful message.
 
@@ -359,7 +359,7 @@ agent is never installed from bytes that were not verified.
 
 `curl … | sh` only needs to reach **this** server, and the source is served by
 this server (not GitHub or a registry). So enrollment works on isolated networks,
-as long as the agent machine can reach BlueEyes. (The Docker path still needs its
+as long as the agent machine can reach BlueEye. (The Docker path still needs its
 base image — pre-load `node:22-alpine` or use a local registry — and the Node
 path needs `npm` reachable; on a fully offline host, pre-stage one of those.)
 
@@ -373,7 +373,7 @@ code, e.g. with Ansible:
 - hosts: all
   become: true
   tasks:
-    - name: Install BlueEyes agent
+    - name: Install BlueEye agent
       ansible.builtin.shell: "curl -sSL https://blueeye.example.dk/enroll/<CODE>/install.sh | sh"
       args:
         creates: /opt/blueeye-agent/current/src/index.js   # idempotent

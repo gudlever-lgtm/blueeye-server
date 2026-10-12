@@ -200,7 +200,7 @@ test('an edit is validated as a whole rule, not as a patch', async () => {
     .send({ source: 'finding', severity: 'WARN', match_metric: 'rtt', reason: 'noisy link' })).body;
 
   // Clearing the last match field would turn a narrow rule into one that
-  // governs every finding BlueEyes produces. Validating the patch alone would
+  // governs every finding BlueEye produces. Validating the patch alone would
   // have let it through.
   const widened = await request(app).put(`${BASE}/${created.id}`).set('Authorization', h).send({ match_metric: '' });
   assert.equal(widened.status, 400);

@@ -579,7 +579,7 @@ function buildModel() {
   return model;
 }
 
-const HEADER = `-- BlueEyes server — canonical database schema (full snapshot).
+const HEADER = `-- BlueEye server — canonical database schema (full snapshot).
 --
 -- GENERATED FILE — do not edit by hand.
 --   Regenerate:  node scripts/build-schema.js

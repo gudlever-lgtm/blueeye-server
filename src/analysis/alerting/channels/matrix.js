@@ -9,7 +9,7 @@ const silentLogger = { info() {}, warn() {}, error() {} };
 // Why Matrix and not Slack or Teams. This product is sold on-prem, to European
 // buyers, with "no US-based vendors" as a stated convention. Matrix is the chat
 // protocol that fits that: the customer can run their own homeserver (Synapse,
-// Conduit, Dendrite) inside the same network as BlueEyes, so an alert never
+// Conduit, Dendrite) inside the same network as BlueEye, so an alert never
 // leaves the building — and if they do use a hosted one, it is theirs to
 // choose. A Slack or Teams channel would have been the other way round.
 //
@@ -83,13 +83,13 @@ function renderMessage(finding, group) {
   if (group && group.hint) lines.push(group.hint);
   if (isCluster && group.advisory) lines.push(group.advisory);
   const link = finding && typeof finding.link === 'string' && /^https?:\/\//.test(finding.link) ? finding.link : null;
-  if (link) lines.push(`Open in BlueEyes: ${link}`);
+  if (link) lines.push(`Open in BlueEye: ${link}`);
 
   const body = lines.join('\n');
   const formatted = [
     `<b>${escapeHtml(headline)}</b>`,
     ...lines.slice(1, link ? -1 : undefined).map((l) => escapeHtml(l)),
-    ...(link ? [`<a href="${escapeHtml(link)}">Open in BlueEyes</a>`] : []),
+    ...(link ? [`<a href="${escapeHtml(link)}">Open in BlueEye</a>`] : []),
   ].join('<br/>');
 
   return { body, formatted };

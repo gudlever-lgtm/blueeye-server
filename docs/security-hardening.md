@@ -23,7 +23,7 @@ All three are **baseline**: never licence-gated, configured under
 | Password max age | yes | no | no | no |
 | IP allowlist | yes | yes | yes | yes (by the token's role) |
 
-Directory and SSO users have no password BlueEyes chose or knows: the provisioner
+Directory and SSO users have no password BlueEye chose or knows: the provisioner
 gives them an unusable random hash, which is never recorded in the history. The
 max age is carried in the session itself — only the local sign-in and
 change-password paths put a `pwdAt` claim in the JWT — so an SSO/LDAP session or

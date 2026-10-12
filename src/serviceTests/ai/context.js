@@ -281,7 +281,7 @@ function incidentAnalysisContext(rawInput = {}) {
     // task string is matched on by the caller, so it is fixed rather than free.
     task: 'explain_incident',
     incident,
-    // The rule-based analysis, so the model can explain what BlueEyes already
+    // The rule-based analysis, so the model can explain what BlueEye already
     // concluded rather than forming an independent opinion nobody can check.
     correlation: correlationContext(input.correlation),
     root_cause: rootCauseContext(input.rootCause),

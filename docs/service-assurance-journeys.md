@@ -26,7 +26,7 @@ A complete thing a user does, described in their words — "Customer lookup", no
 | | |
 | --- | --- |
 | **Name and description** | what the user is trying to do |
-| **Criticality** | Critical / High / Normal / Low — what it costs the business when it breaks. Your judgement, not a number BlueEyes works out |
+| **Criticality** | Critical / High / Normal / Low — what it costs the business when it breaks. Your judgement, not a number BlueEye works out |
 | **Expected duration** | how long the whole thing should take. Blank is fine — no expectation is better than a guessed one |
 | **Environment** | which environment this describes. Staging gets its own journey rather than a flag |
 | **Steps** | the tests that prove it, in order |
@@ -190,7 +190,7 @@ Four things the rules deliberately do:
 
 - **"Availability" never becomes a journey.** Opening the front page and getting
   HTTP 200 is the definition of "the website is up" — the exact sentence
-  journeys exist so BlueEyes stops saying. It stays a useful test.
+  journeys exist so BlueEye stops saying. It stays a useful test.
 - **The smaller journey is dropped when a bigger one contains it.** "Sign in"
   and "Sign in and use the application" both apply whenever there is a login
   with pages behind it; offering both means accepting two journeys that watch
@@ -200,7 +200,7 @@ Four things the rules deliberately do:
   the part that might be wrong.
 - **Criticality is proposed, not decided.** The heuristic suggests one; you
   change it in the same dialog, before anything is created. It is your judgement
-  about your business, and BlueEyes does not get a vote.
+  about your business, and BlueEye does not get a vote.
 
 ## Who can do what
 

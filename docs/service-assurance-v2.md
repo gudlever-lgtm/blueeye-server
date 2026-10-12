@@ -221,7 +221,7 @@ after it stopped being useful.
 ### §2 User Journeys — shipped
 
 The central object, and the one that changes what the product SAYS. A journey is
-a complete thing a user does; the tests under it are how BlueEyes proves it still
+a complete thing a user does; the tests under it are how BlueEye proves it still
 works. `migrations/083_create_service_test_journeys.sql`, `journeys/health.js` (pure), `api/journeys.js`, a
 Journeys tab, and [docs/service-assurance-journeys.md](service-assurance-journeys.md).
 

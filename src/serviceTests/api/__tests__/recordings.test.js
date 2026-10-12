@@ -397,7 +397,7 @@ test('the bookmarklet carries the recorder inline, so a strict script-src cannot
   // refuses. The bookmarklet's own code is the user acting, which it does not.
   assert.ok(!/createElement\("script"\)/.test(code), 'the bookmarklet still appends a script tag');
   assert.ok(code.includes('__blueeyeRecorderConfig'), 'the config the inline recorder reads is missing');
-  assert.ok(code.includes('BlueEyes Service Assurance'), 'the recorder source is not in the bookmarklet');
+  assert.ok(code.includes('BlueEye Service Assurance'), 'the recorder source is not in the bookmarklet');
   assert.ok(code.includes(started.body.token), 'the capture token must reach the recorder');
 
   // It is still a URL a browser will accept as a bookmark.
@@ -433,7 +433,7 @@ test('the review dialog offers no save for an empty recording, and the server re
   assert.match(ui, /save \? t\('sa\.cancel'\) : t\('sa\.close'\)/, 'with no save there is nothing to cancel');
 });
 
-test('the recorder says when it cannot reach BlueEyes instead of counting into a void', () => {
+test('the recorder says when it cannot reach BlueEye instead of counting into a void', () => {
   const fs = require('fs');
   const path = require('path');
   const recorder = fs.readFileSync(path.join(__dirname, '..', '..', '..', '..', 'public', 'recorder.js'), 'utf8');
@@ -443,7 +443,7 @@ test('the recorder says when it cannot reach BlueEyes instead of counting into a
   // journey believing it was recorded.
   assert.match(recorder, /failures \+= 1;/, 'a failed flush must be counted');
   assert.match(recorder, /if \(failures >= 2\)/, 'two failures, not one — a single dropped packet is not a story');
-  // Any HTTP response means BlueEyes was reached; a 429 must not read as "cannot connect".
+  // Any HTTP response means BlueEye was reached; a 429 must not read as "cannot connect".
   assert.match(recorder, /failures = 0;\s*\n\s*delivered = true;/, 'a response must clear the failure state');
   assert.match(recorder, /if \(stopped\) return;/, 'a flush in flight must not overwrite the final badge message');
 });
@@ -559,7 +559,7 @@ test('the capture address setting refuses what could not work, and is admin-only
     const res = await put({ publicUrl: bad });
     assert.equal(res.status, 400, JSON.stringify(bad));
   }
-  // http IS accepted: a BlueEyes on a plain-HTTP internal network is a real
+  // http IS accepted: a BlueEye on a plain-HTTP internal network is a real
   // deployment, and the recording dialog already warns about the consequence.
   assert.equal((await put({ publicUrl: 'http://blueeye.local:3000' })).status, 200);
 

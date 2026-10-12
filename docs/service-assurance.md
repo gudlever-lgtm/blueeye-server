@@ -311,7 +311,7 @@ closes that window; it is a property of resolving a name twice.
 **The worker's network closes it instead.** `docker-compose.yml` puts the
 Service Assurance worker on an `assurance` network carrying the worker and the
 **database only** — the server and the licens signer are on `default`. Whatever a
-name resolves to, there is no route from the worker to BlueEyes' own API, so the
+name resolves to, there is no route from the worker to BlueEye' own API, so the
 interesting target of a rebind is unreachable rather than merely refused. Loopback
 is already another container's loopback, and `169.254.169.254` is refused by the
 deny-list at both check points.

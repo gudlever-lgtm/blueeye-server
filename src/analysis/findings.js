@@ -213,7 +213,7 @@ function mapLightRow(row) {
 // object the rest of the server uses: new FindingStore({ db }).
 class FindingStore {
   // `severityRules` is optional: without it every finding is stored exactly as
-  // the detector judged it, which is what BlueEyes did before rules existed.
+  // the detector judged it, which is what BlueEye did before rules existed.
   constructor({ db, severityRules = null }) {
     if (!db || !db.pool) {
       throw new Error('FindingStore requires the server db handle ({ db: { pool } })');

@@ -578,7 +578,7 @@
           { key: 'host', label: t('analysis.col.host'), width: '150px', sortable: true },
           { key: 'metric', label: t('analysis.col.metric'), width: '144px', sortable: true },
           { key: 'severity', label: t('analysis.col.severity'), width: '176px', sortable: true },
-          { key: 'deviation', label: t('analysis.col.deviation'), width: '104px', sortable: true, num: true },
+          { key: 'deviation', label: t('analysis.col.deviation'), width: '130px', sortable: true, num: true },
         ];
         var body = mode === 'evidence'
           ? [
@@ -672,7 +672,7 @@
           ], byMetric),
           miniTable('analysis.byHost', [
             { key: 'host', label: t('analysis.col.host') },
-            { key: 'count', label: t('analysis.col.count'), width: '72px', num: true },
+            { key: 'count', label: t('analysis.col.count'), width: '88px', num: true },
             { key: 'crit', label: 'CRIT', width: '72px', num: true },
             { key: 'warn', label: 'WARN', width: '72px', num: true },
             { key: 'avg', label: t('analysis.col.avgSigma'), width: '88px', num: true },

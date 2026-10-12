@@ -655,7 +655,7 @@ function createSearchService({
   }
 
   // (b) REMOTE: the customer's ITSM (ServiceNow) searched live — number, words
-  //     from the short description, and the correlation id BlueEyes stamped on
+  //     from the short description, and the correlation id BlueEye stamped on
   //     tickets it raised. Leaves the building like the CMDB resolver; a dead
   //     ITSM is a failed source, not a failed search. Tickets have no screen
   //     here, so each hit carries a deep link.

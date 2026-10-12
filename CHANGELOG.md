@@ -11,7 +11,7 @@
   the control and header counts match, because a mode that hides capability
   cannot be supported over the phone.
 
-## 0.241.0 — a screen that says whether BlueEyes itself can see anything
+## 0.241.0 — a screen that says whether BlueEye itself can see anything
 
 `GET /system/self` + **Administration → System health**. It composes what other
 screens already read and measures nothing new.
@@ -1286,8 +1286,8 @@ catalogue entry of their own.
 
 ```js
 { v: '0.120.0', d: '2026-09-10', area: 'assurance',
-  en: { t: 'BlueEyes Service Assurance', s: 'Synthetic monitoring of your own web services…' },
-  da: { t: 'BlueEyes Service Assurance', s: 'Syntetisk overvågning af jeres egne webtjenester…' } },
+  en: { t: 'BlueEye Service Assurance', s: 'Synthetic monitoring of your own web services…' },
+  da: { t: 'BlueEye Service Assurance', s: 'Syntetisk overvågning af jeres egne webtjenester…' } },
 ```
 
 The text is data rather than catalogue keys on purpose: seventy-nine history
@@ -1323,7 +1323,7 @@ A technician writes what is wrong in their own words:
 > *"Mail kan forbinde, men når der sendes data, mistes pakker eller
 > forbindelsen afbrydes."*
 
-BlueEyes answers with a plan — the likely causes ranked, the tests to run with
+BlueEye answers with a plan — the likely causes ranked, the tests to run with
 their parameters already filled in, the screens to open and what to look for in
 each, and what each answer would mean. Run the tests, and every cause comes back
 **confirmed**, **ruled out** or **open**, with the rule and the measurement that
@@ -1334,7 +1334,7 @@ Nav: **Diagnostics → Diagnose**. Full documentation in
 
 ### The knowledge is data
 
-Everything BlueEyes knows about network faults lives in
+Everything BlueEye knows about network faults lives in
 `src/diagnose/playbooks/*.json` — one file per fault, carrying its symptoms,
 keywords, the tests that tell it apart, the rules for reading them, and the
 fixes. **Adding a playbook is adding a file.** Nine ship: MTU blackhole, hop
@@ -1626,7 +1626,7 @@ alert fatigue starts. Impact follows the worst affected journey's criticality.
 
 An unknown impact is reported as unknown, never as low — "no journey information"
 and "low impact" are different facts. And the number of affected users is always
-`unknown`: BlueEyes watches journeys, not people, so there is no column to hold a
+`unknown`: BlueEye watches journeys, not people, so there is no column to hold a
 number it cannot observe.
 
 The incident reference (`INC-2026-00124`) is derived from the id and the year
@@ -1930,7 +1930,7 @@ V3 deliberately does NOT do is on the record too.
 
 ## 0.127.0 — accessibility checks (V2 §9)
 
-BlueEyes already drives a real browser through a real journey. While it is there
+BlueEye already drives a real browser through a real journey. While it is there
 it can answer a second question at almost no cost: can everybody use this?
 
 ### A finding never fails a run
@@ -2145,7 +2145,7 @@ the schedule, so a failure on the second does not lose the first.
 
 ### "This is a warning for us, not a critical"
 
-BlueEyes decides severity at detection: the analyser from a median + MAD z-score,
+BlueEye decides severity at detection: the analyser from a median + MAD z-score,
 Service Assurance from the kind of failure. Both are reasonable defaults and
 neither knows your business — the packet loss that pages one customer at 3am is
 the wifi at another one's warehouse.
@@ -2354,7 +2354,7 @@ No migration: all three read data that already existed.
 Applications change. A button gets a new id, a field is renamed, an `<a>`
 becomes a `<button>` — and the test that was watching it fails in a way that
 looks exactly like the service being broken, which is the one thing it must not
-be confused with. BlueEyes now looks at what IS on the page and says what it
+be confused with. BlueEye now looks at what IS on the page and says what it
 thinks the step meant.
 
 **It never repoints a test on its own.** Not when it is confident, not when the
@@ -2437,7 +2437,7 @@ Four deliberate rules:
 
 - **"Availability" never becomes a journey.** Opening the front page and getting
   HTTP 200 is the definition of "the website is up" — the exact sentence
-  journeys exist so BlueEyes stops saying. It stays a useful test.
+  journeys exist so BlueEye stops saying. It stays a useful test.
 - **A journey contained by a bigger one is dropped.** "Sign in" and "Sign in and
   use the application" both apply whenever there is a login with pages behind
   it; offering both means accepting two journeys that watch the same login.
@@ -2588,7 +2588,7 @@ broken one. The address is parsed, not pattern-matched: `javascript:`,
 `ftp://`, a bare hostname and a URL carrying a query are all refused, and a
 trailing slash is trimmed on the way in so every caller can append a path.
 
-`http://` is **accepted**, deliberately. A BlueEyes served over plain HTTP on an
+`http://` is **accepted**, deliberately. A BlueEye served over plain HTTP on an
 internal network is a real deployment, and the recording dialog already warns
 that HTTPS applications will refuse it. Refusing to store the truth would be
 worse than reporting it.
@@ -2625,7 +2625,7 @@ at https, which either works or visibly does not.
 
 **And when it is still http, say so.** The start dialog now refuses to pretend:
 it names the address, explains that an HTTPS application will refuse it, and
-gives the fix (serve BlueEyes over HTTPS, or set `BLUEEYE_PUBLIC_URL` to the
+gives the fix (serve BlueEye over HTTPS, or set `BLUEEYE_PUBLIC_URL` to the
 https address when a proxy already terminates TLS). Handing someone a
 bookmarklet that cannot work, and letting them discover it by performing a
 whole journey, is the failure this feature can least afford.
@@ -2638,10 +2638,10 @@ is the failure that comes before CSP can even apply.
 Three fixes from watching someone use it.
 
 **A recording could not be stopped from the dashboard.** The only Stop was the
-badge on the customer's page — which stops by POSTing to BlueEyes. So a site
+badge on the customer's page — which stops by POSTing to BlueEye. So a site
 that blocks the recorder's connection blocks its goodbye too, and the row sat at
 "Recording" with nobody able to end it: pressing Stop appeared to do nothing,
-because from BlueEyes' side nothing happened. The route existed and was tested;
+because from BlueEye' side nothing happened. The route existed and was tested;
 there was simply no button on it. The recordings strip now has one, and the
 dashboard's own connection is never subject to the customer's policy.
 
@@ -2691,17 +2691,17 @@ still served, so an operator can read what it does before trusting it, and the
 recorder takes its config from either source.
 
 **The wall this does not climb, now documented instead of discovered:**
-`connect-src`. The recorder has to post what it saw back to BlueEyes, and a site
+`connect-src`. The recorder has to post what it saw back to BlueEye, and a site
 whose policy allows connections only to itself blocks that — no bookmarklet can
 talk its way past it. The docs and the UI now say which directive to look for in
 the console and give the three real options: record on an environment without
 the header (the test stores paths, so it still runs against production), ask for
-the BlueEyes address to be added to `connect-src`, or build the test in the
+the BlueEye address to be added to `connect-src`, or build the test in the
 designer.
 
 **The bookmark's icon.** A `javascript:` bookmark has no origin, so the browser
 has no favicon to fetch and shows its generic globe whatever we do. The name is
-the part we control, so the BlueEyes mark (◉) rides there, and the UI says why
+the part we control, so the BlueEye mark (◉) rides there, and the UI says why
 rather than leaving it looking broken.
 
 ## 0.125.1 — recording: the bookmarklet, the capture path, and the review screen
@@ -3771,7 +3771,7 @@ null-prototype input instead of returning null.
 
 ## 0.115.2 — The Windows install command no longer looks like a PowerShell stager
 
-A customer's IPS fired on their own BlueEyes server:
+A customer's IPS fired on their own BlueEye server:
 
 ```
 IPS Alert 2: Potentially Bad Traffic. Signature ET ATTACK_RESPONSE PowerShell
@@ -4145,9 +4145,9 @@ a single flapping link can no longer push everything else off the page.
 
 ### Events, not incidents
 
-BlueEyes produces **events**; an **incident** is what a connected ITSM opens from
+BlueEye produces **events**; an **incident** is what a connected ITSM opens from
 one, and it lives there with its own number, SLA and owner. Calling our own row an
-incident made the two indistinguishable and implied BlueEyes does incident
+incident made the two indistinguishable and implied BlueEye does incident
 management, which it deliberately does not. New doc: **`docs/events.md`**.
 
 - The dashboard tab is **Events**; `views.events` / `views.event`, `PAGE_INFO.events`,
@@ -4256,15 +4256,15 @@ The older location-driven anomaly view is unchanged and is now labelled
 
 See `docs/troubleshooting-dashboard.md`.
 
-## 0.98.2 — Rename: BlueEyes Network Resilience System
+## 0.98.2 — Rename: BlueEye Network Resilience System
 
-The product is now the **BlueEyes Network Resilience System**. Every
+The product is now the **BlueEye Network Resilience System**. Every
 user-facing surface was updated — dashboard chrome and login, the built-in
-documentation, plan labels ("BlueEyes Professional"), the one-time-password
+documentation, plan labels ("BlueEye Professional"), the one-time-password
 email, ITSM/CMDB/webhook help text, installer and uninstaller output, and the
 READMEs across server, agent and licens. Inline prose uses the short form
-**BlueEyes**; the full name anchors the page titles, login screens, README
-leads and the "What BlueEyes does" article.
+**BlueEye**; the full name anchors the page titles, login screens, README
+leads and the "What BlueEye does" article.
 
 Deliberately **not** renamed, because deployed installs and integrations key
 off them: the `X-BlueEye-Signature` and `X-BlueEye-Protocol` HTTP headers, the
@@ -4483,7 +4483,7 @@ was recorded).
 
 ## 0.84.0 — Automated read-only evidence snapshot on cluster open
 
-When a cross-agent cluster opens, BlueEyes captures a **READ-ONLY** diagnostic
+When a cross-agent cluster opens, BlueEye captures a **READ-ONLY** diagnostic
 snapshot from each affected target over the **existing** authenticated, audited
 agent-command path — then references one compressed blob per (cluster, target)
 from the incident timeline. The capture is bounded and best-effort: it never
@@ -4594,7 +4594,7 @@ ServiceNow worknote append, and the notifications API.
 Adds a minimal, queryable L2 topology so cross-agent clustering can group findings
 by neighbor adjacency when no shared-site (manual) topology applies.
 
-**Audit note:** the brief assumed BlueEyes already collects LLDP as part of "L2 loop
+**Audit note:** the brief assumed BlueEye already collects LLDP as part of "L2 loop
 detection" — it does **not** (no L2 loop detection, no SNMP/BRIDGE-MIB/LLDP
 collection exists; `locator.js`'s "neighbor" means neighbor *agents*). And Fase 1's
 topology signal is **shared-site** (`location_id`), not a manual dependency graph.

@@ -78,7 +78,7 @@ function describeFilters(f) {
 //   GET   /api/events/:id    viewer+   one event + its linked anomalies
 //   PATCH /api/events/:id    operator+ status transition (audited, RBAC)
 //
-// TERMINOLOGY. BlueEyes produces *events*; an **incident** is what an ITSM
+// TERMINOLOGY. BlueEye produces *events*; an **incident** is what an ITSM
 // (ServiceNow, TOPdesk, a custom connector) opens FROM an event, and it lives in
 // that system with its own number, SLA and owner. Calling our own row an
 // "incident" made those two indistinguishable — so the noun here is "event", and

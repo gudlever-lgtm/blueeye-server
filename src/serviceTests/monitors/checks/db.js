@@ -14,7 +14,7 @@ const { ok, failed, unreachable, misconfigured, KIND } = require('../result');
 // this file refuses it again: a monitor runs on a schedule forever, and a
 // scheduled statement that can write is a scheduled accident.
 //
-// Both drivers are already dependencies (mysql2 for BlueEyes itself, pg for the
+// Both drivers are already dependencies (mysql2 for BlueEye itself, pg for the
 // Postgres-backed installs), and both are required lazily so a deployment that
 // never uses one does not pay for it.
 

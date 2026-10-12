@@ -34,7 +34,7 @@
 // (newest first) about the OTHER end, and what each end was asked to reach.
 //
 // WHAT THIS DOES NOT CLAIM. A round trip cannot be split into two one-way
-// latencies without synchronised clocks, which BlueEyes does not have and will
+// latencies without synchronised clocks, which BlueEye does not have and will
 // not invent. The latency rung compares two ROUND TRIPS — A→B→A against B→A→B —
 // and a difference between them means the two round trips are not the same
 // path, which is a real finding and a different one from "the outbound leg is

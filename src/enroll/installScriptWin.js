@@ -581,15 +581,9 @@ try {
     "set ""BLUEEYE_TOKEN_PATH=$TokenPath""",
     "set ""BLUEEYE_AGENT_CONFIG=$ConfigPath""",
     "set ""BLUEEYE_ACTION_LOG=$(Join-Path $LogDir 'actions.log')""",
-    // The Scheduled Task registered below IS this agent's supervisor, and a task
-    // can be ended and re-run (schtasks /End, /Run). Tagging it 'unmanaged' was
-    // understating what the host can do, and the whole Windows fleet paid for it:
-    // every agent declined the one-click update, so the only way to move one was a
-    // downloaded PowerShell script - outside the signed, command-authenticated
-    // channel that already existed for systemd. blueeye-agent restarts a
-    // 'scheduled-task' from 0.47.2 on; an older agent does not recognise the value
-    // and falls back to 'unmanaged' exactly as before, so writing it is safe on a
-    // host whose agent has not updated yet.
+    # The Scheduled Task below is this agent's supervisor, so it can be restarted
+    # (schtasks /End, /Run) and the one-click update applies. Agents older than
+    # 0.47.2 do not know the value and fall back to 'unmanaged' as before.
     'set "BLUEEYE_RUNTIME=scheduled-task"',
     "cd /d ""$InstallDir""",
     "echo [%DATE% %TIME%] starting blueeye-agent >> ""$AgentLog""",

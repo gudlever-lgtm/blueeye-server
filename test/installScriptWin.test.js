@@ -297,6 +297,24 @@ test('renderUpdatePs1 uses PowerShell idioms and escapes injected values', () =>
   assert.match(script, /\$ServerUrl\s*=\s*'http:\/\/x''; rm -rf \/'/);
 });
 
+// A JS-style `//` comment written inside the template literal ships verbatim
+// into the .ps1, where `//` is a division operator: a customer's install died
+// with "You must provide a value expression following the '/' operator" plus a
+// cascade of unterminated-string/brace errors for the rest of the file.
+// PowerShell comments start with '#'.
+test('no generated PowerShell script contains a JS-style // comment line', () => {
+  const scripts = {
+    install: renderInstallPs1({ serverUrl: 'https://blueeye.example.dk', code: 'CODE', certFingerprint: FP, sourceSha: SHA, agentVersion: '1.2.3' }),
+    installNoSource: renderInstallPs1({ serverUrl: 'https://blueeye.example.dk', code: 'CODE' }),
+    update: renderUpdatePs1({ serverUrl: 'https://blueeye.example.dk', certFingerprint: FP, sourceSha: SHA, agentVersion: '1.2.3' }),
+    uninstall: renderUninstallPs1(),
+  };
+  for (const [name, script] of Object.entries(scripts)) {
+    const bad = script.split(/\r?\n/).filter((line) => /^\s*\/\//.test(line));
+    assert.deepEqual(bad, [], `${name}.ps1 has // comment lines: ${JSON.stringify(bad)}`);
+  }
+});
+
 // Windows PowerShell 5.1 reads a BOM-less .ps1 in the host's ANSI code page. A
 // UTF-8 em-dash in the script then decodes as "â€”", and U+201D ("”") is a quote
 // character to PowerShell — a customer hit exactly this: "Unexpected token 'set'

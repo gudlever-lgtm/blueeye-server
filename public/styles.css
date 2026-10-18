@@ -1394,7 +1394,8 @@ button.active-btn { outline: 2px solid var(--accent); }
 .modal-card.wide .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 16px; }
 .modal-card.wide .form-grid textarea { min-height: 52px; }
 .modal-card.wide .form-grid .error,
-.modal-card.wide .form-grid .form-actions { grid-column: 1 / -1; }
+.modal-card.wide .form-grid .form-actions,
+.modal-card.wide .form-grid .test-items { grid-column: 1 / -1; }
 @media (max-width: 640px) { .modal-card.wide .form-grid { grid-template-columns: 1fr; } }
 
 /* ---- Reporting: two-level subtabs ---------------------------------------- */

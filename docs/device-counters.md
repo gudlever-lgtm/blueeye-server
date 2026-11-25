@@ -204,10 +204,10 @@ monotonically rising `BIGINT`s, which delta-encode well, and the error columns
 are zero most of the time on a healthy network, which run-length-encodes well.
 
 **Retention**: 90 days in TimescaleDB; **14 days** in the MySQL fallback
-(`RETENTION_DEVICE_COUNTER_DAYS`), because 180 bytes × 1.4 million a day is
-~10 GB a month in InnoDB with no compression to lean on. The port inventory is
-purged on a **longer** window (180 days) so a sample never outlives the row that
-gives it meaning.
+(`RETENTION_DEVICE_COUNTER_DAYS`, runtime-editable under Settings →
+Retention), because 180 bytes × 1.4 million a day is ~10 GB a month in InnoDB
+with no compression to lean on. The port inventory is purged on a **longer**
+window (180 days) so a sample never outlives the row that gives it meaning.
 
 ---
 

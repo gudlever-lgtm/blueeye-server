@@ -37,6 +37,7 @@ const MODULE_ANALYSIS_DEFAULTS = {
 };
 const MODULE_RETENTION_DEFAULTS = {
   enabled: true, rawRetentionDays: 7, rollupRetentionDays: 90, findingRetentionDays: 365, rollupIntervalMinutes: 60,
+  deviceCounterRetentionDays: 14,
 };
 
 // Parses a list of integers, keeping only unique values within [min, max].
@@ -460,6 +461,7 @@ function createSettingsService({ settingsRepo, config, liveAnalysis = null, live
     num(p, 'rawRetentionDays', 1, 3650, true, errors, value);
     num(p, 'rollupRetentionDays', 1, 3650, true, errors, value);
     num(p, 'findingRetentionDays', 1, 3650, true, errors, value);
+    num(p, 'deviceCounterRetentionDays', 1, 3650, true, errors, value);
     return { errors: Object.keys(errors).length ? errors : null, value };
   }
 
@@ -470,6 +472,7 @@ function createSettingsService({ settingsRepo, config, liveAnalysis = null, live
     return {
       enabled: !!base.enabled, rawRetentionDays: base.rawRetentionDays, rollupRetentionDays: base.rollupRetentionDays,
       findingRetentionDays: base.findingRetentionDays, rollupIntervalMinutes: base.rollupIntervalMinutes,
+      deviceCounterRetentionDays: base.deviceCounterRetentionDays,
     };
   }
 
@@ -478,7 +481,7 @@ function createSettingsService({ settingsRepo, config, liveAnalysis = null, live
     if (errors) throw badRequest('invalid retention settings', errors);
     const current = await getRetention();
     const merged = { ...current, ...value };
-    await settingsRepo.set('retention', { enabled: merged.enabled, rawRetentionDays: merged.rawRetentionDays, rollupRetentionDays: merged.rollupRetentionDays, findingRetentionDays: merged.findingRetentionDays });
+    await settingsRepo.set('retention', { enabled: merged.enabled, rawRetentionDays: merged.rawRetentionDays, rollupRetentionDays: merged.rollupRetentionDays, findingRetentionDays: merged.findingRetentionDays, deviceCounterRetentionDays: merged.deviceCounterRetentionDays });
     if (liveRetention) Object.assign(liveRetention, value);
     return merged;
   }

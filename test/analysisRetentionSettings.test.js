@@ -47,6 +47,51 @@ test('setRetention live-applies windows + enable toggle, keeps cadence', async (
   assert.equal(liveRetention.rollupIntervalMinutes, 60); // cadence not editable here
 });
 
+test('setBinlog persists the override and applies it via SET GLOBAL on the pool', async () => {
+  const calls = [];
+  const dbPool = { query: async (sql, params) => { calls.push([sql, params]); return [{}]; } };
+  const svc = createSettingsService({ settingsRepo: memRepo(), config: cfg, dbPool });
+  const saved = await svc.setBinlog({ expireLogsDays: 10, maxBinlogSizeMb: 128 });
+  assert.equal(saved.expireLogsDays, 10);
+  assert.equal(saved.maxBinlogSizeMb, 128);
+  assert.equal(saved.applied, true);
+  assert.equal(calls.length, 2);
+  assert.deepEqual(calls[0], ['SET GLOBAL binlog_expire_logs_seconds = ?', [10 * 86400]]);
+  assert.deepEqual(calls[1], ['SET GLOBAL max_binlog_size = ?', [128 * 1024 * 1024]]);
+});
+
+test('setBinlog with enabled:false sets expire seconds to 0 (never auto-purge)', async () => {
+  const calls = [];
+  const dbPool = { query: async (sql, params) => { calls.push([sql, params]); return [{}]; } };
+  const svc = createSettingsService({ settingsRepo: memRepo(), config: cfg, dbPool });
+  await svc.setBinlog({ enabled: false });
+  assert.deepEqual(calls[0], ['SET GLOBAL binlog_expire_logs_seconds = ?', [0]]);
+});
+
+test('setBinlog without a database pool stores the override but reports it was not applied', async () => {
+  const svc = createSettingsService({ settingsRepo: memRepo(), config: cfg });
+  const saved = await svc.setBinlog({ expireLogsDays: 5 });
+  assert.equal(saved.expireLogsDays, 5); // stored regardless
+  assert.equal(saved.applied, false);
+  assert.ok(saved.error);
+});
+
+test('setBinlog rejects out-of-range values', async () => {
+  const svc = createSettingsService({ settingsRepo: memRepo(), config: cfg });
+  await assert.rejects(() => svc.setBinlog({ expireLogsDays: 0 }), (e) => e.statusCode === 400);
+  await assert.rejects(() => svc.setBinlog({ maxBinlogSizeMb: 2000 }), (e) => e.statusCode === 400);
+});
+
+test('applyStoredOverrides re-applies a persisted binlog override at boot', async () => {
+  const calls = [];
+  const dbPool = { query: async (sql, params) => { calls.push([sql, params]); return [{}]; } };
+  const repo = memRepo({ binlog: { enabled: true, expireLogsDays: 7, maxBinlogSizeMb: 64 } });
+  const svc = createSettingsService({ settingsRepo: repo, config: cfg, dbPool });
+  await svc.applyStoredOverrides();
+  assert.deepEqual(calls[0], ['SET GLOBAL binlog_expire_logs_seconds = ?', [7 * 86400]]);
+  assert.deepEqual(calls[1], ['SET GLOBAL max_binlog_size = ?', [64 * 1024 * 1024]]);
+});
+
 test('applyStoredOverrides re-applies persisted edits at boot', async () => {
   const repo = memRepo({ analysis: { critSigma: 5 }, retention: { rawRetentionDays: 30 } });
   const liveAnalysis = { critSigma: 4 };
@@ -80,4 +125,21 @@ test('PUT /api/settings/retention saves (admin) and validates', async () => {
   assert.equal(put.body.retention.rawRetentionDays, 21);
   assert.equal(put.body.retention.enabled, false);
   assert.equal((await request(makeApp()).put('/api/settings/retention').set('Authorization', authHeader('admin')).send({ rawRetentionDays: 0 })).status, 400);
+});
+
+test('PUT /api/settings/binlog saves (admin-only, RBAC) and GET reflects it', async () => {
+  const app = makeApp({ settingsService: makeSettingsService() });
+  const put = await request(app).put('/api/settings/binlog').set('Authorization', authHeader('admin')).send({ expireLogsDays: 10, maxBinlogSizeMb: 128 });
+  assert.equal(put.status, 200);
+  assert.equal(put.body.binlog.expireLogsDays, 10);
+  assert.equal(put.body.binlog.maxBinlogSizeMb, 128);
+  const get = await request(app).get('/api/settings').set('Authorization', authHeader('admin'));
+  assert.equal(get.body.binlog.expireLogsDays, 10);
+});
+
+test('PUT /api/settings/binlog validates (400) and is admin-only (403 for viewer/operator)', async () => {
+  const app = makeApp();
+  assert.equal((await request(app).put('/api/settings/binlog').set('Authorization', authHeader('admin')).send({ expireLogsDays: 0 })).status, 400);
+  assert.equal((await request(app).put('/api/settings/binlog').set('Authorization', authHeader('viewer')).send({ expireLogsDays: 5 })).status, 403);
+  assert.equal((await request(app).put('/api/settings/binlog').set('Authorization', authHeader('operator')).send({ expireLogsDays: 5 })).status, 403);
 });

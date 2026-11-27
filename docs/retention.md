@@ -13,6 +13,16 @@ ON by default (`RETENTION_ENABLED`) — DB hygiene is a safe default.
 > the scheduler/purge read them on each run, so changes take effect on the next
 > cleanup without a restart. The rollup **cadence** (`rollupIntervalMinutes`,
 > scheduler interval) stays env-only.
+>
+> The same screen also has **Binary logs**: MySQL's own retention
+> (`binlog_expire_logs_seconds`, `max_binlog_size`), which ships from
+> `mysql-conf/binlog.cnf` (3 days / 256 MB) and can be overridden here
+> (`PUT /api/settings/binlog`). Unlike the app-level windows above, this needs
+> `SET GLOBAL` on the live MySQL connection — which the app's DB user may not
+> have the privilege for — so the save is best-effort: the override is always
+> stored and retried at every boot/edit, and the response's `applied`/`error`
+> fields say whether it actually reached MySQL this time. Admin-only, like
+> every other Settings write.
 
 ## What it does
 

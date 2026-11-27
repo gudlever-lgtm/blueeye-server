@@ -25,6 +25,7 @@ function createSettingsRouter({ settingsService, featureGate, dispatcher, analys
       },
       alerting: settingsService ? await settingsService.getAlertingSafe() : (dispatcher ? dispatcher.describe() : null),
       retention: settingsService ? await settingsService.getRetention() : (retentionConfig || null),
+      binlog: settingsService ? await settingsService.getBinlog() : null,
       throughput: settingsService ? await settingsService.getThroughput() : null,
       // Every ladder's effective configuration, keyed by id. `ladder` is kept
       // as the reachability one so a screen written before the registry
@@ -195,6 +196,20 @@ function createSettingsRouter({ settingsService, featureGate, dispatcher, analys
   router.put('/retention', ...admin, asyncHandler(async (req, res) => {
     try {
       res.json({ retention: await settingsService.setRetention(req.body || {}) });
+    } catch (err) {
+      if (err.statusCode === 400) return res.status(400).json({ error: 'Validation failed', details: err.details || {} });
+      throw err;
+    }
+  }));
+
+  // PUT /api/settings/binlog — MySQL binary-log retention (admin). Persists the
+  // override and attempts to apply it live via SET GLOBAL; a failure there
+  // (e.g. the DB user lacks the privilege) is reported in the response rather
+  // than failing the save, since the setting is still stored and retried at
+  // every boot/edit.
+  router.put('/binlog', ...admin, asyncHandler(async (req, res) => {
+    try {
+      res.json({ binlog: await settingsService.setBinlog(req.body || {}) });
     } catch (err) {
       if (err.statusCode === 400) return res.status(400).json({ error: 'Validation failed', details: err.details || {} });
       throw err;

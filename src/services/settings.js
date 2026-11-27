@@ -38,6 +38,10 @@ const MODULE_ANALYSIS_DEFAULTS = {
 const MODULE_RETENTION_DEFAULTS = {
   enabled: true, rawRetentionDays: 7, rollupRetentionDays: 90, findingRetentionDays: 365, rollupIntervalMinutes: 60,
 };
+// Mirrors mysql-conf/binlog.cnf (259200s = 3 days, 268435456 bytes = 256 MB) —
+// the file is what a fresh install boots with; these are what Settings shows
+// until an admin overrides them.
+const MODULE_BINLOG_DEFAULTS = { enabled: true, expireLogsDays: 3, maxBinlogSizeMb: 256 };
 
 // Parses a list of integers, keeping only unique values within [min, max].
 // Returns null if the result is empty or the cap is exceeded.
@@ -75,7 +79,7 @@ function badRequest(message, details) {
 // live-object seam liveAnalysis and liveAlerting use, and for the same reason:
 // the detectors run on timers and must not each hold a snapshot taken when the
 // process started.
-function createSettingsService({ settingsRepo, config, liveAnalysis = null, liveRetention = null, liveAlerting = null, liveGeo = null, liveGeoCity = null, liveAttack = null, livePublicUrl = null, secretBox = null }) {
+function createSettingsService({ settingsRepo, config, liveAnalysis = null, liveRetention = null, liveAlerting = null, liveGeo = null, liveGeoCity = null, liveAttack = null, livePublicUrl = null, secretBox = null, dbPool = null }) {
   // Encrypt/decrypt the assistant API key for storage at rest (AES-256-GCM via
   // secretBox, the same scheme integration credentials + the LDAP bind password
   // use). When no box is wired (some tests) values pass through as plaintext. A
@@ -481,6 +485,66 @@ function createSettingsService({ settingsRepo, config, liveAnalysis = null, live
     await settingsRepo.set('retention', { enabled: merged.enabled, rawRetentionDays: merged.rawRetentionDays, rollupRetentionDays: merged.rollupRetentionDays, findingRetentionDays: merged.findingRetentionDays });
     if (liveRetention) Object.assign(liveRetention, value);
     return merged;
+  }
+
+  // ---- Binary logs (Settings → Retention) ---------------------------------
+  // MySQL's own retention: how long binlog files are kept before auto-purge,
+  // and how big one file grows before rotating. Ships env/file-configured
+  // (mysql-conf/binlog.cnf); an admin can override both here, same pattern as
+  // the data-retention windows above. Unlike those, there is no app-side
+  // config object to mutate — the only way to make it real is `SET GLOBAL` on
+  // the MySQL connection itself, which needs a privilege the app's DB user may
+  // not have, so applying it is best-effort and the result (ok/error) is
+  // surfaced back to the admin rather than failing the save: the setting is
+  // still persisted and re-applied on every boot/edit until it succeeds.
+  const BINLOG_DEFAULTS = MODULE_BINLOG_DEFAULTS;
+  let binlogStatus = { applied: null, error: null, appliedAt: null };
+
+  function validateBinlog(patch) {
+    const p = patch && typeof patch === 'object' ? patch : {};
+    const errors = {};
+    const value = {};
+    bool(p, 'enabled', value);
+    num(p, 'expireLogsDays', 1, 365, true, errors, value);
+    num(p, 'maxBinlogSizeMb', 1, 1024, true, errors, value);
+    return { errors: Object.keys(errors).length ? errors : null, value };
+  }
+
+  // Applies a config ({ enabled, expireLogsDays, maxBinlogSizeMb }) to the live
+  // MySQL server. `enabled: false` means "never auto-purge" (seconds = 0),
+  // mirroring how data-retention's own `enabled` flag works. Never throws —
+  // the outcome lands in binlogStatus for getBinlog to report.
+  async function applyBinlogToMysql(cfg) {
+    if (!dbPool) { binlogStatus = { applied: false, error: 'no database connection available', appliedAt: null }; return; }
+    try {
+      const seconds = cfg.enabled ? cfg.expireLogsDays * 86400 : 0;
+      const bytes = cfg.maxBinlogSizeMb * 1024 * 1024;
+      await dbPool.query('SET GLOBAL binlog_expire_logs_seconds = ?', [seconds]);
+      await dbPool.query('SET GLOBAL max_binlog_size = ?', [bytes]);
+      binlogStatus = { applied: true, error: null, appliedAt: new Date().toISOString() };
+    } catch (err) {
+      binlogStatus = { applied: false, error: err.message, appliedAt: null };
+    }
+  }
+
+  async function getBinlog() {
+    const override = await loadOverride('binlog');
+    const o = override && typeof override === 'object' ? override : {};
+    const merged = { ...BINLOG_DEFAULTS, ...o };
+    return {
+      enabled: !!merged.enabled, expireLogsDays: merged.expireLogsDays, maxBinlogSizeMb: merged.maxBinlogSizeMb,
+      applied: binlogStatus.applied, error: binlogStatus.error,
+    };
+  }
+
+  async function setBinlog(patch) {
+    const { errors, value } = validateBinlog(patch || {});
+    if (errors) throw badRequest('invalid binary log settings', errors);
+    const current = await getBinlog();
+    const merged = { enabled: current.enabled, expireLogsDays: current.expireLogsDays, maxBinlogSizeMb: current.maxBinlogSizeMb, ...value };
+    await settingsRepo.set('binlog', { enabled: merged.enabled, expireLogsDays: merged.expireLogsDays, maxBinlogSizeMb: merged.maxBinlogSizeMb });
+    await applyBinlogToMysql(merged);
+    return getBinlog();
   }
 
   // ---- Events (Settings → Events) -----------------------------------------
@@ -1417,6 +1481,10 @@ function createSettingsService({ settingsRepo, config, liveAnalysis = null, live
       }
       if (g && typeof g.cityDbPath === 'string') reloadCity(g.cityDbPath);
     } catch { /* ignore */ }
+    try {
+      const b = await settingsRepo.get('binlog');
+      if (b) await applyBinlogToMysql({ ...BINLOG_DEFAULTS, ...b });
+    } catch { /* ignore */ }
   }
 
   // ---- Active-discovery scope (Admin → Discovery) -------------------------
@@ -1588,6 +1656,7 @@ function createSettingsService({ settingsRepo, config, liveAnalysis = null, live
     getFlowCategories, setFlowCategories, resetFlowCategories, validateFlowCategories,
     getAnalysis, setAnalysis, validateAnalysis,
     getRetention, setRetention, validateRetention,
+    getBinlog, setBinlog, validateBinlog,
     getDiscovery, setDiscovery, validateDiscovery,
     getAttackIndication, setAttackIndication, validateAttackIndication,
     getSecurity, setSecurity, validateSecurity,

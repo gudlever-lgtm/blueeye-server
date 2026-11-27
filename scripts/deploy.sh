@@ -36,6 +36,8 @@
 #       offered agent version via /system/version after deploy (optional)
 #   BLUEEYE_SERVICE_ASSURANCE=1 ./scripts/deploy.sh       # also run the Service
 #       Assurance worker (see above; remembered on later deploys)
+#   BLUEEYE_DUMP_KEEP=20 ./scripts/deploy.sh              # keep the newest 20
+#       pre-migration dumps instead of the default 10 (0 = keep them all)
 #
 # Expects the repos cloned as siblings, e.g.:
 #   /var/www/blueeye.gnf.dk/{blueeye-server,blueeye-agent}
@@ -63,6 +65,26 @@ ROOT_DIR="$(cd "$SERVER_DIR/.." && pwd)"     # parent holding all three repos
 log()  { printf '\n\033[1;36m==> %s\033[0m\n' "$*"; }
 warn() { printf '\033[1;33mWARN: %s\033[0m\n' "$*" >&2; }
 die()  { printf '\033[1;31mERROR: %s\033[0m\n' "$*" >&2; exit 1; }
+
+# Keeps at most $2 pre-migration dumps in $1, deleting the oldest first.
+# Dumps otherwise accumulate forever (one per deploy) until the disk fills —
+# this runs BEFORE the new dump is taken, so a deploy that fails to produce
+# one never loses a backup that's still needed. $2 <= 0 disables rotation
+# (keep everything, the old unbounded behaviour).
+# Filenames are blueeye-YYYYMMDD-HHMMSS.sql.gz, so lexicographic `sort` is
+# also chronological order — no need to stat mtimes (and no GNU-only `find
+# -printf`, which plain `sort`/`head` avoid too).
+rotate_old_dumps() {
+  local dir="$1" keep="$2" files n
+  [ "$keep" -gt 0 ] 2>/dev/null || return 0
+  files="$(find "$dir" -maxdepth 1 -name 'blueeye-*.sql.gz' -type f 2>/dev/null | sort)"
+  n="$(printf '%s\n' "$files" | grep -c .)"
+  [ "$n" -gt "$keep" ] || return 0
+  log "Rotating backups in $dir: keeping the newest $keep of $n"
+  printf '%s\n' "$files" | head -n "$((n - keep))" | while IFS= read -r f; do
+    [ -n "$f" ] && { warn "Deleting old backup $(basename "$f")"; rm -f -- "$f"; }
+  done
+}
 
 # git pull with retry/backoff for transient network failures.
 git_pull_retry() {
@@ -146,8 +168,10 @@ fi
 # you did not take is not.
 #
 # Skipped when the db service is not part of this stack (an external MySQL), or
-# with BLUEEYE_SKIP_DB_DUMP=1.
+# with BLUEEYE_SKIP_DB_DUMP=1. Rotated (oldest deleted first) before each new
+# dump via BLUEEYE_DUMP_KEEP (default 10, 0 = keep every dump ever taken).
 DUMP_DIR="${BLUEEYE_DUMP_DIR:-$SERVER_DIR/backups}"
+DUMP_KEEP="${BLUEEYE_DUMP_KEEP:-10}"
 DUMP_FILE=""
 if [ "${BLUEEYE_SKIP_DB_DUMP:-0}" = "1" ]; then
   warn "BLUEEYE_SKIP_DB_DUMP=1 — no pre-migration dump. A failed schema change will have nothing to restore."
@@ -156,6 +180,7 @@ elif ! "${DC[@]}" ps --services 2>/dev/null | grep -qx db; then
   warn "Take your own dump before deploying a release that migrates."
 else
   mkdir -p "$DUMP_DIR"
+  rotate_old_dumps "$DUMP_DIR" "$DUMP_KEEP"
   DUMP_FILE="$DUMP_DIR/blueeye-$(date +%Y%m%d-%H%M%S).sql.gz"
   log "Dumping the database before migrations → $DUMP_FILE"
   if "${DC[@]}" exec -T db sh -c \

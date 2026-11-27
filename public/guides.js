@@ -89,6 +89,7 @@
     ['rawRetentionDays', '7', 'guide.ins.row.rawRetention'],
     ['rollupRetentionDays', '90', 'guide.ins.row.rollupRetention'],
     ['findingRetentionDays', '365', 'guide.ins.row.findingRetention'],
+    ['deviceCounterRetentionDays', '14', 'guide.ins.row.deviceCounterRetention'],
     ['rollupIntervalMinutes', '60', 'guide.ins.row.rollupInterval'],
   ];
 

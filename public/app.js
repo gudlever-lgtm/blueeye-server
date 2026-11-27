@@ -18745,6 +18745,7 @@ function retentionSettingsCard(r) {
       { key: 'rawRetentionDays', label: 'Raw data (days)', type: 'number', min: 1, max: 3650, step: 1, hint: 'Raw measurements older than this are aggregated into compact buckets.' },
       { key: 'rollupRetentionDays', label: 'Aggregated data (days)', type: 'number', min: 1, max: 3650, step: 1, hint: 'Aggregated buckets older than this are deleted.' },
       { key: 'findingRetentionDays', label: 'Findings (days)', type: 'number', min: 1, max: 3650, step: 1, hint: 'Acknowledged findings older than this are deleted (unacknowledged CRIT are always kept).' },
+      { key: 'deviceCounterRetentionDays', label: 'SNMP interface counters (days)', type: 'number', min: 1, max: 3650, step: 1, hint: 'Per-port counter samples older than this are deleted. The biggest single write stream on a MySQL-only deployment — lower this, or turn off interface counters on switches that don’t need them, to cut disk usage.' },
       { key: 'rollupIntervalMinutes', label: 'Bucket size (min)', type: 'number', readonly: true, hint: 'How wide aggregation buckets are. Set via .env (cached at startup).' },
     ],
   });

@@ -1481,9 +1481,15 @@ function createSettingsService({ settingsRepo, config, liveAnalysis = null, live
       }
       if (g && typeof g.cityDbPath === 'string') reloadCity(g.cityDbPath);
     } catch { /* ignore */ }
+    // Unlike the other overrides above, this one is applied even when nobody
+    // has ever saved it: the shipped defaults (mysql-conf/binlog.cnf's values)
+    // are never actually loaded by MySQL on their own — that file isn't
+    // mounted into the db container — so without this, a fresh install (or
+    // one where an admin never opened Settings → Retention) runs on MySQL's
+    // own defaults (30-day expiry, 1 GiB files) with no purge at all.
     try {
       const b = await settingsRepo.get('binlog');
-      if (b) await applyBinlogToMysql({ ...BINLOG_DEFAULTS, ...b });
+      await applyBinlogToMysql({ ...BINLOG_DEFAULTS, ...(b && typeof b === 'object' ? b : {}) });
     } catch { /* ignore */ }
   }
 

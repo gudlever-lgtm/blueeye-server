@@ -18758,18 +18758,18 @@ function retentionSettingsCard(r) {
 // looking like a no-op.
 function binlogSettingsCard(b) {
   const v = b || { enabled: true, expireLogsDays: 3, maxBinlogSizeMb: 256, applied: null, error: null };
-  let note = 'Applies live via SET GLOBAL on save, and is re-applied on every server start.';
-  if (v.applied === false) note = `⚠ Stored, but not yet applied to MySQL${v.error ? `: ${v.error}` : ''}.`;
-  else if (v.applied === true) note = '✓ Applied to the live MySQL server.';
+  let note = t('set.binlog.noteDefault');
+  if (v.applied === false) note = v.error ? t('set.binlog.noteNotAppliedWithError', { error: v.error }) : t('set.binlog.noteNotApplied');
+  else if (v.applied === true) note = t('set.binlog.noteApplied');
   return settingsFormCard({
-    title: 'Binary logs',
+    title: t('set.binlog.title'),
     values: v,
     endpoint: '/api/settings/binlog',
     note,
     fields: [
-      { key: 'enabled', label: 'Auto-purge enabled', type: 'checkbox', hint: 'Turns automatic deletion of old binary logs on/off.' },
-      { key: 'expireLogsDays', label: 'Binary logs (days)', type: 'number', min: 1, max: 365, step: 1, hint: 'Binary log files older than this are purged automatically.' },
-      { key: 'maxBinlogSizeMb', label: 'Max log file size (MB)', type: 'number', min: 1, max: 1024, step: 1, hint: 'A binary log rotates to a new file once it reaches this size.' },
+      { key: 'enabled', label: t('set.binlog.enabledLabel'), type: 'checkbox', hint: t('set.binlog.enabledHint') },
+      { key: 'expireLogsDays', label: t('set.binlog.daysLabel'), type: 'number', min: 1, max: 365, step: 1, hint: t('set.binlog.daysHint') },
+      { key: 'maxBinlogSizeMb', label: t('set.binlog.sizeLabel'), type: 'number', min: 1, max: 1024, step: 1, hint: t('set.binlog.sizeHint') },
     ],
   });
 }
@@ -18804,6 +18804,7 @@ async function settingsDatabaseView() {
 function mysqlStatusCard(info) {
   const card = el('div', { class: 'settings-card' }, el('h3', {}, 'MySQL'));
   card.append(el('p', { class: 'muted small' }, 'Primary store — inventory, users, configuration. Configured in the server environment (DB_HOST, DB_USER, …).'));
+  card.append(el('p', { class: 'muted small' }, t('set.database.binlogIntro'), ' ', settingsLink('retention', t('set.database.binlogLink')), '.'));
   if (info && !info.error) {
     card.append(el('div', { class: 'section-head' }, el('span', { class: 'badge active' }, 'Connected ✓')));
     const bits = [];

@@ -92,6 +92,18 @@ test('applyStoredOverrides re-applies a persisted binlog override at boot', asyn
   assert.deepEqual(calls[1], ['SET GLOBAL max_binlog_size = ?', [64 * 1024 * 1024]]);
 });
 
+test('applyStoredOverrides applies the shipped binlog DEFAULTS at boot even when nobody has saved an override', async () => {
+  // mysql-conf/binlog.cnf is never actually mounted into the db container, so
+  // this is the only thing that makes "3 days / 256 MB" real on a fresh
+  // install rather than MySQL's own defaults (30-day expiry, 1 GiB files).
+  const calls = [];
+  const dbPool = { query: async (sql, params) => { calls.push([sql, params]); return [{}]; } };
+  const svc = createSettingsService({ settingsRepo: memRepo(), config: cfg, dbPool });
+  await svc.applyStoredOverrides();
+  assert.deepEqual(calls[0], ['SET GLOBAL binlog_expire_logs_seconds = ?', [3 * 86400]]);
+  assert.deepEqual(calls[1], ['SET GLOBAL max_binlog_size = ?', [256 * 1024 * 1024]]);
+});
+
 test('applyStoredOverrides re-applies persisted edits at boot', async () => {
   const repo = memRepo({ analysis: { critSigma: 5 }, retention: { rawRetentionDays: 30 } });
   const liveAnalysis = { critSigma: 4 };

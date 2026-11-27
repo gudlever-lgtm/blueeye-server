@@ -15,14 +15,18 @@ ON by default (`RETENTION_ENABLED`) — DB hygiene is a safe default.
 > scheduler interval) stays env-only.
 >
 > The same screen also has **Binary logs**: MySQL's own retention
-> (`binlog_expire_logs_seconds`, `max_binlog_size`), which ships from
-> `mysql-conf/binlog.cnf` (3 days / 256 MB) and can be overridden here
-> (`PUT /api/settings/binlog`). Unlike the app-level windows above, this needs
-> `SET GLOBAL` on the live MySQL connection — which the app's DB user may not
-> have the privilege for — so the save is best-effort: the override is always
-> stored and retried at every boot/edit, and the response's `applied`/`error`
-> fields say whether it actually reached MySQL this time. Admin-only, like
-> every other Settings write.
+> (`binlog_expire_logs_seconds`, `max_binlog_size`), shipped defaults 3 days /
+> 256 MB, overridable here (`PUT /api/settings/binlog`). There used to be a
+> `mysql-conf/binlog.cnf` for this — it was never actually mounted into the
+> `db` container (see `docker-compose.yml`), so it did nothing; a server that
+> nobody had opened this settings tab on ran on MySQL's own defaults instead
+> (30-day expiry, 1 GiB files, no purge). It has been removed in favour of this
+> panel, which `SET GLOBAL`s the defaults (or the stored override) on **every
+> boot**, not only after an admin saves — unlike the app-level windows above,
+> this needs a MySQL privilege the app's DB user may not have, so applying it
+> is best-effort: the setting is always stored and retried at every boot/edit,
+> and the response's `applied`/`error` fields say whether it actually reached
+> MySQL this time. Admin-only, like every other Settings write.
 
 ## What it does
 

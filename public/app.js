@@ -18545,7 +18545,7 @@ async function settingsRetentionView() {
   const data = await api('/api/settings');
   const root = el('div');
   root.append(el('p', { class: 'muted settings-intro' }, 'To keep the database healthy, raw measurements are aggregated into compact buckets after a while and old data is purged. Here you control the windows — changes take effect at the next cleanup, without restart. Unacknowledged CRIT findings are never deleted.'));
-  root.append(el('div', { class: 'settings-grid' }, retentionSettingsCard(data.retention)));
+  root.append(el('div', { class: 'settings-grid' }, retentionSettingsCard(data.retention), binlogSettingsCard(data.binlog)));
   return root;
 }
 
@@ -18747,6 +18747,30 @@ function retentionSettingsCard(r) {
       { key: 'findingRetentionDays', label: 'Findings (days)', type: 'number', min: 1, max: 3650, step: 1, hint: 'Acknowledged findings older than this are deleted (unacknowledged CRIT are always kept).' },
       { key: 'deviceCounterRetentionDays', label: 'SNMP interface counters (days)', type: 'number', min: 1, max: 3650, step: 1, hint: 'Per-port counter samples older than this are deleted. The biggest single write stream on a MySQL-only deployment — lower this, or turn off interface counters on switches that don’t need them, to cut disk usage.' },
       { key: 'rollupIntervalMinutes', label: 'Bucket size (min)', type: 'number', readonly: true, hint: 'How wide aggregation buckets are. Set via .env (cached at startup).' },
+    ],
+  });
+}
+
+// MySQL's own retention: how long binlog files are kept and how big one grows
+// before rotating (mysql-conf/binlog.cnf ships the defaults). Saving here
+// persists the override AND attempts SET GLOBAL on the live server; `applied`
+// reports whether that attempt succeeded (e.g. the DB user may lack the
+// privilege), so a save that is stored but not yet live is visible rather than
+// looking like a no-op.
+function binlogSettingsCard(b) {
+  const v = b || { enabled: true, expireLogsDays: 3, maxBinlogSizeMb: 256, applied: null, error: null };
+  let note = 'Applies live via SET GLOBAL on save, and is re-applied on every server start.';
+  if (v.applied === false) note = `⚠ Stored, but not yet applied to MySQL${v.error ? `: ${v.error}` : ''}.`;
+  else if (v.applied === true) note = '✓ Applied to the live MySQL server.';
+  return settingsFormCard({
+    title: 'Binary logs',
+    values: v,
+    endpoint: '/api/settings/binlog',
+    note,
+    fields: [
+      { key: 'enabled', label: 'Auto-purge enabled', type: 'checkbox', hint: 'Turns automatic deletion of old binary logs on/off.' },
+      { key: 'expireLogsDays', label: 'Binary logs (days)', type: 'number', min: 1, max: 365, step: 1, hint: 'Binary log files older than this are purged automatically.' },
+      { key: 'maxBinlogSizeMb', label: 'Max log file size (MB)', type: 'number', min: 1, max: 1024, step: 1, hint: 'A binary log rotates to a new file once it reaches this size.' },
     ],
   });
 }

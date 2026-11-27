@@ -1384,7 +1384,7 @@ function start() {
     settingsRepo: createSettingsRepository(db), config,
     liveAnalysis: analysisConfig, liveRetention: retentionConfig, liveAlerting: alertingConfig,
     liveGeo: geoProvider, liveGeoCity: cityProvider, liveAttack: attackConfig,
-    livePublicUrl: publicUrlConfig, secretBox,
+    livePublicUrl: publicUrlConfig, secretBox, dbPool: db,
   });
   // Re-apply persisted analysis/retention edits onto the live config so they
   // survive restarts. Best-effort + fire-and-forget (consumers read lazily).
